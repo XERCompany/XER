@@ -83,7 +83,7 @@ cmake --preset default
 cmake --build --preset default
 ```
 
-The `default` preset enables media support. Core builds fetch Abseil, pthreadpool, and FXdiv; enabling `ENABLE_AI` fetches Eigen, and enabling `ENABLE_V8` also fetches libuv. Install CUDA Toolkit/cuDNN, LLVM/Clang, and libnode development packages separately; set `CUDAToolkit_ROOT`, `CUDNN_ROOT`, or `LibNode_ROOT` when they are outside standard search paths. These SDKs have platform-specific installers or build processes and are not fetched by the generic CMake source flow.
+The `default` preset enables media support. Core builds fetch Abseil, pthreadpool, FXdiv, and zlib; media support also fetches zstd, Brotli, FFmpeg, and libusb. Enabling `ENABLE_AI` fetches Eigen. Enabling `ENABLE_V8` additionally fetches libuv, LibXml2, libcurl, and OpenSSL. OpenSSL requires Perl plus `make`/`nmake` to build; when those tools are unavailable, the source is still downloaded and an installed OpenSSL package is required. On Windows, FFmpeg/libusb sources are downloaded but require GNU Make/Autotools to build; installed binary packages are used when available. Install LLVM/Clang and libnode development packages separately; set `LLVM_DIR`, `Clang_DIR`, or `LibNode_ROOT` when they are outside standard search paths. CUDA Toolkit/cuDNN are also external SDK prerequisites.
 
 `FindLibNode.cmake` and `FindFFMPEG.cmake` adapt libraries without a usable upstream CMake package config into standard CMake variables/targets. They locate normal system installs; FFmpeg also uses pkg-config when available.
 

@@ -85,6 +85,9 @@ if(ENGINE_WRAPPER_FFMPEG_CC)
     if(ENGINE_FFMPEG_LIBRARIES)
         target_link_libraries(XERBridgeFfmpeg PRIVATE ${ENGINE_FFMPEG_LIBRARIES})
     endif()
+    if(TARGET XERFFmpegExternal)
+        add_dependencies(XERBridgeFfmpeg XERFFmpegExternal)
+    endif()
 endif()
 
 # ── ANGLE ────────────────────────────────────────────────────

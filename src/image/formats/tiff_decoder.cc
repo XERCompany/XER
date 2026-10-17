@@ -27,8 +27,10 @@ TiffDecoder::DecodePage(const std::string& path, int page, ImageDescriptor& desc
     }
     int idx = std::min(page, static_cast<int>(frames.size())-1);
     auto& fr = frames[idx];
-    desc.width = fr.width;  desc.height = fr.height;
-    desc.format = PixelFormat::RGBA8;  desc.format_name = "tiff";
+    desc.width = fr.width;  
+    desc.height = fr.height;
+    desc.format = PixelFormat::RGBA8; 
+    desc.format_name = "tiff";
     auto buf = std::make_shared<ImageBuffer>(fr.width, fr.height, PixelFormat::RGBA8);
     uint8_t* dst = buf->Data();
     const uint8_t* d = fr.data.data();

@@ -65,6 +65,12 @@ if(ENGINE_HAS_LIBUSB)
     endif()
 endif()
 target_compile_definitions(XER PRIVATE ENGINE_HAS_LIBUSB=${ENGINE_HAS_LIBUSB})
+if(TARGET XERLibusbExternal)
+    add_dependencies(XER XERLibusbExternal)
+endif()
+if(TARGET XEROpenSSLExternal)
+    add_dependencies(XER XEROpenSSLExternal)
+endif()
 
 # ── Required link deps ───────────────────────────────────────
 target_link_libraries(XER PRIVATE
@@ -225,6 +231,9 @@ if(ENGINE_HAS_FFTW3F)
 endif()
 if(ENGINE_FFMPEG_LIBRARIES)
     target_link_libraries(XERAudioAnalysisSmoke PRIVATE ${ENGINE_FFMPEG_LIBRARIES})
+endif()
+if(TARGET XERFFmpegExternal)
+    add_dependencies(XERAudioAnalysisSmoke XERFFmpegExternal)
 endif()
 
 # ── Interface alias for all Qt6 targets ──────────────────────
