@@ -2,7 +2,15 @@
 # Required system / compiler dependencies
 # ============================================================
 
-find_package(absl QUIET)
+if(XER_FETCH_DEPENDENCIES)
+    set(ABSL_PROPAGATE_CXX_STD ON CACHE BOOL "" FORCE)
+    set(ABSL_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+    xer_fetch_cmake_dependency(xer_abseil https://github.com/abseil/abseil-cpp.git 20250127.1)
+    set(absl_FOUND TRUE)
+else()
+    find_package(absl QUIET)
+endif()
+
 if(NOT absl_FOUND)
     message(STATUS "absl package not found: using XER header-only compatibility fallback")
     set(XER_ABSL_COMPAT_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/compat/absl/include")
@@ -33,7 +41,9 @@ else()
 endif()
 find_package(CURL QUIET)
 find_package(OpenSSL QUIET)
-find_package(ZLIB QUIET)
+if(NOT TARGET ZLIB::ZLIB)
+    find_package(ZLIB QUIET)
+endif()
 
 if(ENABLE_V8)
     if(NOT LibXml2_FOUND)

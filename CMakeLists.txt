@@ -20,6 +20,9 @@ xer_option_from_env(ENABLE_CUDNN OFF "Enable cuDNN sources and bridge targets")
 xer_option_from_env(ENABLE_AI OFF "Enable AI and model-builder sources")
 xer_option_from_env(ENABLE_V8 OFF "Enable V8/libnode JavaScript runtime and XER executable")
 xer_option_from_env(ENABLE_MEDIA ON "Enable FFmpeg and audio/media dependencies")
+option(XER_FETCH_DEPENDENCIES "Download missing CMake dependencies into .deps" ON)
+set(XER_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Directory for downloaded dependency sources and build trees")
+set(FETCHCONTENT_BASE_DIR "${XER_DEPS_DIR}" CACHE PATH "FetchContent source and build directory" FORCE)
 
 if(ENABLE_CUDNN AND NOT ENABLE_CUDA)
     message(FATAL_ERROR "ENABLE_CUDNN=ON requires ENABLE_CUDA=ON")
@@ -42,6 +45,8 @@ include(GNUInstallDirs)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+include(cmake/deps/fetch.cmake)
 
 # ── Dependencies ─────────────────────────────────────────────
 include(cmake/deps/system.cmake)

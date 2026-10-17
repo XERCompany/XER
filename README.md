@@ -72,7 +72,7 @@ XER is a high-performance C++/V8 runtime builder that executes JavaScript projec
 ## 🛠️ Build Instructions
 
 ### Prerequisites
-Install CMake, Git, a supported C/C++ toolchain, and the development packages for the features you enable. Dependencies are discovered from system package configurations and pkg-config; CMake does not bootstrap a package manager.
+Install CMake, Git, and a supported C/C++ toolchain. With `XER_FETCH_DEPENDENCIES=ON` (the default), CMake downloads CMake-native dependencies into the project-local `.deps` directory and reuses them on subsequent configure runs. Set `XER_DEPS_DIR` to move this cache elsewhere, or set `XER_FETCH_DEPENDENCIES=OFF` to use system packages only.
 
 ### Compilation
 ```bash
@@ -83,9 +83,9 @@ cmake --preset default
 cmake --build --preset default
 ```
 
-The `default` preset enables media support. Set `ENABLE_AI`, `ENABLE_V8`, or `ENABLE_CUDA` to `ON` to enable their build paths. Install CUDA Toolkit/cuDNN, LLVM/Clang, and libnode development packages separately as required; set `CUDAToolkit_ROOT`, `CUDNN_ROOT`, or `LibNode_ROOT` when they are outside standard search paths. `ENABLE_V8` requires LLVM/Clang and a compatible libnode development package.
+The `default` preset enables media support. Core builds fetch Abseil, pthreadpool, and FXdiv; enabling `ENABLE_AI` fetches Eigen, and enabling `ENABLE_V8` also fetches libuv. Install CUDA Toolkit/cuDNN, LLVM/Clang, and libnode development packages separately; set `CUDAToolkit_ROOT`, `CUDNN_ROOT`, or `LibNode_ROOT` when they are outside standard search paths. These SDKs have platform-specific installers or build processes and are not fetched by the generic CMake source flow.
 
-`FindLibNode.cmake` and `FindFFMPEG.cmake` adapt libraries without a usable upstream CMake package config into standard CMake variables/targets. Both support normal system installs; FFmpeg also uses pkg-config when available.
+`FindLibNode.cmake` and `FindFFMPEG.cmake` adapt libraries without a usable upstream CMake package config into standard CMake variables/targets. They locate normal system installs; FFmpeg also uses pkg-config when available.
 
 ## 🚀 Quick Start
 
