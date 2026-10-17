@@ -14,7 +14,7 @@ add_library(XERJavaScript STATIC ${ENGINE_JAVASCRIPT_CC})
 target_sources(XERJavaScript PRIVATE ${ENGINE_JAVASCRIPT_H})
 target_include_directories(XERJavaScript PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${NODE_INCLUDE_DIR})
+    ${LibNode_INCLUDE_DIR})
 
 target_compile_definitions(XERJavaScript PRIVATE
     ENGINE_HAS_V8=1

@@ -10,7 +10,7 @@ target_include_directories(XER PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${LIBXML2_INCLUDE_DIRS}
     ${LLVM_INCLUDE_DIRS}
-    ${NODE_INCLUDE_DIR}
+    ${LibNode_INCLUDE_DIR}
     ${CURL_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIR}
     ${ZLIB_INCLUDE_DIRS}
@@ -55,7 +55,6 @@ target_compile_definitions(XER PRIVATE
 
 if(ENGINE_HAS_LIBUSB)
     target_include_directories(XER PRIVATE ${LIBUSB_INCLUDE_DIR})
-    target_compile_definitions(XER PRIVATE ENGINE_HAS_LIBUSB=1)
     target_link_libraries(XER PRIVATE ${LIBUSB_LIBRARY})
     if(WIN32)
         target_link_libraries(XER PRIVATE setupapi cfgmgr32 winusb)
@@ -64,15 +63,14 @@ if(ENGINE_HAS_LIBUSB)
         find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
         target_link_libraries(XER PRIVATE ${IOKIT_FRAMEWORK} ${COREFOUNDATION_FRAMEWORK})
     endif()
-elseif(NOT DEFINED ENGINE_HAS_LIBUSB)
-    target_compile_definitions(XER PRIVATE ENGINE_HAS_LIBUSB=0)
 endif()
+target_compile_definitions(XER PRIVATE ENGINE_HAS_LIBUSB=${ENGINE_HAS_LIBUSB})
 
 # ── Required link deps ───────────────────────────────────────
 target_link_libraries(XER PRIVATE
     XERAsyncIO
     XERJavaScript
-    ${NODE_LIBRARY}
+    LibNode::LibNode
     CURL::libcurl
     OpenSSL::SSL
     OpenSSL::Crypto
@@ -213,7 +211,8 @@ set(XER_AUDIO_ANALYSIS_SMOKE_SOURCES
 
 add_executable(XERAudioAnalysisSmoke ${XER_AUDIO_ANALYSIS_SMOKE_SOURCES})
 target_include_directories(XERAudioAnalysisSmoke PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${ENGINE_FFMPEG_INCLUDE_DIRS})
 target_compile_definitions(XERAudioAnalysisSmoke PRIVATE
     ENGINE_HAS_FFTW3F=${ENGINE_HAS_FFTW3F}
     ENGINE_HAS_FFMPEG_BRIDGE=${ENGINE_HAS_FFMPEG_BRIDGE})

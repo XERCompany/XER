@@ -17,7 +17,7 @@
 - **Profiling**: `ScopedTimer` for timing decode and processing steps.
 - **MP3 fallback**: FFmpeg primary, planned mpg123 fallback (stub present).
 - **Self-test/unit test**: `SelfTest()` method for loader validation and CI.
-- **CMake auto-detect**: vcpkg/auto-detect for ffmpeg, mpg123, fftw, absl, range-v3.
+- **CMake dependency detection**: system packages and pkg-config are detected automatically.
 - **Deduplication**: Structure simplified, code duplication removed, error handling unified.
 
 ## Usage
@@ -42,7 +42,7 @@ std::cout << report;
 
 ## CMake Integration
 
-Auto-detects vcpkg libraries (ffmpeg, mpg123, fftw, absl, range-v3). See CMakeLists.txt for details.
+Detects system FFmpeg and FFTW through pkg-config or CMake Find-modules. See the build instructions for optional features.
 
 ## TODO
 
@@ -72,16 +72,20 @@ XER is a high-performance C++/V8 runtime builder that executes JavaScript projec
 ## 🛠️ Build Instructions
 
 ### Prerequisites
-Make sure you have CMake and a compatible C++ compiler (like Clang/GCC) installed. You may also need dependencies for OpenSSL, Zlib, Zstd, and Brotli.
+Install CMake, Git, a supported C/C++ toolchain, and the development packages for the features you enable. Dependencies are discovered from system package configurations and pkg-config; CMake does not bootstrap a package manager.
 
 ### Compilation
 ```bash
-# Configure the project
-cmake -S . -B build
+# Configure with the platform's default generator
+cmake --preset default
 
-# Build the executable (using 4 threads)
-cmake --build build -j4
+# Build
+cmake --build --preset default
 ```
+
+The `default` preset enables media support. Set `ENABLE_AI`, `ENABLE_V8`, or `ENABLE_CUDA` to `ON` to enable their build paths. Install CUDA Toolkit/cuDNN, LLVM/Clang, and libnode development packages separately as required; set `CUDAToolkit_ROOT`, `CUDNN_ROOT`, or `LibNode_ROOT` when they are outside standard search paths. `ENABLE_V8` requires LLVM/Clang and a compatible libnode development package.
+
+`FindLibNode.cmake` and `FindFFMPEG.cmake` adapt libraries without a usable upstream CMake package config into standard CMake variables/targets. Both support normal system installs; FFmpeg also uses pkg-config when available.
 
 ## 🚀 Quick Start
 

@@ -10,7 +10,7 @@ add_library(EngineQt6Bridge STATIC ${ENGINE_QT6_PROJECT_CC})
 target_sources(EngineQt6Bridge PRIVATE ${ENGINE_QT6_PROJECT_H})
 target_include_directories(EngineQt6Bridge PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
-    ${NODE_INCLUDE_DIR})
+    ${LibNode_INCLUDE_DIR})
 
 target_compile_definitions(EngineQt6Bridge PRIVATE
     ENGINE_HAS_QT6=${ENGINE_HAS_QT6}

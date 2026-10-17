@@ -9,22 +9,22 @@
     {
       "name": "default",
       "displayName": "Default",
-      "generator": "Unix Makefiles",
-      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "ENABLE_CUDA": "OFF",
         "ENABLE_CUDNN": "OFF",
         "ENABLE_AI": "OFF",
-        "ENABLE_V8": "OFF"
+        "ENABLE_V8": "OFF",
+        "ENABLE_MEDIA": "ON"
       }
     },
     {
       "name": "cuda",
       "displayName": "CUDA + cuDNN",
       "inherits": "default",
-      "binaryDir": "${sourceDir}/out/build/${presetName}",
+      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
       "cacheVariables": {
         "ENABLE_CUDA": "ON",
         "ENABLE_CUDNN": "ON",

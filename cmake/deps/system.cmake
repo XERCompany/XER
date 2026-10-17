@@ -22,6 +22,7 @@ endif()
 find_package(LibXml2 QUIET)
 find_package(LLVM CONFIG QUIET)
 find_package(Clang CONFIG QUIET)
+find_package(LibNode QUIET MODULE)
 set(ENGINE_HAS_LLVM_CLANG 0)
 if(LLVM_FOUND AND Clang_FOUND)
     set(ENGINE_HAS_LLVM_CLANG 1)
@@ -50,18 +51,10 @@ if(ENABLE_V8)
 endif()
 
 # ── libnode / V8 ────────────────────────────────────────────
-set(NODE_INCLUDE_DIR)
-set(NODE_LIBRARY)
 if(ENABLE_V8)
-    find_path(NODE_INCLUDE_DIR
-        NAMES v8.h
-        PATH_SUFFIXES node
-    )
-    find_library(NODE_LIBRARY NAMES node)
-
-    if(NOT NODE_INCLUDE_DIR OR NOT NODE_LIBRARY)
+    if(NOT LibNode_FOUND)
         message(FATAL_ERROR
-            "libnode-dev not found: install package libnode-dev (v8.h + libnode), or configure with ENABLE_V8=OFF")
+            "libnode not found: install its development package or set LibNode_ROOT (v8.h + libnode), or configure with ENABLE_V8=OFF")
     endif()
 else()
     message(STATUS "ENABLE_V8=OFF: skipping libnode/V8 dependency discovery")

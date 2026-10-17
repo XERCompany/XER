@@ -117,75 +117,18 @@ set(ENGINE_HAS_FFMPEG_AVFILTER 0)
 set(ENGINE_HAS_FFMPEG_AVDEVICE 0)
 set(ENGINE_FFMPEG_INCLUDE_DIRS)
 set(ENGINE_FFMPEG_LIBRARIES)
-set(XER_BUNDLED_FFMPEG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../ffmpeg" CACHE PATH "Local patched FFmpeg source tree used by XER")
-option(XER_USE_BUNDLED_FFMPEG "Prefer local deps/ffmpeg over system/pkg-config FFmpeg." ON)
 
-if(XER_USE_BUNDLED_FFMPEG AND EXISTS "${XER_BUNDLED_FFMPEG_DIR}/CMakeLists.txt")
-    set(FFMPEG_BUILD_PROGRAMS OFF CACHE BOOL "Build FFmpeg command line programs from bundled source" FORCE)
-    set(FFMPEG_ENABLE_ASM OFF CACHE BOOL "Enable bundled FFmpeg assembly sources" FORCE)
-    set(FFMPEG_ENABLE_X86ASM OFF CACHE BOOL "Enable bundled FFmpeg NASM sources" FORCE)
-    set(FFMPEG_BUILD_SHARED OFF CACHE BOOL "Build bundled FFmpeg shared libraries" FORCE)
-    add_subdirectory("${XER_BUNDLED_FFMPEG_DIR}" "${CMAKE_BINARY_DIR}/deps/ffmpeg" EXCLUDE_FROM_ALL)
-
-    if(TARGET FFmpeg::avutil AND TARGET FFmpeg::avcodec AND TARGET FFmpeg::avformat
-            AND TARGET FFmpeg::swscale AND TARGET FFmpeg::swresample)
-        set(ENGINE_HAS_FFMPEG_BRIDGE 1)
-        if(TARGET FFmpeg::avfilter)
-            set(ENGINE_HAS_FFMPEG_AVFILTER 1)
-        endif()
-        if(TARGET FFmpeg::avdevice)
-            set(ENGINE_HAS_FFMPEG_AVDEVICE 1)
-        endif()
-        if(ENGINE_HAS_FFMPEG_AVDEVICE)
-            list(APPEND ENGINE_FFMPEG_LIBRARIES FFmpeg::avdevice)
-        endif()
-        if(ENGINE_HAS_FFMPEG_AVFILTER)
-            list(APPEND ENGINE_FFMPEG_LIBRARIES FFmpeg::avfilter)
-        endif()
-        list(APPEND ENGINE_FFMPEG_LIBRARIES
-            FFmpeg::avformat
-            FFmpeg::avcodec
-            FFmpeg::swscale
-            FFmpeg::swresample
-            FFmpeg::avutil)
-        message(STATUS "Using bundled patched FFmpeg: ${XER_BUNDLED_FFMPEG_DIR}")
-    else()
-        message(WARNING "Bundled FFmpeg was found but required CMake targets are missing; falling back to pkg-config")
+find_package(FFMPEG QUIET MODULE)
+if(FFMPEG_FOUND AND FFMPEG_libavcodec_FOUND AND FFMPEG_libavformat_FOUND
+        AND FFMPEG_libswscale_FOUND AND FFMPEG_libswresample_FOUND AND FFMPEG_libavutil_FOUND)
+    set(ENGINE_HAS_FFMPEG_BRIDGE 1)
+    set(ENGINE_FFMPEG_INCLUDE_DIRS ${FFMPEG_INCLUDE_DIRS})
+    set(ENGINE_FFMPEG_LIBRARIES ${FFMPEG_LIBRARIES})
+    if(FFMPEG_libavfilter_FOUND)
+        set(ENGINE_HAS_FFMPEG_AVFILTER 1)
     endif()
-endif()
-
-if(NOT ENGINE_HAS_FFMPEG_BRIDGE AND PkgConfig_FOUND)
-    pkg_check_modules(FFMPEG_AVUTIL   libavutil   QUIET)
-    pkg_check_modules(FFMPEG_AVCODEC  libavcodec  QUIET)
-    pkg_check_modules(FFMPEG_AVFORMAT libavformat QUIET)
-    pkg_check_modules(FFMPEG_AVFILTER libavfilter QUIET)
-    pkg_check_modules(FFMPEG_AVDEVICE libavdevice QUIET)
-    pkg_check_modules(FFMPEG_SWSCALE  libswscale  QUIET)
-    pkg_check_modules(FFMPEG_SWRESAMPLE libswresample QUIET)
-    if(FFMPEG_AVUTIL_FOUND AND FFMPEG_AVCODEC_FOUND AND FFMPEG_AVFORMAT_FOUND AND FFMPEG_SWSCALE_FOUND AND FFMPEG_SWRESAMPLE_FOUND)
-        set(ENGINE_HAS_FFMPEG_BRIDGE 1)
-        list(APPEND ENGINE_FFMPEG_INCLUDE_DIRS
-            ${FFMPEG_AVUTIL_INCLUDE_DIRS}
-            ${FFMPEG_AVCODEC_INCLUDE_DIRS}
-            ${FFMPEG_AVFORMAT_INCLUDE_DIRS}
-            ${FFMPEG_SWSCALE_INCLUDE_DIRS}
-            ${FFMPEG_SWRESAMPLE_INCLUDE_DIRS})
-        list(APPEND ENGINE_FFMPEG_LIBRARIES
-            ${FFMPEG_AVUTIL_LIBRARIES}
-            ${FFMPEG_AVCODEC_LIBRARIES}
-            ${FFMPEG_AVFORMAT_LIBRARIES}
-            ${FFMPEG_SWSCALE_LIBRARIES}
-            ${FFMPEG_SWRESAMPLE_LIBRARIES})
-        if(FFMPEG_AVFILTER_FOUND)
-            set(ENGINE_HAS_FFMPEG_AVFILTER 1)
-            list(APPEND ENGINE_FFMPEG_INCLUDE_DIRS ${FFMPEG_AVFILTER_INCLUDE_DIRS})
-            list(APPEND ENGINE_FFMPEG_LIBRARIES ${FFMPEG_AVFILTER_LIBRARIES})
-        endif()
-        if(FFMPEG_AVDEVICE_FOUND)
-            set(ENGINE_HAS_FFMPEG_AVDEVICE 1)
-            list(APPEND ENGINE_FFMPEG_INCLUDE_DIRS ${FFMPEG_AVDEVICE_INCLUDE_DIRS})
-            list(APPEND ENGINE_FFMPEG_LIBRARIES ${FFMPEG_AVDEVICE_LIBRARIES})
-        endif()
+    if(FFMPEG_libavdevice_FOUND)
+        set(ENGINE_HAS_FFMPEG_AVDEVICE 1)
     endif()
 endif()
 
