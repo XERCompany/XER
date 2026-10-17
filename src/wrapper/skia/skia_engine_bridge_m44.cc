@@ -1,6 +1,8 @@
 #include "wrapper/skia/skia_engine_bridge_m44.h"
 #include <cmath>
 
+#define PI 3.14159265358979323846f
+
 #if ENGINE_HAS_SKIA_BRIDGE
 #include "include/core/SkM44.h"
 #endif
@@ -86,7 +88,7 @@ Matrix4x4 M44Scale(float x, float y, float z) {
 }
 
 Matrix4x4 M44RotateX(float degrees) {
-    const float rad = degrees * static_cast<float>(M_PI) / 180.0f;
+    const float rad = degrees * static_cast<float>(PI) / 180.0f;
     const float c = std::cos(rad);
     const float s = std::sin(rad);
     Matrix4x4 m = MakeDiag(1.0f);
@@ -99,7 +101,7 @@ Matrix4x4 M44RotateX(float degrees) {
 }
 
 Matrix4x4 M44RotateY(float degrees) {
-    const float rad = degrees * static_cast<float>(M_PI) / 180.0f;
+    const float rad = degrees * static_cast<float>(PI) / 180.0f;
     const float c = std::cos(rad);
     const float s = std::sin(rad);
     Matrix4x4 m = MakeDiag(1.0f);
@@ -111,7 +113,7 @@ Matrix4x4 M44RotateY(float degrees) {
 }
 
 Matrix4x4 M44RotateZ(float degrees) {
-    const float rad = degrees * static_cast<float>(M_PI) / 180.0f;
+    const float rad = degrees * static_cast<float>(PI) / 180.0f;
     const float c = std::cos(rad);
     const float s = std::sin(rad);
     Matrix4x4 m = MakeDiag(1.0f);

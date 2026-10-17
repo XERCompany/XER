@@ -3,7 +3,9 @@
 #include <thread>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
+#if has_include(<cpuid.h>)
 #  include <cpuid.h>
+#endif
 #endif
 
 #if defined(__linux__)
@@ -95,12 +97,14 @@ HwCapabilities HwCapabilityScanner::Scan() {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__)
     // SSE4 / AVX2 detection via CPUID
     unsigned int eax = 0, ebx = 0, ecx = 0, edx = 0;
+#if has_include(<cpuid.h>)
     if (__get_cpuid(1, &eax, &ebx, &ecx, &edx)) {
         caps.has_sse4 = (ecx & bit_SSE4_2) != 0;
     }
     if (__get_cpuid_count(7, 0, &eax, &ebx, &ecx, &edx)) {
         caps.has_avx2 = (ebx & bit_AVX2) != 0;
     }
+#endif
 #endif
 
     // Total RAM

@@ -1,8 +1,7 @@
 # ============================================================
 # EngineBuilder main executable
 # ============================================================
-
-if(ENABLE_V8)
+ 
 add_executable(XER ${ENGINE_PROJECT_CC})
 target_sources(XER PRIVATE ${ENGINE_PROJECT_H})
 
@@ -195,11 +194,7 @@ endforeach()
 if(Qt6Core_FOUND)
     target_link_libraries(XER PRIVATE Qt6::Core)
 endif()
-
-else()
-    message(STATUS "ENABLE_V8=OFF: XER executable and JavaScript runtime target are disabled")
-endif()
-
+ 
 set(XER_AUDIO_ANALYSIS_SMOKE_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/demo/audio_analysis_cli.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/src/audio/demo/audio_analysis_smoke.cc
