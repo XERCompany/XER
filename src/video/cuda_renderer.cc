@@ -1,11 +1,10 @@
 #include "cuda_renderer.h"
+#include "video_utils.h"
 
 #if ENGINE_HAS_CUDA_BRIDGE
 #include "wrapper/cuda/cuda_engine_bridge.h"
 #endif
-#include "wrapper/skia/skia_engine_bridge.h"
 #include "flux/core/logger.h"
-#include <cstring>
 
 namespace video {
 
@@ -45,32 +44,8 @@ bool CudaRenderer::Render(const Frame& src, RenderTarget& target) {
     Frame* dst = target.GetFrame();
     if (!dst || !dst->IsValid()) return false;
 
-    // For matching dimensions: high-throughput memcpy (GPU would use cudaMemcpy)
-    if (src.Width() == dst->Width() && src.Height() == dst->Height() &&
-        src.Format() == dst->Format()) {
-        std::memcpy(dst->Data(), src.Data(), src.DataSize());
-        return true;
-    }
-
-    // Dimension mismatch: resize via Skia RasterDrawImage (CPU bridge)
-    if (engine::bridge::skia::IsAvailable()) {
-        int sw = src.Width(), sh = src.Height();
-        int dw = dst->Width(), dh = dst->Height();
-        std::vector<uint32_t> src_px(sw * sh), dst_px(dw * dh, 0);
-        const uint8_t* sd = src.Data();
-        for (int i = 0; i < sw * sh; ++i)
-            src_px[i] = engine::bridge::skia::MakeColorRGBA(
-                            sd[i*4+2], sd[i*4+1], sd[i*4+0], sd[i*4+3]);
-        engine::bridge::skia::RasterDrawImage(&dst_px, dw, dh, src_px, sw, sh, 0, 0, "src");
-        uint8_t* dd = dst->Data();
-        for (int i = 0; i < dw * dh; ++i) {
-            uint32_t c = dst_px[i];
-            dd[i*4+2]=(c>>24)&0xFF; dd[i*4+1]=(c>>16)&0xFF;
-            dd[i*4+0]=(c>> 8)&0xFF; dd[i*4+3]=c&0xFF;
-        }
-        return true;
-    }
-    return false;
+    if (utils::CopyFramePixels(src, *dst)) return true;
+    return utils::ResizeFrameWithSkia(src, *dst);
 }
 
 }  // namespace video

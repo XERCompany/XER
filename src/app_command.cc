@@ -179,6 +179,10 @@ AppCommand::Parsed AppCommand::Parse(int argc, char** argv) {
         parsed.type = Type::kAudioAnalysisSmoke;
     }
 
+    if (command == "music_bass_eq_clip" || command == "video_music_clip") {
+        parsed.type = Type::kMusicBassEqClip;
+    }
+
     if (command == "audio_demo") {
         parsed.type = Type::kAudioDemo;
     }
@@ -221,6 +225,9 @@ AppCommand::Parsed AppCommand::Parse(int argc, char** argv) {
         } else if (command == "audio_analysis_smoke") {
 		parsed.type = Type::kAudioAnalysisSmoke;
 		script_index = 2;
+    } else if (command == "music_bass_eq_clip" || command == "video_music_clip") {
+        parsed.type = Type::kMusicBassEqClip;
+        script_index = 2;
     } else if (command == "audio_demo") {
         parsed.type = Type::kAudioDemo;
         script_index = 2;
@@ -405,6 +412,67 @@ AppCommand::Parsed AppCommand::Parse(int argc, char** argv) {
                 if (!inline_v && !ConsumeStringValue("--audio_batch_mode", argc, argv, &i, &value, &parsed))
                     return parsed;
                 parsed.audio_batch_mode = value;
+                continue;
+            }
+        }
+        {
+            std::string value; bool inline_v = false;
+            if (ParseValueFlag(arg, "--video_output", &value, &inline_v) || ParseValueFlag(arg, "--output", &value, &inline_v)) {
+                if (!inline_v && !ConsumeStringValue("--video_output", argc, argv, &i, &value, &parsed))
+                    return parsed;
+                parsed.video_output_path = value;
+                continue;
+            }
+        }
+        {
+            std::string value; bool inline_v = false;
+            if (ParseValueFlag(arg, "--clip_duration", &value, &inline_v) || ParseValueFlag(arg, "--duration_seconds", &value, &inline_v)) {
+                if (!inline_v && !ConsumeStringValue("--clip_duration", argc, argv, &i, &value, &parsed))
+                    return parsed;
+                if (!ParsePositiveFloat(value, &parsed.clip_duration_seconds)) {
+                    parsed.valid = false;
+                    parsed.error_message = "Invalid value for --clip_duration: " + value;
+                    return parsed;
+                }
+                continue;
+            }
+        }
+        {
+            std::string value; bool inline_v = false;
+            if (ParseValueFlag(arg, "--video_width", &value, &inline_v) || ParseValueFlag(arg, "--width", &value, &inline_v)) {
+                if (!inline_v && !ConsumeStringValue("--video_width", argc, argv, &i, &value, &parsed))
+                    return parsed;
+                if (!ParsePositiveInt(value, &parsed.video_width)) {
+                    parsed.valid = false;
+                    parsed.error_message = "Invalid value for --video_width: " + value;
+                    return parsed;
+                }
+                continue;
+            }
+        }
+        {
+            std::string value; bool inline_v = false;
+            if (ParseValueFlag(arg, "--video_height", &value, &inline_v) || ParseValueFlag(arg, "--height", &value, &inline_v)) {
+                if (!inline_v && !ConsumeStringValue("--video_height", argc, argv, &i, &value, &parsed))
+                    return parsed;
+                if (!ParsePositiveInt(value, &parsed.video_height)) {
+                    parsed.valid = false;
+                    parsed.error_message = "Invalid value for --video_height: " + value;
+                    return parsed;
+                }
+                continue;
+            }
+        }
+        {
+            std::string value; bool inline_v = false;
+            if (ParseValueFlag(arg, "--video_fps", &value, &inline_v) || ParseValueFlag(arg, "--fps", &value, &inline_v)) {
+                if (!inline_v && !ConsumeStringValue("--video_fps", argc, argv, &i, &value, &parsed))
+                    return parsed;
+                if (!ParsePositiveInt(value, &parsed.video_fps)) {
+                    parsed.valid = false;
+                    parsed.error_message = "Invalid value for --video_fps: " + value;
+                    return parsed;
+                }
                 continue;
             }
         }
@@ -778,7 +846,7 @@ AppCommand::Parsed AppCommand::Parse(int argc, char** argv) {
             return parsed;
         }
 
-        if (parsed.type == Type::kAudioInspect || parsed.type == Type::kAudioModulesSmoke || parsed.type == Type::kAudioAnalysisSmoke || parsed.type == Type::kAudioDemo || parsed.type == Type::kSpectrogram || parsed.type == Type::kOnset) {
+        if (parsed.type == Type::kAudioInspect || parsed.type == Type::kAudioModulesSmoke || parsed.type == Type::kAudioAnalysisSmoke || parsed.type == Type::kMusicBassEqClip || parsed.type == Type::kAudioDemo || parsed.type == Type::kSpectrogram || parsed.type == Type::kOnset) {
             if (parsed.audio_input_path.empty()) {
                 parsed.audio_input_path = arg;
                 continue;
@@ -791,9 +859,11 @@ AppCommand::Parsed AppCommand::Parse(int argc, char** argv) {
 					? "audio_modules_smoke"
                 : (parsed.type == Type::kAudioAnalysisSmoke
 					? "audio_analysis_smoke"
+                : (parsed.type == Type::kMusicBassEqClip
+                    ? "music_bass_eq_clip"
                 : (parsed.type == Type::kAudioDemo
                     ? "audio_demo"
-                    : (parsed.type == Type::kSpectrogram ? "spectrogram" : "onset"))));
+                    : (parsed.type == Type::kSpectrogram ? "spectrogram" : "onset")))));
             parsed.error_message = std::string("Unexpected extra ") + command_name + " argument: " + arg;
             return parsed;
         }
@@ -826,6 +896,7 @@ std::string AppCommand::BuildHelpText(const std::string& binary_name) {
 	out << "  " << binary_name << " audio_fx_batch <input.mp3|-> --audio_effect <name> [--audio_effect <name> ...] [--output_dir dir] [--target_sample_rate hz] [--target_channels n] [--audio_batch_mode parallel|chain] [--clap_plugin path|ref] [--json] [--pipe_mp3]\n";
     out << "  " << binary_name << " audio_modules_smoke <input_audio> [--output_dir dir]\n";
     out << "  " << binary_name << " audio_analysis_smoke <input_audio> [--output_dir dir] [--target_sample_rate hz]\n";
+    out << "  " << binary_name << " music_bass_eq_clip <input_audio> [--output_dir dir] [--video_output clip.mp4] [--clip_duration 15] [--width 1280] [--height 720] [--fps 30]\n";
     out << "  " << binary_name << " audio_demo [input_audio] [--output_dir dir] [--audio_processor name]\n";
     out << "  " << binary_name << " spectrogram <input_audio> [--output_dir dir] [--target_sample_rate hz]\n";
     out << "  " << binary_name << " onset <input_audio> [--output_dir dir] [--target_sample_rate hz]\n";
@@ -838,7 +909,7 @@ std::string AppCommand::BuildHelpText(const std::string& binary_name) {
     out << "  --noemit                     Dry-run: parse and validate only\n";
     out << "  --emit_source_map            Write source-maps alongside compiled output\n";
     out << "  --output_dir <path>          Write generated compile artifacts into directory\n";
-    out << "  --audio_input <path>         Audio file for audio_inspect/audio_fx_custom/audio_fx_batch/audio_modules_smoke/audio_analysis_smoke/audio_demo/spectrogram/onset\n";
+    out << "  --audio_input <path>         Audio file for audio_inspect/audio_fx_custom/audio_fx_batch/audio_modules_smoke/audio_analysis_smoke/music_bass_eq_clip/audio_demo/spectrogram/onset\n";
     out << "  --file-audio-config <path>   Load audio FX input/effects/output/pipe options from a JSON file\n";
     out << "  --audio_effect <name>        Custom preset name for audio_fx_custom or one batch item for audio_fx_batch\n";
     out << "  --audio_effects <a,b,c>      Comma-separated effect list for audio_fx_batch\n";
@@ -851,6 +922,10 @@ std::string AppCommand::BuildHelpText(const std::string& binary_name) {
     out << "  --target_sample_rate <n>     Normalize file-based audio commands to target sample rate\n";
     out << "  --target_channels <n>        Normalize audio_fx_custom/audio_fx_batch output to a target channel count\n";
     out << "  --audio_batch_mode <mode>   parallel|chain for audio_fx_batch rendering order\n";
+    out << "  --video_output <path>        MP4 path for music_bass_eq_clip\n";
+    out << "  --clip_duration <seconds>    Music visualizer clip length, clamped to 15 seconds\n";
+    out << "  --width/--height <n>         music_bass_eq_clip frame size\n";
+    out << "  --fps <n>                    music_bass_eq_clip frame rate\n";
     out << "  --pipe_mp3                   Read strict MP3 from path/stdin '-' and stream processed MP3 bytes to stdout\n";
     out << "  --json                       Emit audio_inspect or audio_fx_batch summary as JSON\n";
     out << "\nXER protection:\n";
@@ -921,6 +996,7 @@ std::string AppCommand::BuildHelpText(const std::string& binary_name) {
     out << "  " << binary_name << " audio_fx_batch <input.mp3|-> --audio_effect <name> [--audio_effect <name> ...] [--output_dir dir] [--target_sample_rate hz] [--target_channels n] [--audio_batch_mode parallel|chain] [--json] [--pipe_mp3]   Render multiple custom FX presets from strict MP3 input\n";
     out << "  " << binary_name << " audio_modules_smoke <input_audio> [--output_dir dir]   Run plugin/MIDI/codec smoke validation on one input\n";
     out << "  " << binary_name << " audio_analysis_smoke <input_audio> [--output_dir dir] [--target_sample_rate hz]   Run beat/pitch/loudness analysis and export report artifacts\n";
+    out << "  " << binary_name << " music_bass_eq_clip <input_audio> [--output_dir dir] [--video_output clip.mp4]   Create a <=15s bass/EQ-reactive video clip from a music file\n";
     out << "  " << binary_name << " audio_demo [input_audio] [--audio_processor name] [--output_dir dir]   Run STFT smoke demo or file-based processing\n";
     out << "  " << binary_name << " spectrogram <input_audio> [--output_dir dir] [--target_sample_rate hz]   Build a spectrogram raw dump from normalized audio\n";
     out << "  " << binary_name << " onset <input_audio> [--output_dir dir] [--target_sample_rate hz]   Detect onset times from normalized audio\n";

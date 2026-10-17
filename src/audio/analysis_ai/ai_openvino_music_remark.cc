@@ -335,7 +335,7 @@ MusicRemarkMixPlan BuildOpenVinoMusicRemarkMixPlan(const MusicRemarkMetrics& met
 	}
 
 	if (wants_instrumental || metrics.pitch_confidence > 0.58f) {
-		AddStemAction(&plan.stem_actions, "vocal", wants_instrumental ? "suppress" : "extract-move", wants_instrumental ? 0.88f : 0.34f, options.vocal_move_beats, options.vocal_stretch_ratio, 0.64f + 0.20f * Clamp01(metrics.pitch_confidence), wants_instrumental ? "instrumental-target" : "vocal-remix-focus", {"LA2AVocal", "SilkyDeEsser", "ExciterAir"});
+		AddStemAction(&plan.stem_actions, "vocal", wants_instrumental ? "suppress" : "extract-move", wants_instrumental ? 0.88f : 0.34f, options.vocal_move_beats, options.vocal_stretch_ratio, 0.64f + 0.20f * Clamp01(metrics.pitch_confidence), wants_instrumental ? "instrumental-target" : "vocal-remix-focus", {"AutoTuneCorrectPitch", "LA2AVocal", "SilkyDeEsser", "ExciterAir"});
 	}
 	if (wants_acapella || metrics.beat_strength > 0.52f) {
 		AddStemAction(&plan.stem_actions, "drums", wants_acapella ? "suppress" : "duck-move", wants_acapella ? 0.82f : 0.28f, options.drums_move_beats, 1.0f, 0.58f + 0.22f * Clamp01(metrics.beat_strength), wants_acapella ? "acapella-target" : "create-room-for-samples", {"TransientPunch", "SSLBusComp"});
@@ -348,7 +348,7 @@ MusicRemarkMixPlan BuildOpenVinoMusicRemarkMixPlan(const MusicRemarkMetrics& met
 	}
 
 	AddEffectLayer(&plan.effect_layers, "master", plan.effects, 1.0f);
-	AddEffectLayer(&plan.effect_layers, "vocal", {"LA2AVocal", "SilkyDeEsser", "ExciterAir"}, metrics.pitch_confidence > 0.4f ? 0.82f : 0.54f);
+	AddEffectLayer(&plan.effect_layers, "vocal", {"AutoTuneCorrectPitch", "LA2AVocal", "SilkyDeEsser", "ExciterAir"}, metrics.pitch_confidence > 0.4f ? 0.82f : 0.54f);
 	AddEffectLayer(&plan.effect_layers, "drums", {"TransientPunch", "SSLBusComp"}, metrics.beat_strength > 0.3f ? 0.78f : 0.48f);
 	AddEffectLayer(&plan.effect_layers, "samples", {"SpaceEcho", "ShimmerBloom", "Limiter"}, 0.62f + 0.22f * intensity);
 

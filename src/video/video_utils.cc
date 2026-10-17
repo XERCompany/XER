@@ -2,7 +2,36 @@
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
+#include <cstring>
+
 namespace video::utils {
+
+namespace {
+
+uint32_t ReadPackedPixel(const uint8_t* src, PixelFormat fmt) {
+    if (fmt == PixelFormat::RGBA8) return engine::bridge::skia::MakeColorRGBA(src[0], src[1], src[2], src[3]);
+    return engine::bridge::skia::MakeColorRGBA(src[2], src[1], src[0], src[3]);
+}
+
+void WritePackedPixel(uint32_t color, PixelFormat fmt, uint8_t* dst) {
+    const auto r = static_cast<uint8_t>((color >> 24) & 0xFF);
+    const auto g = static_cast<uint8_t>((color >> 16) & 0xFF);
+    const auto b = static_cast<uint8_t>((color >> 8) & 0xFF);
+    const auto a = static_cast<uint8_t>(color & 0xFF);
+    if (fmt == PixelFormat::RGBA8) {
+        dst[0] = r;
+        dst[1] = g;
+        dst[2] = b;
+        dst[3] = a;
+        return;
+    }
+    dst[0] = b;
+    dst[1] = g;
+    dst[2] = r;
+    dst[3] = a;
+}
+
+}  // namespace
 
 std::string PixelFormatName(PixelFormat fmt) {
     switch (fmt) {
@@ -24,6 +53,39 @@ int BytesPerPixel(PixelFormat fmt) {
         case PixelFormat::RGBA8: return 4;
         default: return 0;
     }
+}
+
+bool IsPackedFourChannel(PixelFormat fmt) {
+    return BytesPerPixel(fmt) == 4;
+}
+
+bool CopyFramePixels(const Frame& src, Frame& dst) {
+    if (!src.IsValid() || !dst.IsValid()) return false;
+    if (src.Width() != dst.Width() || src.Height() != dst.Height() || src.Format() != dst.Format()) return false;
+    if (src.DataSize() != dst.DataSize()) return false;
+    std::memcpy(dst.Data(), src.Data(), src.DataSize());
+    return true;
+}
+
+bool ResizeFrameWithSkia(const Frame& src, Frame& dst) {
+    if (!src.IsValid() || !dst.IsValid()) return false;
+    if (!IsPackedFourChannel(src.Format()) || !IsPackedFourChannel(dst.Format())) return false;
+    if (src.Width() <= 0 || src.Height() <= 0 || dst.Width() <= 0 || dst.Height() <= 0) return false;
+    if (!engine::bridge::skia::IsAvailable()) return false;
+
+    const int src_pixels = src.Width() * src.Height();
+    const int dst_pixels = dst.Width() * dst.Height();
+    std::vector<uint32_t> src_px(src_pixels);
+    std::vector<uint32_t> dst_px(dst_pixels, 0);
+
+    const uint8_t* src_data = src.Data();
+    for (int i = 0; i < src_pixels; ++i) src_px[i] = ReadPackedPixel(src_data + i * 4, src.Format());
+
+    engine::bridge::skia::RasterDrawImage(&dst_px, dst.Width(), dst.Height(), src_px, src.Width(), src.Height(), 0, 0, "src");
+
+    uint8_t* dst_data = dst.Data();
+    for (int i = 0; i < dst_pixels; ++i) WritePackedPixel(dst_px[i], dst.Format(), dst_data + i * 4);
+    return true;
 }
 
 /// Returns list of codecs from FFmpeg bridge (decoded + encoded names).

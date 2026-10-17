@@ -103,6 +103,19 @@ bool CustomEffectNodeWrapper::Initialize(const CustomEffectNode& node, float sam
 		}
 		pitch_shifter_.SetPitchRatio(GetCustomEffectParameterValue(node_.parameters, "pitch_ratio", 1.0f));
 		return true;
+	case CustomEffectAlgorithm::kAutoTuneCorrectPitch:
+		if (!auto_tune_correct_pitch_.Initialize(sample_rate_, max_block_size_)) {
+			return false;
+		}
+		auto_tune_correct_pitch_.SetCorrectionAmount(GetCustomEffectParameterValue(node_.parameters, "correction_amount", 0.88f));
+		auto_tune_correct_pitch_.SetCorrectionSpeed(GetCustomEffectParameterValue(node_.parameters, "correction_speed", 0.18f));
+		auto_tune_correct_pitch_.SetRetuneSpeedMs(GetCustomEffectParameterValue(node_.parameters, "retune_speed_ms", 18.0f));
+		auto_tune_correct_pitch_.SetHumanize(GetCustomEffectParameterValue(node_.parameters, "humanize", 0.12f));
+		auto_tune_correct_pitch_.SetScaleRoot(GetCustomEffectParameterValue(node_.parameters, "scale_root", 0.0f));
+		auto_tune_correct_pitch_.SetScaleMode(GetCustomEffectParameterValue(node_.parameters, "scale_mode", 0.0f));
+		auto_tune_correct_pitch_.SetPresenceDb(GetCustomEffectParameterValue(node_.parameters, "presence_db", 1.6f));
+		auto_tune_correct_pitch_.SetWetMix(GetCustomEffectParameterValue(node_.parameters, "wet_mix", 0.92f));
+		return true;
 	case CustomEffectAlgorithm::kDelay:
 		delay_feedback_state_ = 0.0f;
 		return delay_line_.Initialize(std::max<size_t>(4096u, max_block_size_ * 8));
@@ -194,6 +207,17 @@ bool CustomEffectNodeWrapper::ProcessBlock(
 		pitch_shifter_.SetPitchRatio(GetCustomEffectParameterValue(node_.parameters, "pitch_ratio", 1.0f));
 		processed = pitch_shifter_.ProcessBlock(input, frame_count, wet_buffer_.data());
 		break;
+	case CustomEffectAlgorithm::kAutoTuneCorrectPitch:
+		auto_tune_correct_pitch_.SetCorrectionAmount(GetCustomEffectParameterValue(node_.parameters, "correction_amount", 0.88f));
+		auto_tune_correct_pitch_.SetCorrectionSpeed(GetCustomEffectParameterValue(node_.parameters, "correction_speed", 0.18f));
+		auto_tune_correct_pitch_.SetRetuneSpeedMs(GetCustomEffectParameterValue(node_.parameters, "retune_speed_ms", 18.0f));
+		auto_tune_correct_pitch_.SetHumanize(GetCustomEffectParameterValue(node_.parameters, "humanize", 0.12f));
+		auto_tune_correct_pitch_.SetScaleRoot(GetCustomEffectParameterValue(node_.parameters, "scale_root", 0.0f));
+		auto_tune_correct_pitch_.SetScaleMode(GetCustomEffectParameterValue(node_.parameters, "scale_mode", 0.0f));
+		auto_tune_correct_pitch_.SetPresenceDb(GetCustomEffectParameterValue(node_.parameters, "presence_db", 1.6f));
+		auto_tune_correct_pitch_.SetWetMix(GetCustomEffectParameterValue(node_.parameters, "wet_mix", 0.92f));
+		processed = auto_tune_correct_pitch_.ProcessBlock(input, frame_count, wet_buffer_.data());
+		break;
 	case CustomEffectAlgorithm::kDelay: {
 		const size_t delay_samples = static_cast<size_t>(std::max(1.0f, GetCustomEffectParameterValue(node_.parameters, "delay_samples", 640.0f)));
 		const float feedback = std::clamp(GetCustomEffectParameterValue(node_.parameters, "feedback", 0.35f), -0.95f, 0.95f);
@@ -260,6 +284,8 @@ std::string CustomEffectNodeWrapper::GetReport() const {
 		return node_.label + ":" + reverb_algorithmic_.GetReport();
 	case CustomEffectAlgorithm::kPitchShift:
 		return node_.label + ":" + pitch_shifter_.GetReport();
+	case CustomEffectAlgorithm::kAutoTuneCorrectPitch:
+		return node_.label + ":" + auto_tune_correct_pitch_.GetReport();
 	case CustomEffectAlgorithm::kDelay:
 		return node_.label + ":delay";
 	case CustomEffectAlgorithm::kPassthrough:

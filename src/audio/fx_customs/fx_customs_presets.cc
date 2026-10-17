@@ -153,6 +153,7 @@ CustomEffectPackage BuildDeEsserEffect() { return BuildNamedPreset("DeEsser"); }
 CustomEffectPackage BuildCompressorEffect() { return BuildNamedPreset("Compressor"); }
 CustomEffectPackage BuildLimiterEffect() { return BuildNamedPreset("Limiter"); }
 CustomEffectPackage BuildAutoTuneEffect() { return BuildNamedPreset("AutoTune"); }
+CustomEffectPackage BuildAutoTuneCorrectPitchEffect() { return BuildNamedPreset("AutoTuneCorrectPitch"); }
 CustomEffectPackage BuildPitchShifterEffect() { return BuildNamedPreset("PitchShifter"); }
 CustomEffectPackage BuildPitchKeyEffect() { return BuildNamedPreset("PitchKey"); }
 CustomEffectPackage BuildAutoPitchEffect() { return BuildNamedPreset("AutoPitch"); }

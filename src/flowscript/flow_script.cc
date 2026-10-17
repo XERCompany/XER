@@ -145,7 +145,8 @@ bool FlowScript::Run() const {
                 break;
             }
 
-            flow_script_detail::FlowScriptRequireRuntime require_runtime(isolate, context, path_);
+            flow_script_detail::FlowScriptRequireRuntime require_runtime(
+                isolate, context, path_, sandbox_settings.enabled);
             if (!require_runtime.BindGlobals()) {
 				WriteFlowScriptLine(flux::terminal::OutputStream::kStderr,
 					"Failed to bind RequireFile/MakeExportModule APIs");

@@ -53,6 +53,21 @@ target_compile_definitions(XER PRIVATE
     ENGINE_HAS_SQLITE3=${ENGINE_HAS_SQLITE3}
     ENGINE_HAS_QT6=${ENGINE_HAS_QT6})
 
+if(ENGINE_HAS_LIBUSB)
+    target_include_directories(XER PRIVATE ${LIBUSB_INCLUDE_DIR})
+    target_compile_definitions(XER PRIVATE ENGINE_HAS_LIBUSB=1)
+    target_link_libraries(XER PRIVATE ${LIBUSB_LIBRARY})
+    if(WIN32)
+        target_link_libraries(XER PRIVATE setupapi cfgmgr32 winusb)
+    elseif(APPLE)
+        find_library(IOKIT_FRAMEWORK IOKit)
+        find_library(COREFOUNDATION_FRAMEWORK CoreFoundation)
+        target_link_libraries(XER PRIVATE ${IOKIT_FRAMEWORK} ${COREFOUNDATION_FRAMEWORK})
+    endif()
+elseif(NOT DEFINED ENGINE_HAS_LIBUSB)
+    target_compile_definitions(XER PRIVATE ENGINE_HAS_LIBUSB=0)
+endif()
+
 # ── Required link deps ───────────────────────────────────────
 target_link_libraries(XER PRIVATE
     XERAsyncIO

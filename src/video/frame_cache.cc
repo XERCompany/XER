@@ -1,11 +1,13 @@
 #include "frame_cache.h"
 
+#include <algorithm>
+
 namespace video {
 
-FrameCache::FrameCache(int max_frames) : max_frames_(max_frames) {}
+FrameCache::FrameCache(int max_frames) : max_frames_(std::max(1, max_frames)) {}
 
 void FrameCache::Store(const std::string& key, std::shared_ptr<Frame> frame) {
-    if (!frame) return;
+    if (key.empty() || !frame) return;
     if (store_.count(key) == 0) {
         if (static_cast<int>(store_.size()) >= max_frames_) {
             // Keep-without-eviction policy: just grow (caller must Clear() manually)
@@ -26,6 +28,7 @@ bool FrameCache::Has(const std::string& key) const {
 
 void FrameCache::Remove(const std::string& key) {
     store_.erase(key);
+    insertion_order_.erase(std::remove(insertion_order_.begin(), insertion_order_.end(), key), insertion_order_.end());
 }
 
 void FrameCache::Clear() {

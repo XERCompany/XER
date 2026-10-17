@@ -27,6 +27,7 @@ enum class CustomEffectAlgorithm {
 	kTube,
 	kReverbAlgorithmic,
 	kPitchShift,
+	kAutoTuneCorrectPitch,
 	kDelay,
 	kPlugin,
 };

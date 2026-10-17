@@ -6,6 +6,10 @@
 #if defined(_WIN32)
     #include <windows.h>
     #include <intrin.h>
+#elif defined(__APPLE__)
+    #include <sys/types.h>
+    #include <sys/sysctl.h>
+    #include <mach/mach.h>
 #elif defined(__linux__)
     #include <unistd.h>
     #include <cpuid.h>
@@ -88,6 +92,33 @@ bool CPUInfoProvider::Initialize() {
     
     initialized_ = true;
     return true;
+#elif defined(__APPLE__)
+    size_t value_size = sizeof(int);
+    sysctlbyname("hw.logicalcpu", &cpu_info_.logical_cores, &value_size, nullptr, 0);
+
+    value_size = sizeof(int);
+    sysctlbyname("hw.physicalcpu", &cpu_info_.physical_cores, &value_size, nullptr, 0);
+    if (cpu_info_.logical_cores <= 0) return false;
+    if (cpu_info_.physical_cores <= 0) cpu_info_.physical_cores = cpu_info_.logical_cores;
+
+    char cpu_string[256] = {};
+    value_size = sizeof(cpu_string);
+    if (sysctlbyname("machdep.cpu.vendor", cpu_string, &value_size, nullptr, 0) == 0)
+        cpu_info_.vendor = cpu_string;
+
+    value_size = sizeof(cpu_string);
+    if (sysctlbyname("machdep.cpu.brand_string", cpu_string, &value_size, nullptr, 0) == 0)
+        cpu_info_.model = cpu_string;
+    if (cpu_info_.model.empty()) {
+        value_size = sizeof(cpu_string);
+        if (sysctlbyname("hw.model", cpu_string, &value_size, nullptr, 0) == 0)
+            cpu_info_.model = cpu_string;
+    }
+
+    DetectCPUCapabilities();
+    DetectCoreCount();
+    initialized_ = true;
+    return true;
 #else
     return false;
 #endif
@@ -111,6 +142,11 @@ uint64_t CPUInfoProvider::GetTotalMemoryMB() const {
     long pages = sysconf(_SC_PHYS_PAGES);
     long page_size = sysconf(_SC_PAGE_SIZE);
     return (pages * page_size) / (1024 * 1024);
+#elif defined(__APPLE__)
+    uint64_t memory_bytes = 0;
+    size_t value_size = sizeof(memory_bytes);
+    if (sysctlbyname("hw.memsize", &memory_bytes, &value_size, nullptr, 0) != 0) return 0;
+    return memory_bytes / (1024 * 1024);
 #else
     return 0;
 #endif
@@ -126,6 +162,16 @@ uint64_t CPUInfoProvider::GetAvailableMemoryMB() const {
     long avail_pages = sysconf(_SC_AVPHYS_PAGES);
     long page_size = sysconf(_SC_PAGE_SIZE);
     return (avail_pages * page_size) / (1024 * 1024);
+#elif defined(__APPLE__)
+    mach_port_t host = mach_host_self();
+    vm_size_t page_size = 0;
+    vm_statistics64_data_t vm_stats = {};
+    mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
+    if (host_page_size(host, &page_size) != KERN_SUCCESS ||
+        host_statistics64(host, HOST_VM_INFO64, reinterpret_cast< host_info64_t>(&vm_stats), &count) != KERN_SUCCESS) {
+        return 0;
+    }
+    return (static_cast<uint64_t>(vm_stats.free_count + vm_stats.inactive_count) * page_size) / (1024 * 1024);
 #else
     return 0;
 #endif

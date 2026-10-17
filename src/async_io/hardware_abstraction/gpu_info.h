@@ -13,6 +13,10 @@ struct GPUDevice {
     uint64_t total_memory_mb;
     uint64_t free_memory_mb;
     bool is_available;
+    uint32_t vendor_id = 0;
+    uint32_t pci_device_id = 0;
+    std::string driver_version;
+    std::string backend;
 };
 
 class GPUInfoProvider {
@@ -39,6 +43,7 @@ public:
     bool SupportsCUDA() const { return supports_cuda_; }
     bool SupportsOpenCL() const { return supports_opencl_; }
     bool SupportsHIP() const { return supports_hip_; }
+    bool SupportsVulkan() const { return supports_vulkan_; }
 
     // Device info
     std::string GetDeviceDescription(int device_id) const;
@@ -50,8 +55,10 @@ private:
     bool supports_cuda_;
     bool supports_opencl_;
     bool supports_hip_;
+    bool supports_vulkan_;
 
     void DetectGPUs();
+    void DetectVulkanDevices();
     void DetectCUDADevices();
 };
 

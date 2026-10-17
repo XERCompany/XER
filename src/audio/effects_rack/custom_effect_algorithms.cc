@@ -19,6 +19,7 @@ std::vector<std::string> ListCustomEffectAlgorithms() {
 		"tube",
 		"reverb_algorithmic",
 		"pitch_shift",
+		"auto_tune_correct_pitch",
 		"delay",
 		"clap_plugin",
 	};
@@ -94,6 +95,17 @@ CustomEffectNode CreateDefaultCustomEffectNode(const std::string& algorithm_name
 		node.mix_curve.push_back(CustomEffectCurvePoint{0u, 1.0f});
 		node.parameters.push_back(CustomEffectParameter{"pitch_ratio", 1.0f});
 		break;
+	case CustomEffectAlgorithm::kAutoTuneCorrectPitch:
+		node.mix_curve.push_back(CustomEffectCurvePoint{0u, 1.0f});
+		node.parameters.push_back(CustomEffectParameter{"correction_amount", 0.88f});
+		node.parameters.push_back(CustomEffectParameter{"correction_speed", 0.18f});
+		node.parameters.push_back(CustomEffectParameter{"retune_speed_ms", 18.0f});
+		node.parameters.push_back(CustomEffectParameter{"humanize", 0.12f});
+		node.parameters.push_back(CustomEffectParameter{"scale_root", 0.0f});
+		node.parameters.push_back(CustomEffectParameter{"scale_mode", 0.0f});
+		node.parameters.push_back(CustomEffectParameter{"presence_db", 1.6f});
+		node.parameters.push_back(CustomEffectParameter{"wet_mix", 0.92f});
+		break;
 	case CustomEffectAlgorithm::kDelay:
 		node.mix_curve.push_back(CustomEffectCurvePoint{0u, 0.45f});
 		node.parameters.push_back(CustomEffectParameter{"delay_samples", 640.0f});
@@ -123,6 +135,7 @@ std::vector<std::string> ListCustomEffectPresets() {
 		"Compressor",
 		"Limiter",
 		"AutoTune",
+		"AutoTuneCorrectPitch",
 		"PitchShifter",
 		"PitchKey",
 		"AutoPitch",

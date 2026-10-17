@@ -9,7 +9,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <fstream>
+#include <string>
+#include <thread>
 #include <vector>
 
 namespace Engine::Audio::Core {
@@ -26,6 +29,46 @@ struct DecodedAudioData {
 	size_t FrameCount() const {
 		return channels.empty() ? 0 : channels.front().size();
 	}
+};
+
+unsigned CpuWorkerCount(size_t work_items) {
+	if (work_items == 0u) return 1u;
+	const unsigned hardware = std::thread::hardware_concurrency();
+	return static_cast<unsigned>(std::min<size_t>(work_items, std::max(1u, hardware)));
+}
+
+template <typename Callback>
+void RunParallelRanges(size_t item_count, size_t minimum_items_per_worker, Callback&& callback) {
+	if (item_count == 0u) return;
+	const size_t worker_count = std::min<size_t>(
+		CpuWorkerCount(item_count),
+		std::max<size_t>(1u, item_count / std::max<size_t>(1u, minimum_items_per_worker)));
+	if (worker_count <= 1u) {
+		callback(0u, item_count);
+		return;
+	}
+
+	std::vector<std::future<void>> futures;
+	futures.reserve(worker_count - 1u);
+	for (size_t worker = 1u; worker < worker_count; ++worker) {
+		const size_t begin = item_count * worker / worker_count;
+		const size_t end = item_count * (worker + 1u) / worker_count;
+		futures.push_back(std::async(std::launch::async, callback, begin, end));
+	}
+	callback(0u, item_count / worker_count);
+	for (auto& future : futures) {
+		future.get();
+	}
+}
+
+enum class SampleFormatKind {
+	Unknown,
+	U8,
+	S16,
+	S32,
+	S64,
+	F32,
+	F64,
 };
 
 std::string ToLowerCopy(std::string value) {
@@ -178,6 +221,34 @@ size_t BytesPerSample(const std::string& sample_format) {
 	return 0;
 }
 
+SampleFormatKind ParseSampleFormat(const std::string& sample_format) {
+	const std::string canonical = CanonicalSampleFormat(sample_format);
+	if (canonical == "u8") return SampleFormatKind::U8;
+	if (canonical == "s16") return SampleFormatKind::S16;
+	if (canonical == "s32") return SampleFormatKind::S32;
+	if (canonical == "s64") return SampleFormatKind::S64;
+	if (canonical == "flt") return SampleFormatKind::F32;
+	if (canonical == "dbl") return SampleFormatKind::F64;
+	return SampleFormatKind::Unknown;
+}
+
+size_t BytesPerSample(SampleFormatKind sample_format) {
+	switch (sample_format) {
+	case SampleFormatKind::U8:
+		return 1u;
+	case SampleFormatKind::S16:
+		return 2u;
+	case SampleFormatKind::S32:
+	case SampleFormatKind::F32:
+		return 4u;
+	case SampleFormatKind::S64:
+	case SampleFormatKind::F64:
+		return 8u;
+	default:
+		return 0u;
+	}
+}
+
 template <typename SampleType>
 SampleType ReadPod(const std::uint8_t* data) {
 	SampleType value{};
@@ -185,37 +256,40 @@ SampleType ReadPod(const std::uint8_t* data) {
 	return value;
 }
 
-bool DecodeSample(const std::string& sample_format, const std::uint8_t* data, float* sample_out) {
+bool DecodeSample(SampleFormatKind sample_format, const std::uint8_t* data, float* sample_out) {
 	if (data == nullptr || sample_out == nullptr) {
 		return false;
 	}
 
-	const std::string canonical = CanonicalSampleFormat(sample_format);
-	if (canonical == "u8") {
+	if (sample_format == SampleFormatKind::U8) {
 		*sample_out = (static_cast<float>(*data) - 128.0f) / 128.0f;
 		return true;
 	}
-	if (canonical == "s16") {
+	if (sample_format == SampleFormatKind::S16) {
 		*sample_out = static_cast<float>(ReadPod<std::int16_t>(data)) / 32768.0f;
 		return true;
 	}
-	if (canonical == "s32") {
+	if (sample_format == SampleFormatKind::S32) {
 		*sample_out = static_cast<float>(static_cast<double>(ReadPod<std::int32_t>(data)) / 2147483648.0);
 		return true;
 	}
-	if (canonical == "s64") {
+	if (sample_format == SampleFormatKind::S64) {
 		*sample_out = static_cast<float>(static_cast<long double>(ReadPod<std::int64_t>(data)) / 9223372036854775808.0L);
 		return true;
 	}
-	if (canonical == "flt") {
+	if (sample_format == SampleFormatKind::F32) {
 		*sample_out = ReadPod<float>(data);
 		return true;
 	}
-	if (canonical == "dbl") {
+	if (sample_format == SampleFormatKind::F64) {
 		*sample_out = static_cast<float>(ReadPod<double>(data));
 		return true;
 	}
 	return false;
+}
+
+bool DecodeSample(const std::string& sample_format, const std::uint8_t* data, float* sample_out) {
+	return DecodeSample(ParseSampleFormat(sample_format), data, sample_out);
 }
 
 bool AppendFrameChannels(
@@ -238,7 +312,8 @@ bool AppendFrameChannels(
 		return false;
 	}
 
-	const size_t bytes_per_sample = BytesPerSample(frame.sample_format);
+	const SampleFormatKind sample_format = ParseSampleFormat(frame.sample_format);
+	const size_t bytes_per_sample = BytesPerSample(sample_format);
 	if (bytes_per_sample == 0) {
 		if (error_out != nullptr) {
 			*error_out = "unsupported ffmpeg sample format: " + frame.sample_format;
@@ -246,8 +321,10 @@ bool AppendFrameChannels(
 		return false;
 	}
 
-	for (auto& channel : decoded_audio->channels) {
-		channel.reserve(channel.size() + static_cast<size_t>(frame.sample_count));
+	std::vector<size_t> write_offsets(decoded_audio->channels.size(), 0u);
+	for (size_t channel = 0; channel < decoded_audio->channels.size(); ++channel) {
+		write_offsets[channel] = decoded_audio->channels[channel].size();
+		decoded_audio->channels[channel].resize(write_offsets[channel] + static_cast<size_t>(frame.sample_count));
 	}
 
 	if (frame.planar) {
@@ -274,17 +351,16 @@ bool AppendFrameChannels(
 		}
 
 		for (int channel = 0; channel < frame.channels; ++channel) {
+			float* output = decoded_audio->channels[static_cast<size_t>(channel)].data() + write_offsets[static_cast<size_t>(channel)];
 			for (int sample_index = 0; sample_index < frame.sample_count; ++sample_index) {
-				float decoded_sample = 0.0f;
 				const size_t byte_offset = plane_offsets[static_cast<size_t>(channel)]
 					+ static_cast<size_t>(sample_index) * bytes_per_sample;
-				if (!DecodeSample(frame.sample_format, frame.data.data() + static_cast<std::ptrdiff_t>(byte_offset), &decoded_sample)) {
+				if (!DecodeSample(sample_format, frame.data.data() + static_cast<std::ptrdiff_t>(byte_offset), output + sample_index)) {
 					if (error_out != nullptr) {
 						*error_out = "failed to decode planar audio sample";
 					}
 					return false;
 				}
-				decoded_audio->channels[static_cast<size_t>(channel)].push_back(decoded_sample);
 			}
 		}
 		return true;
@@ -302,16 +378,15 @@ bool AppendFrameChannels(
 
 	for (int sample_index = 0; sample_index < frame.sample_count; ++sample_index) {
 		for (int channel = 0; channel < frame.channels; ++channel) {
-			float decoded_sample = 0.0f;
 			const size_t byte_offset = (static_cast<size_t>(sample_index) * static_cast<size_t>(frame.channels)
 				+ static_cast<size_t>(channel)) * bytes_per_sample;
-			if (!DecodeSample(frame.sample_format, frame.data.data() + static_cast<std::ptrdiff_t>(byte_offset), &decoded_sample)) {
+			float* output = decoded_audio->channels[static_cast<size_t>(channel)].data() + write_offsets[static_cast<size_t>(channel)];
+			if (!DecodeSample(sample_format, frame.data.data() + static_cast<std::ptrdiff_t>(byte_offset), output + sample_index)) {
 				if (error_out != nullptr) {
 					*error_out = "failed to decode interleaved audio sample";
 				}
 				return false;
 			}
-			decoded_audio->channels[static_cast<size_t>(channel)].push_back(decoded_sample);
 		}
 	}
 	return true;
@@ -341,12 +416,14 @@ bool DecodeRawPcmFile(
 	}
 
 	decoded_audio->channels.assign(1, std::vector<float>(bytes.size() / 2u, 0.0f));
-	for (size_t index = 0; index < decoded_audio->channels.front().size(); ++index) {
-		const std::int16_t sample = static_cast<std::int16_t>(
-			static_cast<std::uint16_t>(bytes[index * 2u])
-			| (static_cast<std::uint16_t>(bytes[index * 2u + 1u]) << 8u));
-		decoded_audio->channels.front()[index] = static_cast<float>(sample) / 32768.0f;
-	}
+	RunParallelRanges(decoded_audio->channels.front().size(), 65536u, [&](size_t begin, size_t end) {
+		for (size_t index = begin; index < end; ++index) {
+			const std::int16_t sample = static_cast<std::int16_t>(
+				static_cast<std::uint16_t>(bytes[index * 2u])
+				| (static_cast<std::uint16_t>(bytes[index * 2u + 1u]) << 8u));
+			decoded_audio->channels.front()[index] = static_cast<float>(sample) / 32768.0f;
+		}
+	});
 	decoded_audio->sample_rate = sample_rate;
 	decoded_audio->source_format = "raw_s16le_mono";
 	decoded_audio->codec_name = "pcm_s16le";
@@ -439,6 +516,8 @@ bool DecodeWithFFmpeg(
 
 	decoded_audio->channels.clear();
 	decoded_audio->sample_rate = 0;
+	int decoded_channels = 0;
+	size_t total_frame_count = 0u;
 	for (const auto& frame : frames) {
 		if (frame.sample_rate <= 0) {
 			if (error_out != nullptr) {
@@ -454,6 +533,21 @@ bool DecodeWithFFmpeg(
 			}
 			return false;
 		}
+		if (decoded_channels == 0) {
+			decoded_channels = frame.channels;
+		} else if (decoded_channels != frame.channels) {
+			if (error_out != nullptr) {
+				*error_out = "decoded audio frames use inconsistent channel counts";
+			}
+			return false;
+		}
+		total_frame_count += static_cast<size_t>(frame.sample_count);
+	}
+	decoded_audio->channels.assign(static_cast<size_t>(decoded_channels), {});
+	for (auto& channel : decoded_audio->channels) {
+		channel.reserve(total_frame_count);
+	}
+	for (const auto& frame : frames) {
 		if (!AppendFrameChannels(frame, decoded_audio, error_out)) {
 			return false;
 		}
@@ -583,14 +677,28 @@ bool ResamplePlanar(
 	}
 
 	output_channels->assign(input_channels.size(), {});
-	for (size_t channel = 0; channel < input_channels.size(); ++channel) {
-		if (!ResampleMono(
+	if (input_channels.size() == 1u) {
+		return ResampleMono(input_channels.front(), input_sample_rate, output_sample_rate, quality, &output_channels->front(), error_out);
+	}
+
+	std::vector<std::string> errors(input_channels.size());
+	std::vector<uint8_t> ok(input_channels.size(), 0u);
+	RunParallelRanges(input_channels.size(), 1u, [&](size_t begin, size_t end) {
+		for (size_t channel = begin; channel < end; ++channel) {
+			ok[channel] = ResampleMono(
 				input_channels[channel],
 				input_sample_rate,
 				output_sample_rate,
 				quality,
 				&(*output_channels)[channel],
-				error_out)) {
+				&errors[channel]) ? 1u : 0u;
+		}
+	});
+	for (size_t channel = 0; channel < input_channels.size(); ++channel) {
+		if (!ok[channel]) {
+			if (error_out != nullptr) {
+				*error_out = errors[channel].empty() ? "failed to resample normalized audio channel" : errors[channel];
+			}
 			return false;
 		}
 	}

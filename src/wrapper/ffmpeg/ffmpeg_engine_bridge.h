@@ -1,6 +1,8 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -157,6 +159,10 @@ struct VideoFrameInfo {
 	std::vector<uint8_t> data;
 };
 
+using VideoFrameProvider = std::function<bool(std::size_t frame_index,
+											 VideoFrameInfo* out_frame,
+											 std::string* out_error)>;
+
 struct AudioFrameInfo {
 	int stream_index = -1;
 	int sample_rate = 0;
@@ -210,6 +216,10 @@ bool RemuxCopy(const std::string& input_path,
 bool EncodeVideoFrames(const EncodeVideoParams& params,
                        const std::vector<VideoFrameInfo>& frames,
                        std::string* out_error);
+bool EncodeVideoFrameStream(const EncodeVideoParams& params,
+							std::size_t frame_count,
+							const VideoFrameProvider& provider,
+							std::string* out_error);
 bool EncodeAudioFrames(const EncodeAudioParams& params,
                        const std::vector<AudioFrameInfo>& frames,
                        std::string* out_error);

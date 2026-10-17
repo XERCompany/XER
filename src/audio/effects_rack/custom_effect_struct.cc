@@ -72,6 +72,8 @@ std::string CustomEffectAlgorithmToString(CustomEffectAlgorithm algorithm) {
 		return "reverb_algorithmic";
 	case CustomEffectAlgorithm::kPitchShift:
 		return "pitch_shift";
+	case CustomEffectAlgorithm::kAutoTuneCorrectPitch:
+		return "auto_tune_correct_pitch";
 	case CustomEffectAlgorithm::kDelay:
 		return "delay";
 	case CustomEffectAlgorithm::kPlugin:
@@ -137,6 +139,10 @@ bool ParseCustomEffectAlgorithm(const std::string& text, CustomEffectAlgorithm* 
 	}
 	if (normalized == "pitch_shift" || normalized == "pitch") {
 		*algorithm_out = CustomEffectAlgorithm::kPitchShift;
+		return true;
+	}
+	if (normalized == "auto_tune_correct_pitch" || normalized == "autotunecorrectpitch" || normalized == "correct_pitch") {
+		*algorithm_out = CustomEffectAlgorithm::kAutoTuneCorrectPitch;
 		return true;
 	}
 	if (normalized == "delay") {

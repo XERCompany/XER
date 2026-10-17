@@ -51,9 +51,15 @@ bool RemoveCacheArtifact(const std::filesystem::path& artifact_path, std::string
 
 FlowScriptRequireRuntime::FlowScriptRequireRuntime(v8::Isolate* isolate,
                                                    v8::Local<v8::Context> context,
-                                                   std::string entry_script_path)
-    : isolate_(isolate), entry_script_path_(std::move(entry_script_path)) {
+                                                   std::string entry_script_path,
+                                                   bool sandboxed)
+    : isolate_(isolate), entry_script_path_(std::move(entry_script_path)), sandboxed_(sandboxed) {
     context_.Reset(isolate_, context);
+    if (sandboxed_) {
+        std::error_code error;
+        sandbox_root_ = std::filesystem::weakly_canonical(entry_script_path_.parent_path(), error);
+        if (error) sandbox_root_.clear();
+    }
 }
 
 bool FlowScriptRequireRuntime::RunEntry(std::string* error_out) {
@@ -78,6 +84,12 @@ bool FlowScriptRequireRuntime::Require(const std::string& request,
                                        v8::Local<v8::Value>* export_value,
                                        std::string* error_out) {
     std::filesystem::path resolved = ResolveRequestPath(request);
+    if (sandboxed_ && !IsWithinSandboxRoot(resolved)) {
+        if (error_out != nullptr) {
+            *error_out = "RequireFile blocked by sandbox: path outside entry script directory";
+        }
+        return false;
+    }
 
     require_support::ScriptExecutionInfo execution_info;
     if (!require_support::PrepareScriptForExecution(resolved, &execution_info, error_out)) {
@@ -525,6 +537,18 @@ std::filesystem::path FlowScriptRequireRuntime::ResolveRequestPath(
         }
     }
     return resolved;
+}
+
+bool FlowScriptRequireRuntime::IsWithinSandboxRoot(const std::filesystem::path& path) const {
+    if (sandbox_root_.empty()) return false;
+
+    std::error_code error;
+    const std::filesystem::path canonical_path = std::filesystem::weakly_canonical(path, error);
+    if (error) return false;
+
+    const std::filesystem::path relative_path = canonical_path.lexically_relative(sandbox_root_);
+    if (relative_path.empty()) return canonical_path == sandbox_root_;
+    return !relative_path.is_absolute() && *relative_path.begin() != "..";
 }
 
 }  // namespace flow_script_detail

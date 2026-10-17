@@ -17,6 +17,7 @@
 #include "fx_mod_chorus.h"
 #include "fx_mod_flanger.h"
 #include "fx_mod_phaser.h"
+#include "fx_pitch_auto_tune_correct.h"
 #include "fx_reverb_algorithmic.h"
 
 namespace Engine::Audio::FX {
@@ -50,6 +51,7 @@ private:
 	ModFlanger flanger_;
 	ModPhaser phaser_;
 	ParametricEQ parametric_eq_;
+	AutoTuneCorrectPitch auto_tune_correct_pitch_;
 	ReverbAlgorithmic reverb_algorithmic_;
 	float delay_feedback_state_ = 0.0f;
 	std::vector<float> wet_buffer_;

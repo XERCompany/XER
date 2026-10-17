@@ -15,6 +15,7 @@ public:
         kAudioFxBatch,
         kAudioModulesSmoke,
         kAudioAnalysisSmoke,
+        kMusicBassEqClip,
         kAudioDemo,
         kSpectrogram,
         kOnset,
@@ -47,6 +48,11 @@ public:
         int target_sample_rate = 44100;
         int audio_target_channels = -1;
         std::string audio_batch_mode = "parallel";
+        std::string video_output_path;
+        float clip_duration_seconds = 15.0f;
+        int video_width = 1280;
+        int video_height = 720;
+        int video_fps = 30;
         bool json_output = false;
         bool audio_pipe_mp3 = false;
         std::string xer_key;

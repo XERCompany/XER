@@ -154,10 +154,32 @@ bool BuildFxCustomEffectPackage(
 		return true;
 	}
 	if (normalized == "autotune") {
-		CustomEffectNode pitch = MakeNode("pitch_shift", "autotune_pitch", 0u, 1.0f);
-		SetParam(&pitch, "pitch_ratio", 1.059463f);
+		CustomEffectNode pitch = MakeNode("auto_tune_correct_pitch", "autotune_realtime_pitch_corrector", 0u, 1.0f);
+		SetParam(&pitch, "correction_amount", 1.0f);
+		SetParam(&pitch, "correction_speed", 0.92f);
+		SetParam(&pitch, "retune_speed_ms", 0.0f);
+		SetParam(&pitch, "humanize", 0.0f);
+		SetParam(&pitch, "scale_root", 0.0f);
+		SetParam(&pitch, "scale_mode", 0.0f);
+		SetParam(&pitch, "presence_db", 1.2f);
+		SetParam(&pitch, "wet_mix", 1.0f);
 		CustomEffectNode limiter = MakeNode("limiter", "autotune_limiter", 1u, 1.0f);
 		*package_out = MakePresetPackage("AutoTune", {pitch, limiter});
+		return true;
+	}
+	if (normalized == "autotunecorrectpitch" || normalized == "autotunecorrect" || normalized == "correctpitch") {
+		CustomEffectNode correct = MakeNode("auto_tune_correct_pitch", "autotune_correct_pitch_process", 0u, 1.0f);
+		SetParam(&correct, "correction_amount", 0.88f);
+		SetParam(&correct, "correction_speed", 0.18f);
+		SetParam(&correct, "retune_speed_ms", 18.0f);
+		SetParam(&correct, "humanize", 0.12f);
+		SetParam(&correct, "scale_root", 0.0f);
+		SetParam(&correct, "scale_mode", 0.0f);
+		SetParam(&correct, "presence_db", 1.6f);
+		SetParam(&correct, "wet_mix", 0.92f);
+		CustomEffectNode limiter = MakeNode("limiter", "autotune_correct_pitch_limiter", 1u, 1.0f);
+		SetParam(&limiter, "ceiling_db", -0.8f);
+		*package_out = MakePresetPackage("AutoTuneCorrectPitch", {correct, limiter});
 		return true;
 	}
 	if (normalized == "pitchkey" || normalized == "pitchshifter") {

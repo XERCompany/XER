@@ -42,6 +42,7 @@ CustomEffectPackage BuildDeEsserEffect();
 CustomEffectPackage BuildCompressorEffect();
 CustomEffectPackage BuildLimiterEffect();
 CustomEffectPackage BuildAutoTuneEffect();
+CustomEffectPackage BuildAutoTuneCorrectPitchEffect();
 CustomEffectPackage BuildPitchShifterEffect();
 CustomEffectPackage BuildPitchKeyEffect();
 CustomEffectPackage BuildAutoPitchEffect();

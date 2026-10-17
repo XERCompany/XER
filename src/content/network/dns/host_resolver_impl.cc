@@ -88,7 +88,7 @@ void HostResolverImpl::StoreCache(const std::string& host,
     if (addrs.empty()) return;
     const uint32_t ttl = addrs[0].ttl_sec ? addrs[0].ttl_sec : 60;
     std::lock_guard<std::mutex> lock(cache_mu_);
-    cache_[host] = {addrs, NowMs() + ttl * 1000};
+    cache_[host] = {addrs, NowMs() + static_cast<uint64_t>(ttl) * 1000ULL};
 }
 
 void HostResolverImpl::ClearCache() {

@@ -1457,29 +1457,54 @@ bool ExtractStream(const std::string& input_path,
 bool EncodeVideoFrames(const EncodeVideoParams& params,
                        const std::vector<VideoFrameInfo>& frames,
                        std::string* out_error) {
+    return EncodeVideoFrameStream(
+        params,
+        frames.size(),
+        [&frames](std::size_t frame_index, VideoFrameInfo* out_frame, std::string* out_error) {
+            if (out_frame == nullptr || frame_index >= frames.size()) {
+                SetError(out_error, "EncodeVideoFrames provider received invalid frame index");
+                return false;
+            }
+            *out_frame = frames[frame_index];
+            return true;
+        },
+        out_error);
+}
+
+bool EncodeVideoFrameStream(const EncodeVideoParams& params,
+                            std::size_t frame_count,
+                            const VideoFrameProvider& provider,
+                            std::string* out_error) {
 #if ENGINE_HAS_FFMPEG_BRIDGE
-    if (frames.empty()) {
+    if (frame_count == 0u) {
         SetError(out_error, "No video frames to encode");
         return false;
     }
 
+    if (!provider) {
+        SetError(out_error, "EncodeVideoFrameStream requires a frame provider");
+        return false;
+    }
+
     if (params.output_path.empty()) {
-        SetError(out_error, "EncodeVideoFrames requires an output path");
+        SetError(out_error, "EncodeVideoFrameStream requires an output path");
         return false;
     }
 
-    const int width = params.width > 0 ? params.width : frames.front().width;
-    const int height = params.height > 0 ? params.height : frames.front().height;
+    VideoFrameInfo first_frame;
+    if (!provider(0u, &first_frame, out_error)) {
+        return false;
+    }
+
+    const int width = params.width > 0 ? params.width : first_frame.width;
+    const int height = params.height > 0 ? params.height : first_frame.height;
     if (width <= 0 || height <= 0) {
-        SetError(out_error, "EncodeVideoFrames received invalid width/height");
+        SetError(out_error, "EncodeVideoFrameStream received invalid width/height");
         return false;
     }
 
-    bool all_valid = std::all_of(frames.begin(), frames.end(), [width, height](const VideoFrameInfo& f) {
-        return f.width == width && f.height == height && !f.line_sizes.empty() && !f.data.empty();
-    });
-    if (!all_valid) {
-        SetError(out_error, "Some video frames contain invalid data or inconsistent dimensions");
+    if (first_frame.width != width || first_frame.height != height || first_frame.line_sizes.empty() || first_frame.data.empty()) {
+        SetError(out_error, "First video frame contains invalid data or inconsistent dimensions");
         return false;
     }
 
@@ -1597,7 +1622,7 @@ bool EncodeVideoFrames(const EncodeVideoParams& params,
         return false;
     }
 
-    const AVPixelFormat input_pix_fmt = parse_input_pix_fmt(frames.front().pixel_format);
+    const AVPixelFormat input_pix_fmt = parse_input_pix_fmt(first_frame.pixel_format);
     if (input_pix_fmt == AV_PIX_FMT_NONE) {
         av_packet_free(&packet);
         av_write_trailer(output_context);
@@ -1606,7 +1631,7 @@ bool EncodeVideoFrames(const EncodeVideoParams& params,
         }
         avcodec_free_context(&codec_context);
         avformat_free_context(output_context);
-        SetError(out_error, "unsupported input pixel format: " + frames.front().pixel_format);
+        SetError(out_error, "unsupported input pixel format: " + first_frame.pixel_format);
         return false;
     }
 
@@ -1637,7 +1662,21 @@ bool EncodeVideoFrames(const EncodeVideoParams& params,
 
     bool success = true;
     int64_t next_pts = 0;
-    for (const auto& input : frames) {
+    for (std::size_t frame_index = 0; frame_index < frame_count; ++frame_index) {
+        VideoFrameInfo input;
+        if (frame_index == 0u) {
+            input = std::move(first_frame);
+        } else if (!provider(frame_index, &input, out_error)) {
+            success = false;
+            break;
+        }
+
+        if (input.width != width || input.height != height || input.line_sizes.empty() || input.data.empty()) {
+            success = false;
+            SetError(out_error, "Streamed video frame contains invalid data or inconsistent dimensions");
+            break;
+        }
+
         AVFrame* frame = av_frame_alloc();
         if (frame == nullptr) {
             success = false;
@@ -1751,7 +1790,8 @@ bool EncodeVideoFrames(const EncodeVideoParams& params,
     return success;
 #else
     (void)params;
-    (void)frames;
+    (void)frame_count;
+    (void)provider;
     SetError(out_error, "FFmpeg bridge unavailable");
     return false;
 #endif

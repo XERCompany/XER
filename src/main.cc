@@ -40,6 +40,7 @@
 #include "provider.h"
 #include "runtime_safety/safe_integrity_check.h"
 #include "compilerapi/runtime_live.h"
+#include "video/music_bass_eq_clip.h"
 #include "watch/watch_live_updatex_script.h"
 #include "xer/xer_encode.h"
 #include "xer/xer_script.h"
@@ -983,6 +984,33 @@ int main(int argc, char** argv) {
 			return 1;
 		}
 		WriteStdout(report);
+		return 0;
+	}
+
+	if (parsed.type == AppCommand::Type::kMusicBassEqClip) {
+		video::MusicBassEqClipOptions clip_options;
+		clip_options.input_path = parsed.audio_input_path.empty()
+			? std::filesystem::path()
+			: std::filesystem::path(parsed.audio_input_path);
+		clip_options.output_dir = parsed.output_dir.empty()
+			? std::filesystem::path("out/music_bass_eq_clip")
+			: std::filesystem::path(parsed.output_dir);
+		clip_options.output_path = parsed.video_output_path.empty()
+			? std::filesystem::path()
+			: std::filesystem::path(parsed.video_output_path);
+		clip_options.duration_seconds = parsed.clip_duration_seconds;
+		clip_options.width = parsed.video_width;
+		clip_options.height = parsed.video_height;
+		clip_options.fps = parsed.video_fps;
+		clip_options.target_sample_rate = parsed.target_sample_rate;
+
+		video::MusicBassEqClipResult clip_result;
+		std::string clip_error;
+		if (!video::GenerateMusicBassEqClip(clip_options, &clip_result, &clip_error)) {
+			WriteStderrLine(absl::StrCat("Music bass EQ clip failed: ", clip_error));
+			return 1;
+		}
+		WriteStdout(video::BuildMusicBassEqClipReport(clip_options, clip_result));
 		return 0;
 	}
 

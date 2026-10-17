@@ -1,9 +1,45 @@
 #include "audio_interleave_processor.h"
 
-#include <cstring>
 #include <algorithm>
+#include <cstring>
+#include <future>
+#include <thread>
 
 namespace Engine::Audio::Core {
+
+namespace {
+
+unsigned CpuWorkerCount(size_t work_items) {
+    if (work_items == 0u) return 1u;
+    const unsigned hardware = std::thread::hardware_concurrency();
+    return static_cast<unsigned>(std::min<size_t>(work_items, std::max(1u, hardware)));
+}
+
+template <typename Callback>
+void RunParallelFrames(size_t frame_count, Callback&& callback) {
+    constexpr size_t kMinimumFramesPerWorker = 65536u;
+    const size_t worker_count = std::min<size_t>(
+        CpuWorkerCount(frame_count),
+        std::max<size_t>(1u, frame_count / kMinimumFramesPerWorker));
+    if (worker_count <= 1u) {
+        callback(0u, frame_count);
+        return;
+    }
+
+    std::vector<std::future<void>> futures;
+    futures.reserve(worker_count - 1u);
+    for (size_t worker = 1u; worker < worker_count; ++worker) {
+        const size_t begin = frame_count * worker / worker_count;
+        const size_t end = frame_count * (worker + 1u) / worker_count;
+        futures.push_back(std::async(std::launch::async, callback, begin, end));
+    }
+    callback(0u, frame_count / worker_count);
+    for (auto& future : futures) {
+        future.get();
+    }
+}
+
+}  // namespace
 
 AudioInterleaveProcessor::AudioInterleaveProcessor() {}
 
@@ -19,11 +55,13 @@ bool AudioInterleaveProcessor::Interleave(
         return false;
     }
 
-    for (size_t frame = 0; frame < frame_count; ++frame) {
-        for (int ch = 0; ch < channel_count; ++ch) {
-            interleaved_output[frame * channel_count + ch] = planar_data[ch][frame];
+    RunParallelFrames(frame_count, [&](size_t begin, size_t end) {
+        for (size_t frame = begin; frame < end; ++frame) {
+            for (int ch = 0; ch < channel_count; ++ch) {
+                interleaved_output[frame * static_cast<size_t>(channel_count) + static_cast<size_t>(ch)] = planar_data[ch][frame];
+            }
         }
-    }
+    });
     
     return true;
 }
@@ -38,11 +76,13 @@ bool AudioInterleaveProcessor::Deinterleave(
         return false;
     }
 
-    for (size_t frame = 0; frame < frame_count; ++frame) {
-        for (int ch = 0; ch < channel_count; ++ch) {
-            planar_output[ch][frame] = interleaved_data[frame * channel_count + ch];
+    RunParallelFrames(frame_count, [&](size_t begin, size_t end) {
+        for (size_t frame = begin; frame < end; ++frame) {
+            for (int ch = 0; ch < channel_count; ++ch) {
+                planar_output[ch][frame] = interleaved_data[frame * static_cast<size_t>(channel_count) + static_cast<size_t>(ch)];
+            }
         }
-    }
+    });
     
     return true;
 }
@@ -125,14 +165,16 @@ bool AudioInterleaveProcessor::MixChannels(
         return false;
     }
 
-    std::fill(output, output + frame_count, 0.0f);
-    
-    float scale = 1.0f / input_channels;
-    for (int ch = 0; ch < input_channels; ++ch) {
-        for (size_t frame = 0; frame < frame_count; ++frame) {
-            output[frame] += inputs[ch][frame] * scale;
+    const float scale = 1.0f / static_cast<float>(input_channels);
+    RunParallelFrames(frame_count, [&](size_t begin, size_t end) {
+        for (size_t frame = begin; frame < end; ++frame) {
+            float sum = 0.0f;
+            for (int ch = 0; ch < input_channels; ++ch) {
+                sum += inputs[ch][frame];
+            }
+            output[frame] = sum * scale;
         }
-    }
+    });
     
     return true;
 }

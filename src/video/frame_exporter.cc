@@ -2,6 +2,8 @@
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 #include "flux/core/logger.h"
 
+#include <utility>
+
 namespace video {
 
 static flux::core::Logger& Log() {
@@ -90,6 +92,56 @@ bool FrameExporter::ExportFrames(const std::string& path,
     if (!ok) Log().Error("FrameExporter", "ExportFrames failed: " + err);
     else     Log().Info("FrameExporter",
                         "Exported " + std::to_string(vframes.size()) + " frames to " + path);
+    return ok;
+}
+
+bool FrameExporter::ExportFrameStream(const std::string& path,
+                                      size_t frame_count,
+                                      int width,
+                                      int height,
+                                      const std::string& codec,
+                                      int fps,
+                                      const FrameStreamProvider& provider) {
+    if (!engine::bridge::ffmpeg::IsAvailable() || frame_count == 0u || !provider) return false;
+    if (width <= 0 || height <= 0) return false;
+
+    engine::bridge::ffmpeg::EncodeVideoParams params;
+    params.output_path = path;
+    params.codec_name = codec;
+    params.width = width;
+    params.height = height;
+    params.pixel_format = "bgra";
+    params.fps_num = fps;
+    params.fps_den = 1;
+
+    std::string err;
+    bool ok = engine::bridge::ffmpeg::EncodeVideoFrameStream(
+        params,
+        frame_count,
+        [&provider](size_t frame_index, engine::bridge::ffmpeg::VideoFrameInfo* out_frame, std::string* error_out) {
+            if (out_frame == nullptr) {
+                if (error_out != nullptr) *error_out = "stream frame target is null";
+                return false;
+            }
+            std::shared_ptr<Frame> frame;
+            if (!provider(frame_index, &frame, error_out) || !frame || !frame->IsValid()) {
+                if (error_out != nullptr && error_out->empty()) *error_out = "stream frame provider returned an invalid frame";
+                return false;
+            }
+
+            out_frame->stream_index = 0;
+            out_frame->width = frame->Width();
+            out_frame->height = frame->Height();
+            out_frame->pixel_format = "bgra";
+            out_frame->pts = frame->Pts();
+            out_frame->key_frame = frame_index == 0u;
+            out_frame->line_sizes.push_back(frame->Width() * 4);
+            out_frame->data.assign(frame->Data(), frame->Data() + frame->DataSize());
+            return true;
+        },
+        &err);
+    if (!ok) Log().Error("FrameExporter", "ExportFrameStream failed: " + err);
+    else Log().Info("FrameExporter", "Stream exported " + std::to_string(frame_count) + " frames to " + path);
     return ok;
 }
 

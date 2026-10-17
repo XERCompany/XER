@@ -1,5 +1,5 @@
 #include "video_manager.h"
-#include <cstring>
+#include "video_utils.h"
 #include "cuda_renderer.h"
 #include "vulkan_renderer.h"
 #include "angle_renderer.h"
@@ -95,13 +95,13 @@ bool VideoManager::ProcessFrame(Frame& out, const std::string& stream_id) {
         }
         if (Frame* rf = rt.GetFrame(); rf && rf->IsValid()) {
             out.Allocate(rf->Width(), rf->Height(), rf->Format());
-            std::memcpy(out.Data(), rf->Data(), rf->DataSize());
+            return utils::CopyFramePixels(*rf, out);
         }
     } else {
         out.Allocate(frame->Width(), frame->Height(), frame->Format());
-        std::memcpy(out.Data(), frame->Data(), frame->DataSize());
+        return utils::CopyFramePixels(*frame, out);
     }
-    return true;
+    return false;
 }
 
 }  // namespace video

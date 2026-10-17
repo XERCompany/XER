@@ -1,5 +1,7 @@
 #include "frame.h"
 
+#include <limits>
+
 namespace video {
 
 Frame::Frame(int w, int h, PixelFormat fmt) {
@@ -7,15 +9,40 @@ Frame::Frame(int w, int h, PixelFormat fmt) {
 }
 
 bool Frame::Allocate(int w, int h, PixelFormat fmt) {
+    if (w <= 0 || h <= 0) {
+        Release();
+        return false;
+    }
+
+    const auto width = static_cast<size_t>(w);
+    const auto height = static_cast<size_t>(h);
+    if (width > std::numeric_limits<size_t>::max() / height) {
+        Release();
+        return false;
+    }
+    const size_t pixels = width * height;
+
     meta_.width  = w;
     meta_.height = h;
     meta_.format = fmt;
     size_t sz = 0;
     switch (fmt) {
         case PixelFormat::BGRA8:
-        case PixelFormat::RGBA8: sz = static_cast<size_t>(w) * h * 4; break;
-        case PixelFormat::NV12:  sz = static_cast<size_t>(w) * h * 3 / 2; break;
-        case PixelFormat::YUV420P: sz = static_cast<size_t>(w) * h * 3 / 2; break;
+        case PixelFormat::RGBA8:
+            if (pixels > std::numeric_limits<size_t>::max() / 4) {
+                Release();
+                return false;
+            }
+            sz = pixels * 4;
+            break;
+        case PixelFormat::NV12:
+        case PixelFormat::YUV420P:
+            if (pixels > (std::numeric_limits<size_t>::max() / 3) * 2) {
+                Release();
+                return false;
+            }
+            sz = pixels * 3 / 2;
+            break;
     }
     data_.assign(sz, 0);
     return sz > 0;
