@@ -73,6 +73,9 @@ endif()
 if(TARGET XERV8External)
     add_dependencies(XER XERV8External)
 endif()
+if(TARGET XERLLVMExternal)
+    add_dependencies(XER XERLLVMExternal)
+endif()
 
 # ── Required link deps ───────────────────────────────────────
 target_link_libraries(XER PRIVATE

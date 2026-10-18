@@ -40,6 +40,7 @@
       "binaryDir": "${sourceDir}/out/build/${presetName}-system",
       "cacheVariables": {
         "ENABLE_V8": "ON",
+        "XER_BUILD_LLVM": "ON",
         "ENABLE_MEDIA": "OFF"
       }
     },
@@ -66,7 +67,12 @@
     {
       "name": "v8",
       "configurePreset": "v8",
-      "targets": ["XERV8External", "XERJavaScript"]
+      "targets": ["XERLLVMExternal", "XERV8External", "XERJavaScript", "XERSQLite3"]
+    },
+    {
+      "name": "v8-xer",
+      "configurePreset": "v8",
+      "targets": ["XER"]
     },
     {
       "name": "opencv",

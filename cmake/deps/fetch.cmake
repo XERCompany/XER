@@ -1,5 +1,6 @@
 include(FetchContent)
 include(cmake/deps/v8_external.cmake)
+include(cmake/deps/llvm_external.cmake)
 include(cmake/deps/openssl_external.cmake)
 include(cmake/deps/libusb_external.cmake)
 
@@ -44,6 +45,25 @@ if(XER_FETCH_DEPENDENCIES)
             "${xer_zlib_BINARY_DIR}")
         set(ZLIB_LIBRARIES ZLIB::ZLIB)
     endif()
+
+    set(XER_SQLITE3_VERSION "3.46.1" CACHE STRING "SQLite amalgamation version")
+    FetchContent_Populate(xer_sqlite3
+        URL "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"
+        SOURCE_DIR "${XER_DEPS_DIR}/sqlite3-src"
+        BINARY_DIR "${XER_DEPS_DIR}/sqlite3-build")
+    add_library(XERSQLite3 STATIC "${xer_sqlite3_SOURCE_DIR}/sqlite3.c")
+    target_include_directories(XERSQLite3 PUBLIC "${xer_sqlite3_SOURCE_DIR}")
+    target_compile_definitions(XERSQLite3 PRIVATE
+        SQLITE_THREADSAFE=1
+        SQLITE_ENABLE_FTS5
+        SQLITE_ENABLE_RTREE)
+    if(NOT TARGET SQLite::SQLite3)
+        add_library(SQLite::SQLite3 ALIAS XERSQLite3)
+    endif()
+    set(SQLite3_FOUND TRUE)
+    set(SQLite3_INCLUDE_DIRS "${xer_sqlite3_SOURCE_DIR}")
+    set(SQLite3_LIBRARIES SQLite::SQLite3)
+    set(XER_SQLITE_SOURCE_ENABLED TRUE)
 
     if(ENABLE_MEDIA)
         set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)

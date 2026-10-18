@@ -4,7 +4,9 @@
 
 find_package(PkgConfig QUIET)
 find_package(ICU COMPONENTS uc i18n QUIET)
-find_package(SQLite3 QUIET)
+if(NOT XER_SQLITE_SOURCE_ENABLED)
+    find_package(SQLite3 QUIET)
+endif()
 if(ENABLE_V8 AND NOT TARGET V8::V8)
     find_package(V8 QUIET)
 endif()
@@ -23,21 +25,18 @@ find_package(HDF5 QUIET COMPONENTS C CXX)
 find_package(Skia QUIET CONFIG)
 if(ENABLE_AI OR ENABLE_V8)
     if(XER_FETCH_DEPENDENCIES)
-        set(EIGEN_BUILD_DOC OFF CACHE BOOL "" FORCE)
-        set(EIGEN_BUILD_TESTING OFF CACHE BOOL "" FORCE)
-        if(DEFINED BUILD_TESTING)
-            set(_XER_BUILD_TESTING_WAS_DEFINED TRUE)
-            set(_XER_BUILD_TESTING_SAVED "${BUILD_TESTING}")
-        else()
-            set(_XER_BUILD_TESTING_WAS_DEFINED FALSE)
+        FetchContent_Populate(xer_eigen
+            GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+            GIT_TAG 3.4.0
+            GIT_SHALLOW TRUE
+            SOURCE_DIR "${XER_DEPS_DIR}/eigen-src"
+            BINARY_DIR "${XER_DEPS_DIR}/eigen-build")
+        if(NOT TARGET Eigen3::Eigen)
+            add_library(Eigen3::Eigen INTERFACE IMPORTED GLOBAL)
+            set_target_properties(Eigen3::Eigen PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "${xer_eigen_SOURCE_DIR}")
         endif()
-        set(BUILD_TESTING OFF)
-        xer_fetch_cmake_dependency(xer_eigen https://gitlab.com/libeigen/eigen.git 3.4.0)
-        if(_XER_BUILD_TESTING_WAS_DEFINED)
-            set(BUILD_TESTING "${_XER_BUILD_TESTING_SAVED}")
-        else()
-            unset(BUILD_TESTING)
-        endif()
+        set(Eigen3_FOUND TRUE)
     else()
         find_package(Eigen3 QUIET)
     endif()
