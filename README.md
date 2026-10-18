@@ -72,7 +72,7 @@ XER is a high-performance C++/V8 runtime builder that executes JavaScript projec
 ## 🛠️ Build Instructions
 
 ### Prerequisites
-Install CMake, Git, and a supported C/C++ toolchain. With `XER_FETCH_DEPENDENCIES=ON` (the default), CMake downloads CMake-native dependencies into the project-local `.deps` directory and reuses them on subsequent configure runs. Set `XER_DEPS_DIR` to move this cache elsewhere, or set `XER_FETCH_DEPENDENCIES=OFF` to use system packages only.
+Install CMake, Git, and a supported C/C++ toolchain. With `XER_FETCH_DEPENDENCIES=ON` (the default), XER CMake downloads dependencies into the project-local `.deps` directory and reuses them on subsequent configure runs. Set `XER_DEPS_DIR` to move this cache elsewhere, or set `XER_FETCH_DEPENDENCIES=OFF` to use system packages only.
 
 ### Compilation
 ```bash
@@ -81,9 +81,17 @@ cmake --preset default
 
 # Build
 cmake --build --preset default
+
+# Build V8 and the JavaScript runtime without media dependencies
+cmake --preset v8
+cmake --build --preset v8
+
+# Build the OpenCV bridge and its libraries
+cmake --preset opencv
+cmake --build --preset opencv
 ```
 
-The `default` preset enables media support. Core builds fetch Abseil, pthreadpool, FXdiv, and zlib; media support also fetches zstd, Brotli, FFmpeg, and libusb. Enabling `ENABLE_AI` fetches Eigen. Enabling `ENABLE_V8` additionally fetches libuv, LibXml2, libcurl, and OpenSSL. OpenSSL requires Perl plus `make`/`nmake` to build; when those tools are unavailable, the source is still downloaded and an installed OpenSSL package is required. On Windows, FFmpeg/libusb sources are downloaded but require GNU Make/Autotools to build; installed binary packages are used when available. Install LLVM/Clang and libnode development packages separately; set `LLVM_DIR`, `Clang_DIR`, or `LibNode_ROOT` when they are outside standard search paths. CUDA Toolkit/cuDNN are also external SDK prerequisites.
+The `default` preset enables media support. Core builds fetch Abseil, pthreadpool, FXdiv, and zlib; media support also fetches zstd, Brotli, FFmpeg, and libusb. Enable `ENABLE_OPENCV=ON` to have XER CMake fetch and build OpenCV; `ENABLE_AI=ON` also enables that dependency. OpenCV's optional ADE, IPP IW, ITT, TBB, and bundled FFmpeg downloads are disabled, and its download cache is kept under `.deps`. Enabling `ENABLE_V8=ON` fetches depot_tools and builds a pinned V8 monolith, as well as fetching libuv, LibXml2, libcurl, and OpenSSL. The `v8` preset builds V8 and `XERJavaScript`; building the `XER` executable additionally requires LLVM/Clang CMake packages. V8 builds require Python, Git, Ninja through depot_tools, and the platform's native compiler toolchain. OpenSSL requires Perl plus `make`/`nmake` to build; when those tools are unavailable, the source is still downloaded and an installed OpenSSL package is required for the executable. On Windows, FFmpeg builds from source with MSVC when Bash and GNU Make (for example from MSYS2) are available; otherwise CMake downloads the source and uses an installed FFmpeg package if present. Set `LLVM_DIR` or `Clang_DIR` when LLVM/Clang are outside standard search paths. CUDA Toolkit/cuDNN are also external SDK prerequisites.
 
 `FindLibNode.cmake` and `FindFFMPEG.cmake` adapt libraries without a usable upstream CMake package config into standard CMake variables/targets. They locate normal system installs; FFmpeg also uses pkg-config when available.
 

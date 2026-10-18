@@ -9,9 +9,15 @@ include(ExternalProject)
 set(_xer_ffmpeg_install "${XER_DEPS_DIR}/ffmpeg-install")
 set(_xer_ffmpeg_components avdevice avfilter avformat avcodec swscale swresample avutil)
 set(_xer_ffmpeg_archives)
-foreach(_component IN LISTS _xer_ffmpeg_components)
-    list(APPEND _xer_ffmpeg_archives "${_xer_ffmpeg_install}/lib/lib${_component}.a")
-endforeach()
+if(WIN32)
+    foreach(_component IN LISTS _xer_ffmpeg_components)
+        list(APPEND _xer_ffmpeg_archives "${_xer_ffmpeg_install}/lib/${_component}.lib")
+    endforeach()
+else()
+    foreach(_component IN LISTS _xer_ffmpeg_components)
+        list(APPEND _xer_ffmpeg_archives "${_xer_ffmpeg_install}/lib/lib${_component}.a")
+    endforeach()
+endif()
 
 set(_xer_ffmpeg_external_args
     GIT_REPOSITORY https://git.ffmpeg.org/ffmpeg.git
@@ -24,6 +30,9 @@ set(_xer_ffmpeg_external_args
 
 if(UNIX)
     find_program(XER_FFMPEG_MAKE_EXECUTABLE NAMES gmake make)
+elseif(WIN32)
+    find_program(XER_FFMPEG_MAKE_EXECUTABLE NAMES make gmake)
+    find_program(XER_FFMPEG_BASH_EXECUTABLE NAMES bash bash.exe)
 endif()
 
 if(UNIX AND XER_FFMPEG_MAKE_EXECUTABLE)
@@ -63,8 +72,46 @@ if(UNIX AND XER_FFMPEG_MAKE_EXECUTABLE)
         m)
 
     set(XER_FFMPEG_SOURCE_ENABLED TRUE)
+elseif(WIN32 AND MSVC AND XER_FFMPEG_MAKE_EXECUTABLE AND XER_FFMPEG_BASH_EXECUTABLE)
+    list(APPEND _xer_ffmpeg_external_args
+        CONFIGURE_COMMAND
+            "${CMAKE_COMMAND}" -E env
+            "CC=${CMAKE_C_COMPILER}"
+            "CXX=${CMAKE_CXX_COMPILER}"
+            "${XER_FFMPEG_BASH_EXECUTABLE}" "<SOURCE_DIR>/configure"
+            "--prefix=<INSTALL_DIR>"
+            --toolchain=msvc
+            --enable-static
+            --disable-shared
+            --disable-programs
+            --disable-doc
+            --disable-debug
+            --disable-autodetect
+            --disable-x86asm
+            --enable-avcodec
+            --enable-avformat
+            --enable-avdevice
+            --enable-avfilter
+            --enable-swscale
+            --enable-swresample
+        BUILD_COMMAND "${XER_FFMPEG_MAKE_EXECUTABLE}" -j "${XER_FFMPEG_BUILD_JOBS}"
+        INSTALL_COMMAND "${XER_FFMPEG_MAKE_EXECUTABLE}" install
+        BUILD_BYPRODUCTS ${_xer_ffmpeg_archives})
+
+    add_library(XERFFmpegLibraries INTERFACE)
+    target_include_directories(XERFFmpegLibraries INTERFACE
+        "${_xer_ffmpeg_install}/include")
+    target_link_libraries(XERFFmpegLibraries INTERFACE
+        ${_xer_ffmpeg_archives}
+        bcrypt
+        secur32
+        ws2_32
+        ole32
+        user32
+        advapi32)
+    set(XER_FFMPEG_SOURCE_ENABLED TRUE)
 else()
-    message(STATUS "FFmpeg sources will be downloaded to ${XER_DEPS_DIR}/ffmpeg-src; native build unavailable on this platform, using installed FFmpeg if present")
+    message(STATUS "FFmpeg sources will be downloaded to ${XER_DEPS_DIR}/ffmpeg-src; building requires a supported native toolchain and GNU Make (plus Bash/MSYS2 for MSVC builds), using installed FFmpeg if present")
     list(APPEND _xer_ffmpeg_external_args
     CONFIGURE_COMMAND "${CMAKE_COMMAND}" -E echo "FFmpeg configure skipped: GNU Make is unavailable"
     BUILD_COMMAND "${CMAKE_COMMAND}" -E echo "FFmpeg build skipped: GNU Make is unavailable"

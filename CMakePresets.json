@@ -16,6 +16,7 @@
         "ENABLE_CUDA": "OFF",
         "ENABLE_CUDNN": "OFF",
         "ENABLE_AI": "OFF",
+        "ENABLE_OPENCV": "OFF",
         "ENABLE_V8": "OFF",
         "ENABLE_MEDIA": "ON"
       }
@@ -31,6 +32,26 @@
         "ENABLE_AI": "ON",
         "ENABLE_V8": "OFF"
       }
+    },
+    {
+      "name": "v8",
+      "displayName": "Source-built V8 runtime",
+      "inherits": "default",
+      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
+      "cacheVariables": {
+        "ENABLE_V8": "ON",
+        "ENABLE_MEDIA": "OFF"
+      }
+    },
+    {
+      "name": "opencv",
+      "displayName": "OpenCV bridge libraries",
+      "inherits": "default",
+      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
+      "cacheVariables": {
+        "ENABLE_OPENCV": "ON",
+        "ENABLE_MEDIA": "OFF"
+      }
     }
   ],
   "buildPresets": [
@@ -41,6 +62,16 @@
     {
       "name": "cuda",
       "configurePreset": "cuda"
+    },
+    {
+      "name": "v8",
+      "configurePreset": "v8",
+      "targets": ["XERV8External", "XERJavaScript"]
+    },
+    {
+      "name": "opencv",
+      "configurePreset": "opencv",
+      "targets": ["XEROpenCV"]
     }
   ]
 }

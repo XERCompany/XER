@@ -2,7 +2,7 @@
 # EngineBuilder main executable
 # ============================================================
 
-if(ENABLE_V8)
+if(ENABLE_V8 AND ENGINE_HAS_LLVM_CLANG)
 add_executable(XER ${ENGINE_PROJECT_CC})
 target_sources(XER PRIVATE ${ENGINE_PROJECT_H})
 
@@ -10,7 +10,6 @@ target_include_directories(XER PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
     ${LIBXML2_INCLUDE_DIRS}
     ${LLVM_INCLUDE_DIRS}
-    ${LibNode_INCLUDE_DIR}
     ${CURL_INCLUDE_DIRS}
     ${OPENSSL_INCLUDE_DIR}
     ${ZLIB_INCLUDE_DIRS}
@@ -71,12 +70,15 @@ endif()
 if(TARGET XEROpenSSLExternal)
     add_dependencies(XER XEROpenSSLExternal)
 endif()
+if(TARGET XERV8External)
+    add_dependencies(XER XERV8External)
+endif()
 
 # ── Required link deps ───────────────────────────────────────
 target_link_libraries(XER PRIVATE
     XERAsyncIO
     XERJavaScript
-    LibNode::LibNode
+    V8::V8
     CURL::libcurl
     OpenSSL::SSL
     OpenSSL::Crypto
@@ -196,8 +198,10 @@ if(Qt6Core_FOUND)
     target_link_libraries(XER PRIVATE Qt6::Core)
 endif()
 
-else()
+elseif(NOT ENABLE_V8)
     message(STATUS "ENABLE_V8=OFF: XER executable and JavaScript runtime target are disabled")
+else()
+    message(STATUS "XER executable disabled: LLVM and Clang CMake packages are required")
 endif()
 
 set(XER_AUDIO_ANALYSIS_SMOKE_SOURCES
