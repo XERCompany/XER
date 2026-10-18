@@ -19,7 +19,41 @@ if(NOT Clang_DIR)
         "Clang CMake package installed by XER")
 endif()
 
+set(_xer_llvm_dependencies)
+set(_xer_llvm_dependency_args)
+if(TARGET zlibstatic)
+    list(APPEND _xer_llvm_dependencies zlibstatic)
+    list(APPEND _xer_llvm_dependency_args
+        -DLLVM_ENABLE_ZLIB=ON
+        "-DZLIB_INCLUDE_DIR=${xer_zlib_SOURCE_DIR}"
+        "-DZLIB_LIBRARY=$<TARGET_FILE:zlibstatic>")
+endif()
+if(TARGET LibXml2)
+    list(APPEND _xer_llvm_dependencies LibXml2)
+    list(APPEND _xer_llvm_dependency_args
+        -DLLVM_ENABLE_LIBXML2=ON
+        "-DLIBXML2_INCLUDE_DIR=${xer_libxml2_BINARY_DIR}"
+        "-DLIBXML2_LIBRARY=$<TARGET_FILE:LibXml2>")
+    if(MSVC)
+        list(APPEND _xer_llvm_dependency_args
+            "-DCMAKE_C_FLAGS=/I${xer_libxml2_SOURCE_DIR}/include /I${xer_libxml2_BINARY_DIR}"
+            "-DCMAKE_CXX_FLAGS=/I${xer_libxml2_SOURCE_DIR}/include /I${xer_libxml2_BINARY_DIR}")
+    else()
+        list(APPEND _xer_llvm_dependency_args
+            "-DCMAKE_C_FLAGS=-I${xer_libxml2_SOURCE_DIR}/include -I${xer_libxml2_BINARY_DIR}"
+            "-DCMAKE_CXX_FLAGS=-I${xer_libxml2_SOURCE_DIR}/include -I${xer_libxml2_BINARY_DIR}")
+    endif()
+endif()
+if(TARGET libzstd_static)
+    list(APPEND _xer_llvm_dependencies libzstd_static)
+    list(APPEND _xer_llvm_dependency_args
+        -DLLVM_ENABLE_ZSTD=ON
+        "-Dzstd_INCLUDE_DIR=${xer_zstd_SOURCE_DIR}/lib"
+        "-Dzstd_LIBRARY=$<TARGET_FILE:libzstd_static>")
+endif()
+
 ExternalProject_Add(XERLLVMExternal
+    DEPENDS ${_xer_llvm_dependencies}
     GIT_REPOSITORY https://github.com/llvm/llvm-project.git
     GIT_TAG "${XER_LLVM_VERSION}"
     GIT_SHALLOW TRUE
@@ -35,8 +69,7 @@ ExternalProject_Add(XERLLVMExternal
         -DLLVM_ENABLE_ASSERTIONS=OFF
         -DLLVM_INCLUDE_TESTS=OFF
         -DLLVM_BUILD_TESTS=OFF
-        -DLLVM_ENABLE_ZLIB=OFF
-        -DLLVM_ENABLE_ZSTD=OFF
+        ${_xer_llvm_dependency_args}
         -DLLVM_ENABLE_TERMINFO=OFF
         -DLLVM_ENABLE_LIBEDIT=OFF
         -DCLANG_ENABLE_ARCMT=OFF

@@ -8,6 +8,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 set(XER_V8_VERSION "13.2.152.28" CACHE STRING "V8 source version")
 set(XER_V8_BUILD_JOBS "4" CACHE STRING "Parallel jobs for the V8 source build")
 set(_xer_v8_source "${XER_DEPS_DIR}/v8-src")
+set(_xer_v8_icu_source "${_xer_v8_source}/third_party/icu/source")
 set(_xer_depot_tools "${XER_DEPS_DIR}/depot_tools")
 get_filename_component(_xer_python_dir "${Python3_EXECUTABLE}" DIRECTORY)
 set(_xer_v8_path "${_xer_depot_tools};${_xer_python_dir};$ENV{PATH}")
@@ -85,7 +86,7 @@ function(xer_add_v8_variant target_name variant_name build_dir is_debug)
             "PATH=${_xer_v8_path}"
             "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
             "${_xer_gn}" gen "${build_dir}"
-            "--args=is_debug=${_is_debug} is_component_build=false v8_monolithic=true v8_use_external_startup_data=false v8_enable_i18n_support=false symbol_level=0 target_cpu=\"${_xer_v8_target_cpu}\""
+            "--args=is_debug=${_is_debug} is_component_build=false v8_monolithic=true v8_use_external_startup_data=false v8_enable_i18n_support=true icu_use_data_file=false v8_use_zlib=true symbol_level=0 target_cpu=\"${_xer_v8_target_cpu}\""
         BUILD_COMMAND "${CMAKE_COMMAND}" -E env
             "PATH=${_xer_v8_path}"
             "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
@@ -108,6 +109,8 @@ if(WIN32)
     add_dependencies(XERV8External XERV8Debug XERV8Release)
     target_include_directories(XERV8Runtime INTERFACE
         "${_xer_v8_source}/include"
+        "${_xer_v8_icu_source}/common"
+        "${_xer_v8_icu_source}/i18n"
         "$<$<CONFIG:Debug>:${XERV8Debug_BUILD_DIR}/gen>"
         "$<$<NOT:$<CONFIG:Debug>>:${XERV8Release_BUILD_DIR}/gen>")
     target_link_libraries(XERV8Runtime INTERFACE
@@ -120,6 +123,8 @@ else()
     add_dependencies(XERV8External XERV8Release)
     target_include_directories(XERV8Runtime INTERFACE
         "${_xer_v8_source}/include"
+        "${_xer_v8_icu_source}/common"
+        "${_xer_v8_icu_source}/i18n"
         "${XERV8Release_BUILD_DIR}/gen")
     target_link_libraries(XERV8Runtime INTERFACE "${XERV8Release_LIBRARY}")
 endif()

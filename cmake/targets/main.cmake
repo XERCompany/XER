@@ -80,6 +80,7 @@ endif()
 # ── Required link deps ───────────────────────────────────────
 target_link_libraries(XER PRIVATE
     XERAsyncIO
+    XERSQL
     XERJavaScript
     V8::V8
     CURL::libcurl
@@ -130,10 +131,6 @@ if(TARGET LibXml2::LibXml2)
     target_link_libraries(XER PRIVATE LibXml2::LibXml2)
 else()
     target_link_libraries(XER PRIVATE ${LIBXML2_LIBRARIES})
-endif()
-
-if(SQLite3_FOUND)
-    target_link_libraries(XER PRIVATE SQLite::SQLite3)
 endif()
 
 # libuv

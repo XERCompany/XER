@@ -64,6 +64,7 @@ include(cmake/sources.cmake)
 
 # ── Targets ───────────────────────────────────────────────────
 include(cmake/targets/async_io.cmake)
+include(cmake/targets/sql.cmake)
 include(cmake/targets/bridges.cmake)
 include(cmake/targets/javascript.cmake)
 include(cmake/targets/qt6_bridge.cmake)

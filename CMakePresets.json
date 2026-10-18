@@ -67,11 +67,13 @@
     {
       "name": "v8",
       "configurePreset": "v8",
+      "configuration": "Release",
       "targets": ["XERLLVMExternal", "XERV8External", "XERJavaScript", "XERSQLite3"]
     },
     {
       "name": "v8-xer",
       "configurePreset": "v8",
+      "configuration": "Release",
       "targets": ["XER"]
     },
     {

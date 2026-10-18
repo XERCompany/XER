@@ -3,7 +3,13 @@
 # ============================================================
 
 find_package(PkgConfig QUIET)
-find_package(ICU COMPONENTS uc i18n QUIET)
+if(ENABLE_V8 AND XER_V8_SOURCE_ENABLED)
+    set(ICU_FOUND TRUE)
+    set(ICU_INCLUDE_DIRS ${XER_V8_ICU_INCLUDE_DIRS})
+    set(ICU_LIBRARIES V8::V8)
+else()
+    find_package(ICU COMPONENTS uc i18n QUIET)
+endif()
 if(NOT XER_SQLITE_SOURCE_ENABLED)
     find_package(SQLite3 QUIET)
 endif()
