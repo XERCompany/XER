@@ -1,319 +1,228 @@
-Отлично, давайте адаптируем структуру проекта и расширим `README.md` под новое расположение файлов (`.cc` / `.h`) и папки (`common/`, `streaming/`, `protocol/`).
+# Lunca - High-Performance Audio Streaming
 
-### Новая Структура Проекта
+Lunca is a high-performance audio streaming system built with deep module architecture. It provides real-time audio streaming over UDP with minimal latency.
 
-```
-lunca/
-├── server/
-│   ├── src/
-│   │   ├── server.cc          # Основной файл сервера
-│   │   └── ...                # специфичные для сервера реализации
-│   ├── include/
-│   │   └── ...                # заголовочные файлы сервера
-│   └── CMakeLists.txt
-├── client/
-│   ├── src/
-│   │   ├── client.cc          # Основной файл клиента
-│   │   └── ...                # специфичные для клиента реализации
-│   ├── include/
-│   │   └── ...                # заголовочные файлы клиента
-│   └── CMakeLists.txt
-├── common/
-│   ├── src/
-│   │   ├── xer_wrapper.cc
-│   │   ├── opus_codec.cc
-│   │   └── udp_socket.cc
-│   ├── include/
-│   │   ├── xer_wrapper.h
-│   │   ├── opus_codec.h
-│   │   ├── udp_socket.h
-│   │   └── packet.h
-│   └── CMakeLists.txt
-├── streaming/
-│   ├── src/
-│   │   ├── audio_capture.cc
-│   │   ├── audio_encoder.cc
-│   │   ├── audio_decoder.cc
-│   │   ├── audio_playback.cc
-│   │   └── ...
-│   ├── include/
-│   │   ├── audio_capture.h
-│   │   ├── audio_encoder.h
-│   │   ├── audio_decoder.h
-│   │   ├── audio_playback.h
-│   │   └── ...
-│   └── CMakeLists.txt
-├── protocol/
-│   ├── src/
-│   │   ├── control_message.cc
-│   │   └── ...
-│   ├── include/
-│   │   ├── control_message.h
-│   │   └── ...
-│   └── CMakeLists.txt
-├── third_party/
-│   ├── XER/
-│   └── opus/
-├── README.md
-└── CMakeLists.txt
-```
+## Overview
 
-### Обновленный README.md
+Lunca enables real-time audio streaming without standard protocols like HTTP or WebSocket. It uses UDP for maximum speed and efficiency with application-level reliability mechanisms.
 
-```markdown
-# Lunca - Audio Streaming (C++)
+## Key Features
 
-Lunca - это высокопроизводительная система потокового аудио, разработанная на C++, которая позволяет передавать аудиоданные в реальном времени через сеть без использования стандартных протоколов, таких как HTTP или WebSocket. Система использует UDP для передачи аудио и предлагает гибкую архитектуру для работы с различными аудиоисточниками и клиентами.
+- **Low Latency**: Optimized for minimal delay audio streaming
+- **UDP-Based**: Uses UDP for maximum speed and efficiency
+- **Custom URI Protocol**: Supports `lunca://<IP>/on/<STREAM_ID>` for stream control
+- **Cross-Platform**: Designed for Windows, Linux, macOS
+- **Deep Module Architecture**: Small interfaces with maximum hidden complexity
+- **XER Integration**: Uses XER audio subsystem for device abstraction
+- **Opus Codec**: High-efficiency audio compression
+- **Modular Design**: Clear separation into common, streaming, and protocol modules
 
-## Особенности
-
-*   **Низкая задержка:** Оптимизировано для потоковой передачи аудио с минимальной задержкой.
-*   **UDP-ориентированная передача:** Использует UDP для максимальной скорости и эффективности, с реализацией механизмов надежности на уровне приложения.
-*   **Протокол URI:** Поддержка пользовательского URI-протокола `lunca://<IP>/on/<ID_BUFFER_STREAM>` для управления аудиопотоками.
-*   **Кроссплатформенность:** Разработан с учетом возможности работы на различных операционных системах (Windows, Linux, macOS) благодаря использованию кроссплатформенных библиотек.
-*   **Гибкая архитектура:** Легко расширяется для поддержки новых кодеков, аудиоустройств и протоколов управления.
-*   **Использование XER:** Интеграция с библиотекой XER (Xenon Echo Remapper) для абстракции и управления аудио устройствами и буферами.
-*   **Эффективное кодирование:** Поддержка современных аудиокодеков, таких как Opus, для сжатия аудиоданных.
-*   **Разделение модулей:** Четкое разделение кода на `common`, `streaming` и `protocol` модули для лучшей организации и переиспользования.
-
-## Структура Проекта
+## Architecture
 
 ```
-lunca/
-├── server/          # Серверная часть приложения
-│   ├── src/
-│   │   ├── server.cc
-│   │   └── ...
-│   ├── include/
-│   │   └── ...
-│   └── CMakeLists.txt
-├── client/          # Клиентская часть приложения
-│   ├── src/
-│   │   ├── client.cc
-│   │   └── ...
-│   ├── include/
-│   │   └── ...
-│   └── CMakeLists.txt
-├── common/          # Общие утилиты и обертки библиотек
-│   ├── src/
-│   │   ├── xer_wrapper.cc
-│   │   ├── opus_codec.cc
-│   │   └── udp_socket.cc
-│   ├── include/
-│   │   ├── xer_wrapper.h
-│   │   ├── opus_codec.h
-│   │   ├── udp_socket.h
-│   │   └── packet.h
-│   └── CMakeLists.txt
-├── streaming/       # Логика потоковой передачи аудио (захват, кодирование, декодирование, воспроизведение)
-│   ├── src/
-│   │   ├── audio_capture.cc
-│   │   ├── audio_encoder.cc
-│   │   ├── audio_decoder.cc
-│   │   ├── audio_playback.cc
-│   │   └── ...
-│   ├── include/
-│   │   ├── audio_capture.h
-│   │   ├── audio_encoder.h
-│   │   ├── audio_decoder.h
-│   │   ├── audio_playback.h
-│   │   └── ...
-│   └── CMakeLists.txt
-├── protocol/        # Обработка протоколов, включая управляющие сообщения
-│   ├── src/
-│   │   ├── control_message.cc
-│   │   └── ...
-│   ├── include/
-│   │   ├── control_message.h
-│   │   └── ...
-│   └── CMakeLists.txt
-├── third_party/     # Внешние зависимости (XER, Opus)
-│   ├── XER/
-│   └── opus/
-├── README.md
-└── CMakeLists.txt   # Главный CMake файл
+src/lunca/
+├── common/                  # Shared utilities (interface layer)
+│   ├── packet.h/cc          # Network packet structures
+│   └── udp_socket.h/cc      # UDP socket abstraction
+├── streaming/               # Audio streaming logic (TODO)
+│   ├── audio_capture.h/cc   # Audio capture from XER
+│   ├── audio_encoder.h/cc   # Audio encoding (Opus)
+│   ├── audio_decoder.h/cc   # Audio decoding (Opus)
+│   ├── audio_playback.h/cc  # Audio playback via XER
+│   └── stream_manager.h/cc  # Stream lifecycle management
+├── protocol/                # Protocol handling (TODO)
+│   ├── control_message.h/cc # Control message parsing
+│   ├── uri_parser.h/cc      # URI protocol parsing
+│   └── protocol_handler.h/cc # Protocol state machine
+├── server/                  # Server implementation (TODO)
+│   ├── lunca_server.h/cc    # Main server class
+│   └── client_connection.h/cc # Client connection management
+├── client/                  # Client implementation (TODO)
+│   ├── lunca_client.h/cc    # Main client class
+│   └── stream_receiver.h/cc # Stream reception
+├── ARCHITECTURE.md          # Detailed architecture documentation
+└── README.md
 ```
 
-## Технологии
+## Design Principles
 
-*   **Язык:** C++ (C++17 или новее)
-*   **Сеть:** Boost.Asio (для UDP сокетов и асинхронной работы)
-*   **Аудио:** XER (Xenon Echo Remapper) для ввода/вывода и буферизации, Opus для кодирования/декодирования.
-*   **Сборка:** CMake
+### Deep Module Strategy
+- **Small Interface**: Minimal public API (e.g., UDPSocket has only 4 core methods)
+- **Deep Implementation**: Complex logic hidden in private implementation (PIMPL pattern)
+- **High Leverage**: One interface call enables complex operations
+- **Local Changes**: Modifications contained within modules
+- **Testability**: Clean seams for mocking and testing
 
-## Установка
+### Module Separation
+- **common/**: Shared utilities used by both client and server
+- **streaming/**: Audio capture, encoding, decoding, playback logic
+- **protocol/**: Control message parsing and URI handling
+- **server/**: Server-specific implementation
+- **client/**: Client-specific implementation
 
-### Предварительные требования
+## Protocol Specification
 
-*   **CMake:** Версия 3.10 или выше.
-*   **Boost C++ Libraries:** Убедитесь, что Boost установлен и доступен для CMake.
-*   **Opus Codec:** Установите библиотеку Opus (обычно `libopus-dev` или аналогичный пакет).
-*   **XER:** Вам необходимо будет добавить библиотеку XER в ваш проект. Это может быть сделано через:
-    *   **Git Submodule:** Добавьте репозиторий XER как подмодуль.
-    *   **Ручная компиляция:** Скомпилируйте XER отдельно и укажите пути к заголовочным файлам и библиотекам.
-
-### Клонирование репозитория
-
-```bash
-# Если XER добавлен как Git submodule:
-git clone --recursive https://github.com/yourusername/lunca.git
-cd lunca
-
-# Если XER не добавлен как submodule, клонируйте его отдельно:
-git clone https://github.com/yourusername/lunca.git
-cd lunca
-git clone https://github.com/MiroslavskyCoder/XER third_party/XER # Пример
-# Следуйте инструкциям XER для его компиляции, если требуется
+### URI Format
+```
+lunca://<SERVER_IP>/<COMMAND>/<STREAM_ID>
 ```
 
-### Сборка проекта
+Examples:
+- `lunca://192.168.1.100/on/mic0` - Start stream
+- `lunca://192.168.1.100/off/mic0` - Stop stream
+- `lunca://192.168.1.100/status/mic0` - Query status
 
-Используйте CMake для сборки проекта.
-
-```bash
-mkdir build
-cd build
-
-# Конфигурация CMake
-# Укажите пути к Boost, если они не найдены автоматически
-# Укажите пути к XER, если он компилируется отдельно
-cmake .. \
-    -DBOOST_ROOT=/path/to/your/boost \
-    -DXER_INCLUDE_DIR=../../third_party/XER/include \
-    -DXER_LIBRARY=../../third_party/XER/build/libxer.a # Пример для ручной компиляции XER
-
-# Сборка
-make
+### Control Message (JSON)
+```json
+{
+    "command": "ON|OFF|STATUS",
+    "stream_id": "mic0",
+    "client_ip_for_audio": "192.168.1.101",
+    "client_port_for_audio": "12346",
+    "sample_rate": 48000,
+    "channels": 2,
+    "bitrate": 128000
+}
 ```
 
-## Использование
-
-### Запуск Сервера Lunca
-
-Сервер отвечает за захват аудио, кодирование и отправку его клиентам.
-
-```bash
-cd build
-./server/lunca_server <IP_сервера_слушать> <Порт_управления> <Порт_аудио_отправлять>
+### Audio Packet Format
+```
+[Header (8 bytes)][Payload]
+Header:
+  - Stream ID: 4 bytes
+  - Sequence Number: 2 bytes
+  - Timestamp: 2 bytes
+Payload: Encoded audio data (Opus)
 ```
 
-*   `<IP_сервера_слушать>`: IP-адрес, на котором сервер будет слушать управляющие сообщения (например, `0.0.0.0` для всех интерфейсов).
-*   `<Порт_управления>`: UDP-порт для приема управляющих команд (например, `12347`).
-*   `<Порт_аудио_отправлять>`: UDP-порт, на который сервер будет отправлять аудиоданные.
+## Technology Stack
 
-**Пример:**
-```bash
-cd build
-./server/lunca_server 0.0.0.0 12347 12345
+- **Language**: C++17 or newer
+- **Network**: Raw sockets (WinAPI on Windows, POSIX on Linux/macOS)
+- **Audio**: XER audio subsystem for I/O, Opus for encoding/decoding
+- **Build**: CMake
+
+## Usage Examples
+
+### UDP Socket
+
+```cpp
+#include "lunca/common/udp_socket.h"
+
+using namespace Lunca::Common;
+
+// Create socket
+auto socket = UDPSocket::Create();
+
+// Bind to address
+socket->Bind("0.0.0.0", 12345);
+
+// Send data
+std::vector<uint8_t> data = {0x01, 0x02, 0x03};
+socket->SendTo(data, "192.168.1.100", 12345);
+
+// Receive data
+std::vector<uint8_t> received;
+std::string from_addr;
+int from_port;
+socket->Receive(received, &from_addr, &from_port);
 ```
 
-### Запуск Клиента Lunca
+### Audio Packet
 
-Клиент отвечает за прием аудиопотоков, декодирование и воспроизведение.
+```cpp
+#include "lunca/common/packet.h"
 
-```bash
-cd build
-./client/lunca_client <IP_клиента_слушать_аудио> <Порт_клиента_слушать_аудио> <IP_сервера_управления> <Порт_сервера_управления>
+using namespace Lunca::Common;
+
+// Create packet
+AudioPacketHeader header(1, 100, 5000);  // stream_id=1, seq=100, ts=5000ms
+AudioPacket packet(header);
+
+// Set payload
+std::vector<uint8_t> encoded_audio = {/* Opus encoded data */};
+packet.SetPayload(encoded_audio);
+
+// Serialize
+std::vector<uint8_t> serialized = packet.Serialize();
+
+// Deserialize
+AudioPacket received_packet;
+received_packet.Deserialize(serialized);
 ```
 
-*   `<IP_клиента_слушать_аудио>`: IP-адрес, на котором клиент будет слушать аудиопотоки (например, `0.0.0.0`).
-*   `<Порт_клиента_слушать_аудио>`: UDP-порт, на котором клиент будет принимать аудиоданные (например, `12346`).
-*   `<IP_сервера_управления>`: IP-адрес сервера Lunca, на который клиент будет отправлять управляющие команды (например, `192.168.1.100`).
-*   `<Порт_сервера_управления>`: UDP-порт сервера Lunca, на который клиент будет отправлять управляющие команды (например, `12347`).
+## Implementation Status
 
-**Пример:**
-```bash
-cd build
-./client/lunca_client 0.0.0.0 12346 192.168.1.100 12347
+### Completed
+- ✅ Deep module architecture design
+- ✅ Common module (packet structures)
+- ✅ UDP socket abstraction (Windows/Linux support)
+- ✅ Architecture documentation
+
+### TODO
+- ⏳ Streaming module (capture, encoder, decoder, playback)
+- ⏳ Protocol module (URI parser, control messages)
+- ⏳ Server implementation
+- ⏳ Client implementation
+- ⏳ XER audio subsystem integration
+- ⏳ Opus codec integration
+- ⏳ Comprehensive tests
+- ⏳ Usage examples
+
+## Deep Module Benefits
+
+### Leverage
+- `UDPSocket::Bind()` handles socket creation, configuration, and binding
+- `AudioPacket::Serialize()` handles header/payload serialization
+- Complex operations through simple interface calls
+
+### Locality
+- Network logic isolated in common/ directory
+- Audio logic in streaming/ directory
+- Protocol logic in protocol/ directory
+- Changes don't spread across codebase
+
+### Testability
+- UDP socket mockable for integration tests
+- Packet structures testable independently
+- Clean seams for dependency injection
+
+## Building
+
+### Prerequisites
+- CMake 3.10+
+- C++17 compatible compiler
+- XER audio subsystem
+- Opus codec library
+
+### CMake Integration
+```cmake
+# Add to main CMakeLists.txt
+if(WIN32)
+    add_subdirectory(src/lunca)
+endif()
 ```
 
-### Управление потоками (URI-протокол)
+## Documentation
 
-Для запуска потока, вы можете использовать URI `lunca://<IP_сервера_управления>/on/<ID_BUFFER_STREAM>`. Этот URI должен быть обработан вашим **управляющим приложением** или компонентом.
+- [ARCHITECTURE.md](ARCHITECTURE.md) - Detailed architecture and design
+- [README.md](README.md) - This file
 
-**Пример работы управляющего сообщения (из вашего управляющего приложения):**
+## Development
 
-1.  Ваше приложение парсит URI: `lunca://192.168.1.100/on/mic0`
-    *   IP сервера: `192.168.1.100`
-    *   Команда: `ON`
-    *   ID потока: `mic0` (указывает серверу использовать микрофон с ID `mic0`)
+### Adding New Features
+1. Keep interface small
+2. Hide complexity in implementation
+3. Use PIMPL pattern for ABI stability
+4. Document the interface clearly
+5. Add tests for the interface
 
-2.  Ваше приложение отправляет UDP-сообщение на `192.168.1.100:12347` (порт управления сервера). Сообщение может быть в формате JSON:
-    ```json
-    {
-        "command": "ON",
-        "stream_id": "mic0",
-        "client_ip_for_audio": "192.168.1.101", // IP клиента, на который отправлять аудио
-        "client_port_for_audio": "12346"        // Порт клиента, на который отправлять аудио
-    }
-    ```
+### Code Style
+- Follow XER project conventions
+- Use C++17 features where appropriate
+- Prefer const correctness
+- Use RAII for resource management
 
-3.  Сервер Lunca получает это сообщение, находит аудиоисточник `mic0` (используя XER), и начинает отправлять аудиоданные на `192.168.1.101:12346`.
-4.  Клиент Lunca, запущенный на `192.168.1.101`, слушает на порту `12346` и начинает принимать аудиопоток.
+## License
 
-**Примечание:**
-*   `ID_BUFFER_STREAM` может быть просто именем аудиоустройства, которое XER может найти, или предопределенным идентификатором потока.
-*   `client_ip_for_audio` и `client_port_for_audio` необходимы, чтобы сервер знал, куда отправлять аудио. Клиент может быть настроен на прослушивание на определенном порту, и этот порт может быть указан в управляющем сообщении.
-
-## Разработка
-
-### Структура кода
-
-*   **`common/`**: Содержит общие утилиты и обёртки для библиотек, используемых обеими сторонами.
-    *   `xer_wrapper.h/.cc`: Абстракция над XER API.
-    *   `opus_codec.h/.cc`: Абстракция над Opus API.
-    *   `udp_socket.h/.cc`: Абстракция для UDP-сокетов, возможно, на базе Boost.Asio.
-    *   `packet.h`: Структуры данных для сетевых пакетов (ID, timestamp, данные).
-*   **`streaming/`**: Содержит логику потоковой передачи аудио.
-    *   `audio_capture.h/.cc`: Работает с XER для получения аудио с устройств ввода.
-    *   `audio_encoder.h/.cc`: Кодирует аудиоданные с помощью Opus.
-    *   `audio_decoder.h/.cc`: Декодирует аудиоданные с помощью Opus.
-    *   `audio_playback.h/.cc`: Работает с XER для воспроизведения аудио.
-*   **`protocol/`**: Обработка протоколов, включая управляющие сообщения.
-    *   `control_message.h/.cc`: Парсинг, формирование и обработка управляющих сообщений (например, `ON`, `OFF`, `STATUS`).
-
-### Компоненты
-
-*   **XER:** Предоставляет унифицированный интерфейс для работы с аудио устройствами ввода/вывода и буферами.
-*   **Opus:** Используется для высокоэффективного сжатия аудиоданных.
-*   **Boost.Asio:** Для кроссплатформенного сетевого программирования (UDP).
-
-### Добавление новых кодеков
-
-1.  Реализуйте обертку для нового кодека в `common/` (аналогично `opus_codec.h/.cc`).
-2.  Измените `streaming/audio_encoder.cc` (сервер) и `streaming/audio_decoder.cc` (клиент) для использования нового кодека.
-3.  Обновите `CMakeLists.txt` для включения новой библиотеки.
-
-### Добавление поддержки новых аудиоустройств (через XER)
-
-XER обычно сам справляется с поиском доступных аудиоустройств. Вам может потребоваться:
-
-1.  Убедиться, что XER правильно настроен для вашей платформы.
-2.  Возможно, расширить формат `ID_BUFFER_STREAM` для более специфического выбора устройств (например, `lunca://<IP>/on/capture:hw:0,0` для ALSA).
-
-## Лицензия
-
-Этот проект распространяется под лицензией [MIT License](LICENSE.txt).
-
-## Вклад
-
-Мы приветствуем ваши предложения и вклады! Пожалуйста, ознакомьтесь с [CONTRIBUTING.md](CONTRIBUTING.md) для получения информации о том, как вы можете внести свой вклад.
-
----
-```
-
-### Основные изменения в `README.md`:
-
-1.  **Структура Проекта:** Полностью обновлена, чтобы отразить новые папки (`common/`, `streaming/`, `protocol/`) и использование `.h`/`.cc` файлов.
-2.  **Описание модулей:** В разделах "Структура кода" и "Компоненты" детально расписано назначение каждой из новых папок.
-3.  **Установка:** Обновлены примеры путей в `cmake` команде, чтобы они соответствовали новой структуре (например, `../../third_party/XER/include`).
-4.  **Использование:** Немного изменены аргументы командной строки для сервера и клиента, чтобы соответствовать новому разделению портов (управление и аудио).
-
-**Важные моменты для реализации:**
-
-*   **`common/`:** Будет содержать все вспомогательные классы и функции, которые используются как клиентом, так и сервером (например, обертки для UDP, Opus, XER, структуры пакетов).
-*   **`streaming/`:** Здесь будет основная логика работы с аудио – захват, кодирование, декодирование, воспроизведение. Классы в `streaming` будут использовать компоненты из `common`.
-*   **`protocol/`:** Этот модуль будет отвечать за сериализацию/десериализацию управляющих сообщений (например, JSON парсинг или собственный бинарный протокол).
-*   **`server/` и `client/`:** Основные файлы (`server.cc`, `client.cc`) будут собирать все вместе: инициализировать сетевые соединения, аудиопотоки, обрабатывать управляющие команды и запускать нужные потоки.
-
-Эта структура делает код более модульным и понятным.
+Part of XER project. See main project LICENSE.

@@ -10,6 +10,8 @@ XER is a high-performance C++/V8 runtime builder that executes JavaScript projec
 - [Build Instructions](#build-instructions)
 - [Quick Start](#quick-start)
 - [Audio Subsystem](#audio-subsystem)
+- [UI Module](#ui-module)
+- [Lunca Audio Streaming](#lunca-audio-streaming)
 - [Project Layout](#project-layout)
 - [Documentation](#documentation)
 - [Development](#development)
@@ -209,6 +211,118 @@ bool ok = AudioSourceLoader::SelfTest(&report);
 std::cout << report;
 ```
 
+## UI Module
+
+XER includes a modern WinAPI-based UI framework with deep module architecture.
+
+### UI Features
+
+- **Deep Module Design**: Small interface with maximum hidden complexity
+- **ColorSpace Support**: Full support for sRGB, Display P3, Rec.2020, and HDR (PQ/HLG)
+- **HDR Rendering**: Windows HDR API integration for high dynamic range displays
+- **ShadcnUI Style**: Modern, clean widget design inspired by ShadcnUI
+- **Pure WinAPI**: No external UI dependencies, direct Windows API integration
+
+### Core UI Components
+
+- **Application**: Main entry point with lifecycle management
+- **Window**: Window management with widget tree support
+- **ColorSpace**: Color space enumeration and utilities
+- **HDRManager**: HDR display detection and configuration
+- **ColorManager**: Unified color management with conversion
+- **Widget System**: Base widget interface for custom components
+
+### UI Usage
+
+```cpp
+#include "ui/core/application.h"
+#include "ui/core/window.h"
+#include "ui/colorspace/color_manager.h"
+
+using namespace XER::UI;
+using namespace XER::UI::ColorSpace;
+
+int main() {
+    // Initialize application
+    auto& app = Application::Instance();
+    app.Initialize();
+
+    // Setup ColorSpace/HDR
+    auto& color_mgr = ColorManager::Instance();
+    color_mgr.Initialize();
+
+    if (color_mgr.IsHDRCapable()) {
+        color_mgr.SetPreferredColorSpace(ColorSpace::Rec2100_PQ);
+    }
+
+    // Create window
+    Window window;
+    window.Create("XER UI Demo", 800, 600);
+
+    // Enable HDR if available
+    if (color_mgr.IsHDRCapable()) {
+        color_mgr.GetHDRManager().EnableHDR(window.GetHWND());
+    }
+
+    window.Show();
+    return app.Run();
+}
+```
+
+### Supported Color Spaces
+
+- **sRGB**: Standard sRGB (no HDR)
+- **DisplayP3**: Wide gamut (Apple displays)
+- **Rec2020**: Ultra-wide gamut (high-end displays)
+- **Rec2100_PQ**: HDR with Perceptual Quantizer
+- **Rec2100_HLG**: HDR with Hybrid Log-Gamma
+- **ScRGB**: HDR with linear transfer
+
+### Documentation
+
+- [UI Module README](src/ui/README.md) - Comprehensive UI documentation
+- [UI Architecture](src/ui/ARCHITECTURE.md) - Detailed architecture and design
+
+## Lunca Audio Streaming
+
+XER includes a high-performance audio streaming system for real-time audio transmission.
+
+### Lunca Features
+
+- **Low Latency**: Optimized for minimal delay audio streaming
+- **UDP-Based**: Uses UDP for maximum speed and efficiency
+- **Custom URI Protocol**: Supports `lunca://<IP>/on/<STREAM_ID>` for stream control
+- **Deep Module Architecture**: Small interfaces with maximum hidden complexity
+- **XER Integration**: Uses XER audio subsystem for device abstraction
+- **Opus Codec**: High-efficiency audio compression
+- **Cross-Platform**: Windows, Linux, macOS support
+
+### Lunca Usage
+
+```cpp
+#include "lunca/common/udp_socket.h"
+#include "lunca/common/packet.h"
+
+using namespace Lunca::Common;
+
+// Create UDP socket
+auto socket = UDPSocket::Create();
+socket->Bind("0.0.0.0", 12345);
+
+// Create audio packet
+AudioPacketHeader header(1, 100, 5000);
+AudioPacket packet(header);
+packet.SetPayload(encoded_audio);
+
+// Send packet
+socket->SendTo(packet.Serialize(), "192.168.1.100", 12345);
+```
+
+### Lunca Documentation
+
+- [Lunca README](src/lunca/README.md) - Comprehensive Lunca documentation
+- [Lunca Architecture](src/lunca/ARCHITECTURE.md) - Detailed architecture and design
+
 ## Crypto & Compression Support
 
 XER includes built-in support for multiple algorithms:
@@ -229,6 +343,18 @@ XER/
 ├── src/                   # Core runtime engine
 │   ├── async_io/         # Async I/O primitives
 │   ├── audio/            # Audio processing subsystem
+│   ├── ui/               # WinAPI UI framework
+│   │   ├── core/         # Core framework (Application, Window)
+│   │   ├── colorspace/   # ColorSpace & HDR support
+│   │   ├── widgets/      # Widget system
+│   │   ├── layout/       # Layout system
+│   │   └── theme/        # ShadcnUI-style theming
+│   ├── lunca/            # Audio streaming system
+│   │   ├── common/       # Shared utilities (UDP, packets)
+│   │   ├── streaming/    # Audio streaming logic
+│   │   ├── protocol/     # Protocol handling
+│   │   ├── server/       # Server implementation
+│   │   └── client/       # Client implementation
 │   ├── modules/          # JavaScript modules
 │   └── v8/               # V8 engine integration
 ├── demo_app/             # Demo configurations and scripts
@@ -247,6 +373,11 @@ XER/
 - [Demo App Docs](demo_app/README.md)
 - [JavaScript Modules Docs](src/modules/README.md)
 - [Async I/O Docs](src/async_io/README.md)
+- [Audio Subsystem Docs](src/audio/README.md)
+- [UI Module Docs](src/ui/README.md)
+- [UI Architecture](src/ui/ARCHITECTURE.md)
+- [Lunca Audio Streaming Docs](src/lunca/README.md)
+- [Lunca Architecture](src/lunca/ARCHITECTURE.md)
 - [Module Reference](docs/modules.md)
 - [Stack Error Handling](docs/stack_error.md)
 
