@@ -1,6 +1,109 @@
-/build
-/out
-/.deps
-/.vscode
-/*.mp3
-/models
+# Build directories
+/build/
+/out/
+/.deps/
+/cmake-build-*/
+install/
+
+# IDE and editor files
+/.vscode/
+/.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+# Allow cmake/ directory files
+!cmake/*.cmake
+!cmake/**/*.cmake
+
+# Compiled Object files
+*.o
+*.obj
+*.ko
+*.elf
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Compiled Static libraries
+*.a
+*.lib
+*.ar
+
+# Executables
+*.exe
+*.out
+*.app
+EngineBuilder
+Flux*
+
+# Dependencies
+/vendor/
+/external/
+
+# Audio and media files
+*.mp3
+*.wav
+*.flac
+*.ogg
+*.mp4
+*.avi
+*.mkv
+/models/
+
+# Generated files
+*.flowcache.*
+*.flowcache.bin
+*.flowcache.diff
+*.flowcache.xml
+
+# Test results
+/test_results/
+/coverage/
+
+# Logs
+*.log
+/logs/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.cache
+
+# OS specific
+# Windows
+*.user
+*.suo
+*.sln.docstates
+
+# macOS
+*.dSYM/
+*.dSYM
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+env/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

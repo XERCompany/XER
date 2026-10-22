@@ -1,38 +1,207 @@
-# AudioSourceLoader Modernization (2024)
+# XER 🚀
 
+XER is a high-performance C++/V8 runtime builder that executes JavaScript project configurations and compiles native code dynamically through `RuntimeLive`. It provides a powerful bridge between JavaScript and advanced C++ multimedia/GPU frameworks.
 
-## DSP/Effects: SIMD, Async, Zero-Copy, Memory Stats
+## Table of Contents
 
-- **SIMD/Parallelism:** Все основные DSP/эффекты используют AVX2/SSE2 и многопоточность для ускорения обработки аудиоблоков.
-- **Zero-Copy:** Поддержка zero-copy для всех ProcessBlock/ProcessSample — если вход и выход совпадают, копий не происходит.
-- **Async API:** Все эффекты и фильтры поддерживают асинхронный вызов через std::future (например, ProcessBlockAsync).
-- **Memory Stats:** Для аудиомодулей реализован метод GetMemoryStats() для отчёта по памяти.
-- **Unit/Smoke-тесты:** См. tests/dsp_memory_async_zero_copy_test.cc — тестируются zero-copy, async, memory stats, корректность SIMD путей.
+- [Overview](#overview)
+- [Key Features](#key-features)
+- [Architecture](#architecture)
+- [Build Instructions](#build-instructions)
+- [Quick Start](#quick-start)
+- [Audio Subsystem](#audio-subsystem)
+- [Project Layout](#project-layout)
+- [Documentation](#documentation)
+- [Development](#development)
+- [License](#license)
 
+## Overview
 
-- **Strict MP3-only support**: Loader enforces MP3 as primary format, with fallback stub for other formats.
-- **Error handling**: Uses `AudioLoaderError` enum and error category for robust error reporting.
-- **Async API**: Supports `LoadAsync` and `std::future` for non-blocking decode/process.
-- **SIMD/multithreading**: Interleaving/mixing accelerated with SSE2/AVX2 and thread pool.
-- **Profiling**: `ScopedTimer` for timing decode and processing steps.
-- **MP3 fallback**: FFmpeg primary, planned mpg123 fallback (stub present).
-- **Self-test/unit test**: `SelfTest()` method for loader validation and CI.
-- **CMake dependency detection**: system packages and pkg-config are detected automatically.
-- **Deduplication**: Structure simplified, code duplication removed, error handling unified.
+XER is designed for high-performance multimedia and GPU-accelerated applications. It combines:
+- A JavaScript-driven build system via `EngineBuilder`
+- Dynamic native compilation with Clang/LLVM integration
+- Rich multimedia bridges (Skia, FFmpeg, OpenCV, CUDA, cuDNN, ANGLE)
+- Comprehensive async I/O and hardware abstraction layers
+- Advanced audio processing with SIMD acceleration
 
-## Usage
+## Key Features
+
+### JavaScript-Driven Build Flows
+- Orchestrate builds easily via `EngineBuilder`
+- Support for FlowScript and XerScript
+- Dynamic runtime compilation
+
+### Dynamic Native Compilation
+- Real-time C/C++ compilation with Clang/LLVM
+- In-process compile path via `RuntimeLive`
+- Runtime code generation and execution
+
+### Multimedia & GPU Bridges
+- **Skia**: 2D graphics rendering
+- **FFmpeg**: Audio/video processing
+- **OpenCV**: Computer vision
+- **CUDA/cuDNN**: GPU computing and deep learning
+- **ANGLE**: OpenGL ES to Vulkan/DirectX translation
+
+### Rich Module System
+- Filesystem operations
+- Cryptography (OpenSSL integration)
+- Compression (Zlib, Zstd, Brotli)
+- Networking utilities
+- Asynchronous I/O helpers
+
+### Async I/O System
+- High-performance async file operations
+- Thread pool management
+- Hardware abstraction (CPU, GPU, memory monitoring)
+- DNN backends (cuDNN integration)
+
+## Architecture
+
+### Core Components
+
+```
+src/
+├── main.cc                 # Application entry point
+├── app_command.*           # CLI command parsing
+├── compilerapi/            # LLVM/Clang integration
+├── v8/                     # V8 JavaScript engine binding
+├── javascript/             # JavaScript runtime
+├── flowscript/             # FlowScript interpreter
+├── runtime_safety/        # Runtime safety and integrity checks
+├── async_io/               # Async I/O system
+│   ├── hardware_abstraction/  # CPU/GPU monitoring
+│   ├── dnn_backends/          # cuDNN integration
+│   └── sync_primitives/       # Thread synchronization
+├── audio/                  # Audio processing subsystem
+│   ├── audio_core/           # Core audio engine
+│   ├── dsp_algorithms/       # DSP algorithms
+│   ├── effects_rack/         # Audio effects
+│   └── analysis_ai/          # Audio analysis
+├── modules/                # JavaScript modules
+└── xer/                    # XER encoding/compilation
+```
+
+## Build Instructions
+
+### Prerequisites
+
+Install CMake (3.21+), Git, and a supported C/C++ toolchain. With `XER_FETCH_DEPENDENCIES=ON` (the default), XER CMake downloads dependencies into the project-local `.deps` directory and reuses them on subsequent configure runs.
+
+### Environment Variables
+
+- `XER_FETCH_DEPENDENCIES`: Enable/disable automatic dependency fetching (default: ON)
+- `XER_DEPS_DIR`: Directory for dependency cache (default: `.deps`)
+- `ENABLE_CUDA`: Enable CUDA support (default: OFF)
+- `ENABLE_CUDNN`: Enable cuDNN support (default: OFF)
+- `ENABLE_AI`: Enable AI and model-builder sources (default: OFF)
+- `ENABLE_OPENCV`: Fetch and build OpenCV (default: OFF)
+- `ENABLE_V8`: Build V8 and JavaScript runtime (default: OFF)
+- `ENABLE_MEDIA`: Enable FFmpeg and audio/media dependencies (default: ON)
+
+### Compilation
+
+```bash
+# Configure with the platform's default generator
+cmake --preset default
+
+# Build
+cmake --build --preset default
+
+# Build V8 and the JavaScript runtime without media dependencies
+cmake --preset v8
+cmake --build --preset v8
+
+# Reconfigure after LLVM/Clang installation, then build XER
+cmake --preset v8
+cmake --build --preset v8-xer
+
+# Build the OpenCV bridge and its libraries
+cmake --preset opencv
+cmake --build --preset opencv
+```
+
+### Dependency Details
+
+The `default` preset enables media support and fetches:
+- Core: Abseil, pthreadpool, FXdiv, zlib, SQLite
+- Media: zstd, Brotli, FFmpeg, libusb
+
+With `ENABLE_V8=ON`, XER also fetches:
+- V8 (via depot_tools)
+- LLVM/Clang
+- libuv, LibXml2, libcurl, OpenSSL
+
+OpenCV's optional ADE, IPP IW, ITT, TBB, and bundled FFmpeg downloads are disabled.
+
+## Quick Start
+
+### Run Multimedia Bridge Demo
+
+```bash
+./build/EngineBuilder run demo_app/bridge_multimedia.js
+```
+
+This demo showcases:
+- Skia graphics rendering
+- FFmpeg audio/video processing
+- OpenCV computer vision
+- CUDA/cuDNN operations (if enabled)
+
+### Run Module Smoke Tests
+
+```bash
+./out/build/default/EngineBuilder run demo_app/modules_smoke.js
+```
+
+### Audio Processing Examples
+
+```bash
+# Audio effects
+./build/EngineBuilder audiofxcustom --input input.mp3 --effect reverb
+
+# Audio analysis
+./build/EngineBuilder audioinspect --input input.mp3
+
+# Spectrogram generation
+./build/EngineBuilder spectrogram --input input.mp3
+```
+
+## Audio Subsystem
+
+### DSP/Effects Features
+
+- **SIMD/Parallelism**: All major DSP/effects use AVX2/SSE2 and multithreading
+- **Zero-Copy**: Zero-copy support for ProcessBlock/ProcessSample operations
+- **Async API**: Async processing via std::future (e.g., ProcessBlockAsync)
+- **Memory Stats**: GetMemoryStats() for memory reporting
+- **Comprehensive Test Suite**: See tests/dsp_memory_async_zero_copy_test.cc
+
+### Audio Loader Features
+
+- **Strict MP3 Support**: Primary MP3 format with fallback for others
+- **Error Handling**: AudioLoaderError enum and error category
+- **Async API**: LoadAsync and std::future for non-blocking operations
+- **SIMD/Multithreading**: SSE2/AVX2 acceleration with thread pool
+- **Profiling**: ScopedTimer for decode/process timing
+- **Self-Test**: SelfTest() method for validation
+
+### Audio Usage
 
 ```cpp
 #include "audio_core/audio_source_loader.h"
+
 AudioSourceLoadOptions opts;
 opts.input_path = "file.mp3";
 AudioSourceBuffer buf;
 std::string err;
 auto code = AudioSourceLoader::LoadWithCode(opts, &buf, &err);
-if (code != AudioLoaderError::OK) { /* handle error */ }
+if (code != AudioLoaderError::OK) {
+    // Handle error
+}
 ```
 
-## Self-Test
+### Audio Self-Test
 
 ```cpp
 std::string report;
@@ -40,17 +209,90 @@ bool ok = AudioSourceLoader::SelfTest(&report);
 std::cout << report;
 ```
 
-## CMake Integration
+## Crypto & Compression Support
 
-Detects system FFmpeg and FFTW through pkg-config or CMake Find-modules. See the build instructions for optional features.
+XER includes built-in support for multiple algorithms:
+
+### Crypto
+- OpenSSL `libcrypto` integration
+- `Crypto` & `Bcrypto` modules
+
+### Compression
+- **Zlib**: Standard compression
+- **Zstd**: High-speed compression (requires libzstd)
+- **Brotli**: Modern compression (requires libbrotli)
+
+## Project Layout
+
+```
+XER/
+├── src/                   # Core runtime engine
+│   ├── async_io/         # Async I/O primitives
+│   ├── audio/            # Audio processing subsystem
+│   ├── modules/          # JavaScript modules
+│   └── v8/               # V8 engine integration
+├── demo_app/             # Demo configurations and scripts
+├── cmake/                # CMake configuration
+│   ├── deps/             # Dependency management
+│   ├── modules/          # CMake find modules
+│   └── targets/          # Build targets
+├── tests/                # Unit and integration tests
+├── plugins/              # Plugin system
+├── compat/               # Compatibility shims
+└── docs/                 # Documentation
+```
+
+## Documentation
+
+- [Demo App Docs](demo_app/README.md)
+- [JavaScript Modules Docs](src/modules/README.md)
+- [Async I/O Docs](src/async_io/README.md)
+- [Module Reference](docs/modules.md)
+- [Stack Error Handling](docs/stack_error.md)
+
+## Development
+
+### Running Tests
+
+```bash
+# DSP/Effects tests
+cd tests
+g++ dsp_memory_async_zero_copy_test.cc -I../src -std=c++17 -lpthread -o dsp_test
+./dsp_test
+
+# Module smoke tests
+./build/EngineBuilder run demo_app/modules_smoke.js
+```
+
+### Code Style
+
+- C++23 standard
+- Follow existing code conventions
+- Use consistent naming patterns
+- Document public APIs
+
+### Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure all tests pass
+5. Submit a pull request
 
 ## TODO
 
+### Audio Subsystem
 - Implement full mpg123 fallback for MP3 decode
 - Add more unit tests (valid MP3, WAV, error cases)
 - Integrate async decode in effect chains
 - Advanced error propagation and profiling
-# XER 🚀
+
+### General
+- Improve test coverage across all modules
+- Enhance documentation and examples
+- Optimize build times and dependency management
+- Add performance benchmarks
 
 XER is a high-performance C++/V8 runtime builder that executes JavaScript project configurations and compiles native code dynamically through `RuntimeLive`. It provides a powerful bridge between JavaScript and advanced C++ multimedia/GPU frameworks.
 
