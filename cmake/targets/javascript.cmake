@@ -7,6 +7,14 @@ if(NOT ENABLE_V8)
 endif()
 
 if(NOT ENGINE_JAVASCRIPT_CC)
+    message(STATUS "ENGINE_JAVASCRIPT_CC not set, skipping XERJavaScript library")
+    return()
+endif()
+
+# Check if V8 is properly available
+if(NOT V8_FOUND OR NOT TARGET V8::V8)
+    message(WARNING "V8 not found or not properly built. XERJavaScript library will be skipped.")
+    message(STATUS "To build V8, ensure ENABLE_V8=ON and the build completes successfully.")
     return()
 endif()
 

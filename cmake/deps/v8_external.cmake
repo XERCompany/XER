@@ -5,8 +5,11 @@ endif()
 include(ExternalProject)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
+# V8 configuration options
 set(XER_V8_VERSION "13.2.152.28" CACHE STRING "V8 source version")
 set(XER_V8_BUILD_JOBS "4" CACHE STRING "Parallel jobs for the V8 source build")
+option(XER_SKIP_V8_SYNC "Skip V8 source sync if already present" OFF)
+
 set(_xer_v8_source "${XER_DEPS_DIR}/v8-src")
 set(_xer_v8_icu_source "${_xer_v8_source}/third_party/icu/source")
 set(_xer_depot_tools "${XER_DEPS_DIR}/depot_tools")
@@ -24,14 +27,22 @@ else()
     set(_xer_v8_target_cpu "ia32")
 endif()
 
-ExternalProject_Add(XERDepotTools
-    GIT_REPOSITORY https://chromium.googlesource.com/chromium/tools/depot_tools.git
-    GIT_TAG main
-    GIT_SHALLOW TRUE
-    SOURCE_DIR "${_xer_depot_tools}"
-    CONFIGURE_COMMAND ""
-    BUILD_COMMAND ""
-    INSTALL_COMMAND "")
+# Check if depot_tools already exists
+if(EXISTS "${_xer_depot_tools}/gclient" OR EXISTS "${_xer_depot_tools}/gclient.bat")
+    message(STATUS "depot_tools already exists at ${_xer_depot_tools}, skipping download")
+    # Create a dummy target for XERDepotTools
+    add_custom_target(XERDepotTools
+        COMMAND ${CMAKE_COMMAND} -E echo "depot_tools download skipped (already present)")
+else()
+    ExternalProject_Add(XERDepotTools
+        GIT_REPOSITORY https://chromium.googlesource.com/chromium/tools/depot_tools.git
+        GIT_TAG main
+        GIT_SHALLOW TRUE
+        SOURCE_DIR "${_xer_depot_tools}"
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND ""
+        INSTALL_COMMAND "")
+endif()
 
 if(WIN32)
     set(_xer_gclient "${_xer_depot_tools}/gclient.bat")
@@ -46,22 +57,48 @@ endif()
 set(_xer_v8_gclient_spec
     "solutions = [{ 'name': 'v8-src', 'url': 'https://chromium.googlesource.com/v8/v8.git@${XER_V8_VERSION}', 'managed': False }]")
 
-ExternalProject_Add(XERV8SourceSync
-    DEPENDS XERDepotTools
-    PREFIX "${XER_DEPS_DIR}/v8-sync-external"
-    SOURCE_DIR "${_xer_v8_source}"
-    BINARY_DIR "${XER_DEPS_DIR}/v8-sync-build"
-    DOWNLOAD_COMMAND "${CMAKE_COMMAND}" -E make_directory "${_xer_v8_source}"
-    UPDATE_COMMAND ""
-    CONFIGURE_COMMAND
-        "${CMAKE_COMMAND}" -E chdir "${XER_DEPS_DIR}"
-        "${CMAKE_COMMAND}" -E env "PATH=${_xer_v8_path}" "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
-        "${_xer_gclient}" config --spec "${_xer_v8_gclient_spec}"
-    BUILD_COMMAND
-        "${CMAKE_COMMAND}" -E chdir "${XER_DEPS_DIR}"
-        "${CMAKE_COMMAND}" -E env "PATH=${_xer_v8_path}" "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
-        "${_xer_gclient}" sync --no-history --shallow
-    INSTALL_COMMAND "")
+# Check if V8 source already exists
+if(EXISTS "${_xer_v8_source}/.git" AND DEFINED XER_SKIP_V8_SYNC AND XER_SKIP_V8_SYNC)
+    message(STATUS "V8 source already exists at ${_xer_v8_source}, skipping sync")
+    # Create a dummy target for XERV8SourceSync to satisfy dependencies
+    add_custom_target(XERV8SourceSync
+        COMMAND ${CMAKE_COMMAND} -E echo "V8 source sync skipped (already present)")
+elseif(NOT EXISTS "${_xer_v8_source}/.git" AND DEFINED XER_SKIP_V8_SYNC AND XER_SKIP_V8_SYNC)
+    message(WARNING "XER_SKIP_V8_SYNC is ON but V8 source not found at ${_xer_v8_source}. Sync will proceed.")
+    ExternalProject_Add(XERV8SourceSync
+        DEPENDS XERDepotTools
+        PREFIX "${XER_DEPS_DIR}/v8-sync-external"
+        SOURCE_DIR "${_xer_v8_source}"
+        BINARY_DIR "${XER_DEPS_DIR}/v8-sync-build"
+        DOWNLOAD_COMMAND "${CMAKE_COMMAND}" -E make_directory "${_xer_v8_source}"
+        UPDATE_COMMAND ""
+        CONFIGURE_COMMAND
+            "${CMAKE_COMMAND}" -E chdir "${XER_DEPS_DIR}"
+            "${CMAKE_COMMAND}" -E env "PATH=${_xer_v8_path}" "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+            "${_xer_gclient}" config --spec "${_xer_v8_gclient_spec}"
+        BUILD_COMMAND
+            "${CMAKE_COMMAND}" -E chdir "${XER_DEPS_DIR}"
+            "${CMAKE_COMMAND}" -E env "PATH=${_xer_v8_path}" "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+            "${_xer_gclient}" sync --no-history --shallow
+        INSTALL_COMMAND "")
+else()
+    ExternalProject_Add(XERV8SourceSync
+        DEPENDS XERDepotTools
+        PREFIX "${XER_DEPS_DIR}/v8-sync-external"
+        SOURCE_DIR "${_xer_v8_source}"
+        BINARY_DIR "${XER_DEPS_DIR}/v8-sync-build"
+        DOWNLOAD_COMMAND "${CMAKE_COMMAND}" -E make_directory "${_xer_v8_source}"
+        UPDATE_COMMAND ""
+        CONFIGURE_COMMAND
+            "${CMAKE_COMMAND}" -E chdir "${XER_DEPS_DIR}"
+            "${CMAKE_COMMAND}" -E env "PATH=${_xer_v8_path}" "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+            "${_xer_gclient}" config --spec "${_xer_v8_gclient_spec}"
+        BUILD_COMMAND
+            "${CMAKE_COMMAND}" -E chdir "${XER_DEPS_DIR}"
+            "${CMAKE_COMMAND}" -E env "PATH=${_xer_v8_path}" "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+            "${_xer_gclient}" sync --no-history --shallow
+        INSTALL_COMMAND "")
+endif()
 
 function(xer_add_v8_variant target_name variant_name build_dir is_debug)
     if(is_debug)
@@ -75,24 +112,33 @@ function(xer_add_v8_variant target_name variant_name build_dir is_debug)
         set(_library "${build_dir}/obj/libv8_monolith.a")
     endif()
 
-    ExternalProject_Add(${target_name}
-        DEPENDS XERV8SourceSync
-        PREFIX "${XER_DEPS_DIR}/v8-${variant_name}-external"
-        SOURCE_DIR "${_xer_v8_source}"
-        BINARY_DIR "${build_dir}"
-        DOWNLOAD_COMMAND ""
-        UPDATE_COMMAND ""
-        CONFIGURE_COMMAND "${CMAKE_COMMAND}" -E env
-            "PATH=${_xer_v8_path}"
-            "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
-            "${_xer_gn}" gen "${build_dir}"
-            "--args=is_debug=${_is_debug} is_component_build=false v8_monolithic=true v8_use_external_startup_data=false v8_enable_i18n_support=true icu_use_data_file=false v8_use_zlib=true symbol_level=0 target_cpu=\"${_xer_v8_target_cpu}\""
-        BUILD_COMMAND "${CMAKE_COMMAND}" -E env
-            "PATH=${_xer_v8_path}"
-            "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
-            "${_xer_ninja}" -C "${build_dir}" -j "${XER_V8_BUILD_JOBS}" v8_monolith
-        INSTALL_COMMAND ""
-        BUILD_BYPRODUCTS "${_library}")
+    # Check if V8 build already exists
+    if(EXISTS "${_library}")
+        message(STATUS "V8 ${variant_name} library already exists at ${_library}, skipping build")
+        # Create a dummy target
+        add_custom_target(${target_name}
+            COMMAND ${CMAKE_COMMAND} -E echo "V8 ${variant_name} build skipped (already present)")
+    else()
+        ExternalProject_Add(${target_name}
+            DEPENDS XERV8SourceSync
+            PREFIX "${XER_DEPS_DIR}/v8-${variant_name}-external"
+            SOURCE_DIR "${_xer_v8_source}"
+            BINARY_DIR "${build_dir}"
+            DOWNLOAD_COMMAND ""
+            UPDATE_COMMAND ""
+            CONFIGURE_COMMAND "${CMAKE_COMMAND}" -E env
+                "PATH=${_xer_v8_path}"
+                "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+                "${_xer_gn}" gen "${build_dir}"
+                "--args=is_debug=${_is_debug} is_component_build=false v8_monolithic=true v8_use_external_startup_data=false v8_enable_i18n_support=true icu_use_data_file=false v8_use_zlib=true symbol_level=0 target_cpu=\"${_xer_v8_target_cpu}\""
+            BUILD_COMMAND "${CMAKE_COMMAND}" -E env
+                "PATH=${_xer_v8_path}"
+                "DEPOT_TOOLS_WIN_TOOLCHAIN=0"
+                "${_xer_ninja}" -C "${build_dir}" -j "${XER_V8_BUILD_JOBS}" v8_monolith
+            INSTALL_COMMAND ""
+            BUILD_BYPRODUCTS "${_library}")
+    endif()
+
     set(${target_name}_LIBRARY "${_library}" PARENT_SCOPE)
     set(${target_name}_BUILD_DIR "${build_dir}" PARENT_SCOPE)
 endfunction()

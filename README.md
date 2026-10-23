@@ -12,6 +12,7 @@ XER is a high-performance C++/V8 runtime builder that executes JavaScript projec
 - [Audio Subsystem](#audio-subsystem)
 - [UI Module](#ui-module)
 - [Lunca Audio Streaming](#lunca-audio-streaming)
+- [Network Module](#network-module)
 - [Project Layout](#project-layout)
 - [Documentation](#documentation)
 - [Development](#development)
@@ -323,6 +324,47 @@ socket->SendTo(packet.Serialize(), "192.168.1.100", 12345);
 - [Lunca README](src/lunca/README.md) - Comprehensive Lunca documentation
 - [Lunca Architecture](src/lunca/ARCHITECTURE.md) - Detailed architecture and design
 
+## Network Module
+
+XER includes a comprehensive network stack inspired by Chromium's architecture.
+
+### Network Features
+
+- **Full Protocol Support**: HTTP/1.1, HTTP/2, HTTP/3 (QUIC), WebSocket, FTP, SPDY
+- **URL Handling**: Complete URL parsing, validation, and normalization
+- **Request/Response Management**: Create, send, and process network requests
+- **HTTP Caching**: Integrated HTTP cache for accelerated resource loading
+- **SSL/TLS Security**: Certificate verification and modern TLS support
+- **DNS Resolution**: Efficient DNS resolution with caching
+- **Proxy Support**: HTTP, HTTPS, SOCKS4/5 proxy support
+- **Low-Level Sockets**: TCP, UDP, SSL/TLS socket operations
+- **Asynchronous Model**: Event-driven architecture with thread pool integration
+
+### Network Usage
+
+```cpp
+#include "content/network/url/url_request_util.h"
+
+// High-level: synchronous GET
+std::string response = network::url::SyncGet("http://example.com/api");
+
+// WebSocket connection
+#include "content/network/websocket/websocket_stream.h"
+
+network::websocket::WebSocketStream ws;
+std::string error;
+if (!ws.DoHandshake("ws://echo.websocket.org", {}, &error)) {
+    // handle error
+}
+ws.SendText("Hello", [](bool ok) { /* callback */ });
+```
+
+### Network Documentation
+
+- [Network README](src/content/network/README.md) - Comprehensive network documentation
+- [Network Architecture](src/content/network/ARCHITECTURE.md) - Detailed architecture
+- [Network Improvements](src/content/network/IMPROVEMENTS.md) - Improvement roadmap
+
 ## Crypto & Compression Support
 
 XER includes built-in support for multiple algorithms:
@@ -355,6 +397,18 @@ XER/
 │   │   ├── protocol/     # Protocol handling
 │   │   ├── server/       # Server implementation
 │   │   └── client/       # Client implementation
+│   ├── content/          # Content subsystems
+│   │   └── network/      # Network stack (HTTP, WebSocket, QUIC, etc.)
+│   │       ├── core/     # Network context and service
+│   │       ├── url/      # URL handling
+│   │       ├── http/     # HTTP protocol
+│   │       ├── websocket/# WebSocket protocol
+│   │       ├── quic/     # QUIC protocol
+│   │       ├── socket/   # Socket abstractions
+│   │       ├── dns/      # DNS resolution
+│   │       ├── proxy/    # Proxy support
+│   │       ├── cert/     # Certificate management
+│   │       └── ...       # Other network components
 │   ├── modules/          # JavaScript modules
 │   └── v8/               # V8 engine integration
 ├── demo_app/             # Demo configurations and scripts
@@ -378,6 +432,9 @@ XER/
 - [UI Architecture](src/ui/ARCHITECTURE.md)
 - [Lunca Audio Streaming Docs](src/lunca/README.md)
 - [Lunca Architecture](src/lunca/ARCHITECTURE.md)
+- [Network Module Docs](src/content/network/README.md)
+- [Network Architecture](src/content/network/ARCHITECTURE.md)
+- [Network Improvements](src/content/network/IMPROVEMENTS.md)
 - [Module Reference](docs/modules.md)
 - [Stack Error Handling](docs/stack_error.md)
 

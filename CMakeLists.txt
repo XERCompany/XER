@@ -48,6 +48,9 @@ else()
 endif()
 xer_option_from_env(XER_BUILD_LLVM "${_xer_build_llvm_default}" "Build LLVM and Clang from source into .deps")
 
+# V8 build options (only used when ENABLE_V8=ON)
+option(XER_SKIP_V8_SYNC "Skip V8 source sync if already present (useful for cached V8 builds)" OFF)
+
 # Dependency management options
 option(XER_FETCH_DEPENDENCIES "Download missing CMake dependencies into .deps" ON)
 set(XER_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Directory for downloaded dependency sources and build trees")
@@ -94,6 +97,11 @@ include(cmake/deps/fetch.cmake)
 
 # System dependencies
 include(cmake/deps/system.cmake)
+
+# External dependencies (OpenSSL, FFmpeg, libusb)
+include(cmake/deps/openssl_external.cmake)
+include(cmake/deps/ffmpeg_external.cmake)
+include(cmake/deps/libusb_external.cmake)
 
 # Optional dependencies
 include(cmake/deps/optional.cmake)

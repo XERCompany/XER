@@ -5,6 +5,9 @@
 /cmake-build-*/
 install/
 
+# Compatibility layer (removed in favor of real dependencies)
+/compat/
+
 # IDE and editor files
 /.vscode/
 /.idea/
