@@ -98,11 +98,6 @@ include(cmake/deps/fetch.cmake)
 # System dependencies
 include(cmake/deps/system.cmake)
 
-# External dependencies (OpenSSL, FFmpeg, libusb)
-include(cmake/deps/openssl_external.cmake)
-include(cmake/deps/ffmpeg_external.cmake)
-include(cmake/deps/libusb_external.cmake)
-
 # Optional dependencies
 include(cmake/deps/optional.cmake)
 

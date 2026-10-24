@@ -16,98 +16,26 @@ else()
     endif()
 endif()
 
-# ============================================================
-# libxml2 auto-fetch (required for V8+LLVM/Clang)
-# ============================================================
-if(NOT LibXml2_FOUND AND XER_FETCH_DEPENDENCIES)
-    message(STATUS "libxml2 not found, fetching via FetchContent")
-    include(FetchContent)
+# libxml2 is already fetched in fetch.cmake for ENABLE_V8
 
-    FetchContent_Declare(
-        libxml2
-        GIT_REPOSITORY https://github.com/GNOME/libxml2.git
-        GIT_TAG v2.12.7
-        GIT_SHALLOW TRUE
-        SOURCE_DIR "${XER_DEPS_DIR}/libxml2-src"
-        BINARY_DIR "${XER_DEPS_DIR}/libxml2-build"
-    )
+# zstd is already fetched in fetch.cmake for ENABLE_MEDIA or (ENABLE_V8 AND XER_BUILD_LLVM)
 
-    FetchContent_MakeAvailable(libxml2)
-
-    if(EXISTS "${XER_DEPS_DIR}/libxml2-src/CMakeLists.txt")
-        message(STATUS "Building libxml2 from source")
-        option(LIBXML2_WITH_PROGRAMS "Build programs" OFF)
-        option(LIBXML2_WITH_TESTS "Build tests" OFF)
-        option(LIBXML2_WITH_PYTHON "Python bindings" OFF)
-        add_subdirectory("${XER_DEPS_DIR}/libxml2-src" "${XER_DEPS_DIR}/libxml2-build" EXCLUDE_FROM_ALL)
-        set(LibXml2_FOUND TRUE)
-    else()
-        message(WARNING "libxml2 auto-fetch failed. Install manually:")
-        message(WARNING "  Windows: vcpkg install libxml2:x64-windows")
-        message(WARNING "  Linux: apt install libxml2-dev")
-        message(WARNING "  macOS: brew install libxml2")
-    endif()
-endif()
+# zlib is already fetched in fetch.cmake
 
 # ============================================================
-# zstd auto-fetch (optional compression library)
+# System library discovery
 # ============================================================
-if(NOT zstd_FOUND AND XER_FETCH_DEPENDENCIES)
-    message(STATUS "zstd not found, fetching via FetchContent")
-    include(FetchContent)
 
-    FetchContent_Declare(
-        zstd
-        GIT_REPOSITORY https://github.com/facebook/zstd.git
-        GIT_TAG v1.5.6
-        GIT_SHALLOW TRUE
-        SOURCE_DIR "${XER_DEPS_DIR}/zstd-src"
-        BINARY_DIR "${XER_DEPS_DIR}/zstd-build"
-    )
-
-    FetchContent_MakeAvailable(zstd)
-
-    if(EXISTS "${XER_DEPS_DIR}/zstd-src/build/cmake/CMakeLists.txt")
-        message(STATUS "Building zstd from source")
-        add_subdirectory("${XER_DEPS_DIR}/zstd-src/build/cmake" "${XER_DEPS_DIR}/zstd-build" EXCLUDE_FROM_ALL)
-        set(zstd_FOUND TRUE)
-    else()
-        message(WARNING "zstd auto-fetch failed. Install manually:")
-        message(WARNING "  Windows: vcpkg install zstd:x64-windows")
-        message(WARNING "  Linux: apt install libzstd-dev")
-        message(WARNING "  macOS: brew install zstd")
-    endif()
-endif()
+# Optional: find system packages first
+find_package(CURL QUIET)
+find_package(OpenSSL QUIET)
+find_package(LibXml2 QUIET)
+find_package(libuv QUIET)
+find_package(zstd QUIET)
 
 # ============================================================
-# zlib auto-fetch (required compression library)
+# LLVM/Clang detection
 # ============================================================
-if(NOT ZLIB_FOUND AND XER_FETCH_DEPENDENCIES)
-    message(STATUS "zlib not found, fetching via FetchContent")
-    include(FetchContent)
-
-    FetchContent_Declare(
-        zlib
-        GIT_REPOSITORY https://github.com/madler/zlib.git
-        GIT_TAG v1.3.1
-        GIT_SHALLOW TRUE
-        SOURCE_DIR "${XER_DEPS_DIR}/zlib-src"
-        BINARY_DIR "${XER_DEPS_DIR}/zlib-build"
-    )
-
-    FetchContent_MakeAvailable(zlib)
-
-    if(EXISTS "${XER_DEPS_DIR}/zlib-src/CMakeLists.txt")
-        message(STATUS "Building zlib from source")
-        add_subdirectory("${XER_DEPS_DIR}/zlib-src" "${XER_DEPS_DIR}/zlib-build" EXCLUDE_FROM_ALL)
-        set(ZLIB_FOUND TRUE)
-    else()
-        message(WARNING "zlib auto-fetch failed. Install manually:")
-        message(WARNING "  Windows: vcpkg install zlib:x64-windows")
-        message(WARNING "  Linux: apt install zlib1g-dev")
-        message(WARNING "  macOS: brew install zlib")
-    endif()
-endif()
 if(NOT TARGET LibXml2::LibXml2)
     find_package(LibXml2 QUIET)
 endif()
@@ -123,60 +51,6 @@ if(ENABLE_V8 AND NOT TARGET V8::V8)
         set(V8_FOUND TRUE)
     endif()
 endif()
-set(ENGINE_HAS_LLVM_CLANG 0)
-if(LLVM_FOUND AND Clang_FOUND)
-    set(ENGINE_HAS_LLVM_CLANG 1)
-elseif(ENABLE_V8)
-    message(STATUS "LLVM/Clang CMake packages not found: XER executable disabled; V8 runtime can still be built")
-else()
-    message(STATUS "LLVM/Clang packages not found: compiler runtime targets disabled with ENABLE_V8=OFF")
-endif()
-# ============================================================
-# System library discovery
-# ============================================================
-
-# Optional: find system packages first
-find_package(CURL QUIET)
-find_package(OpenSSL QUIET)
-find_package(LibXml2 QUIET)
-find_package(libuv QUIET)
-find_package(zstd QUIET)
-
-# ============================================================
-# libuv auto-fetch (if not found and XER_FETCH_DEPENDENCIES=ON)
-# ============================================================
-if(NOT TARGET libuv::libuv AND XER_FETCH_DEPENDENCIES)
-    message(STATUS "libuv not found, fetching via FetchContent")
-    include(FetchContent)
-
-    FetchContent_Declare(
-        libuv
-        GIT_REPOSITORY https://github.com/libuv/libuv.git
-        GIT_TAG v1.48.0
-        GIT_SHALLOW TRUE
-        SOURCE_DIR "${XER_DEPS_DIR}/libuv-src"
-        BINARY_DIR "${XER_DEPS_DIR}/libuv-build"
-    )
-
-    FetchContent_MakeAvailable(libuv)
-
-    if(EXISTS "${XER_DEPS_DIR}/libuv-src/CMakeLists.txt")
-        message(STATUS "Building libuv from source")
-        add_subdirectory("${XER_DEPS_DIR}/libuv-src" "${XER_DEPS_DIR}/libuv-build" EXCLUDE_FROM_ALL)
-        set(libuv_FOUND TRUE)
-    else()
-        message(WARNING "libuv auto-fetch failed. Install manually:")
-        message(WARNING "  Windows: vcpkg install libuv:x64-windows")
-        message(WARNING "  Linux: apt install libuv1-dev")
-        message(WARNING "  macOS: brew install libuv")
-    endif()
-endif()
-
-# ============================================================
-# LLVM/Clang detection
-# ============================================================
-find_package(LLVM CONFIG QUIET)
-find_package(Clang CONFIG QUIET)
 set(ENGINE_HAS_LLVM_CLANG 0)
 if(LLVM_FOUND AND Clang_FOUND)
     set(ENGINE_HAS_LLVM_CLANG 1)
