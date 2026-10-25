@@ -26,10 +26,13 @@ target_link_libraries(XER_OpenAI
     PUBLIC
         XER_AsyncIO
         XER_AudioCore
+        XER_AudioDSP
         XER_Network
         absl::strings
         absl::synchronization
         absl::container
+        absl::escaping
+        absl::numbers
         range_v3
         re2::re2
 )

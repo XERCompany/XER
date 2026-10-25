@@ -9,7 +9,13 @@ Provides modern, ShadcnUI-style widgets for interacting with OpenAI features:
 - **ImageWidget**: Image generation and gallery
 - **AgentWidget**: Agent interaction and memory management
 - **AudioTranscriptionWidget**: Audio transcription with waveform visualization
+- **TextProcessingWidget**: Text processing and analysis
+- **SkillsWidget**: Skill management and execution
 - **OpenAIDashboardWidget**: Main dashboard with tabbed interface
+- **UsageStatsWidget**: API usage statistics display
+- **SystemStatusWidget**: System status indicators
+- **SentimentAnalysisWidget**: Sentiment visualization
+- **WaveformWidget**: Audio waveform visualization
 
 ## Architecture
 
@@ -19,6 +25,8 @@ src/ui/widgets/openai/
 ├── image_widget.h/cc       # Image generation
 ├── agent_widget.h/cc       # Agent interaction
 ├── audio_widget.h/cc       # Audio transcription
+├── text_widget.h/cc        # Text processing
+├── skills_widget.h/cc      # Skill management
 ├── dashboard_widget.h/cc   # Main dashboard
 ├── sample_app.cc           # Example applications
 └── CMakeLists.txt          # Build configuration
@@ -31,6 +39,9 @@ All widgets inherit from `XER::UI::Widgets::Widget` and integrate with:
 - **XER Rendering**: Direct2D rendering abstraction
 - **XER Layout**: Geometry primitives (Rect, Size, Point)
 - **XER ColorSpace**: Full color space and HDR support
+- **XER OpenAI**: Complete OpenAI subsystem integration
+- **XER Audio**: Audio engine and DSP algorithms
+- **XER Hardware**: GPU detection and acceleration
 
 ## Widget Features
 

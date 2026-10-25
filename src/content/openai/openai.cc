@@ -27,6 +27,14 @@ bool OpenAISubsystem::Initialize() {
     sandbox_ = Sandbox::SandboxFactory::CreatePythonSandbox();
     audio_transcriber_ = Audio::AudioTranscriberFactory::CreateWhisperTranscriber(client_);
 
+    // Create hardware manager
+    hardware_manager_ = std::make_shared<Hardware::HardwareManager>();
+    hardware_manager_->Initialize();
+
+    // Create GPU image processor
+    gpu_image_processor_ = std::make_shared<Hardware::GPUImageProcessor>();
+    gpu_image_processor_->Initialize(hardware_manager_);
+
     // Register default skills if enabled
     if (config_.register_default_skills) {
         Skills::SkillRegistry::GetInstance().RegisterDefaultSkills();
@@ -97,6 +105,14 @@ std::shared_ptr<Sandbox::ISandbox> OpenAISubsystem::GetSandbox() const {
 
 std::shared_ptr<Audio::IAudioTranscriber> OpenAISubsystem::GetAudioTranscriber() const {
     return audio_transcriber_;
+}
+
+std::shared_ptr<Hardware::HardwareManager> OpenAISubsystem::GetHardwareManager() const {
+    return hardware_manager_;
+}
+
+std::shared_ptr<Hardware::GPUImageProcessor> OpenAISubsystem::GetGPUImageProcessor() const {
+    return gpu_image_processor_;
 }
 
 void OpenAISubsystem::RegisterAgent(const std::string& name, std::shared_ptr<Agent::IAgent> agent) {

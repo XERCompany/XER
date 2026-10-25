@@ -11,6 +11,9 @@
 // - Audio transcription (using audio/ and Whisper)
 // - Server for HTTP API endpoint
 // - Integration with XER infrastructure (async_io, range-v3, absl, re2, libuv)
+// - Hardware acceleration (GPU via hardware_abstraction)
+// - DSP algorithms (audio/dsp_algorithms)
+// - Utilities (string, JSON, validation)
 
 #include "openai_types.h"
 
@@ -34,6 +37,13 @@
 
 // Audio
 #include "audio/audio_transcriber.h"
+#include "audio/dsp_integration.h"
+
+// Hardware
+#include "hardware_integration.h"
+
+// Utilities
+#include "openai_utils.h"
 
 // Server
 #include "server/openai_server.h"
@@ -65,6 +75,8 @@ public:
     std::shared_ptr<Text::ITextProcessor> GetTextProcessor() const;
     std::shared_ptr<Sandbox::ISandbox> GetSandbox() const;
     std::shared_ptr<Audio::IAudioTranscriber> GetAudioTranscriber() const;
+    std::shared_ptr<Hardware::HardwareManager> GetHardwareManager() const;
+    std::shared_ptr<Hardware::GPUImageProcessor> GetGPUImageProcessor() const;
 
     // Agent management
     void RegisterAgent(const std::string& name, std::shared_ptr<Agent::IAgent> agent);
@@ -84,6 +96,8 @@ private:
     std::shared_ptr<Text::ITextProcessor> text_processor_;
     std::shared_ptr<Sandbox::ISandbox> sandbox_;
     std::shared_ptr<Audio::IAudioTranscriber> audio_transcriber_;
+    std::shared_ptr<Hardware::HardwareManager> hardware_manager_;
+    std::shared_ptr<Hardware::GPUImageProcessor> gpu_image_processor_;
     std::map<std::string, std::shared_ptr<Agent::IAgent>> agents_;
     mutable std::mutex agents_mutex_;
     bool initialized_ = false;

@@ -8,6 +8,9 @@ Comprehensive integration with OpenAI API for XER runtime, providing:
 - **Image**: Image processing and generation
 - **Text**: Text processing and analysis (using `range-v3`, `absl`, `re2`)
 - **Audio**: Audio transcription (using `audio/` and Whisper)
+- **Hardware**: GPU acceleration and resource management
+- **DSP**: Audio feature extraction and preprocessing
+- **Utilities**: String, JSON, validation utilities
 - **Server**: HTTP API server
 
 ## Integration with XER
@@ -33,9 +36,26 @@ The subsystem deeply integrates with XER infrastructure:
 - DSP algorithms for audio preprocessing
 - Format conversion
 
+### Hardware Abstraction (async_io/hardware_abstraction)
+- GPU detection and management via `GPUInfoProvider`
+- CPU information via `CPUInfo`
+- Memory monitoring via `MemoryMonitor`
+- GPU-accelerated image processing
+- Resource allocation and monitoring
+
+### DSP Algorithms (audio/dsp_algorithms)
+- FFT engine for spectral analysis
+- STFT processor for time-frequency analysis
+- Windowing functions
+- Feature extraction (MFCC, spectral features)
+- Voice activity detection
+- Speaker diarization
+
 ### Libraries
 - **range-v3**: Functional programming for text processing
-- **absl**: String utilities (str_format, str_join, str_split, str_replace)
+- **absl**: String utilities (str_format, str_join, str_split, str_replace, escaping, numbers)
+- **absl**: Synchronization (Mutex, Notification)
+- **absl**: Containers (flat_hash_map, flat_hash_set)
 - **re2**: Regular expressions for pattern matching
 - **libuv**: Event loop for async operations (via network subsystem)
 
