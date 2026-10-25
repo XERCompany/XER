@@ -13,6 +13,15 @@
 #include <absl/synchronization/mutex.h>
 #include <absl/synchronization/notification.h>
 #include <re2/re2.h>
+
+#if __has_include(<jsoncpp/json/json.h>)
+  #include <jsoncpp/json/json.h>
+  #define OPENAI_JSONCPP_AVAILABLE 1
+#elif __has_include(<json/json.h>)
+  #include <json/json.h>
+  #define OPENAI_JSONCPP_AVAILABLE 1
+#endif
+
 #include <string>
 #include <vector>
 #include <map>
@@ -62,21 +71,62 @@ public:
 };
 
 /**
- * JSON utilities (simplified using absl and re2)
+ * JSON utilities using jsoncpp
  */
 class JsonUtils {
 public:
-    // Escape JSON string
+#ifdef OPENAI_JSONCPP_AVAILABLE
+    // Create JSON object
+    static Json::Value CreateObject();
+    
+    // Create JSON array
+    static Json::Value CreateArray();
+    
+    // Add value to object
+    static void AddToObject(Json::Value& obj, absl::string_view key, const Json::Value& value);
+    
+    // Add value to array
+    static void AddToArray(Json::Value& arr, const Json::Value& value);
+    
+    // Convert JSON to string
+    static std::string ToString(const Json::Value& value, bool styled = false);
+    
+    // Parse string to JSON
+    static Json::Value Parse(const std::string& json_str);
+    
+    // Extract value from JSON
+    static Json::Value ExtractValue(const Json::Value& root, absl::string_view key);
+    
+    // Extract nested value
+    static Json::Value ExtractNested(const Json::Value& root, const std::vector<std::string>& path);
+    
+    // Check if key exists
+    static bool HasKey(const Json::Value& root, absl::string_view key);
+    
+    // Get string value
+    static std::string GetString(const Json::Value& root, absl::string_view key, const std::string& default_value = "");
+    
+    // Get int value
+    static int GetInt(const Json::Value& root, absl::string_view key, int default_value = 0);
+    
+    // Get float value
+    static float GetFloat(const Json::Value& root, absl::string_view key, float default_value = 0.0f);
+    
+    // Get bool value
+    static bool GetBool(const Json::Value& root, absl::string_view key, bool default_value = false);
+    
+    // Get array
+    static Json::Value GetArray(const Json::Value& root, absl::string_view key);
+    
+    // Get object
+    static Json::Value GetObject(const Json::Value& root, absl::string_view key);
+#else
+    // Fallback string-based JSON (simplified)
     static std::string EscapeString(absl::string_view str);
-    
-    // Format JSON key-value
     static std::string FormatKeyValue(absl::string_view key, absl::string_view value);
-    
-    // Format JSON array
     static std::string FormatArray(const std::vector<std::string>& items);
-    
-    // Parse simple JSON (simplified)
     static std::string ExtractValue(absl::string_view json, absl::string_view key);
+#endif
 };
 
 /**

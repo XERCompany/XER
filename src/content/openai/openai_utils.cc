@@ -103,6 +103,122 @@ std::vector<std::string> StringUtils::RegexExtract(absl::string_view text, absl:
 }
 
 // JsonUtils implementation
+#ifdef OPENAI_JSONCPP_AVAILABLE
+Json::Value JsonUtils::CreateObject() {
+    return Json::Value(Json::objectValue);
+}
+
+Json::Value JsonUtils::CreateArray() {
+    return Json::Value(Json::arrayValue);
+}
+
+void JsonUtils::AddToObject(Json::Value& obj, absl::string_view key, const Json::Value& value) {
+    obj[std::string(key)] = value;
+}
+
+void JsonUtils::AddToArray(Json::Value& arr, const Json::Value& value) {
+    arr.append(value);
+}
+
+std::string JsonUtils::ToString(const Json::Value& value, bool styled) {
+    Json::StreamWriterBuilder builder;
+    if (styled) {
+        builder["indentation"] = "  ";
+    } else {
+        builder["indentation"] = "";
+    }
+    return Json::writeString(builder, value);
+}
+
+Json::Value JsonUtils::Parse(const std::string& json_str) {
+    Json::Value root;
+    Json::CharReaderBuilder builder;
+    std::string errs;
+    std::istringstream iss(json_str);
+    
+    if (!Json::parseFromStream(builder, iss, &root, &errs)) {
+        return Json::Value(Json::nullValue);
+    }
+    
+    return root;
+}
+
+Json::Value JsonUtils::ExtractValue(const Json::Value& root, absl::string_view key) {
+    std::string key_str(key);
+    if (root.isMember(key_str)) {
+        return root[key_str];
+    }
+    return Json::Value(Json::nullValue);
+}
+
+Json::Value JsonUtils::ExtractNested(const Json::Value& root, const std::vector<std::string>& path) {
+    Json::Value current = root;
+    
+    for (const auto& key : path) {
+        if (current.isMember(key)) {
+            current = current[key];
+        } else {
+            return Json::Value(Json::nullValue);
+        }
+    }
+    
+    return current;
+}
+
+bool JsonUtils::HasKey(const Json::Value& root, absl::string_view key) {
+    return root.isMember(std::string(key));
+}
+
+std::string JsonUtils::GetString(const Json::Value& root, absl::string_view key, const std::string& default_value) {
+    Json::Value value = ExtractValue(root, key);
+    if (value.isString()) {
+        return value.asString();
+    }
+    return default_value;
+}
+
+int JsonUtils::GetInt(const Json::Value& root, absl::string_view key, int default_value) {
+    Json::Value value = ExtractValue(root, key);
+    if (value.isInt()) {
+        return value.asInt();
+    }
+    return default_value;
+}
+
+float JsonUtils::GetFloat(const Json::Value& root, absl::string_view key, float default_value) {
+    Json::Value value = ExtractValue(root, key);
+    if (value.isDouble()) {
+        return static_cast<float>(value.asDouble());
+    }
+    return default_value;
+}
+
+bool JsonUtils::GetBool(const Json::Value& root, absl::string_view key, bool default_value) {
+    Json::Value value = ExtractValue(root, key);
+    if (value.isBool()) {
+        return value.asBool();
+    }
+    return default_value;
+}
+
+Json::Value JsonUtils::GetArray(const Json::Value& root, absl::string_view key) {
+    Json::Value value = ExtractValue(root, key);
+    if (value.isArray()) {
+        return value;
+    }
+    return Json::Value(Json::arrayValue);
+}
+
+Json::Value JsonUtils::GetObject(const Json::Value& root, absl::string_view key) {
+    Json::Value value = ExtractValue(root, key);
+    if (value.isObject()) {
+        return value;
+    }
+    return Json::Value(Json::objectValue);
+}
+
+#else
+// Fallback string-based JSON (simplified)
 std::string JsonUtils::EscapeString(absl::string_view str) {
     std::string escaped;
     absl::CEscape(str, &escaped);
@@ -126,6 +242,7 @@ std::string JsonUtils::ExtractValue(absl::string_view json, absl::string_view ke
     auto matches = StringUtils::RegexExtract(json, pattern);
     return matches.empty() ? "" : matches[0];
 }
+#endif
 
 // ThreadSafeMap implementation
 void ThreadSafeMap::Insert(const std::string& key, const std::string& value) {

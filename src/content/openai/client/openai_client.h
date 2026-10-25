@@ -3,6 +3,7 @@
 #include "../openai_types.h"
 #include "../../network/http/http_transaction.h"
 #include "../../network/url/url_request.h"
+#include "../openai_utils.h"
 #include <memory>
 #include <future>
 #include <optional>

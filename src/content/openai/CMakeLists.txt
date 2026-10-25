@@ -32,10 +32,15 @@ target_link_libraries(XER_OpenAI
         absl::synchronization
         absl::container
         absl::escaping
-        absl::numbers
         range_v3
         re2::re2
 )
+
+# Link with jsoncpp if available
+if(jsoncpp_FOUND)
+    target_link_libraries(XER_OpenAI PUBLIC jsoncpp_lib)
+    target_compile_definitions(XER_OpenAI PRIVATE OPENAI_JSONCPP_AVAILABLE=1)
+endif()
 
 # Link with external dependencies
 if(OPENSSL_FOUND)

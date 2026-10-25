@@ -324,6 +324,77 @@ std::string OpenAIClient::Impl::BuildChatCompletionBody(
     const std::vector<ChatMessage>& messages,
     const CompletionOptions& options) {
 
+#ifdef OPENAI_JSONCPP_AVAILABLE
+    using namespace Utils;
+    
+    Json::Value root = JsonUtils::CreateObject();
+    
+    // Add model
+    JsonUtils::AddToObject(root, "model", options.model.empty() ? "gpt-4" : options.model);
+    
+    // Add messages
+    Json::Value messages_array = JsonUtils::CreateArray();
+    for (const auto& msg : messages) {
+        Json::Value msg_obj = JsonUtils::CreateObject();
+        
+        // Role
+        std::string role_str;
+        switch (msg.role) {
+            case MessageRole::kSystem: role_str = "system"; break;
+            case MessageRole::kUser: role_str = "user"; break;
+            case MessageRole::kAssistant: role_str = "assistant"; break;
+            case MessageRole::kTool: role_str = "tool"; break;
+        }
+        JsonUtils::AddToObject(msg_obj, "role", role_str);
+        
+        // Content
+        Json::Value content_array = JsonUtils::CreateArray();
+        for (const auto& content : msg.content) {
+            Json::Value content_obj = JsonUtils::CreateObject();
+            JsonUtils::AddToObject(content_obj, "type", 
+                content.type == ContentType::kText ? "text" : "image_url");
+            JsonUtils::AddToObject(content_obj, "text", content.text);
+            JsonUtils::AddToArray(content_array, content_obj);
+        }
+        JsonUtils::AddToObject(msg_obj, "content", content_array);
+        
+        JsonUtils::AddToArray(messages_array, msg_obj);
+    }
+    JsonUtils::AddToObject(root, "messages", messages_array);
+    
+    // Add options
+    if (options.temperature != 1.0f) {
+        JsonUtils::AddToObject(root, "temperature", options.temperature);
+    }
+    if (options.top_p != 1.0f) {
+        JsonUtils::AddToObject(root, "top_p", options.top_p);
+    }
+    if (options.n != 1) {
+        JsonUtils::AddToObject(root, "n", options.n);
+    }
+    if (options.stream) {
+        JsonUtils::AddToObject(root, "stream", true);
+    }
+    if (options.max_tokens > 0) {
+        JsonUtils::AddToObject(root, "max_tokens", options.max_tokens);
+    }
+    if (!options.stop.empty()) {
+        Json::Value stop_array = JsonUtils::CreateArray();
+        for (const auto& stop : options.stop) {
+            JsonUtils::AddToArray(stop_array, stop);
+        }
+        JsonUtils::AddToObject(root, "stop", stop_array);
+    }
+    if (options.presence_penalty != 0.0f) {
+        JsonUtils::AddToObject(root, "presence_penalty", options.presence_penalty);
+    }
+    if (options.frequency_penalty != 0.0f) {
+        JsonUtils::AddToObject(root, "frequency_penalty", options.frequency_penalty);
+    }
+    
+    return JsonUtils::ToString(root, false);
+#else
+    // Fallback to string-based JSON
     using namespace absl;
     
     std::string json = "{";
@@ -397,13 +468,52 @@ std::string OpenAIClient::Impl::BuildChatCompletionBody(
     json += "}";
     
     return json;
+#endif
 }
 
 CompletionResponse OpenAIClient::Impl::ParseChatCompletionResponse(
     const std::string& body) {
 
-    // TODO: Implement proper JSON parsing using re2 or a JSON library
-    // For now, return a mock response
+#ifdef OPENAI_JSONCPP_AVAILABLE
+    using namespace Utils;
+    
+    CompletionResponse response;
+    
+    Json::Value root = JsonUtils::Parse(body);
+    
+    response.id = JsonUtils::GetString(root, "id", "");
+    response.object = JsonUtils::GetString(root, "object", "chat.completion");
+    response.created = JsonUtils::GetInt(root, "created", static_cast<int>(std::time(nullptr)));
+    response.model = JsonUtils::GetString(root, "model", "gpt-4");
+    
+    // Parse usage
+    Json::Value usage = JsonUtils::GetObject(root, "usage");
+    response.usage.prompt_tokens = JsonUtils::GetInt(usage, "prompt_tokens", 0);
+    response.usage.completion_tokens = JsonUtils::GetInt(usage, "completion_tokens", 0);
+    response.usage.total_tokens = JsonUtils::GetInt(usage, "total_tokens", 0);
+    
+    response.finish_reason = JsonUtils::GetString(root, "finish_reason", "stop");
+    
+    // Parse choices
+    Json::Value choices = JsonUtils::GetArray(root, "choices");
+    for (const auto& choice : choices) {
+        ChatMessage assistant_msg;
+        assistant_msg.role = MessageRole::kAssistant;
+        
+        Json::Value message = JsonUtils::GetObject(choice, "message");
+        Json::Value content = JsonUtils::GetArray(message, "content");
+        
+        for (const auto& content_item : content) {
+            std::string text = JsonUtils::GetString(content_item, "text", "");
+            assistant_msg.content.push_back({ContentType::kText, text});
+        }
+        
+        response.choices.push_back(assistant_msg);
+    }
+    
+    return response;
+#else
+    // Fallback: return mock response
     CompletionResponse response;
     response.id = "chatcmpl-" + std::to_string(std::time(nullptr));
     response.object = "chat.completion";
@@ -418,8 +528,9 @@ CompletionResponse OpenAIClient::Impl::ParseChatCompletionResponse(
     assistant_msg.role = MessageRole::kAssistant;
     assistant_msg.content.push_back({ContentType::kText, "Response from OpenAI API"});
     response.choices.push_back(assistant_msg);
-
+    
     return response;
+#endif
 }
 
 }  // namespace Content::OpenAI::Client
