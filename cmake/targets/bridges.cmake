@@ -110,46 +110,7 @@ if(ENGINE_WRAPPER_ANGLE_CC)
 endif()
 
 # ── OpenAI ───────────────────────────────────────────────────
-# Collect OpenAI sources
-file(GLOB_RECURSE ENGINE_WRAPPER_OPENAI_CC
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/content/openai/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/content/openai/**/*.cc"
-)
-
-file(GLOB_RECURSE ENGINE_WRAPPER_OPENAI_H
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/content/openai/*.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/src/content/openai/**/*.h"
-)
-
-if(ENGINE_WRAPPER_OPENAI_CC)
-    add_library(XERBridgeOpenAI STATIC ${ENGINE_WRAPPER_OPENAI_CC})
-    target_sources(XERBridgeOpenAI PRIVATE ${ENGINE_WRAPPER_OPENAI_H})
-    target_include_directories(XERBridgeOpenAI PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/src)
-    target_compile_definitions(XERBridgeOpenAI PRIVATE
-        ENGINE_HAS_OPENAI_BRIDGE=${ENGINE_HAS_OPENAI_BRIDGE})
-    target_link_libraries(XERBridgeOpenAI
-        PRIVATE
-        XER_Network
-        XER_AsyncIO
-        XER_AudioCore
-        absl::strings
-        absl::synchronization
-        absl::container
-        range_v3
-        re2::re2
-    )
-    if(OPENSSL_FOUND)
-        target_link_libraries(XERBridgeOpenAI PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-    endif()
-    if(ZLIB_FOUND)
-        target_link_libraries(XERBridgeOpenAI PRIVATE ZLIB::ZLIB)
-    endif()
-    if(ZSTD_FOUND)
-        target_link_libraries(XERBridgeOpenAI PRIVATE zstd_static)
-    endif()
-    if(jsoncpp_FOUND)
-        target_link_libraries(XERBridgeOpenAI PRIVATE jsoncpp_lib)
-        target_compile_definitions(XERBridgeOpenAI PRIVATE OPENAI_JSONCPP_AVAILABLE=1)
-    endif()
-endif()
+# OpenAI bridge disabled due to missing dependencies
+# TODO: Re-enable when dependencies are available
+set(ENGINE_WRAPPER_OPENAI_CC "")
+set(ENGINE_WRAPPER_OPENAI_H "")
