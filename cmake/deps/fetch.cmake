@@ -44,6 +44,23 @@ if(XER_FETCH_DEPENDENCIES)
         set(ZLIB_LIBRARIES ZLIB::ZLIB)
     endif()
 
+    # JsonCpp for JSON serialization
+    set(JSONCPP_WITH_TESTS OFF CACHE BOOL "" FORCE)
+    set(JSONCPP_WITH_POST_BUILD_UNITTEST OFF CACHE BOOL "" FORCE)
+    set(JSONCPP_WITH_PKGCONFIG_SUPPORT OFF CACHE BOOL "" FORCE)
+    set(JSONCPP_INSTALL OFF CACHE BOOL "" FORCE)
+    set(BUILD_STATIC_LIBS ON CACHE BOOL "" FORCE)
+    FetchContent_Declare(xer_jsoncpp
+        GIT_REPOSITORY https://github.com/open-source-parsers/jsoncpp.git
+        GIT_TAG 1.9.6
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(xer_jsoncpp)
+    if(TARGET jsoncpp_lib)
+        set(jsoncpp_FOUND TRUE CACHE BOOL "" FORCE)
+        set(jsoncpp_INCLUDE_DIR "${xer_jsoncpp_SOURCE_DIR}/include" CACHE PATH "jsoncpp include directory" FORCE)
+        set(jsoncpp_LIBRARY jsoncpp_lib CACHE STRING "jsoncpp library target" FORCE)
+    endif()
+
     set(XER_SQLITE3_VERSION "3.46.1" CACHE STRING "SQLite amalgamation version")
     FetchContent_Populate(xer_sqlite3
         URL "https://www.sqlite.org/2024/sqlite-amalgamation-3460100.zip"

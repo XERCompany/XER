@@ -40,13 +40,8 @@ xer_option_from_env(ENABLE_OPENCV OFF "Fetch and build OpenCV bridge libraries")
 xer_option_from_env(ENABLE_MEDIA ON "Enable FFmpeg and audio/media dependencies")
 
 # JavaScript runtime options
-xer_option_from_env(ENABLE_V8 OFF "Build V8 and enable the JavaScript runtime and XER executable")
-if(ENABLE_V8)
-    set(_xer_build_llvm_default ON)
-else()
-    set(_xer_build_llvm_default OFF)
-endif()
-xer_option_from_env(XER_BUILD_LLVM "${_xer_build_llvm_default}" "Build LLVM and Clang from source into .deps")
+xer_option_from_env(ENABLE_V8 ON "Build V8 and enable the JavaScript runtime and XER executable")
+xer_option_from_env(XER_BUILD_LLVM OFF "Build LLVM and Clang from source into .deps (WARNING: takes 10-30 min)")
 
 # V8 build options (only used when ENABLE_V8=ON)
 option(XER_SKIP_V8_SYNC "Skip V8 source sync if already present (useful for cached V8 builds)" OFF)
@@ -119,6 +114,9 @@ include(cmake/targets/sql.cmake)
 
 # Multimedia bridges
 include(cmake/targets/bridges.cmake)
+
+# WinAPI bridge (platform-specific)
+include(cmake/targets/winapi_bridge.cmake)
 
 # JavaScript runtime
 include(cmake/targets/javascript.cmake)
