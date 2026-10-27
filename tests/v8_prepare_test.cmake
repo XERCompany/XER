@@ -60,4 +60,18 @@ file(READ "${windows_gn}" unchanged)
 if(NOT unchanged STREQUAL "unsupported upstream CRT layout\n")
     message(FATAL_ERROR "The rejected upstream file was modified.")
 endif()
+get_filename_component(missing_source "${XER_TEST_DIR}/missing/v8" ABSOLUTE)
+file(WRITE "${XER_V8_CONFIG_DIR}/missing-settings.cmake"
+    "set(XER_V8_SOURCE_DIR [==[${missing_source}]==])\n")
+execute_process(COMMAND "${CMAKE_COMMAND}"
+    "-DXER_V8_SETTINGS=${XER_V8_CONFIG_DIR}/missing-settings.cmake"
+    -DXER_V8_ACTION=build
+    -P "${CMAKE_CURRENT_LIST_DIR}/../cmake/v8/driver.cmake"
+    RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE error)
+if(result EQUAL 0 OR NOT "${output}${error}" MATCHES "V8 sources are missing")
+    message(FATAL_ERROR "A build without fetched sources did not report the prerequisite: ${output}${error}")
+endif()
+if(EXISTS "${missing_source}" OR EXISTS "${XER_TEST_DIR}/missing/.gclient")
+    message(FATAL_ERROR "A V8 build unexpectedly initiated a source checkout.")
+endif()
 message(STATUS "V8 preparation: CRT, adapters, paths with spaces, idempotence and rejection passed")

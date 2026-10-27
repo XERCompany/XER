@@ -2,7 +2,10 @@ import("//xer_vcpkg/vcpkg.gni")
 
 config("headers") {
   include_dirs = [ xer_vcpkg_include_dir ]
-  defines = [ "U_USING_ICU_NAMESPACE=0" ]
+  defines = [
+    "U_USING_ICU_NAMESPACE=0",
+    "ICU_UTIL_DATA_IMPL=ICU_UTIL_DATA_STATIC",
+  ]
 }
 
 config("uc") {
@@ -26,6 +29,10 @@ group("icuuc") {
 group("icui18n") {
   public_deps = [ ":icuuc" ]
   public_configs = [ ":i18n" ]
+}
+
+group("icudata") {
+  public_configs = [ ":uc" ]
 }
 
 group("icu") {
