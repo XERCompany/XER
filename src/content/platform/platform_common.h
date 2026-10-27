@@ -33,8 +33,8 @@ public:
     virtual std::string GetApplicationDataDirectory() const = 0;
 
     // Process/Thread
-    virtual unsigned int GetCurrentProcessId() const = 0;
-    virtual unsigned int GetCurrentThreadId() const = 0;
+    virtual unsigned int GetProcessId() const = 0;
+    virtual unsigned int GetThreadId() const = 0;
 
     // Memory
     virtual size_t GetTotalMemory() const = 0;

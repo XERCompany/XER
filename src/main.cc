@@ -11,8 +11,6 @@
 #include <json/json.h>
 #include <absl/strings/str_cat.h>
 #include <iterator>
-#include <range/v3/range/conversion.hpp>
-#include <range/v3/view/transform.hpp>
 #include <sstream>
 #include <string>
 #include <cstdlib>

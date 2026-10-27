@@ -1,0 +1,7 @@
+static_library("compression_utils_portable") {
+  sources = [
+    "//third_party/zlib/google/compression_utils_portable.cc",
+    "//third_party/zlib/google/compression_utils_portable.h",
+  ]
+  public_deps = [ "..:zlib" ]
+}

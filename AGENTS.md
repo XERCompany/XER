@@ -12,7 +12,9 @@ XER is a high-performance C++/V8 runtime builder with multimedia and GPU acceler
 - **CMake Version**: 3.21+
 - **C++ Standard**: C++23
 - **Primary Build Tool**: CMake with presets
-- **Dependency Management**: FetchContent with local cache in `.deps/`
+- **Dependency Management**: vcpkg (C:/vcpkg) with x64-windows-release triplet
+- **V8 Fetching**: Separate XER_FETCH_V8 option for V8 source build
+- **Automatic Dependency Fetching**: Disabled by default (XER_FETCH_DEPENDENCIES=OFF)
 
 ### Core Technologies
 - **V8**: JavaScript engine (when ENABLE_V8=ON)
@@ -136,18 +138,36 @@ cmake --build --preset v8-xer
 
 ## Dependency Management
 
+### vcpkg Integration
+- **vcpkg Path**: C:/vcpkg
+- **Triplet**: x64-windows-release
+- **Toolchain**: C:/vcpkg/scripts/buildsystems/vcpkg.cmake
+- **Installation**: Manual via `vcpkg install <package>:x64-windows-release`
+
+### Currently Used vcpkg Libraries
+- libuv - Async I/O
+- absl - Google Abseil (strings, sync, container)
+- fmt - String formatting
+- jsoncpp - JSON handling
+- re2 - Regular expressions
+- sqlite3 - Database
+- zlib, zstd, brotli - Compression
+- OpenSSL, curl - Networking (optional)
+- FFmpeg, SDL2 - Media (optional)
+- OpenCV - Computer vision (optional)
+- pthreadpool, fxdiv - Parallel processing
+
 ### Adding New Dependencies
-1. Check if already available in system
-2. Prefer FetchContent for portability
-3. Add to appropriate cmake/deps/ file
-4. Update build instructions
-5. Test on multiple platforms
+1. Install via vcpkg: `vcpkg install <package>:x64-windows-release`
+2. Add find_package() to CMakeLists.txt
+3. Link target with appropriate library
+4. Update documentation
+5. Test on target platform
 
 ### Version Pinning
-- Pin dependency versions in CMake
-- Use known-good versions
-- Document version requirements
-- Test updates thoroughly
+- vcpkg handles versioning via manifest or latest stable
+- Document tested versions in VCPKG_INTEGRATION.md
+- Test updates thoroughly before integration
 
 ## Documentation
 

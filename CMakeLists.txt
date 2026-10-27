@@ -1,137 +1,152 @@
-# ============================================================
-# XER - High-Performance C++/V8 Runtime Builder
-# ============================================================
-# CMake minimum version requirement
 cmake_minimum_required(VERSION 3.21)
 
-# Add custom CMake modules directory to search path
-list(PREPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/modules")
-
-# ============================================================
-# Helper Functions
-# ============================================================
-
-# Function to create a CMake option that can be overridden by environment variable
-# Usage: xer_option_from_env(OPTION_NAME DEFAULT "Description")
-function(xer_option_from_env option_name default_value description)
-    set(option_default "${default_value}")
-    if(DEFINED ENV{${option_name}})
-        string(TOUPPER "$ENV{${option_name}}" option_env_value)
-        if(option_env_value MATCHES "^(1|ON|TRUE|YES|Y)$")
-            set(option_default ON)
-        elseif(option_env_value MATCHES "^(0|OFF|FALSE|NO|N)$")
-            set(option_default OFF)
-        endif()
-    endif()
-    option(${option_name} "${description}" ${option_default})
-endfunction()
-
-# ============================================================
-# Project Options
-# ============================================================
-
-# GPU and AI support options
-xer_option_from_env(ENABLE_CUDA OFF "Enable CUDA language, CUDA sources, and CUDA bridge targets")
-xer_option_from_env(ENABLE_CUDNN OFF "Enable cuDNN sources and bridge targets")
-xer_option_from_env(ENABLE_AI OFF "Enable AI and model-builder sources")
-
-# Multimedia and vision options
-xer_option_from_env(ENABLE_OPENCV OFF "Fetch and build OpenCV bridge libraries")
-xer_option_from_env(ENABLE_MEDIA ON "Enable FFmpeg and audio/media dependencies")
-
-# JavaScript runtime options
-xer_option_from_env(ENABLE_V8 ON "Build V8 and enable the JavaScript runtime and XER executable")
-xer_option_from_env(XER_BUILD_LLVM OFF "Build LLVM and Clang from source into .deps (WARNING: takes 10-30 min)")
-
-# V8 build options (only used when ENABLE_V8=ON)
-option(XER_SKIP_V8_SYNC "Skip V8 source sync if already present (useful for cached V8 builds)" OFF)
-
-# Dependency management options
-option(XER_FETCH_DEPENDENCIES "Download missing CMake dependencies into .deps" ON)
-set(XER_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Directory for downloaded dependency sources and build trees")
-set(FETCHCONTENT_BASE_DIR "${XER_DEPS_DIR}" CACHE PATH "FetchContent source and build directory" FORCE)
-
-# ============================================================
-# Dependency Validation
-# ============================================================
-
-# cuDNN requires CUDA
-if(ENABLE_CUDNN AND NOT ENABLE_CUDA)
-    message(FATAL_ERROR "ENABLE_CUDNN=ON requires ENABLE_CUDA=ON")
-endif()
-
-# Check CUDA availability if enabled
-if(ENABLE_CUDA)
-    include(CheckLanguage)
-    check_language(CUDA)
-    if(NOT CMAKE_CUDA_COMPILER)
-        message(FATAL_ERROR "ENABLE_CUDA=ON requires a CUDA toolkit and a supported CUDA compiler")
-    endif()
-    set(CMAKE_CUDA_STANDARD 17)
-    project(XER LANGUAGES C CXX CUDA)
-else()
-    project(XER LANGUAGES C CXX)
-endif()
-
-# ============================================================
-# Project Configuration
-# ============================================================
-
-# Standard installation directories
-include(GNUInstallDirs)
-
-# C++ standard
+# Set C++23 standard
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-# ============================================================
-# Dependency Management
-# ============================================================
+# vcpkg integration
+if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+endif()
 
-include(cmake/deps/fetch.cmake)
+# Explicit vcpkg path (C:/vcpkg)
+if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+endif()
 
-# System dependencies
-include(cmake/deps/system.cmake)
+# Set vcpkg triplet to x64-windows-release
+set(VCPKG_TARGET_TRIPLET "x64-windows-release" CACHE STRING "Vcpkg target triplet")
+set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Use preinstalled vcpkg packages")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
 
-# Optional dependencies
-include(cmake/deps/optional.cmake)
+project(XER LANGUAGES C CXX)
+include(GNUInstallDirs)
+include(CTest)
 
-# ============================================================
-# Source Files
-# ============================================================
+if(VCPKG_TARGET_TRIPLET STREQUAL "x64-windows-release")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(FATAL_ERROR "x64-windows-release requires Release or RelWithDebInfo, not Debug.")
+    endif()
+    if(CMAKE_CONFIGURATION_TYPES)
+        set(CMAKE_CONFIGURATION_TYPES "Release;RelWithDebInfo" CACHE STRING "Build configurations" FORCE)
+    endif()
+    set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO "Release;")
+    set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL "Release;")
+endif()
 
-include(cmake/sources.cmake)
+# Build options
+option(XER_FETCH_DEPENDENCIES "Fetch dependencies automatically" OFF)
+option(XER_FETCH_V8 "Fetch V8 from source" OFF)
+option(ENABLE_V8 "Build V8 and JavaScript runtime" OFF)
+option(ENABLE_MEDIA "Enable media dependencies" ON)
+option(ENABLE_CUDA "Enable CUDA support" OFF)
+option(ENABLE_CUDNN "Enable cuDNN support" OFF)
+option(ENABLE_OPENCV "Fetch and build OpenCV" OFF)
+option(ENABLE_AI "Enable AI and model-builder sources" OFF)
+option(XER_BUILD_APP "Build the XER application and its subsystems" ON)
 
-# ============================================================
-# Build Targets
-# ============================================================
+# Dependency cache directory (only used if XER_FETCH_DEPENDENCIES is ON)
+set(XER_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Directory for dependency cache")
 
-# Async I/O library
-include(cmake/targets/async_io.cmake)
+# V8 dependency cache directory (only used if XER_FETCH_V8 is ON)
+set(XER_V8_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/v8" CACHE PATH "Directory for V8 dependency cache")
 
-# SQL support
-include(cmake/targets/sql.cmake)
+# Add subdirectories
 
-# Multimedia bridges
-include(cmake/targets/bridges.cmake)
+# Find vcpkg packages
+find_package(libuv CONFIG REQUIRED)
+find_package(absl CONFIG REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(jsoncpp CONFIG REQUIRED)
+find_package(re2 CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
+find_package(zstd CONFIG REQUIRED)
+find_package(unofficial-brotli CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(CURL REQUIRED)
+find_package(unofficial-pthreadpool CONFIG REQUIRED)
+find_package(unofficial-fxdiv CONFIG REQUIRED)
 
-# WinAPI bridge (platform-specific)
-include(cmake/targets/winapi_bridge.cmake)
+# Find FFmpeg via pkg-config or direct find
+if(ENABLE_MEDIA)
+    find_package(FFMPEG REQUIRED)
+    add_library(XER_FFmpeg INTERFACE)
+    target_include_directories(XER_FFmpeg INTERFACE ${FFMPEG_INCLUDE_DIRS})
+    target_link_directories(XER_FFmpeg INTERFACE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(XER_FFmpeg INTERFACE ${FFMPEG_LIBRARIES})
+endif()
 
-# JavaScript runtime
-include(cmake/targets/javascript.cmake)
+# Find OpenCV if enabled
+if(ENABLE_OPENCV)
+    find_package(OpenCV CONFIG REQUIRED)
+endif()
 
-# Qt6 bridge (optional)
-include(cmake/targets/qt6_bridge.cmake)
+# Find SDL2 for audio
+if(ENABLE_MEDIA)
+    find_package(SDL2 CONFIG REQUIRED)
+endif()
 
-# Main executable
-include(cmake/targets/main.cmake)
+if(ENABLE_V8)
+    include(cmake/v8.cmake)
+endif()
 
-# ============================================================
-# Installation
-# ============================================================
+if(XER_BUILD_APP)
+    add_subdirectory(src)
+endif()
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
 
-if(TARGET XER)
-    install(TARGETS XER
-        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+# Link common vcpkg libraries to xer target
+if(TARGET xer)
+    target_link_libraries(xer PRIVATE
+        $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
+        absl::strings
+        absl::synchronization
+        absl::flat_hash_map
+        absl::flat_hash_set
+        fmt::fmt
+        jsoncpp_lib
+        re2::re2
+        unofficial::sqlite3::sqlite3
+        ZLIB::ZLIB
+        zstd::libzstd
+        unofficial::brotli::brotlienc
+        unofficial::brotli::brotlidec
+        unofficial::brotli::brotlicommon
+    )
+
+    # Link OpenSSL if available
+    if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
+        target_link_libraries(xer PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+
+    # Link libcurl if available
+    if(TARGET CURL::libcurl)
+        target_link_libraries(xer PRIVATE CURL::libcurl)
+    endif()
+
+    # Link FFmpeg if available
+    if(TARGET XER_FFmpeg)
+        target_link_libraries(xer PRIVATE XER_FFmpeg)
+    endif()
+
+    # Link SDL2 if available
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(xer PRIVATE SDL2::SDL2)
+    endif()
+
+    # Link OpenCV if enabled
+    if(ENABLE_OPENCV)
+        target_link_libraries(xer PRIVATE
+            opencv_core
+            opencv_imgproc
+            opencv_imgcodecs
+        )
+    endif()
+    if(ENABLE_V8)
+        target_link_libraries(xer PRIVATE V8::V8)
+    endif()
 endif()
