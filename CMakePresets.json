@@ -1,57 +1,104 @@
 {
   "version": 3,
-  "cmakeMinimumRequired": {
-    "major": 3,
-    "minor": 16,
-    "patch": 0
+  "vendor": {
+    "microsoft.com/VisualStudioSettings/CMake/1.0": {
+      "intelliSenseMode": "windows-msvc"
+    }
   },
   "configurePresets": [
     {
-      "name": "default",
-      "displayName": "Default",
-      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
+      "name": "vcpkg-release",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/${presetName}",
       "cacheVariables": {
-        "CMAKE_BUILD_TYPE": "Debug",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "ENABLE_CUDA": "OFF",
-        "ENABLE_CUDNN": "OFF",
-        "ENABLE_AI": "OFF",
-        "ENABLE_OPENCV": "OFF",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "VCPKG_MANIFEST_MODE": "OFF",
+        "CMAKE_MSVC_RUNTIME_LIBRARY": "MultiThreadedDLL",
+        "XER_FETCH_DEPENDENCIES": "OFF",
+        "XER_FETCH_V8": "OFF",
         "ENABLE_V8": "OFF",
-        "ENABLE_MEDIA": "ON"
+        "ENABLE_MEDIA": "ON",
+        "XER_BUILD_APP": "ON",
+        "BUILD_TESTING": "ON"
       }
     },
     {
-      "name": "cuda",
-      "displayName": "CUDA + cuDNN",
-      "inherits": "default",
-      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
+      "name": "default",
+      "inherits": "vcpkg-release",
+      "displayName": "Default configuration with vcpkg",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/default",
       "cacheVariables": {
-        "ENABLE_CUDA": "ON",
-        "ENABLE_CUDNN": "ON",
-        "ENABLE_AI": "ON",
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "XER_FETCH_DEPENDENCIES": "OFF",
+        "ENABLE_MEDIA": "ON",
         "ENABLE_V8": "OFF"
       }
     },
     {
       "name": "v8",
-      "displayName": "Source-built V8 runtime",
-      "inherits": "default",
-      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
+      "inherits": "vcpkg-release",
+      "displayName": "V8 and JavaScript runtime",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/v8",
       "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "XER_FETCH_DEPENDENCIES": "OFF",
+        "XER_FETCH_V8": "ON",
         "ENABLE_V8": "ON",
-        "XER_BUILD_LLVM": "ON",
-        "ENABLE_MEDIA": "OFF"
+        "ENABLE_MEDIA": "OFF",
+        "XER_BUILD_APP": "OFF"
+      }
+    },
+    {
+      "name": "v8-xer",
+      "inherits": "vcpkg-release",
+      "displayName": "Full XER with V8",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/v8-xer",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "XER_FETCH_DEPENDENCIES": "OFF",
+        "XER_FETCH_V8": "ON",
+        "ENABLE_V8": "ON",
+        "ENABLE_MEDIA": "ON"
       }
     },
     {
       "name": "opencv",
-      "displayName": "OpenCV bridge libraries",
-      "inherits": "default",
-      "binaryDir": "${sourceDir}/out/build/${presetName}-system",
+      "inherits": "vcpkg-release",
+      "displayName": "OpenCV bridge",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/opencv",
       "cacheVariables": {
-        "ENABLE_OPENCV": "ON",
-        "ENABLE_MEDIA": "OFF"
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "XER_FETCH_DEPENDENCIES": "OFF",
+        "ENABLE_OPENCV": "ON"
+      }
+    },
+    {
+      "name": "debug",
+      "inherits": "vcpkg-release",
+      "displayName": "Release CRT with debug symbols",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_TOOLCHAIN_FILE": "C:/vcpkg/scripts/buildsystems/vcpkg.cmake",
+        "VCPKG_TARGET_TRIPLET": "x64-windows-release",
+        "XER_FETCH_DEPENDENCIES": "OFF",
+        "ENABLE_MEDIA": "ON"
       }
     }
   ],
@@ -61,25 +108,44 @@
       "configurePreset": "default"
     },
     {
-      "name": "cuda",
-      "configurePreset": "cuda"
+      "name": "v8",
+      "configurePreset": "v8",
+      "targets": ["xer_v8_smoke"]
+    },
+    {
+      "name": "v8-fetch",
+      "configurePreset": "v8",
+      "targets": ["xer_v8_fetch"]
+    },
+    {
+      "name": "v8-build",
+      "configurePreset": "v8",
+      "targets": ["xer_v8_build"]
+    },
+    {
+      "name": "v8-xer",
+      "configurePreset": "v8-xer"
+    },
+    {
+      "name": "opencv",
+      "configurePreset": "opencv"
+    },
+    {
+      "name": "debug",
+      "configurePreset": "debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "default",
+      "configurePreset": "default",
+      "output": { "outputOnFailure": true }
     },
     {
       "name": "v8",
       "configurePreset": "v8",
-      "configuration": "Release",
-      "targets": ["XERLLVMExternal", "XERV8External", "XERJavaScript", "XERSQLite3"]
-    },
-    {
-      "name": "v8-xer",
-      "configurePreset": "v8",
-      "configuration": "Release",
-      "targets": ["XER"]
-    },
-    {
-      "name": "opencv",
-      "configurePreset": "opencv",
-      "targets": ["XEROpenCV"]
+      "filter": { "include": { "name": "^v8_smoke$" } },
+      "output": { "outputOnFailure": true }
     }
   ]
 }

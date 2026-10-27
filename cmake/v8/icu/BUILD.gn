@@ -1,0 +1,36 @@
+import("//xer_vcpkg/vcpkg.gni")
+
+config("headers") {
+  include_dirs = [ xer_vcpkg_include_dir ]
+  defines = [ "U_USING_ICU_NAMESPACE=0" ]
+}
+
+config("uc") {
+  libs = [
+    xer_vcpkg_icu_uc,
+    xer_vcpkg_icu_data,
+  ]
+}
+
+config("i18n") {
+  libs = [ xer_vcpkg_icu_i18n ]
+}
+
+group("icuuc") {
+  public_configs = [
+    ":headers",
+    ":uc",
+  ]
+}
+
+group("icui18n") {
+  public_deps = [ ":icuuc" ]
+  public_configs = [ ":i18n" ]
+}
+
+group("icu") {
+  public_deps = [
+    ":icuuc",
+    ":icui18n",
+  ]
+}

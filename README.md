@@ -89,11 +89,41 @@ src/
 
 ### Prerequisites
 
-Install CMake (3.21+), Git, and a supported C/C++ toolchain. With `XER_FETCH_DEPENDENCIES=ON` (the default), XER CMake downloads dependencies into the project-local `.deps` directory and reuses them on subsequent configure runs.
+Install CMake (3.21+), Git, and a supported C/C++ toolchain. Dependencies are managed via vcpkg located at `C:/vcpkg`.
+
+### vcpkg Setup
+
+1. Install vcpkg at `C:/vcpkg` (or set `VCPKG_ROOT` environment variable)
+2. Install required dependencies:
+   ```bash
+   vcpkg install libuv:x64-windows-release
+   vcpkg install absl:x64-windows-release
+   vcpkg install fmt:x64-windows-release
+   vcpkg install jsoncpp:x64-windows-release
+   vcpkg install re2:x64-windows-release
+   vcpkg install sqlite3:x64-windows-release
+   vcpkg install zlib:x64-windows-release
+   vcpkg install zstd:x64-windows-release
+   vcpkg install brotli:x64-windows-release
+   vcpkg install pthreadpool:x64-windows-release
+   vcpkg install fxdiv:x64-windows-release
+   ```
+3. For media support (optional):
+   ```bash
+   vcpkg install ffmpeg:x64-windows-release
+   vcpkg install sdl2:x64-windows-release
+   ```
+4. For networking (optional):
+   ```bash
+   vcpkg install openssl:x64-windows-release
+   vcpkg install curl:x64-windows-release
+   ```
 
 ### Environment Variables
 
-- `XER_FETCH_DEPENDENCIES`: Enable/disable automatic dependency fetching (default: ON)
+- `VCPKG_ROOT`: Path to vcpkg installation (default: C:/vcpkg)
+- `XER_FETCH_DEPENDENCIES`: Enable/disable automatic dependency fetching (default: OFF)
+- `XER_FETCH_V8`: Fetch V8 from source (default: OFF)
 - `XER_DEPS_DIR`: Directory for dependency cache (default: `.deps`)
 - `ENABLE_CUDA`: Enable CUDA support (default: OFF)
 - `ENABLE_CUDNN`: Enable cuDNN support (default: OFF)

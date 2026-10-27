@@ -1,0 +1,11 @@
+import("//xer_vcpkg/vcpkg.gni")
+
+config("external_zlib") {
+  include_dirs = [ xer_vcpkg_include_dir ]
+  defines = [ "USE_SYSTEM_ZLIB" ]
+  libs = [ xer_vcpkg_zlib ]
+}
+
+group("zlib") {
+  public_configs = [ ":external_zlib" ]
+}

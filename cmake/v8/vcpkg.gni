@@ -1,0 +1,11 @@
+declare_args() {
+  xer_vcpkg_include_dir = ""
+  xer_vcpkg_icu_uc = ""
+  xer_vcpkg_icu_i18n = ""
+  xer_vcpkg_icu_data = ""
+  xer_vcpkg_zlib = ""
+}
+
+assert(is_win && target_cpu == "x64",
+       "XER's vcpkg adapters require Windows x64.")
+assert(xer_vcpkg_include_dir != "", "Set the vcpkg include directory in args.gn.")

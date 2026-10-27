@@ -2,11 +2,11 @@
 
 # Collect OpenAI widget sources
 file(GLOB_RECURSE OPENAI_WIDGET_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/openai/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
 
 file(GLOB_RECURSE OPENAI_WIDGET_HEADERS
-    "${CMAKE_CURRENT_SOURCE_DIR}/openai/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
 
 # Create OpenAI UI widgets library
@@ -17,7 +17,6 @@ target_include_directories(XER_UI_OpenAI
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/..
         ${CMAKE_CURRENT_SOURCE_DIR}/../../..
-        ${CMAKE_CURRENT_SOURCE_DIR}/openai
 )
 
 # Link with XER components
@@ -25,7 +24,6 @@ target_link_libraries(XER_UI_OpenAI
     PUBLIC
         XER_OpenAI
         XER_UI_Core
-        XER_UI_Widgets
         XER_AsyncIO
 )
 

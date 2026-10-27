@@ -2,13 +2,11 @@
 
 # Collect OpenAI sources
 file(GLOB_RECURSE OPENAI_SOURCES
-    "${CMAKE_CURRENT_SOURCE_DIR}/content/openai/*.cc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/content/openai/**/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
 
 file(GLOB_RECURSE OPENAI_HEADERS
-    "${CMAKE_CURRENT_SOURCE_DIR}/content/openai/*.h"
-    "${CMAKE_CURRENT_SOURCE_DIR}/content/openai/**/*.h"
+    "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
 
 # Create OpenAI library
@@ -17,8 +15,7 @@ add_library(XER_OpenAI STATIC ${OPENAI_SOURCES} ${OPENAI_HEADERS})
 target_include_directories(XER_OpenAI
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_CURRENT_SOURCE_DIR}/content
-        ${CMAKE_CURRENT_SOURCE_DIR}/content/openai
+        ${CMAKE_CURRENT_SOURCE_DIR}/../..
 )
 
 # Link with XER dependencies
@@ -30,30 +27,25 @@ target_link_libraries(XER_OpenAI
         XER_Network
         absl::strings
         absl::synchronization
-        absl::container
-        absl::escaping
-        range_v3
+        absl::flat_hash_map
+        absl::flat_hash_set
         re2::re2
 )
 
-# Link with jsoncpp if available
-if(jsoncpp_FOUND)
-    target_link_libraries(XER_OpenAI PUBLIC jsoncpp_lib)
-    target_compile_definitions(XER_OpenAI PRIVATE OPENAI_JSONCPP_AVAILABLE=1)
-endif()
+# Link with jsoncpp from vcpkg
+target_link_libraries(XER_OpenAI PUBLIC jsoncpp_lib)
+target_compile_definitions(XER_OpenAI PRIVATE OPENAI_JSONCPP_AVAILABLE=1)
 
-# Link with external dependencies
-if(OPENSSL_FOUND)
+# Link with OpenSSL from vcpkg
+if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
     target_link_libraries(XER_OpenAI PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
-if(ZLIB_FOUND)
-    target_link_libraries(XER_OpenAI PUBLIC ZLIB::ZLIB)
-endif()
+# Link with zlib from vcpkg
+target_link_libraries(XER_OpenAI PUBLIC ZLIB::ZLIB)
 
-if(ZSTD_FOUND)
-    target_link_libraries(XER_OpenAI PUBLIC zstd_static)
-endif()
+# Link with zstd from vcpkg
+target_link_libraries(XER_OpenAI PUBLIC zstd::libzstd)
 
 # Platform-specific linking
 if(WIN32)
