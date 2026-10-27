@@ -89,7 +89,7 @@ src/
 
 ### Prerequisites
 
-Install CMake (3.21+), Git, and a supported C/C++ toolchain. Dependencies are managed via vcpkg located at `C:/vcpkg`.
+Install CMake (3.21+), Git, Ninja, and the MSVC x64 C++ toolchain with a Windows SDK. Run the Ninja presets from an x64 Native Tools command prompt. Dependencies are managed via vcpkg located at `C:/vcpkg`.
 
 ### vcpkg Setup
 
@@ -97,7 +97,7 @@ Install CMake (3.21+), Git, and a supported C/C++ toolchain. Dependencies are ma
 2. Install required dependencies:
    ```bash
    vcpkg install libuv:x64-windows-release
-   vcpkg install absl:x64-windows-release
+   vcpkg install abseil:x64-windows-release
    vcpkg install fmt:x64-windows-release
    vcpkg install jsoncpp:x64-windows-release
    vcpkg install re2:x64-windows-release
@@ -107,6 +107,7 @@ Install CMake (3.21+), Git, and a supported C/C++ toolchain. Dependencies are ma
    vcpkg install brotli:x64-windows-release
    vcpkg install pthreadpool:x64-windows-release
    vcpkg install fxdiv:x64-windows-release
+   vcpkg install fftw3:x64-windows-release
    ```
 3. For media support (optional):
    ```bash
@@ -123,7 +124,7 @@ Install CMake (3.21+), Git, and a supported C/C++ toolchain. Dependencies are ma
 
 - `VCPKG_ROOT`: Path to vcpkg installation (default: C:/vcpkg)
 - `XER_FETCH_DEPENDENCIES`: Enable/disable automatic dependency fetching (default: OFF)
-- `XER_FETCH_V8`: Fetch V8 from source (default: OFF)
+- `XER_FETCH_V8`: Expose the explicit `xer_v8_fetch` target (default: OFF); configuration does not download V8.
 - `XER_DEPS_DIR`: Directory for dependency cache (default: `.deps`)
 - `ENABLE_CUDA`: Enable CUDA support (default: OFF)
 - `ENABLE_CUDNN`: Enable cuDNN support (default: OFF)
@@ -143,10 +144,13 @@ cmake --build --preset default
 
 # Build V8 and the JavaScript runtime without media dependencies
 cmake --preset v8
+cmake --build --preset v8-fetch
 cmake --build --preset v8
+ctest --preset v8
 
 # Reconfigure after LLVM/Clang installation, then build XER
-cmake --preset v8
+cmake --preset v8-xer
+cmake --build --preset v8-xer --target xer_v8_fetch
 cmake --build --preset v8-xer
 
 # Build the OpenCV bridge and its libraries
@@ -156,16 +160,13 @@ cmake --build --preset opencv
 
 ### Dependency Details
 
-The `default` preset enables media support and fetches:
-- Core: Abseil, pthreadpool, FXdiv, zlib, SQLite
-- Media: zstd, Brotli, FFmpeg, libusb
+The presets use already installed `x64-windows-release` packages; they do not install vcpkg dependencies. Each preset has its own directory under `out/build/`. `debug` uses `RelWithDebInfo` and the release DLL CRT (`/MD`), because this triplet has no debug libraries.
 
-With `ENABLE_V8=ON`, XER also fetches:
-- V8 (via depot_tools)
-- LLVM/Clang
-- libuv, LibXml2, libcurl, OpenSSL
+V8 is built separately from pinned upstream sources with depot_tools, GN and Ninja. The `v8` preset builds a JavaScript/Intl smoke test without the application subsystems. The `v8-xer` preset also enables the application. The V8 targets are `xer_v8_fetch`, `xer_v8_configure` and `xer_v8_build`; building V8 requires completing the fetch step first.
 
-OpenCV's optional ADE, IPP IW, ITT, TBB, and bundled FFmpeg downloads are disabled.
+CMake generates `out/build/<preset>/v8-config/args.gn`. The preparation step copies it to `.deps/v8/v8/out/xer-release/args.gn`, installs GN adapters for vcpkg ICU and zlib, and enables the dynamic CRT in the pinned Chromium build configuration. `V8::V8` exports the generated `v8-gn.h` settings, ICU/zlib libraries and Windows system libraries. Other internal V8 dependencies follow its upstream `DEPS`.
+
+See [VCPKG_INTEGRATION.md](VCPKG_INTEGRATION.md) for prerequisites, custom source paths and verification commands.
 
 ## Quick Start
 

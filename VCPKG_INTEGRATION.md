@@ -25,7 +25,7 @@ By default, automatic dependency fetching is **disabled**. Dependencies should b
 vcpkg install libuv:x64-windows-release
 ```
 
-For V8 specifically, there is a separate fetch option `XER_FETCH_V8` that can be enabled to download V8 from source. This is independent of the general dependency fetching.
+For V8, `XER_FETCH_V8=ON` exposes the explicit `xer_v8_fetch` target. Neither CMake configuration nor `xer_v8_build` downloads sources. Run the fetch target before configuring or building GN. This is independent of `XER_FETCH_DEPENDENCIES`.
 
 ## Using vcpkg Libraries
 
@@ -58,7 +58,7 @@ Common libraries that may be available in your vcpkg installation:
 - **libxml2** - XML parsing
 - **ffmpeg** - Audio/video processing
 - **opencv** - Computer vision
-- **absl** - Google Abseil libraries
+- **abseil** - Google Abseil libraries (`find_package(absl CONFIG REQUIRED)`)
 - **fmt** - Formatting library
 - **jsoncpp** - JSON parsing and generation
 - **re2** - Regular expressions
@@ -71,7 +71,7 @@ Common libraries that may be available in your vcpkg installation:
 The following vcpkg libraries are integrated into XER:
 
 - **libuv** - Async I/O operations
-- **absl** (strings, synchronization, container) - Core utilities
+- **absl** (strings, synchronization, flat_hash_map, flat_hash_set) - Core utilities
 - **fmt** - String formatting
 - **jsoncpp** - JSON handling
 - **re2** - Regular expressions
@@ -79,13 +79,15 @@ The following vcpkg libraries are integrated into XER:
 - **zlib** - Compression
 - **zstd** - Zstandard compression
 - **brotli** - Brotli compression
-- **OpenSSL** - SSL/TLS (optional)
-- **libcurl** - HTTP client (optional)
+- **OpenSSL** - SSL/TLS
+- **curl** - HTTP client
 - **FFmpeg** - Audio/video processing (optional)
 - **SDL2** - Audio device access (optional)
 - **OpenCV** - Computer vision (optional, requires ENABLE_OPENCV)
 - **pthreadpool** - Parallel processing
 - **fxdiv** - Fast division
+- **fftw3** - Wavetable audio support (application builds)
+- **ICU** - V8 internationalization
 
 To check what's installed:
 ```bash
@@ -109,22 +111,25 @@ cmake --build --preset default
 ### V8
 ```bash
 cmake --preset v8
+cmake --build --preset v8-fetch
 cmake --build --preset v8
+ctest --preset v8
 ```
 - Release build
-- V8 and JavaScript runtime enabled
-- V8 fetched from source (XER_FETCH_V8=ON)
+- V8 and a JavaScript/Intl smoke test enabled (`XER_BUILD_APP=OFF`)
+- V8 fetched by the separate `v8-fetch` build preset
 - Media dependencies disabled
 - No automatic dependency fetching
 
 ### V8-XER
 ```bash
-cmake --preset v8
+cmake --preset v8-xer
+cmake --build --preset v8-xer --target xer_v8_fetch
 cmake --build --preset v8-xer
 ```
 - Release build
 - V8 and JavaScript runtime enabled
-- V8 fetched from source (XER_FETCH_V8=ON)
+- V8 fetched by the explicit `xer_v8_fetch` target
 - Media dependencies enabled
 - Full XER executable
 - No automatic dependency fetching
@@ -143,7 +148,7 @@ cmake --build --preset opencv
 cmake --preset debug
 cmake --build --preset debug
 ```
-- Debug build
+- RelWithDebInfo build with the release DLL CRT (`/MD`)
 - Uses vcpkg toolchain
 - No automatic dependency fetching
 
@@ -160,7 +165,7 @@ cmake -B build -S . ^
   -DENABLE_MEDIA=ON
 ```
 
-With V8 (fetches V8 from source):
+With V8 (exposes the separate fetch target):
 ```bash
 cmake -B build -S . ^
   -DCMAKE_BUILD_TYPE=Release ^
@@ -170,7 +175,47 @@ cmake -B build -S . ^
   -DXER_FETCH_V8=ON ^
   -DENABLE_V8=ON ^
   -DENABLE_MEDIA=OFF
+cmake --build build --target xer_v8_fetch --config Release
+cmake --build build --target xer_v8_smoke --config Release
 ```
+
+## V8 Source Build
+
+The integration pins V8 `13.2.152.28` to commit `3d13fb751e6f2ecb9aeac06e65367704a12f5c19` and depot_tools to `159aabc8235aeccb463493c999c182b6485a1381`. The V8 version is retained from the project's previous build configuration. Changing versions requires checking the GN adapters and the Windows CRT patch against the new sources.
+
+Use an MSVC/Windows SDK installation supported by this V8 revision (its Chromium build scripts recognize Visual Studio 2022). Availability of a newer Visual Studio for CMake does not establish compatibility with V8's older GN scripts.
+
+Install `icu:x64-windows-release` and `zlib:x64-windows-release` before configuring V8. The generated `args.gn` includes absolute include and import-library paths discovered through vcpkg. `v8_icu_path` and `v8_zlib_path` select project-supplied GN targets; they are not filesystem library search paths.
+
+The monolithic library uses `is_debug=false`, `is_component_build=false`, `v8_use_external_startup_data=false`, the MSVC C++ standard library and the dynamic release CRT. The preparation step makes a checked, repeatable change to `build/config/win/BUILD.gn` in the downloaded checkout, enabling `/MD` for both normal targets and release-CRT tools. Unsupported upstream layouts fail rather than silently producing an incompatible library. Internal dependencies other than ICU and zlib remain managed by V8's pinned `DEPS`.
+
+Configuration generates `out/build/<preset>/v8-config/args.gn`. `xer_v8_configure` copies it into the GN output directory and runs `gn gen --fail-on-unused-args`. `xer_v8_build` does the same and builds `v8_monolith`. `V8::V8` supplies `V8_GN_HEADER` and the generated header directory so consumers use the same public feature definitions.
+
+Available CMake cache settings:
+
+- `XER_V8_DEPS_DIR`: workspace for V8 and depot_tools (default `.deps/v8`).
+- `XER_V8_SOURCE_DIR`: source checkout (default `${XER_V8_DEPS_DIR}/v8`).
+- `XER_DEPOT_TOOLS_DIR`: pinned depot_tools checkout.
+- `XER_V8_BUILD_DIR`: GN output directory (default `${XER_V8_SOURCE_DIR}/out/xer-release`).
+- `XER_V8_NINJA_EXECUTABLE`: path to Ninja, discovered from `PATH`.
+- `XER_V8_BUILD_JOBS`: positive integer, default `4`.
+- `XER_BUILD_APP`: build application subsystems, default `ON`.
+
+Existing source checkouts must match the pinned revision. The fetch target refuses to reset other revisions or replace a different `.gclient`. Configuration does not require sources to exist; the build reports the missing fetch step explicitly.
+
+vcpkg's app-local deployment copies dependency DLLs beside the CMake-built executables. The V8 driver also adds the selected triplet's `bin` directory to the environment of GN/Ninja so snapshot and internationalization tools can load ICU and zlib.
+
+## Dependency Verification
+
+From an x64 Native Tools command prompt with Ninja on `PATH`:
+
+```bash
+cmake --preset default
+cmake --build --preset default --target xer_dependencies_smoke
+ctest --preset default
+```
+
+`xer_dependencies_smoke` links and calls the core libraries, SQLite, compression libraries, OpenSSL/curl, pthreadpool, FFmpeg and SDL2. `v8_prepare` exercises CRT selection, paths containing spaces, repeated preparation and rejection of unsupported upstream layouts. `ctest --preset v8` runs the JavaScript/Intl test after the separate V8 build.
 
 ## Troubleshooting
 
@@ -276,7 +321,7 @@ Optional environment variables:
 2. Install required libraries manually:
    ```bash
    vcpkg install libuv:x64-windows-release
-   vcpkg install absl:x64-windows-release
+   vcpkg install abseil:x64-windows-release
    vcpkg install fmt:x64-windows-release
    vcpkg install jsoncpp:x64-windows-release
    vcpkg install re2:x64-windows-release
@@ -286,6 +331,7 @@ Optional environment variables:
    vcpkg install brotli:x64-windows-release
    vcpkg install pthreadpool:x64-windows-release
    vcpkg install fxdiv:x64-windows-release
+   vcpkg install fftw3:x64-windows-release
    ```
 3. For media support (optional):
    ```bash
@@ -300,9 +346,10 @@ Optional environment variables:
 5. For V8 support, enable the fetch option:
    ```bash
    cmake --preset v8
+   cmake --build --preset v8-fetch
    cmake --build --preset v8
    ```
-   This will fetch V8 from source automatically.
+   The separate fetch step obtains V8 and its upstream build dependencies.
 6. For regular builds without V8:
    ```bash
    cmake --preset default
