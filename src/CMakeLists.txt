@@ -31,6 +31,29 @@ add_subdirectory(audio)
 add_subdirectory(content)
 add_subdirectory(ui)
 add_subdirectory(lunca)
+if(ENABLE_V8)
+    add_library(XERJavaScript STATIC
+        javascript/bridge/function_bridge.cc
+        javascript/common/compression_codec.cc
+        javascript/common/text_normalizer.cc
+        javascript/common/uv_async_channel.cc
+        javascript/engine/runtime_context.cc
+        javascript/events/event_router.cc
+        javascript/pipeline/pipeline_executor.cc)
+    target_include_directories(XERJavaScript PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_definitions(XERJavaScript PUBLIC
+        ENGINE_HAS_V8=1 ENGINE_HAS_LIBUV=1 ENGINE_HAS_ICU=1)
+    target_link_libraries(XERJavaScript PUBLIC V8::V8
+        $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
+        absl::strings absl::str_format absl::hash)
+    target_link_libraries(xer PRIVATE XERJavaScript)
+    target_sources(xer PRIVATE
+        v8/v8_engine.cc
+        v8/v8_exception_handler.cc
+        v8/v8_initializer.cc
+        v8/v8_memory_manager.cc
+        v8/v8_script_runner.cc)
+endif()
 
 # Link with XER internal libraries
 target_link_libraries(xer PRIVATE

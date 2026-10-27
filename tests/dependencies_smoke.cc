@@ -15,6 +15,12 @@
 
 #include <iostream>
 
+#ifdef XER_TEST_FFTW
+#include <fftw3.h>
+#endif
+#ifdef XER_TEST_OPENCV
+#include <opencv2/core.hpp>
+#endif
 #ifdef XER_TEST_MEDIA
 #define SDL_MAIN_HANDLED
 #include <SDL.h>
@@ -51,6 +57,14 @@ int main() {
     SDL_GetVersion(&version);
     if (!version.major || !avcodec_version() || !avformat_version() ||
         !avutil_version() || !swresample_version() || !swscale_version()) return 7;
+#endif
+#ifdef XER_TEST_FFTW
+    auto* fft_buffer = fftwf_alloc_real(16);
+    if (!fft_buffer) return 8;
+    fftwf_free(fft_buffer);
+#endif
+#ifdef XER_TEST_OPENCV
+    if (cv::getVersionString().empty()) return 9;
 #endif
     std::cout << fmt::format("{}\n", value["status"].asString());
     return 0;

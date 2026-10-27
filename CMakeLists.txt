@@ -68,9 +68,15 @@ find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(unofficial-pthreadpool CONFIG REQUIRED)
 find_package(unofficial-fxdiv CONFIG REQUIRED)
+if(XER_BUILD_APP)
+    find_package(FFTW3f CONFIG REQUIRED)
+endif()
 
 # Find FFmpeg via pkg-config or direct find
 if(ENABLE_MEDIA)
+    if(POLICY CMP0174)
+        cmake_policy(SET CMP0174 NEW)
+    endif()
     find_package(FFMPEG REQUIRED)
     add_library(XER_FFmpeg INTERFACE)
     target_include_directories(XER_FFmpeg INTERFACE ${FFMPEG_INCLUDE_DIRS})
@@ -81,6 +87,12 @@ endif()
 # Find OpenCV if enabled
 if(ENABLE_OPENCV)
     find_package(OpenCV CONFIG REQUIRED)
+endif()
+if(ENABLE_CUDA OR ENABLE_CUDNN)
+    find_package(CUDAToolkit REQUIRED)
+endif()
+if(ENABLE_CUDNN)
+    find_package(CUDNN REQUIRED)
 endif()
 
 # Find SDL2 for audio

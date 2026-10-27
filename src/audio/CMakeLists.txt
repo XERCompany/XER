@@ -29,6 +29,7 @@ target_link_libraries(XER_AudioCore
         absl::synchronization
         unofficial::pthreadpool
         unofficial::fxdiv::fxdiv
+        FFTW3::fftw3f
 )
 
 # Link with FFmpeg if available
@@ -54,6 +55,7 @@ endif()
 # Platform-specific
 if(WIN32)
     target_link_libraries(XER_AudioCore PRIVATE winmm)
+    target_compile_definitions(XER_AudioCore PRIVATE _USE_MATH_DEFINES)
 endif()
 
 # Add DSP algorithms subdirectory

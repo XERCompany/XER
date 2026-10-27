@@ -4,6 +4,9 @@
 file(GLOB_RECURSE ASYNC_IO_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(NOT ENABLE_CUDNN)
+    list(FILTER ASYNC_IO_SOURCES EXCLUDE REGEX "/dnn_backends/cudnn_[^/]+\\.cc$")
+endif()
 
 file(GLOB_RECURSE ASYNC_IO_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
@@ -33,6 +36,13 @@ endif()
 
 # C++ standard
 target_compile_features(XER_AsyncIO PUBLIC cxx_std_23)
+if(ENABLE_CUDA OR ENABLE_CUDNN)
+    target_link_libraries(XER_AsyncIO PUBLIC CUDA::cudart)
+    target_compile_definitions(XER_AsyncIO PRIVATE XER_ASYNC_IO_HAS_CUDA=1)
+endif()
+if(ENABLE_CUDNN)
+    target_link_libraries(XER_AsyncIO PUBLIC CuDNN::CuDNN)
+endif()
 
 # Compiler flags
 if(MSVC)
