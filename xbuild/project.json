@@ -1,0 +1,146 @@
+{
+    "includes": ["include1", "include2"],
+    "defines": ["DEF1=1", "DEF2=2"],
+    "require": ["async", "vcpkg"],
+    "link_libs": ["v8"],
+    "depot_tools_enabled": true,
+    "depot_tools_sync_jobs": 16,
+    "depot_tools_fetch": ["v8"],
+    "depot_tools_make_environment_data": true,
+    "depot_tools_output_fetching": "./.deps/",
+    "debug": true,
+    "terimal_prefix": ".example",
+    "terimal_enable_color": true,
+    "terimal_verbose": true,
+    "terimal_show_time": true,
+    "terimal_show_progress": true,
+    "terimal_sandbox": "Allow",
+    "features_flags": ["ENABLE_V8"],
+    "vcpkg_enabled": true,
+    "vcpkg_triplet": "x64-windows-release",
+    "vcpkg_enable_manifest": false,
+    "vcpkg_packages": ["zlib", "zstd", "brotli", "ssl", "crypto", "curl", "libxml2", "sqlite3", "protobuf", "grpc"],
+    "vcpkg_include_dirs": [
+        "$<GET_ENV:VCPKG_ROOT>/installed/$<GET_ENV:VCPKG_TRIPLET_TARGET>/include"
+    ],
+    "vcpkg_link_dirs": [
+        "$<GET_ENV:VCPKG_ROOT>/installed/$<GET_ENV:VCPKG_TRIPLET_TARGET>/lib"
+    ],
+    "directory_link_libs": [
+        "$<GET_ENV:VCPKG_ROOT>/installed/$<GET_ENV:VCPKG_TRIPLET_TARGET>/lib"
+    ],
+    "build_dir": ".xbuild",
+    "jobs": 8,
+    "tool": "clang",
+    "optimization_level": 2,
+    "cpp_standard": "c++23",
+    "warnings_as_errors": false,
+    "all_warnings": true,
+    "extra_warnings": true,
+    "rtti": true,
+    "exceptions": true,
+    "address_sanitizer": false,
+    "memory_sanitizer": false,
+    "thread_sanitizer": false,
+    "undefined_sanitizer": false,
+    "lto": false,
+    "lto_mode": "thin",
+    "pic": true,
+    "optimize_size": false,
+    "fast_math": false,
+    "target_triple": "",
+    "target_cpu": "",
+    "extra_compile_flags": [],
+    "extra_link_flags": [],
+    "mock_generate_gen_cpp": true,
+    "mock_targets": [
+        {
+            "name": "mock_gen_version",
+            "lock": true,
+            "pragma_once": "true",
+            "includes": [],
+            "forward_declarations": [],
+            "constructor": [
+                {
+                    "Namespace": [
+                        {
+                            "name": "MockVersion",
+                            "prototypeVariants": [
+                                {
+                                    "name": "version",
+                                    "type": "int",
+                                    "static": true,
+                                    "value": "1",
+                                    "access_specifier": "public"
+                                },
+                                {
+                                    "name": "getVersion",
+                                    "type": "function",
+                                    "functionArgs": [],
+                                    "functionReturnType": "int",
+                                    "static": true,
+                                    "return": {
+                                        "from": "version"
+                                    },
+                                    "access_specifier": "public"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "scopes": [
+        {
+            "custom_scope": "CUSTOM_COPY",
+            "system": [
+                {
+                    "if": {
+                        "IN": "$<GET_ENV:EXAMPLE_ENABLE_COPY>==\"1\"",
+                        "TRUE": "<LOCAL_SET_ENV:COPY_E=1>",
+                        "ELSE": "<LOG:\"No enable copy\">"
+                    }
+                }
+            ]
+        }
+    ],
+    "targets": [
+        {
+            "name": "example_app",
+            "define_target": ["YOUR_DEFINE=1"],
+            "include_target": ["./include"],
+            "links_libs_target": ["v8.lib", "z.lib"],
+            "sources": [
+                {
+                    "input": "file.cpp",
+                    "tool": "clang",
+                    "out": "output.o",
+                    "start_post": "node -e \"console.log('Start build file $<GET_ENV:CURRENT_FILE_COMPILER_IN>')\"",
+                    "end_post": "node -e \"console.log('End build file $<GET_ENV:CURRENT_FILE_COMPILER_IN>')\""
+                },
+                {
+                    "input": "<GLOB_RECURSE:./src>",
+                    "glob_files": true
+                },
+                {
+                    "async_sleep": 1000
+                },
+                {
+                    "input": "<HEADER:./include/config.h>",
+                    "header": true
+                },
+                {
+                    "input": "<GLOB_RECURSE:<REGEX:/^(?:example_)\\*\\.cc/i>",
+                    "scope_support": ["regex"]
+                },
+                {
+                    "glob_aware_worker": true,
+                    "glob_input": ["./example_app/<REGEX:/^(?:app)[^]\\*\\.cc/g>"]
+                }
+            ]
+        }
+    ],
+    "output": "target.exe",
+    "libs": ["lib1", "lib2"]
+}

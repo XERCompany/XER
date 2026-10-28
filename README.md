@@ -135,6 +135,19 @@ Install CMake (3.21+), Git, Ninja, and the MSVC x64 C++ toolchain with a Windows
 
 ### Compilation
 
+The separate `xbuild` utility validates JSON project configurations:
+
+```bash
+cmake --preset xbuild
+cmake --build --preset xbuild
+ctest --preset xbuild
+out/build/xbuild/xbuild/xbuild.exe validate xbuild/project.json
+```
+
+See [xbuild](xbuild/README.md) for its configuration format, current scaffold
+scope and standalone build using Clang/LLVM, Abseil, libuv, JsonCpp, RE2 and
+range-v3 from vcpkg. `XER_BUILD_XBUILD=ON` adds the target to other configurations.
+
 ```bash
 # Configure with the platform's default generator
 cmake --preset default
