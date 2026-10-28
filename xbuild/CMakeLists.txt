@@ -116,8 +116,7 @@ llvm_map_components_to_libnames(LLVM_LIBS
     targetparser
 ) 
 target_link_libraries(xbuild PRIVATE
-    ${LLVM_LIBS} 
-    "C:/vcpkg/installed/x64-windows-release/lib/*.lib"
+    ${LLVM_LIBS}  
 )
 
 # Remove PDB dependency if it exists
