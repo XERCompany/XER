@@ -98,6 +98,35 @@ vcpkg list
 
 The project includes several CMake presets configured for vcpkg:
 
+### xbuild
+
+```bash
+cmake --preset xbuild
+cmake --build --preset xbuild
+ctest --preset xbuild
+```
+
+The separate configuration utility requires `llvm[clang]`, `abseil`, `libuv`,
+`jsoncpp`, `re2` and `range-v3`. This preset enables `XER_BUILD_XBUILD` and disables
+the XER application and media. The [standalone build](xbuild/README.md) requires
+only xbuild's dependencies.
+
+Verified on Windows with MSVC 19.51, Release `/MD`, and `x64-windows-release`:
+
+| Package | Installed version |
+| --- | --- |
+| LLVM / Clang | 23.1.3 |
+| Abseil | 20260107.1 (port revision 3) |
+| libuv | 1.53.0 |
+| JsonCpp | 1.9.6 |
+| RE2 | 2025-11-05 |
+| range-v3 | 0.12.0 (port revision 4) |
+
+These are tested installed versions, not manifest pins. Both LLVM and Clang must
+come from a matching installation. The build uses exported CMake targets and
+LLVM's include paths/definitions, and matches its RTTI setting without disabling
+the exceptions needed for JSON parser errors.
+
 ### Default
 ```bash
 cmake --preset default

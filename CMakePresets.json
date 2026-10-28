@@ -7,6 +7,16 @@
   },
   "configurePresets": [
     {
+      "name": "xbuild",
+      "inherits": "vcpkg-release",
+      "displayName": "xbuild configuration utility",
+      "cacheVariables": {
+        "XER_BUILD_APP": "OFF",
+        "XER_BUILD_XBUILD": "ON",
+        "ENABLE_MEDIA": "OFF"
+      }
+    },
+    {
       "name": "vcpkg-release",
       "hidden": true,
       "generator": "Ninja",
@@ -104,6 +114,11 @@
   ],
   "buildPresets": [
     {
+      "name": "xbuild",
+      "configurePreset": "xbuild",
+      "targets": ["xbuild"]
+    },
+    {
       "name": "default",
       "configurePreset": "default"
     },
@@ -136,6 +151,12 @@
     }
   ],
   "testPresets": [
+    {
+      "name": "xbuild",
+      "configurePreset": "xbuild",
+      "filter": { "include": { "name": "^xbuild_" } },
+      "output": { "outputOnFailure": true }
+    },
     {
       "name": "default",
       "configurePreset": "default",

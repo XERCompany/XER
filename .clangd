@@ -1,0 +1,12 @@
+If: 
+  PathMatch: [.*\.h, .*\.cc] 
+  PathExclude: src/.* 
+CompileFlags:
+  BuiltinHeaders: QueryDriver
+  Add: 
+    - "-I./src"
+    - "-IC:/vcpkg/installed/x64-windows-release/include"
+    - "-std=c++17"
+  Remove: ["-W*"]
+  Compiler: clang++
+  
