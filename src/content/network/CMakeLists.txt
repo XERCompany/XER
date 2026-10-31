@@ -27,10 +27,17 @@ target_link_libraries(XER_Network
         jsoncpp_lib
 )
 
-# Link with OpenSSL if available
-if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
-    target_link_libraries(XER_Network PUBLIC OpenSSL::SSL OpenSSL::Crypto)
-endif()
+# Link with internal modules
+target_link_libraries(XER_Network
+    PUBLIC
+        XER_AsyncIO
+        XER_Cache
+        XER_Flux
+)
+
+# Link with OpenSSL (required for SSL/TLS)
+find_package(OpenSSL REQUIRED)
+target_link_libraries(XER_Network PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 
 # Link with libcurl if available
 if(TARGET CURL::libcurl)
