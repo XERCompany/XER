@@ -9,16 +9,20 @@ The `src/content/network` module is the foundation of the Flux framework's netwo
 - **Full Network Stack**: Support for HTTP/1.1, HTTP/2, HTTP/3 (QUIC), WebSocket, FTP
 - **URL Handling**: Complete URL parsing, validation, and normalization
 - **Request/Response Management**: Create, send, and process network requests and responses
-- **Caching**: Integrated HTTP cache for accelerated resource loading
+- **Caching**: Integrated HTTP cache, DNS cache, and SSL session cache for accelerated resource loading
 - **Security**:
-  - SSL/TLS support for HTTPS and secure connections
+  - SSL/TLS support for HTTPS and secure connections (using OpenSSL)
   - SSL certificate verification
   - Integration with certificate management systems
 - **DNS Resolution**: Efficient domain name resolution with DNS caching
 - **Proxy Support**: Support for HTTP, SOCKS proxies and automatic proxy detection
 - **Low-Level Sockets**: TCP, UDP, SSL/TLS socket operations
-- **Network Logging**: System for logging all network events for debugging
-- **Asynchronous Model**: Built on asynchronous architecture for high performance
+- **Network Logging**: System for logging all network events for debugging (via Flux logger)
+- **Hybrid Asynchronous Model**:
+  - Windows: I/O Completion Ports (IOCP) for true async I/O
+  - POSIX: epoll (Linux) / kqueue (macOS/BSD) for high-performance async I/O
+  - Fallback: Thread pool-based async operations
+- **Cross-Platform**: Full support for Windows, Linux, and macOS
 
 ## Architecture
 

@@ -4,89 +4,117 @@
  */
 #include "content/network/socket/tcp_client_socket.h"
 
-#include <netdb.h>
-#include <sys/socket.h>
-#include <unistd.h>
-#include <cerrno>
-#include <cstring>
+#include "content/network/async/async_operation_manager.h"
+#include "content/network/logging/network_logger.h"
+#include "content/network/socket/platform/socket_platform.h"
 
-#include "content/network/socket/net_log.h"
-#include "async_io/io_thread_pool.h"
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace network::socket {
 
-TcpClientSocket::~TcpClientSocket() { Disconnect(); }
+TcpClientSocket::~TcpClientSocket() {
+    Disconnect();
+}
 
 bool TcpClientSocket::Connect(const std::string& host,
                                uint16_t port,
                                std::string* error) {
-    struct addrinfo hints{};
-    hints.ai_family   = AF_UNSPEC;
-    hints.ai_socktype = SOCK_STREAM;
+    logging::NetworkLogger::Instance().LogConnectionAttempt(host, port);
 
-    struct addrinfo* res = nullptr;
-    const std::string port_str = std::to_string(port);
-    const int rc = ::getaddrinfo(host.c_str(), port_str.c_str(), &hints, &res);
-    if (rc != 0) {
-        if (error) *error = ::gai_strerror(rc);
+    auto& platform = platform::SocketPlatform::GetInstance();
+
+    // Resolve address
+    std::vector<platform::AddressInfo> addresses;
+    if (!platform.ResolveAddress(host, port, &addresses, error)) {
+        logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
         return false;
     }
 
-    for (auto* p = res; p; p = p->ai_next) {
-        fd_ = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-        if (fd_ < 0) continue;
-        if (::connect(fd_, p->ai_addr, p->ai_addrlen) == 0) break;
-        ::close(fd_); fd_ = -1;
-    }
-    ::freeaddrinfo(res);
+    // Try each address
+    for (const auto& addr : addresses) {
+        platform::SocketHandle socket;
+        if (addr.is_ipv6) {
+            socket = platform.CreateTcpSocket(true, error);
+        } else {
+            socket = platform.CreateTcpSocket(false, error);
+        }
 
-    if (fd_ < 0) {
-        if (error) *error = std::strerror(errno);
-        return false;
+        if (!socket.IsValid()) {
+            continue;
+        }
+
+        if (platform.Connect(socket, addr, error)) {
+            fd_ = static_cast<int>(socket.Get());
+            // Detach the handle so it won't be closed by SocketHandle destructor
+            socket.Detach();
+            stream_ = std::make_unique<SocketStream>(fd_);
+
+            logging::NetworkLogger::Instance().LogConnectionSuccess(host, port, 0);
+            return true;
+        }
     }
-    stream_ = std::make_unique<SocketStream>(fd_);
-    NetLog::Info("TCP connected to " + host + ":" + std::to_string(port));
-    return true;
+
+    if (error && error->empty()) {
+        *error = "Failed to connect to any address";
+    }
+    logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
+    return false;
 }
 
 void TcpClientSocket::Disconnect() {
     stream_.reset();
-    if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
+    if (fd_ >= 0) {
+#ifdef _WIN32
+        closesocket(fd_);
+#else
+        close(fd_);
+#endif
+        fd_ = -1;
+    }
 }
 
-bool TcpClientSocket::IsConnected() const { return fd_ >= 0; }
+bool TcpClientSocket::IsConnected() const {
+    return fd_ >= 0;
+}
 
 int TcpClientSocket::Read(uint8_t* buf, size_t len, std::string* error) {
-    const ssize_t n = ::recv(fd_, buf, len, 0);
-    if (n < 0 && error) *error = std::strerror(errno);
-    return static_cast<int>(n);
+    auto& platform = platform::SocketPlatform::GetInstance();
+    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+
+    int result = platform.Recv(socket, buf, len, error);
+    return result;
 }
 
 int TcpClientSocket::Write(const uint8_t* buf, size_t len, std::string* error) {
-    const ssize_t n = ::send(fd_, buf, len, MSG_NOSIGNAL);
-    if (n < 0 && error) *error = std::strerror(errno);
-    return static_cast<int>(n);
+    auto& platform = platform::SocketPlatform::GetInstance();
+    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+
+    int result = platform.Send(socket, buf, len, error);
+    return result;
 }
 
 void TcpClientSocket::ReadAsync(uint8_t* buf, size_t len,
                                  transport::CompletionCallback cb) {
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(
+    async::AsyncOperationManager::Instance().Enqueue(
         [this, buf, len, cb = std::move(cb)]() {
-            std::string err;
-            const int n = Read(buf, len, &err);
-            cb(n);
+            std::string error;
+            int result = Read(buf, len, &error);
+            cb(result, error);
         });
 }
 
 void TcpClientSocket::WriteAsync(const uint8_t* buf, size_t len,
                                   transport::CompletionCallback cb) {
-    // Copy data so we can enqueue safely
     std::vector<uint8_t> data(buf, buf + len);
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(
+    async::AsyncOperationManager::Instance().Enqueue(
         [this, data = std::move(data), cb = std::move(cb)]() mutable {
-            std::string err;
-            const int n = Write(data.data(), data.size(), &err);
-            cb(n);
+            std::string error;
+            int result = Write(data.data(), data.size(), &error);
+            cb(result, error);
         });
 }
 

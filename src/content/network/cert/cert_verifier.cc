@@ -4,6 +4,8 @@
  */
 #include "content/network/cert/cert_verifier.h"
 
+#include "content/network/logging/network_logger.h"
+
 #include <ctime>
 #include <openssl/pem.h>
 #include <openssl/ssl.h>
@@ -30,13 +32,18 @@ bool CertVerifier::Verify(const std::string& pem_cert,
 
     BIO* bio = BIO_new_mem_buf(pem_cert.data(),
                                static_cast<int>(pem_cert.size()));
-    if (!bio) { result->error_message = "BIO_new_mem_buf failed"; return false; }
+    if (!bio) {
+        result->error_message = "BIO_new_mem_buf failed";
+        logging::NetworkLogger::Instance().LogError("cert_verifier", result->error_message);
+        return false;
+    }
 
     X509* cert = PEM_read_bio_X509(bio, nullptr, nullptr, nullptr);
     BIO_free(bio);
 
     if (!cert) {
         result->error_message = "PEM_read_bio_X509 failed";
+        logging::NetworkLogger::Instance().LogError("cert_verifier", result->error_message);
         return false;
     }
 
@@ -56,12 +63,16 @@ bool CertVerifier::Verify(const std::string& pem_cert,
     if (now < result->not_before) {
         result->status = CertStatus::kNotYetValid;
         result->error_message = "certificate not yet valid";
+        logging::NetworkLogger::Instance().LogWarning("cert_verifier",
+            "Certificate not yet valid for " + hostname);
         X509_free(cert);
         return false;
     }
     if (now > result->not_after) {
         result->status = CertStatus::kExpired;
         result->error_message = "certificate expired";
+        logging::NetworkLogger::Instance().LogWarning("cert_verifier",
+            "Certificate expired for " + hostname);
         X509_free(cert);
         return false;
     }
@@ -98,12 +109,16 @@ bool CertVerifier::Verify(const std::string& pem_cert,
     if (!hostname_ok) {
         result->status = CertStatus::kHostnameMismatch;
         result->error_message = "hostname mismatch";
+        logging::NetworkLogger::Instance().LogWarning("cert_verifier",
+            "Hostname mismatch for " + hostname);
         X509_free(cert);
         return false;
     }
 
     result->status   = CertStatus::kOk;
     result->is_valid = true;
+    logging::NetworkLogger::Instance().LogInfo("cert_verifier",
+        "Certificate valid for " + hostname);
     X509_free(cert);
     return true;
 }
