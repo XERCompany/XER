@@ -14,7 +14,7 @@
 namespace network::ftp {
 
 // FTP callback types
-using FtpCallback = std::function<void(bool, const std::vector<uint8_t>&, const std::string&)>;
+using FtpTransferCallback = std::function<void(bool, const std::vector<uint8_t>&, const std::string&)>;
 using FtpListCallback = std::function<void(bool, const std::vector<std::string>&, const std::string&)>;
 
 // Minimal FTP client stream (control channel + passive data channel).
@@ -33,7 +33,7 @@ public:
     bool Quit();
 
     // Asynchronous operations
-    void RetrieveAsync(const std::string& path, FtpCallback cb);
+    void RetrieveAsync(const std::string& path, FtpTransferCallback cb);
     void ListAsync(const std::string& path, FtpListCallback cb);
 
 private:

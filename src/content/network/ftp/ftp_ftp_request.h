@@ -30,6 +30,6 @@ struct FtpResponse {
     std::vector<std::string> listing; // for LIST commands
 };
 
-using FtpCallback = std::function<void(FtpResponse)>;
+using FtpRequestCallback = std::function<void(FtpResponse)>;
 
 }  // namespace network::ftp
