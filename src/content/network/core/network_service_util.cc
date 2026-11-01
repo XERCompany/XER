@@ -4,10 +4,16 @@
  */
 #include "content/network/core/network_service_util.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 namespace network::core {
 
@@ -20,7 +26,11 @@ bool HasNetworkAccess() {
     sin.sin_port        = htons(53);
     inet_pton(AF_INET, "8.8.8.8", &sin.sin_addr);
     const bool ok = ::connect(fd, reinterpret_cast<sockaddr*>(&sin), sizeof(sin)) == 0;
+#ifdef _WIN32
+    ::closesocket(fd);
+#else
     ::close(fd);
+#endif
     return ok;
 }
 

@@ -10,7 +10,7 @@
 
 namespace Engine::Helper {
 
-class JsBuffer {
+class Buffer {
 public:
 	using Byte = std::uint8_t;
 	using Bytes = std::vector<Byte>;
@@ -55,4 +55,4 @@ public:
 
 }  // namespace Engine::Helper
 
-using JsBuffer = Engine::Helper::JsBuffer;
+using Buffer = Engine::Helper::Buffer;

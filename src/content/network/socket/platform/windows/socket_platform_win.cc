@@ -17,7 +17,7 @@ namespace socket {
 namespace platform {
 
 // SocketHandle implementation for Windows
-SocketHandle::SocketHandle() : handle_(reinterpret_cast<uintptr_t>(INVALID_SOCKET)) {}
+SocketHandle::SocketHandle() : handle_(static_cast<uintptr_t>(INVALID_SOCKET)) {}
 
 SocketHandle::SocketHandle(uintptr_t handle) : handle_(handle) {}
 
@@ -27,30 +27,30 @@ SocketHandle::~SocketHandle() {
 
 SocketHandle::SocketHandle(SocketHandle&& other) noexcept
     : handle_(other.handle_) {
-    other.handle_ = reinterpret_cast<uintptr_t>(INVALID_SOCKET);
+    other.handle_ = static_cast<uintptr_t>(INVALID_SOCKET);
 }
 
 SocketHandle& SocketHandle::operator=(SocketHandle&& other) noexcept {
     if (this != &other) {
         Close();
         handle_ = other.handle_;
-        other.handle_ = reinterpret_cast<uintptr_t>(INVALID_SOCKET);
+        other.handle_ = static_cast<uintptr_t>(INVALID_SOCKET);
     }
     return *this;
 }
 
 uintptr_t SocketHandle::GetInvalidValue() {
-    return reinterpret_cast<uintptr_t>(INVALID_SOCKET);
+    return static_cast<uintptr_t>(INVALID_SOCKET);
 }
 
 bool SocketHandle::IsValid() const {
-    return handle_ != reinterpret_cast<uintptr_t>(INVALID_SOCKET);
+    return handle_ != static_cast<uintptr_t>(INVALID_SOCKET);
 }
 
 void SocketHandle::Close() {
     if (IsValid()) {
-        closesocket(reinterpret_cast<SOCKET>(handle_));
-        handle_ = reinterpret_cast<uintptr_t>(INVALID_SOCKET);
+        closesocket(static_cast<SOCKET>(handle_));
+        handle_ = static_cast<uintptr_t>(INVALID_SOCKET);
     }
 }
 
@@ -108,21 +108,21 @@ bool SocketPlatform::ResolveAddress(const std::string& host,
 }
 
 SocketHandle SocketPlatform::CreateTcpSocket(bool ipv6, std::string* error) {
-    SOCKET sock = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    SOCKET sock = ::socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCKET) {
         if (error) *error = GetLastError();
         return SocketHandle();
     }
-    return SocketHandle(reinterpret_cast<uintptr_t>(sock));
+    return SocketHandle(static_cast<uintptr_t>(sock));
 }
 
 SocketHandle SocketPlatform::CreateUdpSocket(bool ipv6, std::string* error) {
-    SOCKET sock = socket(ipv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    SOCKET sock = ::socket(ipv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET) {
         if (error) *error = GetLastError();
         return SocketHandle();
     }
-    return SocketHandle(reinterpret_cast<uintptr_t>(sock));
+    return SocketHandle(static_cast<uintptr_t>(sock));
 }
 
 bool SocketPlatform::Connect(SocketHandle& socket,
@@ -150,7 +150,7 @@ bool SocketPlatform::Connect(SocketHandle& socket,
         addr_len = sizeof(sockaddr_in);
     }
 
-    const int rc = connect(reinterpret_cast<SOCKET>(socket.Get()),
+    const int rc = connect(static_cast<SOCKET>(socket.Get()),
                            reinterpret_cast<sockaddr*>(&addr),
                            addr_len);
     if (rc == SOCKET_ERROR) {
@@ -196,7 +196,7 @@ bool SocketPlatform::Bind(SocketHandle& socket,
         }
     }
 
-    const int rc = bind(reinterpret_cast<SOCKET>(socket.Get()),
+    const int rc = bind(static_cast<SOCKET>(socket.Get()),
                         reinterpret_cast<sockaddr*>(&addr),
                         addr_len);
     if (rc == SOCKET_ERROR) {
@@ -212,7 +212,7 @@ bool SocketPlatform::Listen(SocketHandle& socket, int backlog, std::string* erro
         return false;
     }
 
-    const int rc = listen(reinterpret_cast<SOCKET>(socket.Get()), backlog);
+    const int rc = listen(static_cast<SOCKET>(socket.Get()), backlog);
     if (rc == SOCKET_ERROR) {
         if (error) *error = GetLastError();
         return false;
@@ -232,7 +232,7 @@ SocketHandle SocketPlatform::Accept(SocketHandle& server_socket,
     sockaddr_storage client_addr = {};
     int addr_len = sizeof(client_addr);
 
-    SOCKET client_sock = accept(reinterpret_cast<SOCKET>(server_socket.Get()),
+    SOCKET client_sock = accept(static_cast<SOCKET>(server_socket.Get()),
                                  reinterpret_cast<sockaddr*>(&client_addr),
                                  &addr_len);
     if (client_sock == INVALID_SOCKET) {
@@ -254,7 +254,7 @@ SocketHandle SocketPlatform::Accept(SocketHandle& server_socket,
         *client_ip = ip_str;
     }
 
-    return SocketHandle(reinterpret_cast<uintptr_t>(client_sock));
+    return SocketHandle(static_cast<uintptr_t>(client_sock));
 }
 
 int SocketPlatform::Send(SocketHandle& socket,
@@ -266,7 +266,7 @@ int SocketPlatform::Send(SocketHandle& socket,
         return -1;
     }
 
-    const int rc = send(reinterpret_cast<SOCKET>(socket.Get()),
+    const int rc = send(static_cast<SOCKET>(socket.Get()),
                         reinterpret_cast<const char*>(buf),
                         static_cast<int>(len),
                         0);
@@ -286,7 +286,7 @@ int SocketPlatform::Recv(SocketHandle& socket,
         return -1;
     }
 
-    const int rc = recv(reinterpret_cast<SOCKET>(socket.Get()),
+    const int rc = recv(static_cast<SOCKET>(socket.Get()),
                         reinterpret_cast<char*>(buf),
                         static_cast<int>(len),
                         0);
@@ -325,7 +325,7 @@ int SocketPlatform::SendTo(SocketHandle& socket,
         addr_len = sizeof(sockaddr_in);
     }
 
-    const int rc = sendto(reinterpret_cast<SOCKET>(socket.Get()),
+    const int rc = sendto(static_cast<SOCKET>(socket.Get()),
                           reinterpret_cast<const char*>(buf),
                           static_cast<int>(len),
                           0,
@@ -352,7 +352,7 @@ int SocketPlatform::RecvFrom(SocketHandle& socket,
     sockaddr_storage from_addr = {};
     int addr_len = sizeof(from_addr);
 
-    const int rc = recvfrom(reinterpret_cast<SOCKET>(socket.Get()),
+    const int rc = recvfrom(static_cast<SOCKET>(socket.Get()),
                             reinterpret_cast<char*>(buf),
                             static_cast<int>(len),
                             0,
@@ -391,7 +391,7 @@ bool SocketPlatform::SetOption(SocketHandle& socket,
         return false;
     }
 
-    const int rc = setsockopt(reinterpret_cast<SOCKET>(socket.Get()),
+    const int rc = setsockopt(static_cast<SOCKET>(socket.Get()),
                               level,
                               optname,
                               reinterpret_cast<const char*>(optval),
@@ -410,7 +410,7 @@ bool SocketPlatform::SetNonBlocking(SocketHandle& socket, bool enable, std::stri
     }
 
     u_long mode = enable ? 1 : 0;
-    const int rc = ioctlsocket(reinterpret_cast<SOCKET>(socket.Get()), FIONBIO, &mode);
+    const int rc = ioctlsocket(static_cast<SOCKET>(socket.Get()), FIONBIO, &mode);
     if (rc == SOCKET_ERROR) {
         if (error) *error = GetLastError();
         return false;
@@ -454,7 +454,7 @@ bool SocketPlatform::Poll(SocketHandle& socket,
     FD_ZERO(&read_fds);
     FD_ZERO(&write_fds);
 
-    SOCKET sock = reinterpret_cast<SOCKET>(socket.Get());
+    SOCKET sock = static_cast<SOCKET>(socket.Get());
     if (check_read) FD_SET(sock, &read_fds);
     if (check_write) FD_SET(sock, &write_fds);
 

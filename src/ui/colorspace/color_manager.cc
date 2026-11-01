@@ -1,6 +1,7 @@
 #include "color_manager.h"
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace XER::UI::ColorSpace {
 

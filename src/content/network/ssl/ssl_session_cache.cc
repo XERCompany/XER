@@ -85,7 +85,8 @@ void SslSessionCache::StoreSession(const std::string& hostname, SSL_SESSION* ses
         entry.cipher_suite = SSL_CIPHER_get_name(cipher);
     }
 
-    entry.protocol_version = SSL_SESSION_get0_protocol(session) ? SSL_SESSION_get0_protocol(session) : "unknown";
+    int version = SSL_SESSION_get_protocol_version(session);
+    entry.protocol_version = (version != 0) ? std::to_string(version) : "unknown";
 
     // Increment reference count for storage
     SSL_SESSION_up_ref(session);
@@ -124,7 +125,13 @@ size_t SslSessionCache::GetTotalSize() const {
     std::lock_guard<std::mutex> lock(mutex_);
     size_t total = 0;
     for (const auto& pair : cache_) {
-        total += SSL_SESSION_get_ticket(pair.second.session, nullptr, 0);
+        // Approximate ticket size: use i2d_SSL_SESSION length as proxy.
+        unsigned char* buf = nullptr;
+        int len = i2d_SSL_SESSION(pair.second.session, &buf);
+        if (len > 0) {
+            total += static_cast<size_t>(len);
+            OPENSSL_free(buf);
+        }
     }
     return total;
 }

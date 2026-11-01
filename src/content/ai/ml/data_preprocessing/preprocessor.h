@@ -2,6 +2,7 @@
 
 #include "../data_types/tensor.h"
 #include <memory>
+#include <string>
 
 namespace Engine::MLData::Preprocessing {
 

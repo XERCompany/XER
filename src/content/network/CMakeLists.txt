@@ -60,4 +60,7 @@ endif()
 # Platform-specific
 if(WIN32)
     target_link_libraries(XER_Network PRIVATE ws2_32 crypt32)
+    # Prevent winsock.h (v1) from being pulled in via windows.h;
+    # network code must use winsock2.h exclusively.
+    target_compile_definitions(XER_Network PUBLIC WIN32_LEAN_AND_MEAN)
 endif()

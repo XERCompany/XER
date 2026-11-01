@@ -4,6 +4,9 @@
  */
 #include "content/network/websocket/websocket_stream.h"
 
+#include "content/network/async/async_operation_manager.h"
+#include "content/network/logging/network_logger.h"
+
 #include <vector>
 
 namespace network::websocket {
@@ -17,6 +20,7 @@ WebSocketStream::~WebSocketStream() {
 }
 
 bool WebSocketStream::SendText(const std::string& text, std::string* error) {
+    logging::NetworkLogger::Instance().LogDebug("websocket", "Sending text frame");
     WebSocketFrame f;
     f.opcode  = WebSocketOpcode::kText;
     f.masked  = true;
@@ -27,6 +31,7 @@ bool WebSocketStream::SendText(const std::string& text, std::string* error) {
 
 bool WebSocketStream::SendBinary(const uint8_t* data, size_t len,
                                   std::string* error) {
+    logging::NetworkLogger::Instance().LogDebug("websocket", "Sending binary frame");
     WebSocketFrame f;
     f.opcode = WebSocketOpcode::kBinary;
     f.masked = true;
@@ -36,6 +41,7 @@ bool WebSocketStream::SendBinary(const uint8_t* data, size_t len,
 }
 
 bool WebSocketStream::SendPing(std::string* error) {
+    logging::NetworkLogger::Instance().LogDebug("websocket", "Sending ping");
     WebSocketFrame f;
     f.opcode = WebSocketOpcode::kPing;
     f.masked = true;
@@ -43,8 +49,29 @@ bool WebSocketStream::SendPing(std::string* error) {
     return sock_->Write(wire.data(), wire.size(), error);
 }
 
+void WebSocketStream::SendTextAsync(const std::string& text, WebSocketCallback cb) {
+    async::AsyncOperationManager::Instance().Enqueue(
+        [this, text, cb = std::move(cb)]() {
+            std::string error;
+            bool ok = SendText(text, &error);
+            cb(ok, error);
+        });
+}
+
+void WebSocketStream::SendBinaryAsync(const uint8_t* data, size_t len, WebSocketCallback cb) {
+    std::vector<uint8_t> vec(data, data + len);
+    async::AsyncOperationManager::Instance().Enqueue(
+        [this, vec = std::move(vec), cb = std::move(cb)]() mutable {
+            std::string error;
+            bool ok = SendBinary(vec.data(), vec.size(), &error);
+            cb(ok, error);
+        });
+}
+
 void WebSocketStream::Close(uint16_t code, const std::string& reason) {
     if (!open_) return;
+    logging::NetworkLogger::Instance().LogInfo("websocket",
+        "Closing with code " + std::to_string(code));
     open_ = false;
     auto close_frame = MakeCloseFrame(code, reason);
     close_frame.masked = true;
@@ -55,6 +82,7 @@ void WebSocketStream::Close(uint16_t code, const std::string& reason) {
 }
 
 void WebSocketStream::ReadLoop() {
+    logging::NetworkLogger::Instance().LogDebug("websocket", "Starting read loop");
     std::vector<uint8_t> buf;
     buf.reserve(65536);
     while (open_) {
@@ -63,7 +91,10 @@ void WebSocketStream::ReadLoop() {
         const int n = sock_->Read(tmp, sizeof(tmp), &err);
         if (n <= 0) {
             open_ = false;
-            if (on_error_ && n < 0) on_error_(err);
+            if (on_error_ && n < 0) {
+                logging::NetworkLogger::Instance().LogError("websocket", err);
+                on_error_(err);
+            }
             break;
         }
         buf.insert(buf.end(), tmp, tmp + n);
@@ -96,6 +127,13 @@ void WebSocketStream::ReadLoop() {
             if (on_message_) on_message_(frame);
         }
     }
+}
+
+void WebSocketStream::ReadLoopAsync() {
+    async::AsyncOperationManager::Instance().Enqueue(
+        [this]() {
+            ReadLoop();
+        });
 }
 
 }  // namespace network::websocket

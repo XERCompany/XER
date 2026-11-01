@@ -45,6 +45,9 @@ std::string HttpResponseHeaders::Get(const std::string& name) const {
     const auto it = headers_.find(name);
     return it != headers_.end() ? it->second : "";
 }
+void HttpResponseHeaders::Set(const std::string& name, const std::string& value) {
+    headers_[name] = value;
+}
 const std::map<std::string, std::string>& HttpResponseHeaders::All() const { return headers_; }
 
 int HttpResponseHeaders::ContentLength() const {

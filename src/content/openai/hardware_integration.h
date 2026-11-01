@@ -1,9 +1,9 @@
 #pragma once
 
 #include "openai_types.h"
-#include "../../../async_io/hardware_abstraction/gpu_info.h"
-#include "../../../async_io/hardware_abstraction/cpu_info.h"
-#include "../../../async_io/hardware_abstraction/memory_monitor.h"
+#include "../../async_io/hardware_abstraction/gpu_info.h"
+#include "../../async_io/hardware_abstraction/cpu_info.h"
+#include "../../async_io/hardware_abstraction/memory_monitor.h"
 #include <memory>
 #include <string>
 #include <functional>

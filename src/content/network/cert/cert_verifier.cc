@@ -56,8 +56,13 @@ bool CertVerifier::Verify(const std::string& pem_cert,
     struct tm tm_nb{}, tm_na{};
     ASN1_TIME_to_tm(nb, &tm_nb);
     ASN1_TIME_to_tm(na, &tm_na);
+#ifdef _WIN32
+    result->not_before = _mkgmtime(&tm_nb);
+    result->not_after  = _mkgmtime(&tm_na);
+#else
     result->not_before = timegm(&tm_nb);
     result->not_after  = timegm(&tm_na);
+#endif
 
     const std::time_t now = std::time(nullptr);
     if (now < result->not_before) {

@@ -27,9 +27,11 @@ bool HttpCache::Lookup(const std::string& key, CachedResponse* out) const {
 
         if (out) {
             out->status_code = cached_entry->status_code;
-            out->headers = cached_entry->headers;
+            out->headers = cached_entry->headers.All();
             out->body = cached_entry->body;
-            out->expires = cached_entry->cached_at + cached_entry->ttl;
+            // Note: HttpResponseCacheEntry uses system_clock; CachedResponse uses steady_clock.
+            // Convert TTL into a steady_clock expiry relative to now.
+            out->expires = std::chrono::steady_clock::now() + cached_entry->ttl;
         }
         return true;
     }
@@ -50,7 +52,9 @@ void HttpCache::Store(const std::string& key, CachedResponse entry) {
     auto& cache_mgr = cache::NetworkCacheManager::Instance();
     cache::HttpResponseCacheEntry cache_entry;
     cache_entry.status_code = entry.status_code;
-    cache_entry.headers = entry.headers;
+    for (const auto& kv : entry.headers) {
+        cache_entry.headers.Set(kv.first, kv.second);
+    }
     cache_entry.body = entry.body;
     cache_entry.cached_at = std::chrono::system_clock::now();
 

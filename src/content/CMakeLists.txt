@@ -6,9 +6,32 @@ file(GLOB_RECURSE CONTENT_SOURCES
 )
 list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/(network|openai)/")
 
+# Exclude CUDA ops when CUDA is disabled (no cuda_runtime.h available)
+if(NOT ENABLE_CUDA)
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/ai/ml/cuda_ops/")
+endif()
+
+# Exclude platform backends for other platforms
+if(WIN32)
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/linux/")
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/apple/")
+else()
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/windows/")
+endif()
+
 file(GLOB_RECURSE CONTENT_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
+list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/(network|openai)/")
+if(NOT ENABLE_CUDA)
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/ai/ml/cuda_ops/")
+endif()
+if(WIN32)
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/linux/")
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/apple/")
+else()
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/windows/")
+endif()
 
 # Create content library
 add_library(XER_Content STATIC ${CONTENT_SOURCES} ${CONTENT_HEADERS})
@@ -41,6 +64,25 @@ endif()
 
 # Link with zstd
 target_link_libraries(XER_Content PUBLIC zstd::libzstd)
+
+# AI/ML library backends (gated by ENABLE_AI in root CMakeLists.txt)
+if(ENABLE_AI)
+    target_link_libraries(XER_Content PUBLIC
+        Eigen3::Eigen
+        range-v3::range-v3
+        Boost::boost
+        cereal::cereal
+    )
+    target_link_libraries(XER_Content PRIVATE
+        ggml::ggml
+        Folly::folly
+        mimalloc
+    )
+    # MKL as the unified BLAS/LAPACK backend
+    if(TARGET MKL::MKL)
+        target_link_libraries(XER_Content PRIVATE MKL::MKL)
+    endif()
+endif()
 
 # C++ standard
 target_compile_features(XER_Content PUBLIC cxx_std_23)

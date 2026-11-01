@@ -12,6 +12,8 @@
 #include <mutex>
 #include <string>
 #include <vector>
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <windows.h>
 
 namespace network::async::iocp {

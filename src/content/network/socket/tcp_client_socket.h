@@ -11,7 +11,8 @@
 #include "content/network/transport/transport_client_socket.h"
 #include "content/network/socket/socket_stream.h"
 
-namespace network::socket {
+namespace network {
+namespace socket {
 
 class SocketServer;  // forward declaration
 
@@ -77,6 +78,9 @@ public:
     // Get the underlying stream wrapper (for advanced usage).
     SocketStream* stream() { return stream_.get(); }
 
+    // Get socket file descriptor
+    int GetFd() const override { return fd_; }
+
     // Constructor for injecting an existing file descriptor.
     // Package-internal use only (called by SocketServer::Accept()).
     explicit TcpClientSocket(int fd) : fd_(fd) {
@@ -88,4 +92,5 @@ private:
     std::unique_ptr<SocketStream> stream_;
 };
 
-}  // namespace network::socket
+}  // namespace socket
+}  // namespace network

@@ -42,7 +42,7 @@ public:
     uintptr_t Get() const { return handle_; }
 
     // Detach the handle (won't be closed by destructor)
-    void Detach() { handle_ = reinterpret_cast<uintptr_t>(GetInvalidValue()); }
+    void Detach() { handle_ = GetInvalidValue(); }
 
 private:
     static uintptr_t GetInvalidValue();

@@ -63,6 +63,7 @@ private:
 // RAII wrapper for SSL objects
 class ScopedSsl {
 public:
+    ScopedSsl() : ssl_(nullptr) {}
     explicit ScopedSsl(SSL* ssl);
     ~ScopedSsl();
 

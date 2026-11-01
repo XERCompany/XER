@@ -1,5 +1,6 @@
 #include "window.h"
 #include "../widgets/widget.h"
+#include <mutex>
 #include <stdexcept>
 #include <unordered_map>
 
@@ -228,12 +229,13 @@ public:
                 // TODO: Relayout content
                 return 0;
 
-            case WM_PAINT:
+            case WM_PAINT: {
                 PAINTSTRUCT ps;
                 HDC hdc = BeginPaint(hwnd_, &ps);
                 // TODO: Render content
                 EndPaint(hwnd_, &ps);
                 return 0;
+            }
 
             default:
                 return DefWindowProc(hwnd_, msg, wParam, lParam);
@@ -334,6 +336,10 @@ bool Window::IsVisible() const {
 
 bool Window::IsClosed() const {
     return impl_->IsClosed();
+}
+
+LRESULT Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+    return impl_->HandleMessage(msg, wParam, lParam);
 }
 
 } // namespace XER::UI::Core
