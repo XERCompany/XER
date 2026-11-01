@@ -6,7 +6,7 @@
 #include <absl/strings/str_cat.h>
 #include <range/v3/algorithm/any_of.hpp>
 
-#include "javascript/common/compression_codec.h"
+#include "helper/compression_codec.h"
 
 namespace Engine::Cache {
 
@@ -20,7 +20,7 @@ bool CacheEncryptionHandler::CompressText(const std::string& text,
 		return false;
 	}
 
-	auto compressed = engine::javascript::common::CompressionCodec::Compress(text);
+	auto compressed = Engine::Common::CompressionCodec::Compress(text);
 	if (!compressed.has_value()) {
 		if (error_out != nullptr) {
 			*error_out = "Failed to compress cache payload";
@@ -41,7 +41,7 @@ bool CacheEncryptionHandler::DecompressText(const std::vector<std::uint8_t>& byt
 		return false;
 	}
 
-	auto decompressed = engine::javascript::common::CompressionCodec::DecompressToString(bytes);
+	auto decompressed = Engine::Common::CompressionCodec::DecompressToString(bytes);
 	if (!decompressed.has_value()) {
 		if (error_out != nullptr) {
 			*error_out = absl::StrCat("Failed to decompress cache payload, bytes=", bytes.size());

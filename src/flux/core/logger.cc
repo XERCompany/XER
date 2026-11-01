@@ -69,7 +69,7 @@ void Logger::Log(LogLevel level, std::string_view component, std::string_view me
 		return;
 	}
 	std::ostringstream output;
-	output << "[flux][" << ToString(level) << "]";
+	output << "[" << config_.application_name << "][" << ToString(level) << "]";
 	if (config_.timestamps) {
 		output << "[" << BuildTimestamp() << "]";
 	}
