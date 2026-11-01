@@ -1,4 +1,5 @@
 #include "audio_engine.h"
+#include "audio/audio_core/audio_logger.h"
 
 #include <algorithm>
 #include <cmath>
@@ -6,7 +7,7 @@
 namespace Engine::Audio::Core {
 
 AudioEngine::AudioEngine()
-    : initialized_(false), is_running_(false), sample_rate_(44100), 
+    : initialized_(false), is_running_(false), sample_rate_(44100),
       buffer_size_(512), channel_count_(2), cpu_load_(0.0) {}
 
 AudioEngine::~AudioEngine() {
@@ -19,23 +20,26 @@ bool AudioEngine::Initialize(int sample_rate, int buffer_size, int channel_count
     sample_rate_ = sample_rate;
     buffer_size_ = buffer_size;
     channel_count_ = channel_count;
-    
+
     input_levels_.resize(channel_count, 0.0f);
     output_levels_.resize(channel_count, 0.0f);
-    
+
     initialized_ = true;
+    AudioLogger::Instance().LogEngineStart(sample_rate, buffer_size);
     return true;
-} 
+}
 
 bool AudioEngine::Start() {
     if (!initialized_) return false;
-    
+
     is_running_ = true;
+    AudioLogger::Instance().LogEngineStart(sample_rate_, buffer_size_);
     return true;
 }
 
 bool AudioEngine::Stop() {
     is_running_ = false;
+    AudioLogger::Instance().LogEngineStop();
     return true;
 }
 

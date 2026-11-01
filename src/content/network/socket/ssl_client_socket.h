@@ -13,7 +13,8 @@
 #include "content/network/ssl/ssl_context.h"
 #include "content/network/ssl/ssl_session_cache.h"
 
-namespace network::socket {
+namespace network {
+namespace socket {
 
 class SslClientSocket : public transport::TransportClientSocket {
 public:
@@ -30,7 +31,7 @@ public:
                  uint16_t port,
                  std::string* error) override;
     void Disconnect() override;
-    bool IsConnected() const override { return ssl_ != nullptr && connected_; }
+    bool IsConnected() const override { return static_cast<bool>(ssl_) && connected_; }
 
     // Synchronous I/O
     int Read(uint8_t* buf, size_t len, std::string* error) override;
@@ -50,6 +51,9 @@ public:
 
     // Session resumption
     bool EnableSessionResumption(bool enable) { session_resumption_enabled_ = enable; return true; }
+
+    // Get socket file descriptor
+    int GetFd() const override { return tcp_fd_; }
 
 private:
     // Internal TCP socket operations
@@ -74,4 +78,5 @@ private:
     ssl::ScopedSsl ssl_;
 };
 
-}  // namespace network::socket
+}  // namespace socket
+}  // namespace network

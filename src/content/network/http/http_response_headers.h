@@ -18,6 +18,7 @@ public:
 
     bool Has(const std::string& name) const;
     std::string Get(const std::string& name) const;
+    void Set(const std::string& name, const std::string& value);
     const std::map<std::string, std::string>& All() const;
     int  ContentLength() const;
 

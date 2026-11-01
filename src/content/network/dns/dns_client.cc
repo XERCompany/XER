@@ -4,9 +4,15 @@
  */
 #include "content/network/dns/dns_client.h"
 
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#else
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#endif
 
 #include <cstring>
 #include <random>
@@ -38,22 +44,35 @@ bool DnsClient::Query(const std::string& name,
         return false;
     }
 
+#ifdef _WIN32
+    DWORD tv_ms = static_cast<DWORD>(config_.timeout_ms);
+    ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO,
+                 reinterpret_cast<const char*>(&tv_ms), sizeof(tv_ms));
+#else
     struct timeval tv{};
     tv.tv_sec  = static_cast<time_t>(config_.timeout_ms / 1000);
     tv.tv_usec = static_cast<suseconds_t>((config_.timeout_ms % 1000) * 1000);
     ::setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+#endif
 
     struct sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port   = htons(53);
     ::inet_pton(AF_INET, ns.c_str(), &addr.sin_addr);
 
-    ::sendto(sock, query.data(), query.size(), 0,
+    ::sendto(sock, reinterpret_cast<const char*>(query.data()),
+             static_cast<int>(query.size()), 0,
              reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
 
     std::vector<uint8_t> buf(512);
+#ifdef _WIN32
+    const int n = ::recv(sock, reinterpret_cast<char*>(buf.data()),
+                         static_cast<int>(buf.size()), 0);
+    ::closesocket(sock);
+#else
     const ssize_t n = ::recv(sock, buf.data(), buf.size(), 0);
     ::close(sock);
+#endif
 
     if (n <= 0) {
         if (error) *error = "DNS query timed out or failed";

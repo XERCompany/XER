@@ -9,7 +9,9 @@
 #include <string>
 #include <vector>
 
-namespace network::transport {
+namespace network {
+
+namespace transport {
 
 // Completion callback: (bytes_transferred_or_error_code, error_message)
 using CompletionCallback = std::function<void(int, const std::string&)>;
@@ -39,4 +41,6 @@ public:
     virtual int GetFd() const = 0;
 };
 
-}  // namespace network::transport
+}  // namespace transport
+
+}  // namespace network

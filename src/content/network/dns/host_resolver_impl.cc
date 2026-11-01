@@ -11,6 +11,8 @@
 
 #include <chrono>
 
+namespace platform = network::socket::platform;
+
 namespace network::dns {
 
 namespace {

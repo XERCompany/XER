@@ -2,12 +2,15 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <future>
 #include <string>
 #include <vector>
 
 #include "audio_sample_rate_converter.h"
 
-namespace Engine::Audio::Core {
+namespace Engine {
+namespace Audio {
+namespace Core {
 
 struct AudioSourceLoadOptions {
 	std::filesystem::path input_path;
@@ -33,10 +36,19 @@ struct AudioSourceBuffer {
 
 class AudioSourceLoader {
 public:
+	// Synchronous loading
 	static bool Load(
+		const AudioSourceLoadOptions& options,
+		AudioSourceBuffer* output,
+		std::string* error_out = nullptr);
+
+	// Asynchronous loading
+	static std::future<bool> LoadAsync(
 		const AudioSourceLoadOptions& options,
 		AudioSourceBuffer* output,
 		std::string* error_out = nullptr);
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace Core
+}  // namespace Audio
+}  // namespace Engine

@@ -3,18 +3,15 @@
 
 #include <memory>
 #include <functional>
+#include <vector>
+
+#include "layout/geometry.h"
 
 namespace XER::UI {
 
 // Forward declarations
 namespace Rendering {
 class Renderer;
-}
-
-namespace Layout {
-struct Rect;
-struct Size;
-struct Point;
 }
 
 namespace Widgets {

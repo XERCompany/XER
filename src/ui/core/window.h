@@ -61,6 +61,9 @@ public:
     bool IsVisible() const;
     bool IsClosed() const;
 
+    // Internal message handler (called by static WindowProc)
+    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+
     // Prevent copying
     Window(const Window&) = delete;
     Window& operator=(const Window&) = delete;

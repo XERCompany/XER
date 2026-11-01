@@ -46,7 +46,6 @@ if(WIN32)
             dxgi
             dwrite
     )
+    # Prevent winsock.h / min-max macros from interfering with std::
+    target_compile_definitions(XER_UI_Core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)
 endif()
-
-# Add OpenAI widgets subdirectory
-add_subdirectory(widgets/openai)

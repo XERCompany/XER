@@ -5,11 +5,15 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 #include "content/network/proxy/proxy_config.h"
 
 namespace network::proxy {
+
+// Proxy callback type: (success, error_message)
+using ProxyCallback = std::function<void(bool, const std::string&)>;
 
 // SOCKS4/SOCKS5 client handshake helper.
 class SocksClientSocket {
@@ -21,6 +25,11 @@ public:
     bool Handshake(const std::string& target_host,
                    uint16_t target_port,
                    std::string* error);
+
+    // Asynchronous handshake
+    void HandshakeAsync(const std::string& target_host,
+                       uint16_t target_port,
+                       ProxyCallback cb);
 
 private:
     bool Socks4Handshake(const std::string& host,

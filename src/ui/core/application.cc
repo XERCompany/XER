@@ -1,5 +1,6 @@
 #include "application.h"
 #include <windows.h>
+#include <commctrl.h>
 #include <stdexcept>
 
 namespace XER::UI::Core {

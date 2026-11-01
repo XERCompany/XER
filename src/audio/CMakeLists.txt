@@ -32,6 +32,14 @@ target_link_libraries(XER_AudioCore
         FFTW3::fftw3f
 )
 
+# Link with internal modules
+target_link_libraries(XER_AudioCore
+    PUBLIC
+        XER_AsyncIO
+        XER_Cache
+        XER_Flux
+)
+
 # Link with FFmpeg if available
 if(TARGET XER_FFmpeg)
     target_link_libraries(XER_AudioCore PUBLIC XER_FFmpeg)

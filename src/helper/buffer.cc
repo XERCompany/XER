@@ -1,4 +1,4 @@
-#include "helper/js_buffer.h"
+#include "helper/buffer.h"
 
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
@@ -43,18 +43,18 @@ std::string StripAsciiWhitespace(std::string_view text) {
 
 }  // namespace
 
-JsBuffer::Bytes JsBuffer::FromString(std::string_view text, bool normalize_utf8) {
+Buffer::Bytes Buffer::FromString(std::string_view text, bool normalize_utf8) {
 	Bytes out;
 	AppendString(&out, text, normalize_utf8);
 	return out;
 }
 
-std::string JsBuffer::ToString(ConstSpan bytes, bool normalize_utf8) {
+std::string Buffer::ToString(ConstSpan bytes, bool normalize_utf8) {
 	std::string out(bytes.begin(), bytes.end());
 	return normalize_utf8 ? NormalizeUtf8(out) : out;
 }
 
-std::string JsBuffer::NormalizeUtf8(std::string_view text) {
+std::string Buffer::NormalizeUtf8(std::string_view text) {
 	std::string normalized(text); 
 	UErrorCode status = U_ZERO_ERROR;
 	const icu::Normalizer2* normalizer = icu::Normalizer2::getNFCInstance(status);
@@ -73,7 +73,7 @@ std::string JsBuffer::NormalizeUtf8(std::string_view text) {
 	return normalized;
 }
 
-void JsBuffer::AppendString(Bytes* target, std::string_view text, bool normalize_utf8) {
+void Buffer::AppendString(Bytes* target, std::string_view text, bool normalize_utf8) {
 	if (target == nullptr || text.empty()) {
 		return;
 	}
@@ -82,7 +82,7 @@ void JsBuffer::AppendString(Bytes* target, std::string_view text, bool normalize
 	AppendBytes(target, ConstSpan(reinterpret_cast<const Byte*>(source.data()), source.size()));
 }
 
-void JsBuffer::AppendBytes(Bytes* target, ConstSpan bytes) {
+void Buffer::AppendBytes(Bytes* target, ConstSpan bytes) {
 	if (target == nullptr || bytes.empty()) {
 		return;
 	}
@@ -90,7 +90,7 @@ void JsBuffer::AppendBytes(Bytes* target, ConstSpan bytes) {
 	ranges::copy(bytes, std::back_inserter(*target));
 }
 
-std::string JsBuffer::HexEncode(ConstSpan bytes) {
+std::string Buffer::HexEncode(ConstSpan bytes) {
 	std::string hex;
 	hex.reserve(bytes.size() * 2u);
 	for (Byte value : bytes) {
@@ -100,7 +100,7 @@ std::string JsBuffer::HexEncode(ConstSpan bytes) {
 	return hex;
 }
 
-bool JsBuffer::HexDecode(std::string_view hex, Bytes* bytes_out, std::string* error_out) {
+bool Buffer::HexDecode(std::string_view hex, Bytes* bytes_out, std::string* error_out) {
 	if (bytes_out == nullptr) {
 		if (error_out != nullptr) {
 			*error_out = "hex decode target is null";
@@ -137,7 +137,7 @@ bool JsBuffer::HexDecode(std::string_view hex, Bytes* bytes_out, std::string* er
 	return true;
 }
 
-JsBuffer::SizeType JsBuffer::Copy(ConstSpan source,
+Buffer::SizeType Buffer::Copy(ConstSpan source,
 				      MutableSpan destination,
 				      SizeType source_offset,
 				      SizeType destination_offset,
@@ -155,7 +155,7 @@ JsBuffer::SizeType JsBuffer::Copy(ConstSpan source,
 	return count;
 }
 
-JsBuffer::Bytes JsBuffer::Concat(const std::vector<ConstSpan>& segments) {
+Buffer::Bytes Buffer::Concat(const std::vector<ConstSpan>& segments) {
 	SizeType total_size = 0;
 	for (ConstSpan segment : segments) {
 		total_size += segment.size();
@@ -168,18 +168,18 @@ JsBuffer::Bytes JsBuffer::Concat(const std::vector<ConstSpan>& segments) {
 	return out;
 }
 
-int JsBuffer::Compare(ConstSpan lhs, ConstSpan rhs) {
+int Buffer::Compare(ConstSpan lhs, ConstSpan rhs) {
 	if (ranges::equal(lhs, rhs)) {
 		return 0;
 	}
 	return ranges::lexicographical_compare(lhs, rhs) ? -1 : 1;
 }
 
-bool JsBuffer::Equals(ConstSpan lhs, ConstSpan rhs) {
+bool Buffer::Equals(ConstSpan lhs, ConstSpan rhs) {
 	return ranges::equal(lhs, rhs);
 }
 
-std::ptrdiff_t JsBuffer::IndexOf(ConstSpan haystack, ConstSpan needle, SizeType offset) {
+std::ptrdiff_t Buffer::IndexOf(ConstSpan haystack, ConstSpan needle, SizeType offset) {
 	if (offset > haystack.size()) {
 		return -1;
 	}
@@ -194,7 +194,7 @@ std::ptrdiff_t JsBuffer::IndexOf(ConstSpan haystack, ConstSpan needle, SizeType 
 	return static_cast<std::ptrdiff_t>(offset) + (match.begin() - window.begin());
 }
 
-std::ptrdiff_t JsBuffer::LastIndexOf(ConstSpan haystack, ConstSpan needle, SizeType offset) {
+std::ptrdiff_t Buffer::LastIndexOf(ConstSpan haystack, ConstSpan needle, SizeType offset) {
 	const SizeType clamped_offset = std::min(offset, haystack.size());
 	if (needle.empty()) {
 		return static_cast<std::ptrdiff_t>(clamped_offset);
@@ -215,7 +215,7 @@ std::ptrdiff_t JsBuffer::LastIndexOf(ConstSpan haystack, ConstSpan needle, SizeT
 	return -1;
 }
 
-JsBuffer::SizeType JsBuffer::Fill(MutableSpan destination,
+Buffer::SizeType Buffer::Fill(MutableSpan destination,
 				       ConstSpan pattern,
 				       SizeType offset,
 				       SizeType end) {
@@ -234,7 +234,7 @@ JsBuffer::SizeType JsBuffer::Fill(MutableSpan destination,
 	return written;
 }
 
-JsBuffer::Bytes JsBuffer::Slice(ConstSpan source, SizeType start, SizeType end) {
+Buffer::Bytes Buffer::Slice(ConstSpan source, SizeType start, SizeType end) {
 	const SizeType clamped_start = std::min(start, source.size());
 	const SizeType clamped_end = std::min(end, source.size());
 	if (clamped_start >= clamped_end) {
@@ -246,7 +246,7 @@ JsBuffer::Bytes JsBuffer::Slice(ConstSpan source, SizeType start, SizeType end) 
 
 namespace {
 
-bool SwapChunks(JsBuffer::MutableSpan bytes, std::size_t width, std::string* error_out) {
+bool SwapChunks(Buffer::MutableSpan bytes, std::size_t width, std::string* error_out) {
 	if ((bytes.size() % width) != 0u) {
 		if (error_out != nullptr) {
 			*error_out = absl::StrFormat("buffer size %d must be a multiple of %d",
@@ -268,15 +268,15 @@ bool SwapChunks(JsBuffer::MutableSpan bytes, std::size_t width, std::string* err
 
 }  // namespace
 
-bool JsBuffer::Swap16(MutableSpan bytes, std::string* error_out) {
+bool Buffer::Swap16(MutableSpan bytes, std::string* error_out) {
 	return SwapChunks(bytes, 2u, error_out);
 }
 
-bool JsBuffer::Swap32(MutableSpan bytes, std::string* error_out) {
+bool Buffer::Swap32(MutableSpan bytes, std::string* error_out) {
 	return SwapChunks(bytes, 4u, error_out);
 }
 
-bool JsBuffer::Swap64(MutableSpan bytes, std::string* error_out) {
+bool Buffer::Swap64(MutableSpan bytes, std::string* error_out) {
 	return SwapChunks(bytes, 8u, error_out);
 }
 

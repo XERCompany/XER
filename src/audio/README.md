@@ -1,6 +1,23 @@
-# Audio Subsystem
+# Audio Subsystem v2.0
 
 Comprehensive audio processing framework with DSP algorithms, effects, analysis tools, and plugin support.
+
+## What's New in v2.0
+
+### Infrastructure Integration
+- **Async I/O**: Integration with `XER_AsyncIO` for asynchronous audio operations
+- **Flux Logging**: Structured logging via `XER_Flux` for all audio events
+- **Cache**: Integration with `XER_Cache` for metadata, presets, and analysis results
+- **New Components**:
+  - `AudioAsyncManager` - Async audio operation management
+  - `AudioLogger` - Structured logging for audio events
+  - `AudioCacheManager` - Audio-specific caching (metadata, presets, analysis)
+
+### Improved Performance
+- SIMD acceleration with runtime detection (SSE2/AVX2/AVX-512)
+- Zero-copy optimizations where possible
+- Multi-threaded processing for large blocks
+- Cache-aware memory access patterns
 
 ## Architecture Overview
 
@@ -17,6 +34,9 @@ The audio subsystem is organized into several specialized modules:
 - `audio_clock_sync.*` — Clock synchronization for multi-device setups
 - `audio_latency_monitor.*` — Latency measurement and monitoring
 - `audio_thread_priority.*` — Thread priority management for real-time audio
+- **`audio_async_manager.*`** — Async audio operation management (NEW)
+- **`audio_logger.*`** — Structured logging for audio events (NEW)
+- **`audio_cache_manager.*`** — Audio-specific caching (NEW)
 
 ### DSP Algorithms (`dsp_algorithms/`)
 - `dsp_fft_engine.*` — FFT computation with backend abstraction

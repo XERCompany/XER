@@ -4,6 +4,7 @@
  */
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,12 +13,17 @@
 
 namespace network::ftp {
 
+// FTP callback types
+using FtpCallback = std::function<void(bool, const std::vector<uint8_t>&, const std::string&)>;
+using FtpListCallback = std::function<void(bool, const std::vector<std::string>&, const std::string&)>;
+
 // Minimal FTP client stream (control channel + passive data channel).
 class FtpStream {
 public:
     FtpStream() = default;
     ~FtpStream();
 
+    // Synchronous operations
     bool Connect(const std::string& host, uint16_t port, std::string* error);
     bool Login(const std::string& user, const std::string& pass, std::string* error);
     bool SetBinaryMode(std::string* error);
@@ -25,6 +31,10 @@ public:
     bool Retrieve(const std::string& path, std::vector<uint8_t>* out, std::string* error);
     bool List(const std::string& path, std::vector<std::string>* out, std::string* error);
     bool Quit();
+
+    // Asynchronous operations
+    void RetrieveAsync(const std::string& path, FtpCallback cb);
+    void ListAsync(const std::string& path, FtpListCallback cb);
 
 private:
     bool SendCommand(const std::string& cmd, std::string* error);
