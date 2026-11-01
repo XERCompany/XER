@@ -5,6 +5,18 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     include(CTest)
 endif()
 
+# Output directories for the xbuild utility and generated artifacts
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${config}" config_upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/bin")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
+endforeach()
+
 find_package(LLVM CONFIG REQUIRED)
 find_package(Clang CONFIG REQUIRED)
 find_package(absl CONFIG REQUIRED)
@@ -105,7 +117,7 @@ target_link_libraries(xbuild PRIVATE
     $<IF:$<TARGET_EXISTS:gif::gif>,gif::gif,>)
 
 add_definitions(${LLVM_DEFINITIONS_LIST})
- 
+
 llvm_map_components_to_libnames(LLVM_LIBS
     support
     core
@@ -114,9 +126,9 @@ llvm_map_components_to_libnames(LLVM_LIBS
     frontendopenmp
     target
     targetparser
-) 
+)
 target_link_libraries(xbuild PRIVATE
-    ${LLVM_LIBS} 
+    ${LLVM_LIBS}
     "C:/vcpkg/installed/x64-windows-release/lib/*.lib"
 )
 
@@ -128,8 +140,7 @@ if(TARGET LLVMDebugInfoPDB)
         set_target_properties(LLVMDebugInfoPDB PROPERTIES INTERFACE_LINK_LIBRARIES "${_llvm_pdb_libs}")
     endif()
 endif()
-# LLVM's command-line classes are subclassed by cl::list in the executable.
-# Match the installed LLVM's RTTI setting; retain exceptions for JSON errors.
+
 if(NOT LLVM_ENABLE_RTTI)
     if(MSVC)
         target_compile_options(xbuild PRIVATE /GR-)
