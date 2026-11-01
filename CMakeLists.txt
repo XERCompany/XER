@@ -1,6 +1,11 @@
-# XER Core Source CMake Configuration
+cmake_minimum_required(VERSION 3.21)
 
-# Output directories for the core runtime and libraries
+# Set C++23 standard
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Output directories for binaries and libraries
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
@@ -12,96 +17,172 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
 endforeach()
 
-# Main executable
-add_executable(xer main.cc app_command.cc engine_params.cc
-               audio_config_helper.cc json_config_helper.cc
-               resource_guard.cc feature.cc provider.cc)
-
-# Include directories
-target_include_directories(xer PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}
-    ${CMAKE_CURRENT_SOURCE_DIR}/async_io
-    ${CMAKE_CURRENT_SOURCE_DIR}/audio
-    ${CMAKE_CURRENT_SOURCE_DIR}/content
-    ${CMAKE_CURRENT_SOURCE_DIR}/flowscript
-    ${CMAKE_CURRENT_SOURCE_DIR}/javascript
-    ${CMAKE_CURRENT_SOURCE_DIR}/runtime_safety
-    ${CMAKE_CURRENT_SOURCE_DIR}/v8
-    ${CMAKE_CURRENT_SOURCE_DIR}/ui
-    ${CMAKE_CURRENT_SOURCE_DIR}/lunca
-    ${CMAKE_CURRENT_SOURCE_DIR}/native
-)
-
-# Link with vcpkg libraries (from parent CMakeLists.txt)
-if(TARGET libuv::uv_a OR TARGET libuv::uv)
-    target_link_libraries(xer PRIVATE $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>)
+# vcpkg integration
+if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 endif()
 
-# Add modular subdirectories
-add_subdirectory(async_io)
-add_subdirectory(audio)
-add_subdirectory(content)
-add_subdirectory(node_graph)
-add_subdirectory(sql)
-add_subdirectory(ui)
-add_subdirectory(lunca)
+# Explicit vcpkg path (C:/vcpkg)
+if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+    set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+endif()
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Set vcpkg triplet to x64-windows-release
+set(VCPKG_TARGET_TRIPLET "x64-windows-release" CACHE STRING "Vcpkg target triplet")
+set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Use preinstalled vcpkg packages")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
+
+project(XER LANGUAGES C CXX)
+include(GNUInstallDirs)
+include(CTest)
+
+if(VCPKG_TARGET_TRIPLET STREQUAL "x64-windows-release")
+    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+        message(FATAL_ERROR "x64-windows-release requires Release or RelWithDebInfo, not Debug.")
+    endif()
+    if(CMAKE_CONFIGURATION_TYPES)
+        set(CMAKE_CONFIGURATION_TYPES "Release;RelWithDebInfo" CACHE STRING "Build configurations" FORCE)
+    endif()
+    set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO "Release;")
+    set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL "Release;")
+endif()
+
+# Build options
+option(XER_FETCH_DEPENDENCIES "Fetch dependencies automatically" OFF)
+option(XER_FETCH_V8 "Fetch V8 from source" OFF)
+option(ENABLE_V8 "Build V8 and JavaScript runtime" OFF)
+option(ENABLE_MEDIA "Enable media dependencies" ON)
+option(ENABLE_CUDA "Enable CUDA support" OFF)
+option(ENABLE_CUDNN "Enable cuDNN support" OFF)
+option(ENABLE_OPENCV "Fetch and build OpenCV" OFF)
+option(ENABLE_AI "Enable AI and model-builder sources" OFF)
+option(XER_BUILD_APP "Build the XER application and its subsystems" ON)
+option(XER_BUILD_XBUILD "Build the xbuild configuration utility" OFF)
+
+# Dependency cache directory (only used if XER_FETCH_DEPENDENCIES is ON)
+set(XER_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Directory for dependency cache")
+
+# V8 dependency cache directory (only used if XER_FETCH_V8 is ON)
+set(XER_V8_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/v8" CACHE PATH "Directory for V8 dependency cache")
+
+# Find vcpkg packages
+find_package(libuv CONFIG REQUIRED)
+find_package(absl CONFIG REQUIRED)
+find_package(fmt CONFIG REQUIRED)
+find_package(jsoncpp CONFIG REQUIRED)
+find_package(re2 CONFIG REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED)
+find_package(ZLIB REQUIRED)
+find_package(zstd CONFIG REQUIRED)
+find_package(unofficial-brotli CONFIG REQUIRED)
+find_package(OpenSSL REQUIRED)
+find_package(CURL REQUIRED)
+find_package(unofficial-pthreadpool CONFIG REQUIRED)
+find_package(unofficial-fxdiv CONFIG REQUIRED) 
+find_package(CUDNN REQUIRED)
+if(XER_BUILD_APP)
+    find_package(FFTW3f CONFIG REQUIRED)
+endif()
+
+# Find FFmpeg via pkg-config or direct find
+if(ENABLE_MEDIA)
+    if(POLICY CMP0174)
+        cmake_policy(SET CMP0174 NEW)
+    endif()
+    find_package(FFMPEG REQUIRED)
+    add_library(XER_FFmpeg INTERFACE)
+    target_include_directories(XER_FFmpeg INTERFACE ${FFMPEG_INCLUDE_DIRS})
+    target_link_directories(XER_FFmpeg INTERFACE ${FFMPEG_LIBRARY_DIRS})
+    target_link_libraries(XER_FFmpeg INTERFACE ${FFMPEG_LIBRARIES})
+endif()
+
+# Find OpenCV if enabled
+if(ENABLE_OPENCV)
+    find_package(OpenCV CONFIG REQUIRED)
+endif()
+if(ENABLE_CUDA OR ENABLE_CUDNN)
+    find_package(CUDAToolkit REQUIRED)
+endif()
+if(ENABLE_CUDNN)
+    find_package(CUDNN REQUIRED)
+endif()
+
+# AI/ML library backends for content/ai (ggml, MKL, Eigen, folly, range-v3, mimalloc)
+if(ENABLE_AI)
+    find_package(Eigen3 CONFIG REQUIRED)
+    find_package(range-v3 CONFIG REQUIRED)
+    find_package(mimalloc CONFIG REQUIRED)
+    find_package(ggml CONFIG REQUIRED)
+    find_package(folly CONFIG REQUIRED)
+    find_package(MKL CONFIG REQUIRED)
+    find_package(Boost CONFIG REQUIRED)
+    find_package(cereal CONFIG REQUIRED)
+endif()
+
+# Find SDL2 for audio
+if(ENABLE_MEDIA)
+    find_package(SDL2 CONFIG REQUIRED)
+endif()
+
 if(ENABLE_V8)
-    add_library(XERJavaScript STATIC
-        javascript/bridge/function_bridge.cc
-        javascript/common/compression_codec.cc
-        javascript/common/text_normalizer.cc
-        javascript/common/uv_async_channel.cc
-        javascript/engine/runtime_context.cc
-        javascript/events/event_router.cc
-        javascript/pipeline/pipeline_executor.cc)
-    target_include_directories(XERJavaScript PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
-    target_compile_definitions(XERJavaScript PUBLIC
-        ENGINE_HAS_V8=1 ENGINE_HAS_LIBUV=1 ENGINE_HAS_ICU=1)
-    target_link_libraries(XERJavaScript PUBLIC V8::V8
+    include(cmake/v8.cmake)
+endif()
+
+if(XER_BUILD_APP)
+    add_subdirectory(src)
+endif()
+if(XER_BUILD_XBUILD)
+    add_subdirectory(xbuild)
+endif()
+if(BUILD_TESTING)
+    add_subdirectory(tests)
+endif()
+
+# Link common vcpkg libraries to xer target
+if(TARGET xer)
+    target_link_libraries(xer PRIVATE
         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
-        absl::strings absl::str_format absl::hash)
-    target_link_libraries(xer PRIVATE XERJavaScript)
-    target_sources(xer PRIVATE
-        v8/v8_engine.cc
-        v8/v8_exception_handler.cc
-        v8/v8_initializer.cc
-        v8/v8_memory_manager.cc
-        v8/v8_script_runner.cc)
-endif()
-
-# Link with XER internal libraries
-target_link_libraries(xer PRIVATE
-    XER_AsyncIO
-    XER_AudioCore
-    XER_AudioDSP
-    XER_NodeGraph
-    XER_Network
-    XER_SQL
-    XER_UI_Core
-)
-
-# C++ standard
-target_compile_features(xer PUBLIC cxx_std_23)
-
-# Compiler flags
-if(MSVC)
-    target_compile_options(xer PRIVATE /W4 /WX- /O2 /arch:AVX2)
-else()
-    target_compile_options(xer PRIVATE -Wall -Wextra -Wpedantic -O3 -march=native)
-endif()
-
-# Platform-specific linking
-if(WIN32)
-    target_link_libraries(xer
-        PRIVATE
-            ws2_32
-            crypt32
-            windowsapp
+        absl::strings
+        absl::synchronization
+        absl::flat_hash_map
+        absl::flat_hash_set
+        fmt::fmt
+        jsoncpp_lib
+        re2::re2
+        unofficial::sqlite3::sqlite3
+        ZLIB::ZLIB
+        zstd::libzstd
+        unofficial::brotli::brotlienc
+        unofficial::brotli::brotlidec
+        unofficial::brotli::brotlicommon
     )
-elseif(APPLE)
-    target_link_libraries(xer
-        PRIVATE
-            "-framework CoreFoundation"
-            "-framework Foundation"
-    )
+
+    if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
+        target_link_libraries(xer PRIVATE OpenSSL::SSL OpenSSL::Crypto)
+    endif()
+
+    if(TARGET CURL::libcurl)
+        target_link_libraries(xer PRIVATE CURL::libcurl)
+    endif()
+
+    if(TARGET XER_FFmpeg)
+        target_link_libraries(xer PRIVATE XER_FFmpeg)
+    endif()
+
+    if(TARGET SDL2::SDL2)
+        target_link_libraries(xer PRIVATE SDL2::SDL2)
+    endif()
+
+    if(ENABLE_OPENCV)
+        target_link_libraries(xer PRIVATE
+            opencv_core
+            opencv_imgproc
+            opencv_imgcodecs
+        )
+    endif()
+    if(ENABLE_V8)
+        target_link_libraries(xer PRIVATE V8::V8)
+    endif()
 endif()

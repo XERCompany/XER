@@ -19,6 +19,7 @@ target_include_directories(XER_AsyncIO
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/..
+        ${CUDNN_LIBRARIES}
 )
 
 # Link with vcpkg libraries
@@ -27,7 +28,9 @@ target_link_libraries(XER_AsyncIO
         absl::synchronization
         absl::flat_hash_map
         absl::flat_hash_set
-)
+        CuDNN::CuDNN
+        ${CUDNN_INCLUDE_DIRS}
+) 
 
 # Link with libuv
 if(TARGET libuv::uv_a OR TARGET libuv::uv)
