@@ -100,7 +100,7 @@ if(WIN32)
 endif()
 
 # Add OpenAI subdirectory
-add_subdirectory(openai)
+# add_subdirectory(openai)
 
 # Add network subdirectory
 add_subdirectory(network)
