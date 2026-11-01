@@ -1,26 +1,60 @@
-# src
+# Async I/O subsystem
 
-This directory contains the core implementation of XER and its main runtime subsystems.
+The `src/async_io` directory contains the asynchronous input/output primitives used across the project. It provides the buffering, scheduling, and concurrency building blocks used by the runtime, networking layers, and native integrations.
 
-## Main areas
+## What it provides
 
-- `async_io/` — asynchronous I/O, buffer pooling, queues, and hardware capability layers
-- `audio/` — audio engine, DSP features, and audio plugins or examples
-- `cache/` — cache management utilities and persistence helpers
-- `content/` — content-centric subsystems such as network, AI, and model integrations
-- `flux/` — terminal and rendering runtime components
-- `modules/` — JavaScript-facing module layer exposed to the runtime
-- `app_command.*` — command-line interface and app entry helpers
+- asynchronous file read and write paths
+- reusable buffer pools and memory management helpers
+- task scheduling and queue-based execution
+- synchronization primitives
+- hardware capability detection and resource monitoring
+- optional backend integrations for accelerated workloads
 
-## High-level responsibilities
+## Typical components
 
-- runtime orchestration and dynamic compilation
-- native execution and bridge integration with the V8/JS environment
-- module registration and runtime plumbing
-- I/O, networking, and buffering primitives
-- audio processing and DSP-oriented features
-- model/AI-related backends and optional integrations
+- `async_file_reader.*` / `async_file_writer.*`
+- `async_buffer_pool.*` / `io_buffer_pool.*`
+- `async_task_queue.*`
+- `io_file_map.*`
+- `io_prefetch_manager.*`
+- `io_priority_queue.*`
+- `hardware_abstraction/`
+- `dnn_backends/`
+
+## Design principles
+
+- keep I/O off the main execution path when possible
+- reuse byte buffers and scheduling resources
+- isolate platform-specific behavior behind abstract interfaces
+- allow optional acceleration through CPU/GPU-aware paths
+
+## Hardware abstraction
+
+The `hardware_abstraction` directory covers capabilities such as:
+
+- CPU detection
+- GPU information and detection
+- topology mapping
+- power and temperature monitoring
+- memory tracking
+
+This enables runtime components to adapt their behavior based on the local machine environment and available acceleration paths.
+
+## Example usage
+
+```cpp
+#include "async_io/async_file_reader.h"
+
+IO::AsyncIO::AsyncFileReader reader;
+reader.OpenFile("data.bin");
+reader.ReadAsync(4096, [](int error, size_t bytes, const uint8_t* data) {
+    if (error == 0) {
+        // handle data
+    }
+});
+```
 
 ## Notes
 
-The project is intentionally modular. Many capabilities live in dedicated subdirectories rather than a single monolithic runtime. This keeps the codebase easier to evolve while supporting optional features and platform-specific integrations.
+The subsystem is designed to be reusable rather than application-specific. It serves as a foundation for file access, async execution, and hardware-aware optimization throughout the project.

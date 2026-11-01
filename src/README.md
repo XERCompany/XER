@@ -1,88 +1,26 @@
-# Demo app and smoke tests
+# src
 
-This directory contains sample scripts, runtime validation entry points, and smoke checks used to validate modules and integrations in XER.
+This directory contains the core implementation of XER and its main runtime subsystems.
 
-## Goals
+## Main areas
 
-- validate core engine and runtime behavior
-- verify module registration and integration
-- exercise audio, I/O, buffer, terminal and console bindings
-- provide simple examples for local development and CI verification
+- `async_io/` — asynchronous I/O, buffer pooling, scheduling, and hardware abstraction
+- `audio/` — audio engine, DSP features, and media-related processing modules
+- `cache/` — caching utilities and persistence helpers
+- `content/` — content-centric subsystems such as network, AI, and model integrations
+- `flux/` — terminal and rendering runtime components
+- `modules/` — JavaScript-facing modules exposed to the runtime
+- `app_command.*` — command-line parsing and application entry helpers
 
-## Common commands
+## High-level responsibilities
 
-Run the multimedia bridge demo:
-
-```bash
-./build/EngineBuilder run demo_app/bridge_multimedia.js
-```
-
-Run the general module smoke script:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/modules_smoke.js
-```
-
-Run the Git module smoke test:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/git_module_smoke.js
-```
-
-Run the crypto module smoke test:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/crypto_module_smoke.js
-```
-
-Run the async I/O smoke test:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/io_async_module_smoke.js
-```
-
-Run the buffer smoke test:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/buffer_smoke.js
-```
-
-Run the console smoke test:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/console_smoke.js
-```
-
-Run the terminal snapshot smoke test:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/terminal_snapshot_smoke.js
-```
-
-Run the standalone terminal manager smoke test:
-
-```bash
-./out/build/default/FluxTerminalManagerSmoke
-```
-
-Run the standalone ANSI renderer smoke test:
-
-```bash
-./out/build/default/FluxTerminalAnsiSmoke
-```
-
-## What these smoke tests cover
-
-- OpenCV
-- CUDA / cuDNN
-- Skia
-- FFmpeg
-- ANGLE
-- `Buffer` APIs
-- console runtime functionality
-- terminal snapshot and rendering behavior
-- async I/O and registry integration
+- runtime orchestration and dynamic compilation
+- native execution and bridge integration with the JavaScript environment
+- module registration and runtime plumbing
+- low-level I/O, networking, buffering, and hardware interaction
+- audio processing and DSP-related features
+- AI and model-oriented backends with optional integrations
 
 ## Notes
 
-These scripts are designed for validation and experimentation. They help confirm that the runtime environment, native bridges, and JavaScript-facing modules are operating as expected during development and refactoring.
+The project is intentionally modular. Many capabilities live in dedicated subdirectories instead of a single monolithic runtime. This keeps the codebase easier to evolve while supporting optional features and platform-specific integrations.

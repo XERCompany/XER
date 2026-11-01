@@ -1,41 +1,36 @@
-# OpenAI integration
+# Flux runtime
 
-The `src/content/openai` directory provides a compact integration layer for OpenAI-style APIs and related LLM workflows.
+The `src/flux` directory contains the project’s terminal-focused runtime and rendering framework. It is designed to support interactive terminal interfaces, structured output, and runtime UI-like behavior in a small, modular system.
 
-## Scope
+## Purpose
 
-- OpenAI client access
-- chat and prompt-based interactions
-- agent and skill abstractions
-- text, image, and audio processing helpers
-- server-style request routing concepts
-- integration with other XER subsystems such as network, async I/O, and audio
+Flux is intended to provide a flexible foundation for terminal applications, user interaction, rendering, and debug-friendly visual output while preserving a low-level, performant approach.
 
-## Typical architecture
+## Main capabilities
 
-- `client/` — API transport and request creation
-- `agent/` — agent abstractions and orchestration logic
-- `skills/` — reusable capabilities or tool-like functions
-- `sandbox/` — isolated execution environment for code or workflows
-- `image/` — image generation or processing
-- `text/` — text analysis, summarization, and generation helpers
-- `server/` — server-facing request routing
+- advanced terminal control and window management
+- flexible rendering with buffered output pipelines
+- input handling for keyboard and mouse interaction
+- cross-platform support across major operating systems
+- plugin-oriented extension points
+- logging and debugging utilities
 
-## Relationship to the rest of the project
+## Architecture
 
-This subsystem is intentionally designed to fit into the larger XER runtime rather than as a standalone product. It can use the project’s networking and async primitives and is expected to coexist with the other content and media subsystems.
+Flux is organized around a small set of conceptual components:
 
-## Example
+- `Core` — runtime coordination and application lifecycle
+- `Terminal` — terminal abstraction, ANSI handling, and output management
+- `Rendering` — drawing and screen update logic
+- `Input` — event handling and interaction processing
 
-```cpp
-#include "content/openai/openai.h"
+## Design goals
 
-using namespace Content::OpenAI;
-
-auto client = Client::ClientFactory::CreateFromEnv();
-auto response = client->CreateChatCompletion(messages).get();
-```
+- keep terminal applications powerful and expressive
+- make native terminal UIs easier to build and reason about
+- retain a modular structure for future extension
+- support cross-platform behavior without forcing platform-specific logic into application code
 
 ## Notes
 
-The exact features available in this module depend on the chosen build configuration and dependency set. This README is intended as a high-level overview of the integration points and responsibilities rather than a strict specification of every runtime capability.
+Flux is a foundational layer within the broader XER runtime. It is intended to complement the rest of the system by providing a lightweight but capable terminal and visualization layer for development, diagnostics, and user-facing runtime experiences.
