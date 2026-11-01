@@ -136,7 +136,7 @@ if(XER_BUILD_XBUILD)
     add_subdirectory(xbuild)
 endif()
 if(BUILD_TESTING)
-    add_test_subdirectory(tests)
+    add_subdirectory(tests)
 endif()
 
 # Link common vcpkg libraries to xer target

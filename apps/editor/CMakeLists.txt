@@ -2,8 +2,7 @@
 add_executable(
     editor
     main.cc
-)
-
+) 
 
 target_link_libraries(
     editor PUBLIC
