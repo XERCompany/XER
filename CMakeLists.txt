@@ -26,6 +26,8 @@ project(XER LANGUAGES C CXX)
 include(GNUInstallDirs)
 include(CTest)
 
+
+
 if(VCPKG_TARGET_TRIPLET STREQUAL "x64-windows-release")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         message(FATAL_ERROR "x64-windows-release requires Release or RelWithDebInfo, not Debug.")
@@ -181,3 +183,5 @@ if(TARGET xer)
         target_link_libraries(xer PRIVATE V8::V8)
     endif()
 endif()
+
+add_subdirectory(apps)
