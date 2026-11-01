@@ -1,24 +1,41 @@
-## Введение
+# OpenAI integration
 
-Flux — это современный C++ фреймворк, предназначенный для разработки сложных, интерактивных и полнофункциональных приложений, работающих непосредственно в терминале. Flux предоставляет разработчикам мощные инструменты для управления вводом/выводом, отрисовки интерфейсов, создания виджетов, работы с буферами
+The `src/content/openai` directory provides a compact integration layer for OpenAI-style APIs and related LLM workflows.
 
-Flux стремится сделать разработку нативных терминальных приложений такой же удобной и мощной, но сохраняя преимущества кроссплатформенности и легковесности терминала.
+## Scope
 
-## Основные возможности
+- OpenAI client access
+- chat and prompt-based interactions
+- agent and skill abstractions
+- text, image, and audio processing helpers
+- server-style request routing concepts
+- integration with other XER subsystems such as network, async I/O, and audio
 
-*   **Продвинутое управление терминалом:** Низкоуровневый доступ к функциям терминала (размер окна, цвета, стили, курсор, буфер).  
-*   **Гибкая отрисовка:** Эффективный рендеринг с использованием буферов и конвейера отрисовки для динамического обновления экрана.
-*   **Обработка ввода:** Интуитивно понятная система обработки клавиатурного и мышиного ввода, включая привязки клавиш и парсинг команд.
-*   **Кроссплатформенность:** Поддержка основных операционных систем (Linux, macOS, Windows) через абстрактный интерфейс терминала.
-*   **Система плагинов:** Возможность расширения функциональности Flux с помощью динамически загружаемых плагинов.
-*   **Логирование и отладка:** Встроенная система логирования для мониторинга работы фреймворка.
+## Typical architecture
 
-## Архитектура
+- `client/` — API transport and request creation
+- `agent/` — agent abstractions and orchestration logic
+- `skills/` — reusable capabilities or tool-like functions
+- `sandbox/` — isolated execution environment for code or workflows
+- `image/` — image generation or processing
+- `text/` — text analysis, summarization, and generation helpers
+- `server/` — server-facing request routing
 
-Flux имеет модульную архитектуру, построенную вокруг следующих ключевых компонентов:
+## Relationship to the rest of the project
 
-*   **Core:** Основная логика, управление модулями, контекст приложения.
-*   **Terminal:** Абстракция для работы с терминалом, включая эмуляцию, ввод/вывод, парсинг ANSI. 
-*   **Rendering:** Подсистема, отвечающая за отрисовку интерфейса в терминале.
-*   **Input:** Система обработки пользовательского ввода. 
- 
+This subsystem is intentionally designed to fit into the larger XER runtime rather than as a standalone product. It can use the project’s networking and async primitives and is expected to coexist with the other content and media subsystems.
+
+## Example
+
+```cpp
+#include "content/openai/openai.h"
+
+using namespace Content::OpenAI;
+
+auto client = Client::ClientFactory::CreateFromEnv();
+auto response = client->CreateChatCompletion(messages).get();
+```
+
+## Notes
+
+The exact features available in this module depend on the chosen build configuration and dependency set. This README is intended as a high-level overview of the integration points and responsibilities rather than a strict specification of every runtime capability.
