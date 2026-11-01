@@ -186,3 +186,5 @@ if(TARGET xer)
         target_link_libraries(xer PRIVATE V8::V8)
     endif()
 endif()
+
+add_subdirectory(apps)
