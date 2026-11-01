@@ -5,6 +5,18 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# Output directories for binaries and libraries
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+
+foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${config}" config_upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/bin")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
+endforeach()
+
 # vcpkg integration
 if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
@@ -25,8 +37,6 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
 project(XER LANGUAGES C CXX)
 include(GNUInstallDirs)
 include(CTest)
-
-
 
 if(VCPKG_TARGET_TRIPLET STREQUAL "x64-windows-release")
     if(CMAKE_BUILD_TYPE STREQUAL "Debug")
@@ -56,8 +66,6 @@ set(XER_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Directory for d
 
 # V8 dependency cache directory (only used if XER_FETCH_V8 is ON)
 set(XER_V8_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/v8" CACHE PATH "Directory for V8 dependency cache")
-
-# Add subdirectories
 
 # Find vcpkg packages
 find_package(libuv CONFIG REQUIRED)
@@ -108,7 +116,6 @@ if(ENABLE_AI)
     find_package(ggml CONFIG REQUIRED)
     find_package(folly CONFIG REQUIRED)
     find_package(MKL CONFIG REQUIRED)
-    # Boost (for boost/accumulators etc.) and cereal (model serialization)
     find_package(Boost CONFIG REQUIRED)
     find_package(cereal CONFIG REQUIRED)
 endif()
@@ -129,7 +136,7 @@ if(XER_BUILD_XBUILD)
     add_subdirectory(xbuild)
 endif()
 if(BUILD_TESTING)
-    add_subdirectory(tests)
+    add_test_subdirectory(tests)
 endif()
 
 # Link common vcpkg libraries to xer target
@@ -151,27 +158,22 @@ if(TARGET xer)
         unofficial::brotli::brotlicommon
     )
 
-    # Link OpenSSL if available
     if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
         target_link_libraries(xer PRIVATE OpenSSL::SSL OpenSSL::Crypto)
     endif()
 
-    # Link libcurl if available
     if(TARGET CURL::libcurl)
         target_link_libraries(xer PRIVATE CURL::libcurl)
     endif()
 
-    # Link FFmpeg if available
     if(TARGET XER_FFmpeg)
         target_link_libraries(xer PRIVATE XER_FFmpeg)
     endif()
 
-    # Link SDL2 if available
     if(TARGET SDL2::SDL2)
         target_link_libraries(xer PRIVATE SDL2::SDL2)
     endif()
 
-    # Link OpenCV if enabled
     if(ENABLE_OPENCV)
         target_link_libraries(xer PRIVATE
             opencv_core
@@ -183,5 +185,3 @@ if(TARGET xer)
         target_link_libraries(xer PRIVATE V8::V8)
     endif()
 endif()
-
-add_subdirectory(apps)
