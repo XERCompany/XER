@@ -1,124 +1,104 @@
-# DSP/Effects Unit & Smoke Tests
+# XER
 
-Для проверки SIMD, async, zero-copy и отчётов по памяти для всех DSP/эффектов выполните:
+XER is a C++/V8-based runtime and build environment that combines JavaScript-driven orchestration with native compilation and multimedia-oriented subsystems.
 
-```bash
-cd ../../tests
-g++ dsp_memory_async_zero_copy_test.cc -I../src -std=c++17 -lpthread -o dsp_test && ./dsp_test
+The project is designed around a simple idea: use JavaScript to describe build or runtime workflows, while native components handle compilation, I/O, networking, audio, and GPU-aware processing when needed.
+
+## Highlights
+
+- JavaScript-first orchestration through `EngineBuilder` and FlowScript-style runtime flows
+- Dynamic native compilation with Clang/LLVM integration via `RuntimeLive`
+- Async I/O and buffer management for data-heavy workloads
+- Audio processing and DSP-oriented framework pieces
+- Network and content subsystems for HTTP, sockets, and service integration
+- AI/ML-oriented model infrastructure and optional integrations
+- Terminal and UI-oriented runtime components under `src/flux` and related modules
+
+## Repository layout
+
+```text
+XER/
+├── README.md
+├── AGENTS.md
+├── CMakeLists.txt
+├── CMakePresets.json
+├── build.bat
+├── cmake/
+├── demo_app/
+├── docs/
+├── plugins/
+├── src/
+├── tests/
+└── vcpkg configuration and dependency metadata
 ```
 
-Вывод покажет отчёты по памяти и успешное выполнение zero-copy/async путей.
+### Source tree
 
-# demo_app
+```text
+src/
+├── async_io/            # async file I/O, task queues, memory pools
+├── audio/               # audio engine and DSP-oriented modules
+├── cache/               # caching strategies and storage helpers
+├── content/
+│   ├── ai/              # ML and model-building framework pieces
+│   ├── network/         # HTTP, sockets, DNS, protocol abstractions
+│   └── openai/          # OpenAI integration layer
+├── flux/                # terminal/UI framework and runtime helpers
+├── modules/             # JavaScript modules and runtime bindings
+├── app_command.*
+├── CMakeLists.txt
+├── main.cc
+└── README.md
+```
 
-## Bridge multimedia demo
+## Build
 
-Run bridge status check for multimedia/GPU related modules:
+### Prerequisites
+
+- CMake 3.21+
+- Git
+- A modern C/C++ toolchain
+- Optional vcpkg installation for dependencies
+
+### Typical configure/build flow
+
+```bash
+cmake --preset default
+cmake --build --preset default
+```
+
+Additional presets may be used for specialized scenarios such as V8, OpenCV, and xbuild-related validation.
+
+## Quick start
+
+Run the multimedia bridge demo:
 
 ```bash
 ./build/EngineBuilder run demo_app/bridge_multimedia.js
 ```
 
-Run the broader module-registry smoke check used after refactors:
+Run a smoke suite:
 
 ```bash
 ./out/build/default/EngineBuilder run demo_app/modules_smoke.js
 ```
 
-Run the FlowScript Git module smoke check:
+## Documentation map
 
-```bash
-./out/build/default/EngineBuilder run demo_app/git_module_smoke.js
-```
+- [demo_app/README.md](demo_app/README.md) — demo runner and smoke tests
+- [src/README.md](src/README.md) — core source layout
+- [src/async_io/README.md](src/async_io/README.md) — asynchronous I/O subsystem
+- [src/audio/README.md](src/audio/README.md) — audio and DSP subsystem
+- [src/cache/README.md](src/cache/README.md) — cache subsystem
+- [src/content/network/README.md](src/content/network/README.md) — network stack overview
+- [src/content/ai/README.md](src/content/ai/README.md) — AI and ML framework overview
+- [src/content/openai/README.md](src/content/openai/README.md) — OpenAI integration overview
+- [src/flux/README.md](src/flux/README.md) — Flux terminal/runtime framework
 
-Run the FlowScript Crypto module smoke check:
+## Status
 
-```bash
-./out/build/default/EngineBuilder run demo_app/crypto_module_smoke.js
-```
+This project contains a broad set of runtime and subsystem scaffolding. Some areas are mature, others are experimental or in active development. The repository is organized around modular building blocks rather than a single standalone application.
 
-Run the FlowScript IO/Async module smoke check:
+## License
 
-```bash
-./out/build/default/EngineBuilder run demo_app/io_async_module_smoke.js
-```
-
-Run the FlowScript Buffer smoke check:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/buffer_smoke.js
-```
-
-Run the FlowScript console smoke check:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/console_smoke.js
-```
-
-Run the terminal snapshot smoke check:
-
-```bash
-./out/build/default/EngineBuilder run demo_app/terminal_snapshot_smoke.js
-```
-
-Run the standalone C++ terminal manager smoke check:
-
-```bash
-./out/build/default/FluxTerminalManagerSmoke
-```
-
-Run the standalone ANSI/renderer smoke check:
-
-```bash
-./out/build/default/FluxTerminalAnsiSmoke
-```
-
-This script checks these modules:
-
-- OpenCV
-- CUDA
-- CUDNN
-- Skia
-- FFmpeg
-- ANGLE
-
-The module smoke script also verifies:
-
-- Container
-- System
-- RuntimeLive
-- Doctor
-- VTK
-
-The Buffer smoke script verifies:
-
-- global `Buffer` binding
-- `Buffer.from/alloc/concat/byteLength/isBuffer`
-- `toString`, `copy`, `slice`, `fill`
-- `indexOf`, `lastIndexOf`
-- `swap16`, `swap32`, `swap64`
-
-The console smoke script verifies:
-
-- global `Console` class and `console` instance
-- `log`, `info`, `warn`, `error`, `dir`, `assert`
-- object, array, and Buffer formatting through the new `src/flux` console runtime
-
-The terminal snapshot smoke script verifies:
-
-- direct `console.snapshot()` access to the `src/flux/terminal` buffer state
-- direct `console.clearSnapshot()` reset behavior for stdout and stderr buffers
-
-The standalone C++ terminal manager smoke verifies:
-
-- direct `TerminalManager::Write`, `WriteLine`, `Snapshot`, `SnapshotPlainText`, and `ResetBuffer` behavior
-- persistent plain-text screen state is tracked per stream inside the terminal buffer
-- stdout and stderr buffer separation without using FlowScript runtime
-
-The standalone ANSI/renderer smoke verifies:
-
-- raw ANSI escape sequences remain in the terminal snapshot buffer
-- `SnapshotPlainText()` is served from the persistent terminal emulator state instead of reparsing raw snapshots
-- renderer-facing plain text strips CSI, OSC, DCS, APC, PM, SOS, and single ESC control paths
-- cursor motion and erase handling for `CSI A/B/C/D`, `CSI K`, and `CSI J`
-- stdout clearing does not wipe stderr renderer state
+See the project license in the repository root for licensing details.
