@@ -140,6 +140,8 @@ if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
+add_subdirectory(apps)
+
 # Link common vcpkg libraries to xer target
 if(TARGET xer)
     target_link_libraries(xer PRIVATE
@@ -186,5 +188,3 @@ if(TARGET xer)
         target_link_libraries(xer PRIVATE V8::V8)
     endif()
 endif()
-
-add_subdirectory(apps)
