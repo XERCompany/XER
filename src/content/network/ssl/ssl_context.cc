@@ -6,7 +6,87 @@
 
 #include <absl/strings/str_cat.h>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <wincrypt.h>
+#include <openssl/x509err.h>
+#endif
+
 namespace network::ssl {
+namespace {
+
+#ifdef _WIN32
+bool LoadWindowsRootCertificates(SSL_CTX* context, std::string* error) {
+    X509_STORE* store = SSL_CTX_get_cert_store(context);
+    if (store == nullptr) {
+        if (error) *error = "Failed to get OpenSSL certificate store";
+        return false;
+    }
+
+    constexpr DWORD kStoreLocations[] = {
+        CERT_SYSTEM_STORE_CURRENT_USER,
+        CERT_SYSTEM_STORE_LOCAL_MACHINE,
+    };
+    size_t loaded_certificates = 0;
+
+    for (const DWORD location : kStoreLocations) {
+        HCERTSTORE windows_store = CertOpenStore(
+            CERT_STORE_PROV_SYSTEM_W,
+            0,
+            0,
+            location | CERT_STORE_OPEN_EXISTING_FLAG | CERT_STORE_READONLY_FLAG,
+            L"ROOT");
+        if (windows_store == nullptr) {
+            continue;
+        }
+
+        PCCERT_CONTEXT certificate_context = nullptr;
+        while ((certificate_context = CertEnumCertificatesInStore(
+                    windows_store, certificate_context)) != nullptr) {
+            const unsigned char* encoded = certificate_context->pbCertEncoded;
+            X509* certificate = d2i_X509(
+                nullptr, &encoded,
+                static_cast<long>(certificate_context->cbCertEncoded));
+            if (certificate == nullptr) {
+                ERR_clear_error();
+                continue;
+            }
+
+            ERR_clear_error();
+            if (X509_STORE_add_cert(store, certificate) == 1) {
+                ++loaded_certificates;
+            } else {
+                const unsigned long add_error = ERR_peek_last_error();
+                const bool duplicate = ERR_GET_LIB(add_error) == ERR_LIB_X509 &&
+                    ERR_GET_REASON(add_error) == X509_R_CERT_ALREADY_IN_HASH_TABLE;
+                if (duplicate) {
+                    ERR_clear_error();
+                } else {
+                    if (error) *error = GetLastSslError();
+                    X509_free(certificate);
+                    CertCloseStore(windows_store, 0);
+                    return false;
+                }
+            }
+
+            X509_free(certificate);
+        }
+
+        CertCloseStore(windows_store, 0);
+    }
+
+    if (loaded_certificates == 0) {
+        if (error) {
+            *error = "No trusted root certificates were loaded from Windows";
+        }
+        return false;
+    }
+
+    return true;
+}
+#endif
+
+}  // namespace
 
 SslContext::SslContext()
     : ctx_(nullptr),
@@ -60,6 +140,13 @@ bool SslContext::Initialize(const std::string& ca_bundle_path, std::string* erro
             return false;
         }
     } else {
+#ifdef _WIN32
+        if (!LoadWindowsRootCertificates(ctx_, error)) {
+            SSL_CTX_free(ctx_);
+            ctx_ = nullptr;
+            return false;
+        }
+#else
         // Use default system certificates
         if (!SSL_CTX_set_default_verify_paths(ctx_)) {
             if (error) *error = "Failed to load default CA certificates: " + GetLastSslError();
@@ -67,6 +154,7 @@ bool SslContext::Initialize(const std::string& ca_bundle_path, std::string* erro
             ctx_ = nullptr;
             return false;
         }
+#endif
     }
 
     // Set default options

@@ -123,6 +123,12 @@ bool SslClientSocket::Connect(const std::string& host,
         SSL_set_tlsext_host_name(ssl_.get(), host.c_str());
     }
 
+    if (!skip_verify_ && SSL_set1_host(ssl_.get(), host.c_str()) != 1) {
+        if (error) *error = ssl::GetLastSslError();
+        Disconnect();
+        return false;
+    }
+
     // Load cached session if enabled
     if (session_resumption_enabled_) {
         LoadCachedSession();
@@ -169,15 +175,23 @@ void SslClientSocket::Disconnect() {
 }
 
 bool SslClientSocket::DoHandshake(std::string* error) {
+    ERR_clear_error();
     int result = SSL_connect(ssl_.get());
     if (result != 1) {
-        int ssl_error = SSL_get_error(ssl_.get(), result);
+        const int ssl_error = SSL_get_error(ssl_.get(), result);
         if (error) {
-            *error = ssl::GetSslErrorString(ssl_error);
+            if (ssl_error == SSL_ERROR_SSL) {
+                const long verify_result = SSL_get_verify_result(ssl_.get());
+                *error = verify_result != X509_V_OK
+                    ? X509_verify_cert_error_string(verify_result)
+                    : ssl::GetLastSslError();
+            } else {
+                *error = "SSL_connect failed; SSL_get_error=" +
+                        std::to_string(ssl_error);
+            }
         }
         return false;
     }
-
     // Verify certificate if not skipped
     if (!skip_verify_) {
         X509* cert = SSL_get_peer_certificate(ssl_.get());
