@@ -1,43 +1,38 @@
-# Cache subsystem
+# AI subsystem
 
-The `src/cache` directory contains the project’s caching layer for temporary and persistent runtime data.
+The `src/content/ai` directory contains the project’s model-building and ML-oriented infrastructure. It is structured around a broad set of runtime capabilities, including model construction, inference, and import support for common frameworks.
 
-## Purpose
+## Scope
 
-Caching helps reduce repeated computation, speed up data access, and improve the runtime experience in data-heavy pipelines. The subsystem is designed to centralize storage policy and lifecycle rules instead of scattering them across modules.
+- model building and training scaffolding
+- tensor and data pipeline utilities
+- import support for common model formats such as ONNX and OpenVINO-like flows
+- inference and optimization layers
+- generative AI foundations such as diffusion pipelines
+- runtime capability checks and backend-aware execution decisions
 
-## Core ideas
+## High-level organization
 
-- temporary cache for short-lived runtime data
-- persistent cache for longer-lived values and metadata
-- validation and expiry policy for entries
-- optional storage and serialization helpers
-- integration-friendly API for use by other runtime modules
+- `models_builder/` — model construction, training, serialization, and optimization
+- `ml/` — ML utilities, tensor abstractions, and data processing helpers
+- `reader/` — model format adapters and validation layers
+- `sd_base/`, `img2img/`, `txt2img/` — diffusion and generation-oriented foundations
 
-## Typical responsibilities
+## Design notes
 
-- cache entry lifecycle management
-- storage backend selection
-- cleanup and invalidation workflows
-- metadata and TTL handling
-- disk-based persistence and serialization strategies
+This subsystem is modular and optional. It can be enabled depending on platform capabilities and dependency availability. Some components leverage CUDA, OpenCV, Eigen, XNNPACK, or similar tools when they are available.
 
 ## Example
 
 ```cpp
-#include "cache/cache_manager.h"
+using namespace Engine::ModelsBuilder;
 
-using namespace flux;
-
-auto& cache = context.get_cache_manager();
-cache.put_temporary("session_token", "abc123", std::chrono::minutes(30));
-
-auto token = cache.get_temporary<std::string>("session_token");
-if (token) {
-    // use token
-}
+auto model = std::make_unique<Core::Model>("MyModel");
+model->AddLayer(std::make_unique<Core::DenseLayer>(128, 64));
+model->Build({1, 64});
+model->Compile();
 ```
 
-## Notes
+## Status
 
-The exact storage backends and policies depend on the build and runtime configuration. The subsystem is intentionally general so it can support multiple types of cached data without forcing one implementation shape across the entire project.
+The AI subsystem contains a substantial amount of infrastructure and continues to evolve. Some areas are already implemented and reusable; others remain experimental or incomplete depending on the active build configuration.

@@ -1,47 +1,43 @@
-# Audio subsystem
+# Cache subsystem
 
-The `src/audio` directory contains the project’s audio pipeline and DSP-oriented functionality. It is built to support signal processing, audio file handling, effect logic, and integration with the broader runtime.
+The `src/cache` directory contains the project’s caching layer for temporary and persistent runtime data.
 
-## Scope
+## Purpose
 
-- audio engine and core processing path
-- DSP algorithms and spectral processing
-- built-in effect or plugin-style processing
-- analysis and metadata extraction
-- file I/O for common media formats
-- optional media integrations and acceleration paths
+Caching helps reduce repeated computation, speeds up data access, and improves runtime responsiveness in data-heavy pipelines. The subsystem centralizes storage policy and lifecycle behavior instead of scattering it across modules.
 
-## Main areas
+## Core ideas
 
-- `audio_core/` — main engine and source loading utilities
-- `dsp_algorithms/` — FFT, filters, transforms, and processing blocks
-- `effects_rack/` — effect chain and processing pipeline pieces
-- `analysis_ai/` — analysis and feature extraction logic
-- `file_io_codecs/` — media format handling
-- `plugin_wrappers/` — plugin-host integration points
+- temporary cache for short-lived runtime data
+- persistent cache for longer-lived values and metadata
+- validation and expiry policy for entries
+- optional storage and serialization helpers
+- integration-friendly API for other runtime modules
 
-## Design goals
+## Typical responsibilities
 
-- modular audio processing pipeline
-- hardware-aware and SIMD-friendly implementation paths
-- support for async and batch-style processing
-- integration with the broader runtime and I/O infrastructure
+- cache entry lifecycle management
+- storage backend selection
+- cleanup and invalidation workflows
+- metadata and TTL handling
+- disk-based persistence and serialization strategies
 
 ## Example
 
 ```cpp
-Engine::Audio::Core::AudioSourceLoadOptions opts;
-opts.input_path = "audio.mp3";
-opts.target_sample_rate = 48000;
-opts.target_channels = 2;
+#include "cache/cache_manager.h"
 
-Engine::Audio::Core::AudioSourceBuffer buffer;
-std::string error;
-if (!Engine::Audio::Core::AudioSourceLoader::Load(opts, &buffer, &error)) {
-    // handle error
+using namespace flux;
+
+auto& cache = context.get_cache_manager();
+cache.put_temporary("session_token", "abc123", std::chrono::minutes(30));
+
+auto token = cache.get_temporary<std::string>("session_token");
+if (token) {
+    // use token
 }
 ```
 
 ## Notes
 
-This subsystem is intentionally extensible and can serve both lightweight runtime audio tasks and heavier media-processing workflows. The exact feature set depends on the build configuration and available platform libraries.
+The exact storage backends and policies depend on the build and runtime configuration. The subsystem is intentionally general so it can support multiple types of cached data without forcing one implementation shape across the entire project.

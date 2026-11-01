@@ -1,75 +1,15 @@
-# XER
+# Demo app and smoke tests
 
-XER is a C++/V8-based runtime and build environment that combines JavaScript-driven orchestration with native compilation and multimedia-oriented subsystems.
+This directory contains sample scripts, runtime validation entry points, and smoke tests used to exercise XER modules and integrations.
 
-The project is designed around a simple idea: use JavaScript to describe build or runtime workflows, while native components handle compilation, I/O, networking, audio, and GPU-aware processing when needed.
+## Goals
 
-## Highlights
+- validate core engine behavior
+- verify module registration and integration
+- exercise audio, I/O, buffer, terminal, and console bindings
+- provide simple examples for development and CI validation
 
-- JavaScript-first orchestration through `EngineBuilder` and FlowScript-style runtime flows
-- Dynamic native compilation with Clang/LLVM integration via `RuntimeLive`
-- Async I/O and buffer management for data-heavy workloads
-- Audio processing and DSP-oriented framework pieces
-- Network and content subsystems for HTTP, sockets, and service integration
-- AI/ML-oriented model infrastructure and optional integrations
-- Terminal and UI-oriented runtime components under `src/flux` and related modules
-
-## Repository layout
-
-```text
-XER/
-├── README.md
-├── AGENTS.md
-├── CMakeLists.txt
-├── CMakePresets.json
-├── build.bat
-├── cmake/
-├── demo_app/
-├── docs/
-├── plugins/
-├── src/
-├── tests/
-└── vcpkg configuration and dependency metadata
-```
-
-### Source tree
-
-```text
-src/
-├── async_io/            # async file I/O, task queues, memory pools
-├── audio/               # audio engine and DSP-oriented modules
-├── cache/               # caching strategies and storage helpers
-├── content/
-│   ├── ai/              # ML and model-building framework pieces
-│   ├── network/         # HTTP, sockets, DNS, protocol abstractions
-│   └── openai/          # OpenAI integration layer
-├── flux/                # terminal/UI framework and runtime helpers
-├── modules/             # JavaScript modules and runtime bindings
-├── app_command.*
-├── CMakeLists.txt
-├── main.cc
-└── README.md
-```
-
-## Build
-
-### Prerequisites
-
-- CMake 3.21+
-- Git
-- A modern C/C++ toolchain
-- Optional vcpkg installation for dependencies
-
-### Typical configure/build flow
-
-```bash
-cmake --preset default
-cmake --build --preset default
-```
-
-Additional presets may be used for specialized scenarios such as V8, OpenCV, and xbuild-related validation.
-
-## Quick start
+## Common commands
 
 Run the multimedia bridge demo:
 
@@ -77,28 +17,72 @@ Run the multimedia bridge demo:
 ./build/EngineBuilder run demo_app/bridge_multimedia.js
 ```
 
-Run a smoke suite:
+Run the general module smoke script:
 
 ```bash
 ./out/build/default/EngineBuilder run demo_app/modules_smoke.js
 ```
 
-## Documentation map
+Run the Git module smoke test:
 
-- [demo_app/README.md](demo_app/README.md) — demo runner and smoke tests
-- [src/README.md](src/README.md) — core source layout
-- [src/async_io/README.md](src/async_io/README.md) — asynchronous I/O subsystem
-- [src/audio/README.md](src/audio/README.md) — audio and DSP subsystem
-- [src/cache/README.md](src/cache/README.md) — cache subsystem
-- [src/content/network/README.md](src/content/network/README.md) — network stack overview
-- [src/content/ai/README.md](src/content/ai/README.md) — AI and ML framework overview
-- [src/content/openai/README.md](src/content/openai/README.md) — OpenAI integration overview
-- [src/flux/README.md](src/flux/README.md) — Flux terminal/runtime framework
+```bash
+./out/build/default/EngineBuilder run demo_app/git_module_smoke.js
+```
 
-## Status
+Run the crypto module smoke test:
 
-This project contains a broad set of runtime and subsystem scaffolding. Some areas are mature, others are experimental or in active development. The repository is organized around modular building blocks rather than a single standalone application.
+```bash
+./out/build/default/EngineBuilder run demo_app/crypto_module_smoke.js
+```
 
-## License
+Run the async I/O smoke test:
 
-See the project license in the repository root for licensing details.
+```bash
+./out/build/default/EngineBuilder run demo_app/io_async_module_smoke.js
+```
+
+Run the buffer smoke test:
+
+```bash
+./out/build/default/EngineBuilder run demo_app/buffer_smoke.js
+```
+
+Run the console smoke test:
+
+```bash
+./out/build/default/EngineBuilder run demo_app/console_smoke.js
+```
+
+Run the terminal snapshot smoke test:
+
+```bash
+./out/build/default/EngineBuilder run demo_app/terminal_snapshot_smoke.js
+```
+
+Run the standalone terminal manager smoke test:
+
+```bash
+./out/build/default/FluxTerminalManagerSmoke
+```
+
+Run the standalone ANSI renderer smoke test:
+
+```bash
+./out/build/default/FluxTerminalAnsiSmoke
+```
+
+## Smoke test coverage
+
+- OpenCV
+- CUDA / cuDNN
+- Skia
+- FFmpeg
+- ANGLE
+- `Buffer` APIs
+- console runtime functionality
+- terminal snapshot and rendering behavior
+- async I/O and registry integration
+
+## Notes
+
+These scripts are intended for validation and experimentation. They help confirm that the runtime environment, native bridges, and JavaScript-facing modules are operating as expected during refactoring and daily development.

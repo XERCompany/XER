@@ -1,60 +1,47 @@
-# Async I/O subsystem
+# Audio subsystem
 
-The `src/async_io` directory contains the asynchronous input/output primitives used across the project. It provides the buffering, scheduling, and concurrency building blocks used by runtime, network, and native integrations.
+The `src/audio` directory contains the project’s audio pipeline and DSP-oriented functionality. It is built to support signal processing, media file handling, effect logic, and integration with the broader runtime.
 
-## What it provides
+## Scope
 
-- asynchronous file read/write paths
-- reusable buffer pools and memory-management helpers
-- task scheduling and queue-based execution
-- synchronization primitives
-- hardware capability detection and resource monitoring
-- optional backend integrations for accelerated workloads
+- audio engine and core processing path
+- DSP algorithms and spectral processing
+- built-in effect and plugin-oriented processing
+- analysis and metadata extraction
+- file I/O for common media formats
+- optional media integrations and acceleration paths
 
-## Typical components
+## Main areas
 
-- `async_file_reader.*` / `async_file_writer.*`
-- `async_buffer_pool.*` / `io_buffer_pool.*`
-- `async_task_queue.*`
-- `io_file_map.*`
-- `io_prefetch_manager.*`
-- `io_priority_queue.*`
-- `hardware_abstraction/`
-- `dnn_backends/`
+- `audio_core/` — core audio engine and source loading utilities
+- `dsp_algorithms/` — FFT, filters, transforms, and processing blocks
+- `effects_rack/` — effect chain and processing pipeline utilities
+- `analysis_ai/` — analysis and feature extraction logic
+- `file_io_codecs/` — media format handling
+- `plugin_wrappers/` — plugin-host integration points
 
-## Design principles
+## Design goals
 
-- keep I/O off the main execution path when possible
-- reuse byte buffers and scheduling resources
-- isolate platform-specific behaviors behind abstract interfaces
-- allow optional acceleration through CPU/GPU-aware paths
+- modular audio processing pipeline
+- hardware-aware and SIMD-friendly implementation paths
+- support for async and batch-style processing
+- integration with the broader runtime and I/O infrastructure
 
-## Hardware abstraction
-
-The `hardware_abstraction` directory covers capabilities such as:
-
-- CPU detection
-- GPU information and detection
-- topology mapping
-- power and temperature monitoring
-- memory tracking
-
-This enables runtime components to adapt behavior based on the local machine environment and available acceleration paths.
-
-## Example usage
+## Example
 
 ```cpp
-#include "async_io/async_file_reader.h"
+Engine::Audio::Core::AudioSourceLoadOptions opts;
+opts.input_path = "audio.mp3";
+opts.target_sample_rate = 48000;
+opts.target_channels = 2;
 
-IO::AsyncIO::AsyncFileReader reader;
-reader.OpenFile("data.bin");
-reader.ReadAsync(4096, [](int error, size_t bytes, const uint8_t* data) {
-    if (error == 0) {
-        // handle data
-    }
-});
+Engine::Audio::Core::AudioSourceBuffer buffer;
+std::string error;
+if (!Engine::Audio::Core::AudioSourceLoader::Load(opts, &buffer, &error)) {
+    // handle error
+}
 ```
 
 ## Notes
 
-The subsystem is designed to be reusable rather than application-specific. It is meant to serve as the runtime foundation for everything from file access to async execution and hardware-aware optimization.
+This subsystem is intentionally extensible and can serve both lightweight runtime audio tasks and heavier media-processing workflows. The exact feature set depends on the active build configuration and available platform libraries.

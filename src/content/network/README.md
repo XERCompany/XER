@@ -1,38 +1,41 @@
-# AI subsystem
+# Network subsystem
 
-The `src/content/ai` directory contains the project’s model-building and ML-oriented infrastructure. It is structured around a broad set of runtime capabilities, including model construction, inference, and import support for common frameworks.
+The `src/content/network` directory contains the project’s networking stack. It is intended to provide a reusable, layered networking foundation for runtime and application components.
 
 ## Scope
 
-- model building and training scaffolding
-- tensor and data pipeline utilities
-- import support for common model formats such as ONNX and OpenVINO-like flows
-- inference and optimization layers
-- generative AI-related foundations such as diffusion pipelines
-- runtime capability checks and backend-aware execution decisions
+- HTTP and HTTPS logic
+- URL handling and request/response lifecycle
+- sockets and transport abstractions
+- DNS, proxy, and certificate support
+- event-driven or asynchronous network execution patterns
+- integration with the broader I/O and runtime infrastructure
 
-## High-level organization
+## Layered structure
 
-- `models_builder/` — model construction, training, serialization, and optimization
-- `ml/` — ML utilities, tensor abstractions, and data processing helpers
-- `reader/` — model format adapters and validation layers
-- `sd_base/`, `img2img/`, `txt2img/` — diffusion and generation-related foundations
+- `core/` — network context and service runtime
+- `url/` — request/response handling and URL processing
+- `http/` — HTTP protocol behavior
+- `socket/` — low-level socket abstractions
+- `dns/` — DNS resolution, lookups, and caching
+- `proxy/` — proxy configuration and tunneling
+- `cert/` — certificate management and verification
 
-## Design notes
+## Design goals
 
-This subsystem is modular and optional. It can be enabled depending on platform capabilities and dependency availability. Some components are best-effort integrations that leverage CUDA, OpenCV, Eigen, XNNPACK, or similar tooling when available.
+- clean separation between protocol, transport, and policy layers
+- compatibility with asynchronous execution patterns
+- safe integration with the rest of the runtime
+- support for layered networking scenarios without forcing a single API style
 
 ## Example
 
 ```cpp
-using namespace Engine::ModelsBuilder;
+#include "content/network/url/url_request_util.h"
 
-auto model = std::make_unique<Core::Model>("MyModel");
-model->AddLayer(std::make_unique<Core::DenseLayer>(128, 64));
-model->Build({1, 64});
-model->Compile();
+std::string response = network::url::SyncGet("https://example.com");
 ```
 
-## Status
+## Notes
 
-The AI subsystem contains a substantial amount of infrastructure and is evolving. Some areas are already implemented and reusable; others remain experimental or incomplete depending on the current build configuration.
+This module is part of the broader runtime architecture and should be viewed as a reusable networking foundation rather than a standalone web server implementation. Specific protocol support and feature depth depend on the project’s current build configuration and dependencies.
