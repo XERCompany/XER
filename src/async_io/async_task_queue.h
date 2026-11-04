@@ -8,7 +8,7 @@
 #include <set>
 #include <cstdint>
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 // Task functor type
 using AsyncTask = std::function<void()>;
@@ -39,6 +39,9 @@ public:
 
     // Task dequeuing
     bool DequeueTask(QueuedTask& task);
+    // Blocking dequeue: waits up to timeout_ms for a task to become available.
+    // Returns false on timeout or shutdown. timeout_ms < 0 means wait forever.
+    bool WaitAndDequeue(QueuedTask& task, int timeout_ms);
     int GetQueueSize() const;
     bool IsEmpty() const;
 
@@ -50,6 +53,10 @@ public:
     // Cancellation
     bool CancelTask(uint64_t task_id);
     size_t GetCancelledCount() const;
+    // Reclaim cancelled task IDs that never get dequeued (e.g. cancelled
+    // before they were ever scheduled). Periodic cleanup prevents the
+    // cancelled set from growing without bound.
+    void PruneCancelled();
 
     // Statistics
     uint64_t GetTotalTasksProcessed() const;
@@ -66,4 +73,4 @@ private:
     bool is_running_;
 };
 
-}  // namespace IO::AsyncIO
+}  // namespace AsyncIO::IO::Async

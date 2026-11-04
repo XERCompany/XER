@@ -4,13 +4,24 @@
 // machine (CPU, GPUs, memory, temperature, power, disks, network, battery,
 // capabilities), and prints a compact human-readable summary plus optional
 // pretty-printed JSON.
+//
+// Usage:
+//   async_io_example            — synchronous snapshot summary
+//   async_io_example --json     — snapshot summary + pretty JSON
+//   async_io_example --async    — demonstrate RefreshAsync()
+//   async_io_example --alert    — start temp monitoring + rising-edge alerts
+//                                  (runs until Ctrl+C; fires on threshold cross)
 
 #include "async_io/hardware_abstraction/system_info.h"
 
 #include <iomanip>
 #include <iostream>
+#include <chrono>
+#include <thread>
 
 using AsyncIO::IO::Hardware::SystemInfoProvider;
+using AsyncIO::IO::Hardware::TemperatureSensor;
+using AsyncIO::IO::Hardware::TemperatureReading;
 
 namespace {
 
@@ -24,6 +35,14 @@ void PrintSummary(const AsyncIO::IO::Hardware::SystemSnapshot& s) {
               << s.physical_cores << "P / " << s.logical_cores << "L cores\n";
     std::cout << "Cache     : L1=" << s.cpu.l1_cache_kb << "KB  L2="
               << s.cpu.l2_cache_kb << "KB  L3=" << s.cpu.l3_cache_kb << "KB\n";
+    // Show first few cores' frequencies (base + current).
+    if (!s.cores.empty()) {
+        const auto& c0 = s.cores[0];
+        std::cout << "Freq      : base=" << c0.frequency_mhz << "MHz";
+        if (c0.current_frequency_mhz > 0)
+            std::cout << "  current=" << c0.current_frequency_mhz << "MHz";
+        std::cout << "  (core0; " << s.cores.size() << " logical procs)\n";
+    }
     std::cout << "SIMD      : SSE=" << s.cpu.supports_sse
               << "  AVX=" << s.cpu.supports_avx
               << "  AVX2=" << s.cpu.supports_avx2
@@ -80,6 +99,13 @@ void PrintSummary(const AsyncIO::IO::Hardware::SystemSnapshot& s) {
             if (d.is_read_only) std::cout << " (ro)";
             std::cout << "\n";
         }
+        // Aggregate disk I/O counters (cumulative since boot).
+        if (s.disk_io.read_bytes || s.disk_io.write_bytes) {
+            std::cout << "  I/O totals: read=" << (s.disk_io.read_bytes >> 20)
+                      << "MB (" << s.disk_io.reads << " ops)  written="
+                      << (s.disk_io.write_bytes >> 20) << "MB ("
+                      << s.disk_io.writes << " ops)\n";
+        }
     }
 
     if (!s.network.empty()) {
@@ -124,6 +150,39 @@ int main(int argc, char** argv) {
     if (!sys.Initialize()) {
         std::cerr << "Failed to initialize SystemInfoProvider\n";
         return 1;
+    }
+
+    // --async: demonstrate RefreshAsync() (non-blocking snapshot).
+    if (argc > 1 && std::string(argv[1]) == "--async") {
+        std::cout << "Requesting async snapshot...\n";
+        auto fut = sys.RefreshAsync();
+        // We can do other work here while the snapshot builds on a worker
+        // thread (which blocks for ~50ms on CPU usage sampling).
+        std::cout << "(main thread free while snapshot builds)\n";
+        const auto snap = fut.get();
+        PrintSummary(snap);
+        return 0;
+    }
+
+    // --alert: start temperature monitoring with a low threshold so any
+    // supported sensor immediately triggers a rising-edge alert callback.
+    // Runs until Ctrl+C.
+    if (argc > 1 && std::string(argv[1]) == "--alert") {
+        TemperatureSensor& t = sys.Temp();
+        t.SetTemperatureAlert(1.0);  // 1C — any reading above freezing fires
+        t.SetAlertCallback([](const TemperatureReading& r) {
+            std::cout << "[ALERT] " << r.sensor_name << " (" << r.source
+                      << ") crossed threshold: "
+                      << std::fixed << std::setprecision(1)
+                      << r.temperature_celsius << " C\n";
+        });
+        if (!t.StartMonitoring(1000)) {
+            std::cerr << "Failed to start temperature monitoring\n";
+            return 1;
+        }
+        std::cout << "Monitoring temperatures (Ctrl+C to stop)...\n";
+        for (;;) std::this_thread::sleep_for(std::chrono::seconds(1));
+        // t.StopMonitoring() + ~TemperatureSensor() handle cleanup on exit.
     }
 
     const auto snap = sys.Refresh();

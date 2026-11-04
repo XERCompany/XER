@@ -129,7 +129,45 @@ std::vector<DiskInfo> DiskInfoProvider::GetDisks() const {
 
 DiskIoStats DiskInfoProvider::GetIoStats() const {
     DiskIoStats stats;
-#if defined(__linux__)
+#if defined(_WIN32)
+    // IOCTL_DISK_PERFORMANCE returns cumulative counters per physical drive.
+    // We enumerate \\.\PhysicalDrive0..N until one fails to open.
+    for (int i = 0; i < 64; ++i) {
+        const std::string path = "\\\\.\\PhysicalDrive" + std::to_string(i);
+        HANDLE h = CreateFileA(path.c_str(), GENERIC_READ,
+                               FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                               OPEN_EXISTING, 0, nullptr);
+        if (h == INVALID_HANDLE_VALUE) break;  // no more physical drives
+
+        // IOCTL_DISK_PERFORMANCE requires admin rights on some Windows builds;
+        // if it fails we simply stop aggregating (already-collected drives kept).
+        // Layout: BytesRead, BytesWritten, ReadTime, WriteTime, IdleTime,
+        //   ReadCount, WriteCount, QueueDepth, ...
+        struct DiskPerformance {
+            LARGE_INTEGER BytesRead;
+            LARGE_INTEGER BytesWritten;
+            LARGE_INTEGER ReadTime;
+            LARGE_INTEGER WriteTime;
+            LARGE_INTEGER IdleTime;
+            DWORD ReadCount;
+            DWORD WriteCount;
+            DWORD QueueDepth;
+            DWORD SplitCount;
+            LARGE_INTEGER QueryTime;
+            DWORD StorageDeviceNumber;
+            WCHAR StorageManagerName[8];
+        } perf{};
+        DWORD returned = 0;
+        if (DeviceIoControl(h, 0x00070008 /* IOCTL_DISK_PERFORMANCE */, nullptr, 0,
+                            &perf, sizeof(perf), &returned, nullptr)) {
+            stats.read_bytes  += static_cast<uint64_t>(perf.BytesRead.QuadPart);
+            stats.write_bytes += static_cast<uint64_t>(perf.BytesWritten.QuadPart);
+            stats.reads       += perf.ReadCount;
+            stats.writes      += perf.WriteCount;
+        }
+        CloseHandle(h);
+    }
+#elif defined(__linux__)
     std::ifstream f("/proc/diskstats");
     if (!f.is_open()) return stats;
     std::string line;

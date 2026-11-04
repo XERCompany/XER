@@ -1,7 +1,7 @@
 #include "io_prefetch_manager.h"
 #include <sstream>
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 std::string IOPrefetchManager::BuildRegionKey(const std::string& path, size_t offset, size_t length) {
     std::ostringstream os;
@@ -104,4 +104,4 @@ size_t IOPrefetchManager::GetMappedRegionCount() const {
     return fileMap_.GetTotalMappedRegionCount();
 }
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async

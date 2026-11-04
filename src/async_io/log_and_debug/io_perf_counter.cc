@@ -142,4 +142,27 @@ void PerformanceCounter::UpdateMetric(const std::string& name, double elapsed_ms
     }
 }
 
+ScopedTimer::ScopedTimer(PerformanceCounter& counter, const std::string& name)
+    : counter_(&counter), name_(name),
+      start_(std::chrono::steady_clock::now()), stopped_(false) {}
+
+ScopedTimer::~ScopedTimer() {
+    if (!stopped_) Stop();
+}
+
+void ScopedTimer::Stop() {
+    if (stopped_) return;
+    stopped_ = true;
+    const auto end = std::chrono::steady_clock::now();
+    const double elapsed_ms =
+        std::chrono::duration<double, std::milli>(end - start_).count();
+    counter_->RecordElapsed(name_, elapsed_ms);
+}
+
+void PerformanceCounter::RecordElapsed(const std::string& name, double elapsed_ms) {
+    if (!enabled_) return;
+    std::lock_guard lock(mutex_);
+    UpdateMetric(name, elapsed_ms);
+}
+
 }  // namespace AsyncIO::IO::LogDebug

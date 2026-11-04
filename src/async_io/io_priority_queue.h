@@ -6,7 +6,7 @@
 #include <mutex>
 #include <queue>
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 struct IOPriorityItem {
     int priority;
@@ -32,6 +32,6 @@ private:
     std::priority_queue<IOPriorityItem, std::vector<IOPriorityItem>, IOPriorityCompare> queue_;
 };
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_PRIORITY_QUEUE_H

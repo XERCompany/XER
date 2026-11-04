@@ -6,6 +6,7 @@
 #include <atomic>
 #include <thread>
 #include <mutex>
+#include <functional>
 
 namespace AsyncIO::IO::Hardware {
 
@@ -21,6 +22,20 @@ struct TemperatureReading {
     int64_t timestamp_ms;            // Reading time (steady_clock epoch), 0 if N/A
 };
 
+// Temperature monitoring with optional background refresh and rising-edge
+// alert callbacks.
+//
+// Thread-safety contract:
+//   - GetAllReadings()/GetReading()/Get*Temperature()/NeedsAlert() are const
+//     and safe from any thread; they take an internal mutex.
+//   - Initialize()/Refresh()/StartMonitoring()/StopMonitoring()/
+//     SetTemperatureAlert()/SetAlertCallback() are safe from any thread.
+//   - StartMonitoring() spawns a background thread that periodically calls
+//     UpdateReadings(). The alert callback (if set) is invoked from that
+//     thread; it must not call back into the TemperatureSensor
+//     (reentrancy is undefined — e.g. calling StopMonitoring() from the
+//     callback would deadlock joining the monitor thread).
+//   - After StopMonitoring() (or destruction), no more callbacks fire.
 class TemperatureSensor {
 public:
     TemperatureSensor();
@@ -58,6 +73,14 @@ public:
     void SetTemperatureAlert(double threshold_celsius);
     bool NeedsAlert() const;
 
+    // Register a callback invoked from the monitor thread whenever any
+    // supported reading crosses the alert threshold (rising edge only —
+    // the callback fires once per crossing, not on every poll while above).
+    // Pass nullptr to clear. The callback must not call back into the
+    // sensor (it runs on the monitor thread; reentrancy is undefined).
+    using AlertCallback = std::function<void(const TemperatureReading&)>;
+    void SetAlertCallback(AlertCallback cb);
+
 private:
     mutable std::mutex mutex_;
     std::vector<TemperatureReading> readings_;
@@ -66,6 +89,11 @@ private:
     std::atomic<double> alert_threshold_;
     std::thread monitor_thread_;
     int monitor_interval_ms_ = 2000;
+
+    // Alert callback + per-sensor "already alerted" state (rising-edge).
+    mutable std::mutex callback_mutex_;
+    AlertCallback alert_callback_;
+    std::vector<bool> alerted_per_sensor_;
 
     void UpdateReadings();
     void MonitorLoop(int interval_ms);

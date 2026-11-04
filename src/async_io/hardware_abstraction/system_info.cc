@@ -34,10 +34,11 @@ void AppendCpu(Json::Value& root, const SystemSnapshot& s) {
     Json::Value cores(Json::arrayValue);
     for (const auto& c : s.cores) {
         Json::Value j(Json::objectValue);
-        j["core_id"]      = c.core_id;
-        j["logical_id"]   = c.logical_id;
-        j["frequency_mhz"] = static_cast<Json::UInt64>(c.frequency_mhz);
-        j["is_active"]    = c.is_active;
+        j["core_id"]               = c.core_id;
+        j["logical_id"]            = c.logical_id;
+        j["frequency_mhz"]         = static_cast<Json::UInt64>(c.frequency_mhz);
+        j["current_frequency_mhz"] = static_cast<Json::UInt64>(c.current_frequency_mhz);
+        j["is_active"]             = c.is_active;
         cores.append(std::move(j));
     }
     cpu["cores"] = std::move(cores);
@@ -223,7 +224,9 @@ void AppendCaps(Json::Value& root, const SystemSnapshot& s) {
 }  // namespace
 
 SystemInfoProvider::SystemInfoProvider() = default;
-SystemInfoProvider::~SystemInfoProvider() = default;
+SystemInfoProvider::~SystemInfoProvider() {
+    if (async_thread_.joinable()) async_thread_.join();
+}
 
 bool SystemInfoProvider::Initialize() {
     if (initialized_) return true;
@@ -248,6 +251,7 @@ SystemSnapshot SystemInfoProvider::Refresh() {
 
     // CPU + topology
     s.cpu             = cpu_.GetInfo();
+    cpu_.RefreshFrequencies();  // update per-core current frequencies
     s.cores           = cpu_.GetCores();
     s.total_memory_mb = cpu_.GetTotalMemoryMB();
     s.available_memory_mb = cpu_.GetAvailableMemoryMB();
@@ -314,6 +318,23 @@ SystemSnapshot SystemInfoProvider::Refresh() {
 
     last_ = s;
     return s;
+}
+
+std::future<SystemSnapshot> SystemInfoProvider::RefreshAsync() {
+    std::lock_guard<std::mutex> lock(async_mutex_);
+    // If a refresh is already in flight, join it first so we serialize
+    // provider access (providers are not guaranteed reentrant).
+    if (async_thread_.joinable()) async_thread_.join();
+
+    // Reuse a fresh promise each call. std::promise is move-only and
+    // single-shot; the worker fulfills it exactly once.
+    async_promise_ = std::promise<SystemSnapshot>();
+    auto fut = async_promise_.get_future();
+    async_thread_ = std::thread([this]() {
+        SystemSnapshot snap = this->Refresh();
+        this->async_promise_.set_value(std::move(snap));
+    });
+    return fut;
 }
 
 std::string SystemInfoProvider::ToJson(const SystemSnapshot& s, bool pretty) const {

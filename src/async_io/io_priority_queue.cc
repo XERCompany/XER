@@ -1,6 +1,6 @@
 #include "io_priority_queue.h"
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 void IOPriorityQueue::Push(IOPriorityItem item) {
     {
@@ -32,4 +32,4 @@ bool IOPriorityQueue::Empty() const {
     return queue_.empty();
 }
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async

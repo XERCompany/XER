@@ -1,6 +1,6 @@
 #include "io_cache_manager.h"
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 IOCacheManager::IOCacheManager(size_t capacityBytes)
     : capacityBytes_(capacityBytes), sizeBytes_(0) {}
@@ -71,4 +71,4 @@ void IOCacheManager::EvictIfNeeded() {
     }
 }
 
-} // namespace AIToolsXPro::IO::AsyncIO
+} // namespace AsyncIO::IO::Async

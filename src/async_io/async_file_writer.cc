@@ -4,7 +4,7 @@
 
 #include <fstream>
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 AsyncFileWriter::AsyncFileWriter()
     : file_handle_(nullptr), bytes_written_(0), is_writing_(false), pending_ops_(0) {}
@@ -175,4 +175,4 @@ std::string AsyncFileWriter::GetLastError() const {
     return last_error_;
 }
 
-}  // namespace AIToolsXPro::IO::AsyncIO
+}  // namespace AsyncIO::IO::Async

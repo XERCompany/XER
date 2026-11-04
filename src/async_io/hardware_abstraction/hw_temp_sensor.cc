@@ -327,9 +327,64 @@ bool TemperatureSensor::NeedsAlert() const {
     return GetMaxTemperature() >= alert_threshold_.load(std::memory_order_relaxed);
 }
 
+void TemperatureSensor::SetAlertCallback(AlertCallback cb) {
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    alert_callback_ = std::move(cb);
+}
+
 void TemperatureSensor::MonitorLoop(int interval_ms) {
     while (is_monitoring_.load(std::memory_order_relaxed)) {
         UpdateReadings();
+
+        // Rising-edge alert detection. We fire the callback once when a
+        // sensor crosses the threshold (low->high), and re-arm it only when
+        // it drops back below. This avoids calling the callback on every
+        // poll while above the threshold.
+        {
+            std::vector<TemperatureReading> snapshot;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                snapshot = readings_;
+            }
+            const double threshold = alert_threshold_.load(std::memory_order_relaxed);
+
+            // Resize the per-sensor "already alerted" vector to match the
+            // current sensor count (sensors can appear/disappear between polls).
+            std::vector<bool> now_alerted;
+            {
+                std::lock_guard<std::mutex> lock(callback_mutex_);
+                now_alerted = alerted_per_sensor_;
+            }
+            now_alerted.resize(snapshot.size(), false);
+
+            AlertCallback cb;
+            {
+                std::lock_guard<std::mutex> lock(callback_mutex_);
+                cb = alert_callback_;
+            }
+
+            bool state_changed = false;
+            for (size_t i = 0; i < snapshot.size(); ++i) {
+                if (!snapshot[i].is_supported) {
+                    now_alerted[i] = false;
+                    continue;
+                }
+                const bool above = snapshot[i].temperature_celsius >= threshold;
+                if (above && !now_alerted[i]) {
+                    now_alerted[i] = true;
+                    state_changed = true;
+                    if (cb) cb(snapshot[i]);
+                } else if (!above && now_alerted[i]) {
+                    now_alerted[i] = false;
+                    state_changed = true;
+                }
+            }
+            if (state_changed) {
+                std::lock_guard<std::mutex> lock(callback_mutex_);
+                alerted_per_sensor_ = std::move(now_alerted);
+            }
+        }
+
         // Sleep in small increments so StopMonitoring responds promptly.
         const int step = 100;
         int remaining = interval_ms;

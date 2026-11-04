@@ -122,6 +122,26 @@ void ReadCpuidBrand(std::string& vendor, std::string& model) {
     if (start != std::string::npos && start > 0) model.erase(0, start);
 }
 
+// Read nominal/base CPU frequency (MHz) from the registry. Windows stores
+// the advertised frequency under HARDWARE\DESCRIPTION\System\CentralProcessor\0
+// as "~MHz" (DWORD, MHz). This is the base frequency, not the current boost.
+uint64_t ReadBaseFrequencyMHzWin() {
+    HKEY key = nullptr;
+    if (RegOpenKeyExA(HKEY_LOCAL_MACHINE,
+            "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0",
+            0, KEY_READ, &key) != ERROR_SUCCESS) {
+        return 0;
+    }
+    DWORD mhz = 0;
+    DWORD type = 0;
+    DWORD size = sizeof(mhz);
+    LONG rc = RegQueryValueExA(key, "~MHz", nullptr, &type,
+                               reinterpret_cast<LPBYTE>(&mhz), &size);
+    RegCloseKey(key);
+    if (rc != ERROR_SUCCESS || type != REG_DWORD) return 0;
+    return static_cast<uint64_t>(mhz);
+}
+
 #endif  // _WIN32
 
 }  // namespace
@@ -510,14 +530,112 @@ void CPUInfoProvider::DetectCPUCapabilities() {
 }
 
 void CPUInfoProvider::DetectCoreCount() {
-    for (int i = 0; i < cpu_info_.logical_cores; ++i) {
-        ProcessorCore core;
-        core.core_id = i / 2;
-        core.logical_id = i;
-        core.frequency_mhz = 0;
-        core.is_active = true;
-        cores_.push_back(core);
+    cores_.clear();
+
+#if defined(_WIN32)
+    // Enumerate RelationProcessorCore: each entry is one physical core, and its
+    // group mask lists the logical processors (SMT threads) on that core. We
+    // assign a sequential physical core_id and one ProcessorCore per logical
+    // processor, so sibling threads share core_id (instead of the old i/2
+    // heuristic that breaks on big.LITTLE / non-uniform SMT).
+    DWORD len = 0;
+    if (GetLogicalProcessorInformationEx(RelationProcessorCore, nullptr, &len)
+        == FALSE && GetLastError() != ERROR_INSUFFICIENT_BUFFER) {
+        len = 0;
     }
+    if (len > 0) {
+        std::vector<uint8_t> buffer(len);
+        if (GetLogicalProcessorInformationEx(RelationProcessorCore,
+                reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data()), &len)) {
+            const uint64_t base_mhz = ReadBaseFrequencyMHzWin();
+            DWORD offset = 0;
+            int physical_id = 0;
+            while (offset < len) {
+                auto* entry = reinterpret_cast<PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX>(buffer.data() + offset);
+                if (entry->Relationship == RelationProcessorCore) {
+                    for (WORD g = 0; g < entry->Processor.GroupCount; ++g) {
+                        const KAFFINITY mask = entry->Processor.GroupMask[g].Mask;
+                        for (int bit = 0; bit < 64; ++bit) {
+                            if (mask & (KAFFINITY{1} << bit)) {
+                                ProcessorCore c{};
+                                c.core_id = physical_id;
+                                c.logical_id = bit;  // single-group assumption
+                                c.frequency_mhz = base_mhz;
+                                c.current_frequency_mhz = base_mhz;
+                                c.is_active = true;
+                                cores_.push_back(std::move(c));
+                            }
+                        }
+                    }
+                    ++physical_id;
+                }
+                offset += entry->Size;
+                if (entry->Size == 0) break;
+            }
+        }
+    }
+#endif
+
+    // Fallback / non-Windows: one logical processor per index; core_id is
+    // derived from /proc/cpuinfo "core id" on Linux (already in physical_cores
+    // estimate) — we use a simple modulo scheme if nothing better is available.
+    if (cores_.empty()) {
+        for (int i = 0; i < cpu_info_.logical_cores; ++i) {
+            ProcessorCore c{};
+            c.core_id = (cpu_info_.physical_cores > 0)
+                ? (i % cpu_info_.physical_cores)
+                : i / 2;
+            c.logical_id = i;
+            c.frequency_mhz = 0;
+            c.current_frequency_mhz = 0;
+            c.is_active = true;
+            cores_.push_back(std::move(c));
+        }
+    }
+
+#if defined(__linux__)
+    // Linux: read base frequency from cpuinfo and current from sysfs.
+    {
+        uint64_t base_mhz = 0;
+        std::ifstream cpuinfo("/proc/cpuinfo");
+        std::string line;
+        while (std::getline(cpuinfo, line)) {
+            if (line.rfind("cpu MHz", 0) == 0) {
+                const auto colon = line.find(':');
+                if (colon != std::string::npos) {
+                    try { base_mhz = static_cast<uint64_t>(std::stod(line.substr(colon + 1))); }
+                    catch (...) {}
+                    break;
+                }
+            }
+        }
+        if (base_mhz > 0) {
+            for (auto& c : cores_) c.frequency_mhz = base_mhz;
+        }
+    }
+#endif
+}
+
+void CPUInfoProvider::RefreshFrequencies() {
+#if defined(__linux__)
+    for (auto& c : cores_) {
+        std::ifstream f("/sys/devices/system/cpu/cpu" + std::to_string(c.logical_id) +
+                        "/cpufreq/scaling_cur_freq");
+        if (f.is_open()) {
+            uint64_t khz = 0;
+            f >> khz;
+            if (khz > 0) c.current_frequency_mhz = khz / 1000;
+        }
+    }
+#elif defined(_WIN32)
+    // Windows exposes per-logical-processor current frequency only via
+    // undocumented APIs / WMI. We leave current_frequency_mhz == base
+    // frequency (set at DetectCoreCount time) as the best-effort value.
+    // A future enhancement could query ProcessorPerformance via HKEY
+    // or the Power Throttling registry counters.
+#else
+    // macOS / other: no portable per-core current-frequency API.
+#endif
 }
 
 }  // namespace AsyncIO::IO::Hardware
