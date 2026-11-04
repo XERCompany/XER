@@ -1,8 +1,17 @@
 #include "window.h"
+
 #include "../widgets/widget.h"
+#include "../widgets/widget_tree.h"
+#include "../rendering/windows/direct2d_renderer.h"
+#include "../platform/windows/input_translator.h"
+
+#include <algorithm>
+#include <cmath>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
+
+#include <windowsx.h>
 
 namespace XER::UI::Core {
 
@@ -33,7 +42,12 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     }
 
     if (window) {
-        return window->HandleMessage(msg, wParam, lParam);
+        const auto result = window->HandleNativeMessage(hwnd, msg, wParam, lParam);
+        if (msg == WM_NCDESTROY) {
+            std::lock_guard<std::mutex> lock(g_window_map_mutex);
+            g_window_map.erase(hwnd);
+        }
+        return result;
     }
 
     return DefWindowProc(hwnd, msg, wParam, lParam);
@@ -50,10 +64,13 @@ public:
         , x_(CW_USEDEFAULT)
         , y_(CW_USEDEFAULT)
         , visible_(false)
-        , closed_(false) {}
+        , closed_(false)
+        , dpi_(USER_DEFAULT_SCREEN_DPI)
+        , window_(nullptr) {}
 
     ~Impl() {
         if (hwnd_) {
+            renderer_.reset();
             DestroyWindow(hwnd_);
         }
     }
@@ -128,12 +145,27 @@ public:
     }
 
     void SetContent(std::shared_ptr<Widgets::Widget> root) {
-        root_widget_ = root;
-        // TODO: Layout and render when window is shown
+        root_widget_ = std::move(root);
+        widget_tree_.SetRoot(root_widget_);
+        LayoutContent(hwnd_);
+        if (hwnd_ != nullptr) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
     }
 
     std::shared_ptr<Widgets::Widget> GetContent() const {
         return root_widget_;
+    }
+
+    void SetTheme(Theme::Variant variant) {
+        theme_.SetVariant(variant);
+        if (hwnd_ != nullptr) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+
+    std::string GetLastRenderError() const {
+        return last_render_error_;
     }
 
     void SetOnClose(Callback callback) {
@@ -199,18 +231,22 @@ public:
     }
 
     // Message handler (called from WindowProc)
-    LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
+    LRESULT HandleMessage(HWND message_hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+        if (hwnd_ == nullptr) {
+            hwnd_ = message_hwnd;
+            dpi_ = GetDpiForWindow(message_hwnd);
+            if (dpi_ == 0) {
+                dpi_ = USER_DEFAULT_SCREEN_DPI;
+            }
+        }
         switch (msg) {
             case WM_CLOSE:
                 if (on_close_) {
                     on_close_();
                 }
                 closed_ = true;
-                {
-                    std::lock_guard<std::mutex> lock(g_window_map_mutex);
-                    g_window_map.erase(hwnd_);
-                }
-                DestroyWindow(hwnd_);
+                renderer_.reset();
+                DestroyWindow(message_hwnd);
                 hwnd_ = nullptr;
                 return 0;
 
@@ -219,26 +255,113 @@ public:
                 return 0;
 
             case WM_SIZE:
+            {
+                const int new_width = LOWORD(lParam);
+                const int new_height = HIWORD(lParam);
+                width_ = new_width;
+                height_ = new_height;
+                LayoutContent(message_hwnd, new_width, new_height);
                 if (on_resize_) {
-                    int new_width = LOWORD(lParam);
-                    int new_height = HIWORD(lParam);
-                    width_ = new_width;
-                    height_ = new_height;
                     on_resize_(new_width, new_height);
                 }
-                // TODO: Relayout content
-                return 0;
-
-            case WM_PAINT: {
-                PAINTSTRUCT ps;
-                HDC hdc = BeginPaint(hwnd_, &ps);
-                // TODO: Render content
-                EndPaint(hwnd_, &ps);
+                InvalidateRect(message_hwnd, nullptr, FALSE);
                 return 0;
             }
 
+            case WM_DPICHANGED: {
+                const UINT new_dpi = HIWORD(wParam);
+                if (new_dpi != 0) {
+                    dpi_ = new_dpi;
+                    if (renderer_ != nullptr) {
+                        renderer_->SetDpi(dpi_);
+                    }
+                }
+
+                const auto* suggested_rect = reinterpret_cast<const RECT*>(lParam);
+                if (suggested_rect != nullptr &&
+                    !SetWindowPos(
+                        message_hwnd,
+                        nullptr,
+                        suggested_rect->left,
+                        suggested_rect->top,
+                        suggested_rect->right - suggested_rect->left,
+                        suggested_rect->bottom - suggested_rect->top,
+                        SWP_NOZORDER | SWP_NOACTIVATE
+                    )) {
+                    ReportRenderError("SetWindowPos failed while applying WM_DPICHANGED");
+                }
+
+                LayoutContent(message_hwnd);
+                InvalidateRect(message_hwnd, nullptr, FALSE);
+                return 0;
+            }
+
+            case WM_PAINT: {
+                PAINTSTRUCT paint{};
+                HDC hdc = BeginPaint(message_hwnd, &paint);
+                Paint(message_hwnd, hdc, paint.rcPaint);
+                EndPaint(message_hwnd, &paint);
+                return 0;
+            }
+
+            case WM_ERASEBKGND:
+                return 1;
+
+            case WM_LBUTTONDOWN:
+                SetFocus(message_hwnd);
+                SetCapture(message_hwnd);
+                [[fallthrough]];
+            case WM_RBUTTONDOWN:
+            case WM_MBUTTONDOWN:
+            case WM_MOUSEMOVE:
+            case WM_LBUTTONUP:
+            case WM_RBUTTONUP:
+            case WM_MBUTTONUP:
+            case WM_KEYDOWN:
+            case WM_KEYUP:
+            case WM_SYSKEYDOWN:
+            case WM_SYSKEYUP:
+            case WM_CHAR:
+            case WM_SETFOCUS:
+            case WM_KILLFOCUS: {
+                if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP) {
+                    if (GetCapture() == message_hwnd) {
+                        ReleaseCapture();
+                    }
+                }
+                auto event = input_translator_.Translate(msg, wParam, lParam);
+                if (event) {
+                    if (event->type == Widgets::Event::Type::MouseMove ||
+                        event->type == Widgets::Event::Type::MouseDown ||
+                        event->type == Widgets::Event::Type::MouseUp) {
+                        const float scale = 96.0f / static_cast<float>(dpi_);
+                        event->position.x *= scale;
+                        event->position.y *= scale;
+                    }
+                    widget_tree_.HandleEvent(*event);
+                    InvalidateRect(message_hwnd, nullptr, FALSE);
+                    if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
+                        return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                    }
+                    if (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) {
+                        return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                    }
+                    return 0;
+                }
+                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+            }
+
+            case WM_NCDESTROY: {
+                renderer_.reset();
+                const LRESULT result = DefWindowProc(message_hwnd, msg, wParam, lParam);
+                if (hwnd_ == message_hwnd) {
+                    hwnd_ = nullptr;
+                }
+                return result;
+            }
+
             default:
-                return DefWindowProc(hwnd_, msg, wParam, lParam);
+                return DefWindowProc(message_hwnd, msg, wParam, lParam);
         }
     }
 
@@ -247,6 +370,81 @@ public:
     }
 
 private:
+    void LayoutContent(HWND hwnd, int client_width = -1, int client_height = -1) {
+        if (hwnd == nullptr || root_widget_ == nullptr) {
+            return;
+        }
+
+        if (client_width < 0 || client_height < 0) {
+            RECT client_rect{};
+            if (!GetClientRect(hwnd, &client_rect)) {
+                return;
+            }
+            client_width = client_rect.right;
+            client_height = client_rect.bottom;
+        }
+        const float scale = 96.0f / static_cast<float>(dpi_);
+        widget_tree_.Layout(
+            Layout::Rect(
+                0.0f,
+                0.0f,
+                static_cast<float>(client_width) * scale,
+                static_cast<float>(client_height) * scale
+            ),
+            theme_.GetTokens()
+        );
+    }
+
+    void Paint(HWND hwnd, HDC hdc, const RECT& paint_rect) {
+        try {
+            const auto background = theme_.GetTokens().background;
+            if (root_widget_ == nullptr || !root_widget_->IsVisible()) {
+                FillBackground(hdc, paint_rect, background);
+            } else {
+                if (renderer_ == nullptr) {
+                    renderer_ = std::make_unique<Rendering::Windows::Direct2DRenderer>(hwnd);
+                }
+                renderer_->SetDpi(dpi_);
+                renderer_->SetClearColor(background);
+                widget_tree_.Render(*renderer_, theme_.GetTokens());
+            }
+            last_render_error_.clear();
+        } catch (const std::exception& error) {
+            renderer_.reset();
+            ReportRenderError(error.what());
+        } catch (...) {
+            renderer_.reset();
+            ReportRenderError("Unknown native renderer failure");
+        }
+    }
+
+    void FillBackground(HDC hdc, const RECT& paint_rect, Theme::Color color) {
+        const auto channel = [](float value) {
+            return static_cast<BYTE>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
+        };
+        HBRUSH brush = CreateSolidBrush(RGB(
+            channel(color.r),
+            channel(color.g),
+            channel(color.b)
+        ));
+        if (brush == nullptr) {
+            throw std::runtime_error("CreateSolidBrush failed while painting an empty window");
+        }
+        const int painted = FillRect(hdc, &paint_rect, brush);
+        DeleteObject(brush);
+        if (painted == 0) {
+            throw std::runtime_error("FillRect failed while painting an empty window");
+        }
+    }
+
+    void ReportRenderError(const char* message) {
+        last_render_error_ = message;
+        std::string output = "XER UI native rendering error: ";
+        output += message;
+        output += "\n";
+        OutputDebugStringA(output.c_str());
+    }
+
     HWND hwnd_;
     std::string title_;
     int width_;
@@ -255,9 +453,15 @@ private:
     int y_;
     bool visible_;
     bool closed_;
+    UINT dpi_;
 
     Window* window_;
     std::shared_ptr<Widgets::Widget> root_widget_;
+    Widgets::WidgetTree widget_tree_;
+    Theme::Provider theme_;
+    Platform::Windows::InputTranslator input_translator_;
+    std::unique_ptr<Rendering::Windows::Direct2DRenderer> renderer_;
+    std::string last_render_error_;
 
     Callback on_close_;
     std::function<void(int, int)> on_resize_;
@@ -292,6 +496,14 @@ void Window::SetContent(std::shared_ptr<Widgets::Widget> root) {
 
 std::shared_ptr<Widgets::Widget> Window::GetContent() const {
     return impl_->GetContent();
+}
+
+void Window::SetTheme(Theme::Variant variant) {
+    impl_->SetTheme(variant);
+}
+
+std::string Window::GetLastRenderError() const {
+    return impl_->GetLastRenderError();
 }
 
 void Window::SetOnClose(Callback callback) {
@@ -339,7 +551,11 @@ bool Window::IsClosed() const {
 }
 
 LRESULT Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
-    return impl_->HandleMessage(msg, wParam, lParam);
+    return impl_->HandleMessage(impl_->GetHWND(), msg, wParam, lParam);
+}
+
+LRESULT Window::HandleNativeMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    return impl_->HandleMessage(hwnd, msg, wParam, lParam);
 }
 
 } // namespace XER::UI::Core

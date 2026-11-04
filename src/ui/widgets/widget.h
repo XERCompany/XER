@@ -2,23 +2,46 @@
 #define XER_UI_WIDGETS_WIDGET_H
 
 #include <memory>
-#include <functional>
+#include <string>
 #include <vector>
 
 #include "layout/geometry.h"
 
 namespace XER::UI {
 
-// Forward declarations
 namespace Rendering {
 class Renderer;
 }
 
+namespace Theme {
+struct Tokens;
+}
+
 namespace Widgets {
 
-/**
- * Event structure for widget events
- */
+enum class KeyCode {
+    None,
+    Tab,
+    Enter,
+    Space,
+    Backspace,
+    Delete,
+    ArrowLeft,
+    ArrowRight,
+    ArrowUp,
+    ArrowDown,
+    Home,
+    End,
+    Escape
+};
+
+enum class MouseButton {
+    None,
+    Left,
+    Middle,
+    Right
+};
+
 struct Event {
     enum class Type {
         MouseMove,
@@ -27,51 +50,49 @@ struct Event {
         Click,
         KeyDown,
         KeyUp,
+        TextInput,
         Focus,
         Blur
     };
 
-    Type type;
-    int x;
-    int y;
-    int key_code;
-    bool is_ctrl;
-    bool is_shift;
-    bool is_alt;
+    Type type = Type::MouseMove;
+    Layout::Point position;
+    MouseButton mouse_button = MouseButton::None;
+    KeyCode key = KeyCode::None;
+    std::string text;
+    bool is_ctrl = false;
+    bool is_shift = false;
+    bool is_alt = false;
 };
 
-/**
- * Widget - Base class for all UI widgets
- *
- * Deep module with small interface:
- * - Render(): Draw the widget
- * - Layout(): Calculate size and position
- * - HandleEvent(): Process user input
- *
- * All widget-specific complexity hidden in derived classes.
- */
-class Widget {
+class Widget : public std::enable_shared_from_this<Widget> {
 public:
     virtual ~Widget() = default;
 
-    // Small interface - core operations only
-    virtual void Render(Rendering::Renderer& renderer) = 0;
+    virtual void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) = 0;
     virtual void Layout(const Layout::Rect& bounds) = 0;
+    // Theme-aware layout. Widgets that need theme metrics (e.g. Card padding)
+    // override this; the default delegates to Layout(bounds) so widgets that
+    // ignore theme metrics keep working unchanged.
+    virtual void Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens);
     virtual bool HandleEvent(const Event& event) = 0;
 
-    // Size hints for layout system
     virtual Layout::Size GetMinSize() const = 0;
     virtual Layout::Size GetPreferredSize() const = 0;
     virtual Layout::Size GetMaxSize() const = 0;
 
-    // Visibility and enabled state
     void SetVisible(bool visible);
     bool IsVisible() const;
 
     void SetEnabled(bool enabled);
     bool IsEnabled() const;
 
-    // Parent-child relationships
+    void SetFocusable(bool focusable);
+    bool IsFocusable() const;
+
+    void SetFocused(bool focused);
+    bool IsFocused() const;
+
     void SetParent(std::shared_ptr<Widget> parent);
     std::shared_ptr<Widget> GetParent() const;
 
@@ -89,16 +110,21 @@ protected:
     void RequestLayout();
 
 private:
+    friend class WidgetTree;
+
+    void ClearFocusedSubtree();
+
     Layout::Rect bounds_;
     bool visible_ = true;
     bool enabled_ = true;
+    bool focusable_ = false;
+    bool focused_ = false;
 
     std::weak_ptr<Widget> parent_;
     std::vector<std::shared_ptr<Widget>> children_;
 };
 
-} // namespace XER::UI::Widgets
-
+} // namespace Widgets
 } // namespace XER::UI
 
 #endif // XER_UI_WIDGETS_WIDGET_H

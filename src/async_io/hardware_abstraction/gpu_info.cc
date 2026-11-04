@@ -1,5 +1,7 @@
 #include "gpu_info.h"
 
+#include "nvml_loader.h"
+
 #if defined(XER_ASYNC_IO_HAS_CUDA)
 #include <cuda_runtime.h>
 #endif
@@ -84,6 +86,7 @@ std::string GPUInfoProvider::GetDeviceDescription(int device_id) const {
 void GPUInfoProvider::DetectGPUs() {
     DetectVulkanDevices();
     DetectCUDADevices();
+    DetectNvmlDevices();
 }
 
 void GPUInfoProvider::DetectVulkanDevices() {
@@ -201,6 +204,69 @@ void GPUInfoProvider::DetectCUDADevices() {
         }
     }
 #endif
+}
+
+void GPUInfoProvider::DetectNvmlDevices() {
+    auto& nvml = NvmlLibrary::Instance();
+    if (!nvml.IsAvailable()) return;
+
+    const auto snapshots = nvml.GetSnapshots();
+    for (const auto& s : snapshots) {
+        // Enrich an already-detected (CUDA) device if present, matching by
+        // NVML index == CUDA index. Otherwise register an NVML-only entry.
+        GPUDevice* match = nullptr;
+        for (auto& dev : gpu_devices_) {
+            if (dev.device_id == s.index && dev.backend.find("CUDA") != std::string::npos) {
+                match = &dev;
+                break;
+            }
+        }
+        if (match) {
+            // Update live telemetry + accurate free memory.
+            match->free_memory_mb      = s.memory_free / (1024 * 1024);
+            match->temp_celsius         = s.temp_celsius;
+            match->temp_supported       = s.temp_supported;
+            match->power_watts          = s.power_watts;
+            match->power_supported      = s.power_supported;
+            match->gpu_util_percent     = s.gpu_util_percent;
+            match->mem_util_percent     = s.mem_util_percent;
+            match->util_supported       = s.util_supported;
+            match->clock_graphics_mhz   = s.clock_graphics_mhz;
+            match->clock_mem_mhz        = s.clock_mem_mhz;
+            if (match->backend.find("NVML") == std::string::npos) {
+                match->backend += " + NVML";
+            }
+        } else {
+            GPUDevice dev{};
+            dev.device_id       = s.index;
+            dev.name            = s.name.empty() ? ("NVIDIA GPU " + std::to_string(s.index)) : s.name;
+            dev.total_memory_mb = s.memory_total / (1024 * 1024);
+            dev.free_memory_mb  = s.memory_free  / (1024 * 1024);
+            dev.is_available    = true;
+            dev.vendor_id       = 0x10DE;  // NVIDIA
+            dev.driver_version  = "nvml";
+            dev.backend         = "NVML";
+            dev.temp_celsius        = s.temp_celsius;
+            dev.temp_supported      = s.temp_supported;
+            dev.power_watts         = s.power_watts;
+            dev.power_supported     = s.power_supported;
+            dev.gpu_util_percent    = s.gpu_util_percent;
+            dev.mem_util_percent    = s.mem_util_percent;
+            dev.util_supported      = s.util_supported;
+            dev.clock_graphics_mhz  = s.clock_graphics_mhz;
+            dev.clock_mem_mhz       = s.clock_mem_mhz;
+
+            // Avoid duplicating an NVML-only entry if one already exists.
+            const auto dup = std::find_if(gpu_devices_.begin(), gpu_devices_.end(),
+                [&dev](const GPUDevice& current) {
+                    return current.device_id == dev.device_id &&
+                           current.backend == dev.backend;
+                });
+            if (dup == gpu_devices_.end()) {
+                gpu_devices_.push_back(std::move(dev));
+            }
+        }
+    }
 }
 
 }  // namespace AsyncIO::IO::Hardware

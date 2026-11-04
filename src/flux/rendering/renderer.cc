@@ -46,7 +46,8 @@ std::string Renderer::RenderAnsi(const RenderContext& context) const {
 		std::size_t last_non_blank = 0;
 		bool has_visible_cells = false;
 		for (std::size_t x = 0; x < context.frame().width(); ++x) {
-			if (context.frame().GetCell(x, y).glyph != ' ') {
+			const FrameCell cell = context.frame().GetCell(x, y);
+			if (cell.glyph != ' ' || !IsDefaultStyle(cell.style)) {
 				last_non_blank = x;
 				has_visible_cells = true;
 			}

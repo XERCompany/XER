@@ -54,7 +54,7 @@ void DirectIOManager::ReleaseBuffer(DirectIOBuffer& buffer) {
     }
 }
 
-bool DirectIOManager::OpenFileForDIO(const std::string& filepath, DirectIOMode mode) {
+int DirectIOManager::OpenFileForDIO(const std::string& filepath, DirectIOMode mode) {
 #ifdef _WIN32
     DWORD access = 0;
     switch (mode) {
@@ -63,17 +63,24 @@ bool DirectIOManager::OpenFileForDIO(const std::string& filepath, DirectIOMode m
         case DirectIOMode::READ_WRITE: access = GENERIC_READ | GENERIC_WRITE; break;
     }
 
+    DWORD creation = (mode == DirectIOMode::WRITE || mode == DirectIOMode::READ_WRITE)
+        ? OPEN_ALWAYS
+        : OPEN_EXISTING;
+
     HANDLE file = CreateFileA(
         filepath.c_str(),
         access,
-        0,
+        FILE_SHARE_READ | FILE_SHARE_WRITE,
         nullptr,
-        OPEN_EXISTING,
+        creation,
         FILE_FLAG_NO_BUFFERING,
         nullptr
     );
 
-    return (file != INVALID_HANDLE_VALUE);
+    if (file == INVALID_HANDLE_VALUE) {
+        return -1;
+    }
+    return static_cast<int>(reinterpret_cast<intptr_t>(file));
 #else
     int flags = O_DIRECT;
     switch (mode) {
@@ -82,8 +89,8 @@ bool DirectIOManager::OpenFileForDIO(const std::string& filepath, DirectIOMode m
         case DirectIOMode::READ_WRITE: flags |= O_RDWR; break;
     }
 
-    int fd = open(filepath.c_str(), flags);
-    return (fd >= 0);
+    int fd = open(filepath.c_str(), flags, 0644);
+    return fd;  // -1 on failure
 #endif
 }
 

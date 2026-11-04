@@ -5,10 +5,12 @@ file(GLOB_RECURSE UI_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
 list(FILTER UI_SOURCES EXCLUDE REGEX "/widgets/openai/")
+list(FILTER UI_SOURCES EXCLUDE REGEX "/backends/flux/")
 
 file(GLOB_RECURSE UI_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
+list(FILTER UI_HEADERS EXCLUDE REGEX "/backends/flux/")
 
 # Create UI core library
 add_library(XER_UI_Core STATIC ${UI_SOURCES} ${UI_HEADERS})
@@ -34,6 +36,33 @@ if(MSVC)
     target_compile_options(XER_UI_Core PRIVATE /W4 /WX- /O2)
 else()
     target_compile_options(XER_UI_Core PRIVATE -Wall -Wextra -Wpedantic -O3)
+endif()
+
+add_library(XER_UI_Flux STATIC
+    backends/flux/flux_renderer.cc
+    backends/flux/flux_renderer.h
+    backends/flux/flux_input_adapter.cc
+    backends/flux/flux_input_adapter.h
+)
+
+target_include_directories(XER_UI_Flux
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+)
+
+target_link_libraries(XER_UI_Flux
+    PUBLIC
+        XER_UI_Core
+        XER_Flux_Core
+)
+
+target_compile_features(XER_UI_Flux PUBLIC cxx_std_23)
+
+if(MSVC)
+    target_compile_options(XER_UI_Flux PRIVATE /W4 /WX- /O2)
+else()
+    target_compile_options(XER_UI_Flux PRIVATE -Wall -Wextra -Wpedantic -O3)
 endif()
 
 # Platform-specific linking

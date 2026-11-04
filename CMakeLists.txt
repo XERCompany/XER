@@ -141,6 +141,9 @@ if(BUILD_TESTING)
 endif()
 
 add_subdirectory(apps)
+# Examples are optional demos; examples/CMakeLists.txt guards the async_io
+# example behind `if(TARGET XER_AsyncIO)` so it only builds with the app.
+add_subdirectory(examples)
 
 # Link common vcpkg libraries to xer target
 if(TARGET xer)

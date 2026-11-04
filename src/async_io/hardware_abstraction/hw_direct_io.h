@@ -35,7 +35,9 @@ public:
     void ReleaseBuffer(DirectIOBuffer& buffer);
 
     // Direct I/O operations
-    bool OpenFileForDIO(const std::string& filepath, DirectIOMode mode);
+    // OpenFileForDIO returns an opaque file handle (>= 0) usable with
+    // ReadDirect/WriteDirect, or -1 on failure. Use CloseFile to release it.
+    int  OpenFileForDIO(const std::string& filepath, DirectIOMode mode);
     bool ReadDirect(int file_handle, DirectIOBuffer& buffer, size_t bytes);
     bool WriteDirect(int file_handle, const DirectIOBuffer& buffer, size_t bytes);
     void CloseFile(int file_handle);

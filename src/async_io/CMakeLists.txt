@@ -19,18 +19,34 @@ target_include_directories(XER_AsyncIO
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_CURRENT_SOURCE_DIR}/..
-        ${CUDNN_LIBRARIES}
 )
 
-# Link with vcpkg libraries
+# Link with vcpkg libraries (jsoncpp is needed for SystemInfoProvider::ToJson).
+find_package(jsoncpp CONFIG REQUIRED)
+
 target_link_libraries(XER_AsyncIO
     PUBLIC
         absl::synchronization
         absl::flat_hash_map
         absl::flat_hash_set
-        CuDNN::CuDNN
-        ${CUDNN_INCLUDE_DIRS}
-) 
+        jsoncpp_lib
+)
+
+# Optional CUDA/cuDNN backend (only when explicitly enabled; the hardware
+# abstraction layer loads NVML dynamically so we never hard-depend on it).
+if(ENABLE_CUDA OR ENABLE_CUDNN)
+    target_link_libraries(XER_AsyncIO PUBLIC CUDA::cudart)
+    target_compile_definitions(XER_AsyncIO PRIVATE XER_ASYNC_IO_HAS_CUDA=1)
+endif()
+if(ENABLE_CUDNN)
+    target_link_libraries(XER_AsyncIO PUBLIC CuDNN::CuDNN)
+    target_compile_definitions(XER_AsyncIO PRIVATE XER_ASYNC_IO_HAS_CUDNN=1)
+endif()
+
+# Optional Vulkan device enumeration.
+if(ENABLE_VULKAN)
+    target_compile_definitions(XER_AsyncIO PRIVATE XER_ASYNC_IO_HAS_VULKAN=1)
+endif()
 
 # Link with libuv
 if(TARGET libuv::uv_a OR TARGET libuv::uv)
@@ -39,13 +55,6 @@ endif()
 
 # C++ standard
 target_compile_features(XER_AsyncIO PUBLIC cxx_std_23)
-if(ENABLE_CUDA OR ENABLE_CUDNN)
-    target_link_libraries(XER_AsyncIO PUBLIC CUDA::cudart)
-    target_compile_definitions(XER_AsyncIO PRIVATE XER_ASYNC_IO_HAS_CUDA=1)
-endif()
-if(ENABLE_CUDNN)
-    target_link_libraries(XER_AsyncIO PUBLIC CuDNN::CuDNN)
-endif()
 
 # Compiler flags
 if(MSVC)
@@ -54,7 +63,13 @@ else()
     target_compile_options(XER_AsyncIO PRIVATE -Wall -Wextra -Wpedantic -O3)
 endif()
 
-# Platform-specific
+# Platform-specific system libraries.
 if(WIN32)
-    target_link_libraries(XER_AsyncIO PRIVATE ws2_32)
+    # ws2_32 + iphlpapi  -> NetworkInfoProvider (GetAdaptersAddresses, inet_ntop)
+    # ole32 + wbemuuid   -> TemperatureSensor WMI/ACPI thermal zones (CoInitialize, IWbemLocator)
+    target_link_libraries(XER_AsyncIO PUBLIC ws2_32 iphlpapi ole32 wbemuuid)
+elseif(APPLE)
+    # macOS: no extra libs required for the providers in this module.
+else()
+    # Linux: nothing extra required (/proc, /sys, getifaddrs are libc).
 endif()
