@@ -1,0 +1,43 @@
+{
+  "name": "xer-native",
+  "version": "1.0.0",
+  "description": "XER C++ runtime bindings for Node.js using Nan",
+  "main": "index.js",
+  "scripts": {
+    "install": "cmake-js rebuild",
+    "build": "cmake-js build",
+    "configure": "cmake-js configure",
+    "clean": "cmake-js clean",
+    "test": "node test.js"
+  },
+  "keywords": [
+    "xer",
+    "audio",
+    "async-io",
+    "cache",
+    "multimedia",
+    "native",
+    "binding"
+  ],
+  "author": "XER Project",
+  "license": "MIT",
+  "dependencies": {
+    "nan": "^2.30.0",
+    "node-addon-api": "^7.0.0"
+  },
+  "devDependencies": {
+    "cmake-js": "^7.3.0"
+  },
+  "engines": {
+    "node": ">=16.0.0"
+  },
+  "cmake-js": {
+    "runtime": "node",
+    "preferMake": true,
+    "preferNinja": true,
+    "cmakeArgs": [
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_CXX_STANDARD=20"
+    ]
+  }
+}
