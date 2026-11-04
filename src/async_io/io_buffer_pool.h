@@ -8,7 +8,7 @@
 #include <mutex>
 #include <vector>
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 class IOBufferPool {
 public:
@@ -46,6 +46,6 @@ private:
     std::deque<Bucket> buckets_;
 };
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_BUFFER_POOL_H

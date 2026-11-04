@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 class IOCacheManager {
 public:
@@ -40,6 +40,6 @@ private:
     void EvictIfNeeded();
 };
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_CACHE_MANAGER_H

@@ -1,7 +1,7 @@
 #include "io_file_map.h"
 #include <fstream>
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 bool IOFileMap::MapRegion(const std::string &path, size_t offset, size_t length) {
     std::ifstream input(path, std::ios::binary);
@@ -66,4 +66,4 @@ size_t IOFileMap::GetTotalMappedRegionCount() const {
     return total;
 }
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async

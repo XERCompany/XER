@@ -12,7 +12,7 @@
 #include "io_file_map.h"
 #include "io_thread_pool.h"
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 using PrefetchCallback = std::function<void(bool)>;
 
@@ -40,6 +40,6 @@ private:
     std::unordered_map<std::string, std::uint64_t> pathGenerations_;
 };
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_PREFETCH_MANAGER_H

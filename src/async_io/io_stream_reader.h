@@ -10,7 +10,7 @@
 
 #include "io_thread_pool.h"
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 class IOStreamReader {
 public:
@@ -27,6 +27,6 @@ private:
     bool open_ = false;
 };
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_STREAM_READER_H

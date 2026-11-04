@@ -5,7 +5,10 @@ file(GLOB_RECURSE ASYNC_IO_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
 if(NOT ENABLE_CUDNN)
-    list(FILTER ASYNC_IO_SOURCES EXCLUDE REGEX "/dnn_backends/cudnn_[^/]+\\.cc$")
+    # cudnn_bridge.cc handles dynamic loading on its own, so it builds with
+    # or without cuDNN. Only the cudnn_*_engine.cc files require the linked
+    # cuDNN headers and are excluded when ENABLE_CUDNN is OFF.
+    list(FILTER ASYNC_IO_SOURCES EXCLUDE REGEX "/dnn_backends/cudnn_[a-z]+_engine\\.cc$")
 endif()
 
 file(GLOB_RECURSE ASYNC_IO_HEADERS

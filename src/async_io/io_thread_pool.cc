@@ -10,7 +10,7 @@
 #include <sys/resource.h>
 #endif
 
-namespace IO::AsyncIO {
+namespace AsyncIO::IO::Async {
 
 // Returns the thread count to use for the shared instance.
 // Respects ENGINE_ASYNC_IO_WORKERS (first choice) and ENGINE_MAX_CPU_THREADS (fallback).
@@ -118,6 +118,7 @@ void IOThreadPool::Stop() {
         stopping_ = true;
     }
     cv_.notify_all();
+    idle_cv_.notify_all();  // wake WaitAll so it can observe shutdown
 
     for (auto &worker : workers_) {
         if (worker.joinable()) {
@@ -131,6 +132,7 @@ void IOThreadPool::Stop() {
         while (!tasks_.empty()) {
             tasks_.pop();
         }
+        active_tasks_ = 0;
     }
 }
 
@@ -140,6 +142,24 @@ void IOThreadPool::Enqueue(std::function<void()> task) {
         tasks_.push(std::move(task));
     }
     cv_.notify_one();
+}
+
+bool IOThreadPool::TryEnqueue(std::function<void()> task, size_t max_pending) {
+    {
+        std::lock_guard lock(mutex_);
+        if (!started_ || stopping_) return false;
+        if (max_pending > 0 && tasks_.size() >= max_pending) return false;
+        tasks_.push(std::move(task));
+    }
+    cv_.notify_one();
+    return true;
+}
+
+void IOThreadPool::WaitAll() {
+    std::unique_lock lock(mutex_);
+    idle_cv_.wait(lock, [this] {
+        return (!started_ || stopping_) || (tasks_.empty() && active_tasks_ == 0);
+    });
 }
 
 size_t IOThreadPool::GetThreadCount() const {
@@ -169,11 +189,26 @@ void IOThreadPool::WorkerLoop() {
             }
             task = std::move(tasks_.front());
             tasks_.pop();
+            ++active_tasks_;
         }
+        // Execute the task out of the lock. A throwing task must NOT kill
+        // the worker thread: we swallow the exception and continue, so one
+        // bad task doesn't permanently shrink the pool.
         if (task) {
-            task();
+            try {
+                task();
+            } catch (...) {
+                // Intentionally swallow. Callers that need to observe task
+                // failures should propagate errors through their own
+                // completion callbacks, not via exceptions.
+            }
         }
+        {
+            std::lock_guard lock(mutex_);
+            --active_tasks_;
+        }
+        idle_cv_.notify_one();
     }
 }
 
-} // namespace IO::AsyncIO
+} // namespace AsyncIO::IO::Async

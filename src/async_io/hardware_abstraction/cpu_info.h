@@ -7,9 +7,10 @@
 namespace AsyncIO::IO::Hardware {
 
 struct ProcessorCore {
-    int core_id;
-    int logical_id;
-    uint64_t frequency_mhz;
+    int core_id;            // Physical core index (0-based); same for sibling SMT threads
+    int logical_id;         // Logical processor (SMT thread) index
+    uint64_t frequency_mhz; // Nominal/base frequency (0 if unknown)
+    uint64_t current_frequency_mhz; // Current frequency (0 if unsupported)
     bool is_active;
 };
 
@@ -49,6 +50,11 @@ public:
     // Performance monitoring
     double GetCPUUsagePercent() const;
     double GetCoreUsagePercent(int core_id) const;
+
+    // Refresh per-core current frequencies (Linux sysfs / Windows best-effort).
+    // Base/nominal frequencies are populated at Initialize(); current
+    // frequencies require a fresh query and are updated by this method.
+    void RefreshFrequencies();
 
     // Info string
     std::string GetCPUDescription() const;

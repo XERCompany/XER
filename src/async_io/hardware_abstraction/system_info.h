@@ -13,6 +13,10 @@
 
 #include <string>
 #include <vector>
+#include <future>
+#include <functional>
+#include <mutex>
+#include <thread>
 
 namespace AsyncIO::IO::Hardware {
 
@@ -73,6 +77,19 @@ struct SystemSnapshot {
 // Owns one instance of each hardware provider and refreshes them together.
 // Call Refresh() to update the snapshot, or use the providers directly for
 // streaming/background telemetry.
+//
+// Thread-safety contract:
+//   - Refresh() / RefreshAsync() / GetLastSnapshot() / ToJson() are safe to
+//     call from any thread. Refresh() itself blocks for ~50ms (CPU usage
+//     sampling); prefer RefreshAsync() from latency-sensitive threads.
+//   - RefreshAsync() serializes refreshes: a new call joins any in-flight
+//     refresh before starting its own. The providers are accessed by at
+//     most one thread at a time.
+//   - The per-subsystem accessors (Cpu(), Gpu(), ...) return references to
+//     non-thread-safe providers. If you use them directly from multiple
+//     threads you must synchronize externally; the providers are NOT
+//     reentrant. Mixing direct provider calls with Refresh()/RefreshAsync()
+//     from another thread is a data race unless you synchronize.
 class SystemInfoProvider {
 public:
     SystemInfoProvider();
@@ -85,6 +102,12 @@ public:
     // Build a fresh snapshot. Cheap to call, but each call re-queries the OS
     // and may block briefly (CPU usage sampling is ~50ms).
     SystemSnapshot Refresh();
+
+    // Asynchronous variant: runs Refresh() on the internal worker thread and
+    // returns a future. Safe to call from any thread; the underlying provider
+    // objects are accessed only by one worker at a time. If a refresh is
+    // already in flight, the returned future resolves to the in-flight result.
+    std::future<SystemSnapshot> RefreshAsync();
 
     // Return the last snapshot produced by Refresh() (cheap).
     const SystemSnapshot& GetLastSnapshot() const { return last_; }
@@ -116,6 +139,12 @@ private:
     NetworkInfoProvider  network_;
     BatteryInfoProvider  battery_;
     SystemSnapshot       last_;
+
+    // Async refresh support: a single background worker serves RefreshAsync
+    // calls so providers are never accessed concurrently.
+    std::mutex async_mutex_;
+    std::thread async_thread_;
+    std::promise<SystemSnapshot> async_promise_;
 };
 
 }  // namespace AsyncIO::IO::Hardware
