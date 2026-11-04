@@ -1,6 +1,8 @@
 #ifndef XER_UI_LAYOUT_GEOMETRY_H
 #define XER_UI_LAYOUT_GEOMETRY_H
 
+#include <algorithm>
+
 namespace XER::UI::Layout {
 
 /**

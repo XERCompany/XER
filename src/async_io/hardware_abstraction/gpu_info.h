@@ -17,6 +17,17 @@ struct GPUDevice {
     uint32_t pci_device_id = 0;
     std::string driver_version;
     std::string backend;
+
+    // Live telemetry from NVML (NVIDIA only; zero/unsupported otherwise).
+    double temp_celsius = 0.0;
+    bool   temp_supported = false;
+    double power_watts = 0.0;
+    bool   power_supported = false;
+    double gpu_util_percent = 0.0;
+    double mem_util_percent = 0.0;
+    bool   util_supported = false;
+    uint32_t clock_graphics_mhz = 0;
+    uint32_t clock_mem_mhz = 0;
 };
 
 class GPUInfoProvider {
@@ -60,6 +71,7 @@ private:
     void DetectGPUs();
     void DetectVulkanDevices();
     void DetectCUDADevices();
+    void DetectNvmlDevices();
 };
 
 }  // namespace AsyncIO::IO::Hardware

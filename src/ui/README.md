@@ -27,10 +27,17 @@ src/ui/
 │   └── widget.h           # Base widget interface
 ├── layout/                # Layout system
 │   └── geometry.h         # Geometric primitives (Rect, Size, Point)
-├── theme/                 # ShadcnUI-style theming (TODO)
-├── rendering/             # Rendering abstraction (TODO)
-└── platform/              # WinAPI platform layer (TODO)
+├── theme/                 # Theme tokens and light/dark provider
+├── rendering/             # Renderer abstraction and Direct2D/DirectWrite backend
+└── platform/              # Win32 input translation
 ```
+
+`Window::SetContent` hosts a widget tree, relayouts it on client-area resizes, and
+invalidates the window for painting. Win32 keyboard, character, mouse, and focus
+messages become widget events, with UTF-16 character pairs encoded as UTF-8.
+`Window::SetTheme` selects the light or dark tokens. Native rendering errors are
+retained by `GetLastRenderError()` and sent to the Windows debugger output; an empty
+content tree paints the selected background.
 
 ## Design Principles
 

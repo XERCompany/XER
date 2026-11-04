@@ -10,3 +10,15 @@ CompileFlags:
   Remove: ["-W*"]
   Compiler: clang++
   
+# Files under src/ are driven by compile_commands.json, which uses MSVC flags
+# clangd doesn't fully understand (notably -external:I for system include
+# paths, and /std:c++latest which clangd maps poorly). Re-add the vcpkg
+# include directory via a plain -I and force C++23 so headers like json/json.h
+# resolve and C++23 features (nested namespaces) are accepted.
+If:
+  PathMatch: [src/.*\.cc, src/.*\.h]
+CompileFlags:
+  Add:
+    - "-IC:/vcpkg/installed/x64-windows-release/include"
+    - "-std=c++23"
+  Compiler: clang++

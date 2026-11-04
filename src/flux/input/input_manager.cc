@@ -58,6 +58,9 @@ std::vector<InputDispatch> InputManager::Feed(std::string_view input) {
 		case flux::terminal::InputEventKind::kText:
 			current_buffer_ += event.text;
 			break;
+		case flux::terminal::InputEventKind::kTab:
+			current_buffer_.push_back('\t');
+			break;
 		case flux::terminal::InputEventKind::kBackspace:
 			if (!current_buffer_.empty()) {
 				current_buffer_.pop_back();

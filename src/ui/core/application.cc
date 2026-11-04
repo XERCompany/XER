@@ -15,7 +15,7 @@ public:
             return true;
         }
 
-        // Initialize WinAPI common controls
+        // // Initialize WinAPI common controls
         INITCOMMONCONTROLSEX icc = {};
         icc.dwSize = sizeof(icc);
         icc.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS;

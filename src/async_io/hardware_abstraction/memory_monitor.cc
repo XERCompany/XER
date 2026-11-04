@@ -1,16 +1,17 @@
 #include "memory_monitor.h"
 
+#include "nvml_loader.h"
+
 #ifdef _WIN32
     #include <windows.h>
 #elif defined(__linux__)
     #include <unistd.h>
-    #include <dlfcn.h>
 #endif
 
 namespace AsyncIO::IO::Hardware {
 
 MemoryMonitor::MemoryMonitor()
-    : is_monitoring_(false), peak_memory_mb_(0), tracked_allocation_mb_(0), 
+    : is_monitoring_(false), peak_memory_mb_(0), tracked_allocation_mb_(0),
       low_memory_threshold_(0.9) {}
 
 MemoryMonitor::~MemoryMonitor() {
@@ -36,75 +37,19 @@ MemoryStats MemoryMonitor::GetMemoryStats() const {
 MemoryStats MemoryMonitor::GetGPUMemoryStats(int device_id) const {
     MemoryStats stats = {0, 0, 0, 0.0, 0};
 
-    // Load NVML at runtime to avoid a hard dependency on NVIDIA drivers.
-#ifdef _WIN32
-    HMODULE lib = LoadLibraryA("nvml.dll");
-    auto load_symbol = [lib](const char* name) -> void* {
-        return lib != nullptr ? reinterpret_cast<void*>(GetProcAddress(lib, name)) : nullptr;
-    };
-    auto close_library = [lib]() {
-        if (lib != nullptr) {
-            FreeLibrary(lib);
-        }
-    };
-#elif defined(__linux__)
-    void* lib = dlopen("libnvidia-ml.so.1", RTLD_LAZY | RTLD_LOCAL);
-    auto load_symbol = [lib](const char* name) -> void* {
-        return lib != nullptr ? dlsym(lib, name) : nullptr;
-    };
-    auto close_library = [lib]() {
-        if (lib != nullptr) {
-            dlclose(lib);
-        }
-    };
-#else
-    void* lib = nullptr;
-    auto load_symbol = [](const char*) -> void* { return nullptr; };
-    auto close_library = []() {};
-#endif
-    if (!lib) return stats;
+    auto& nvml = NvmlLibrary::Instance();
+    if (!nvml.IsAvailable()) return stats;
 
-    using nvmlReturn_t = int;
-    using nvmlDevice_t = void*;
-    constexpr nvmlReturn_t kNvmlSuccess = 0;
+    NvmlDeviceSnapshot snap;
+    if (!nvml.GetSnapshot(device_id, snap)) return stats;
 
-    struct NvmlMemInfo { unsigned long long total, free, used; };
-    using PfnNvmlInit        = nvmlReturn_t (*)();
-    using PfnNvmlHandle      = nvmlReturn_t (*)(unsigned int, nvmlDevice_t*);
-    using PfnNvmlMemInfo     = nvmlReturn_t (*)(nvmlDevice_t, NvmlMemInfo*);
-    using PfnNvmlShutdown    = nvmlReturn_t (*)();
-
-    auto pfnInit     = reinterpret_cast<PfnNvmlInit>    (load_symbol("nvmlInit_v2"));
-    auto pfnHandle   = reinterpret_cast<PfnNvmlHandle>  (load_symbol("nvmlDeviceGetHandleByIndex_v2"));
-    auto pfnMemInfo  = reinterpret_cast<PfnNvmlMemInfo> (load_symbol("nvmlDeviceGetMemoryInfo"));
-    auto pfnShutdown = reinterpret_cast<PfnNvmlShutdown>(load_symbol("nvmlShutdown"));
-
-    if (!pfnInit || !pfnHandle || !pfnMemInfo) {
-        close_library();
-        return stats;
-    }
-
-    if (pfnInit() != kNvmlSuccess) {
-        close_library();
-        return stats;
-    }
-
-    nvmlDevice_t dev = nullptr;
-    if (pfnHandle(static_cast<unsigned int>(device_id), &dev) == kNvmlSuccess && dev) {
-        NvmlMemInfo info{};
-        if (pfnMemInfo(dev, &info) == kNvmlSuccess) {
-            stats.total_mb = info.total / (1024ULL * 1024ULL);
-            stats.free_mb  = info.free  / (1024ULL * 1024ULL);
-            stats.used_mb  = info.used  / (1024ULL * 1024ULL);
-            stats.usage_percent = (info.total > 0)
-                ? static_cast<double>(info.used) / static_cast<double>(info.total)
-                : 0.0;
-            stats.peak_usage_mb = stats.used_mb;
-        }
-    }
-
-    if (pfnShutdown) pfnShutdown();
-    close_library();
+    stats.total_mb = snap.memory_total / (1024ULL * 1024ULL);
+    stats.free_mb  = snap.memory_free  / (1024ULL * 1024ULL);
+    stats.used_mb  = snap.memory_used  / (1024ULL * 1024ULL);
+    stats.usage_percent = (snap.memory_total > 0)
+        ? static_cast<double>(snap.memory_used) / static_cast<double>(snap.memory_total)
+        : 0.0;
+    stats.peak_usage_mb = stats.used_mb;
     return stats;
 }
 
@@ -124,7 +69,7 @@ bool MemoryMonitor::IsLowMemory() const {
 void MemoryMonitor::RecordAllocation(size_t bytes) {
     uint64_t mb = bytes / (1024 * 1024);
     tracked_allocation_mb_ += mb;
-    
+
     if (tracked_allocation_mb_ > peak_memory_mb_) {
         peak_memory_mb_ = tracked_allocation_mb_;
     }
@@ -147,7 +92,7 @@ MemoryStats MemoryMonitor::QuerySystemMemory() const {
 #ifdef _WIN32
     MEMORYSTATUSEX mem_status;
     mem_status.dwLength = sizeof(mem_status);
-    
+
     if (GlobalMemoryStatusEx(&mem_status)) {
         stats.total_mb = mem_status.ullTotalPhys / (1024 * 1024);
         stats.free_mb = mem_status.ullAvailPhys / (1024 * 1024);
@@ -159,7 +104,7 @@ MemoryStats MemoryMonitor::QuerySystemMemory() const {
     long total_pages = sysconf(_SC_PHYS_PAGES);
     long avail_pages = sysconf(_SC_AVPHYS_PAGES);
     long page_size = sysconf(_SC_PAGE_SIZE);
-    
+
     stats.total_mb = (total_pages * page_size) / (1024 * 1024);
     stats.free_mb = (avail_pages * page_size) / (1024 * 1024);
     stats.used_mb = stats.total_mb - stats.free_mb;

@@ -6,12 +6,13 @@
 #include <string>
 #include <windows.h>
 
-namespace XER::UI::Core {
+#include "../theme/theme.h"
 
-// Forward declarations
-namespace Widgets {
+namespace XER::UI::Widgets {
 class Widget;
 }
+
+namespace XER::UI::Core {
 
 /**
  * Window - Main window class with small interface
@@ -40,6 +41,9 @@ public:
     // Content management
     void SetContent(std::shared_ptr<Widgets::Widget> root);
     std::shared_ptr<Widgets::Widget> GetContent() const;
+    void SetTheme(Theme::Variant variant);
+    // Empty after a successful paint; otherwise returns the most recent native paint error.
+    std::string GetLastRenderError() const;
 
     // Callbacks
     void SetOnClose(Callback callback);
@@ -63,6 +67,7 @@ public:
 
     // Internal message handler (called by static WindowProc)
     LRESULT HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam);
+    LRESULT HandleNativeMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
     // Prevent copying
     Window(const Window&) = delete;
