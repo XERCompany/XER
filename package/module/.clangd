@@ -1,0 +1,14 @@
+CompileFlags:
+  Add:
+    - -std=c++20
+    - -DBUILDING_NODE_EXTENSION
+  Remove:
+    - -W*
+Diagnostics:
+  UnusedIncludes: Strict
+  MissingIncludes: Strict
+InlayHints:
+  Enabled: Yes
+  ParameterNames: Yes
+  DeducedTypes: Yes
+CompletionStyle: Detailed

@@ -140,10 +140,14 @@ if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
-add_subdirectory(apps)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/apps")
+    add_subdirectory(apps)
+endif()
 # Examples are optional demos; examples/CMakeLists.txt guards the async_io
 # example behind `if(TARGET XER_AsyncIO)` so it only builds with the app.
-add_subdirectory(examples)
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples")
+    add_subdirectory(examples)
+endif()
 
 # Link common vcpkg libraries to xer target
 if(TARGET xer)
