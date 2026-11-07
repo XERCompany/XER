@@ -21,7 +21,9 @@ std::size_t Utf8Length(std::string_view text) {
 
 } // namespace
 
-Button::Button(std::string text) : text_(std::move(text)) {
+Button::Button(std::string text, ButtonStyle style) 
+    : text_(std::move(text))
+    , style_(style) {
     SetFocusable(true);
 }
 
@@ -39,22 +41,54 @@ void Button::SetOnClick(std::function<void()> callback) {
     on_click_ = std::move(callback);
 }
 
+void Button::SetStyle(ButtonStyle style) {
+    style_ = style;
+    Invalidate();
+}
+
 void Button::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
-    const auto fill = IsEnabled() ? (IsFocused() ? tokens.accent : tokens.surface) : tokens.muted;
-    renderer.FillRect(bounds, fill, tokens.radius_medium);
-    renderer.StrokeRect(
-        bounds,
-        IsFocused() ? tokens.focus : tokens.border,
-        1.0f,
-        tokens.radius_medium
-    );
+    
+    Theme::Color fill_color;
+    Theme::Color stroke_color;
+    Theme::Color text_color;
+    float stroke_width = 1.0f;
+
+    if (!IsEnabled()) {
+        fill_color = tokens.muted;
+        stroke_color = tokens.border;
+        text_color = tokens.background;
+    } else {
+        switch (style_) {
+            case ButtonStyle::Primary:
+                fill_color = IsFocused() ? tokens.focus : tokens.foreground;
+                stroke_color = fill_color;
+                text_color = tokens.surface;
+                stroke_width = 0.0f;
+                break;
+            case ButtonStyle::Secondary:
+                fill_color = tokens.surface;
+                stroke_color = IsFocused() ? tokens.focus : tokens.border;
+                text_color = tokens.foreground;
+                break;
+            case ButtonStyle::Outline:
+                fill_color = tokens.background;
+                stroke_color = IsFocused() ? tokens.focus : tokens.border;
+                text_color = tokens.foreground;
+                break;
+        }
+    }
+
+    renderer.FillRect(bounds, fill_color, tokens.radius_medium);
+    if (stroke_width > 0.0f) {
+        renderer.StrokeRect(bounds, stroke_color, stroke_width, tokens.radius_medium);
+    }
     renderer.DrawText(
         text_,
         Layout::EdgeInsets(tokens.spacing_large, tokens.spacing_small)
             .Apply(bounds),
         Rendering::TextStyle{
-            IsEnabled() ? tokens.foreground : tokens.background,
+            text_color,
             tokens.font_body,
             true
         }

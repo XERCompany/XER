@@ -7,7 +7,7 @@
 namespace network::transport {
 
 IOBuffer::IOBuffer(size_t size) {
-    holder_ = IO::AsyncIO::IOBufferPool::Instance().Acquire(size);
+    holder_ = AsyncIO::IO::Async::IOBufferPool::Instance().Acquire(size);
     holder_->resize(size);
     data_ = holder_->data();
     size_ = size;

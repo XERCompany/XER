@@ -201,7 +201,9 @@ AppCommand::Parsed AppCommand::Parse(int argc, char** argv) {
     }
 
     size_t script_index = 1;
-    if (command == "run") {
+    if (command == "audio_input") {
+        parsed.type = Type::kAudioInput;
+    } else if (command == "run") {
         parsed.type = Type::kRun;
         script_index = 2;
     } else if (command == "compile") {
@@ -256,6 +258,11 @@ AppCommand::Parsed AppCommand::Parse(int argc, char** argv) {
             continue;
         }
 
+        if (arg == "--audio-input") {
+            if (!ConsumeStringValue("--audio-input", argc, argv, &i, &parsed.audio_input_path, &parsed))
+                return parsed;
+            continue;
+        }
         // ---- Security ------------------------------------------------------
         if (arg == "--sandbox")                  { parsed.sandbox = true;             continue; }
 

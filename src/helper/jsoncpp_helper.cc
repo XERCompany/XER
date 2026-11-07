@@ -6,12 +6,12 @@ namespace Engine::Helper {
 
 Json::Value JsonCppHelper::Parse(const std::string& json_str) {
     Json::CharReaderBuilder builder;
-    std::unique_ptr<Json::CharReader> reader(new Json::CharReader(builder));
-    
+    std::unique_ptr<Json::CharReader> reader(builder.newCharReader());
+
     std::string errMsg;
     Json::Value root;
-    if (!Json::parseFromStream(*reader, std::basic_streambuf<char>(std::cin), 
-                                &root, &errMsg)) {
+    if (!reader->parse(json_str.c_str(), json_str.c_str() + json_str.size(),
+                       &root, &errMsg)) {
         throw std::runtime_error(errMsg);
     }
     return root;
@@ -33,42 +33,32 @@ bool JsonCppHelper::WriteToFile(const Json::Value& root, const std::string& file
     if (!file.is_open()) {
         throw std::runtime_error("Failed to open file for writing: " + filepath);
     }
-    
+
     Json::StreamWriterBuilder writerBuilder;
-    Json::StreamWriter* writer = writerBuilder.newStreamWriter();
-    std::string output = writer->write(root);
-    delete writer;
-    
-    if (output.empty()) {
-        return false;
-    }
-    
-    file << output;
+    std::unique_ptr<Json::StreamWriter> writer(writerBuilder.newStreamWriter());
+    writer->write(root, &file);
+
     return true;
 }
 
 std::string JsonCppHelper::ToJsonString(const Json::Value& root) {
     Json::StreamWriterBuilder builder;
-    Json::StreamWriter* writer = builder.newStreamWriter();
-    std::string output;
-    output = writer->write(root);
-    delete writer;
-    
+    std::string output = Json::writeString(builder, root);
     return output;
 }
 
-std::vector<std::pair<std::string, std::string>> 
+std::vector<std::pair<std::string, std::string>>
 JsonCppHelper::GetTopLevelKeys(const Json::Value& root) {
     std::vector<std::pair<std::string, std::string>> keys;
-    
+
     if (!root.isObject()) {
         return keys;
     }
-    
-    for (const auto& pair : root.getMemberPairs()) {
-        keys.push_back({pair.first.asString(), pair.second.toString()});
+
+    for (const auto& key : root.getMemberNames()) {
+        keys.push_back({key, root[key].asString()});
     }
-    
+
     return keys;
 }
 
@@ -85,15 +75,15 @@ JsonCppHelper::GetNestedValues(const Json::Value& root,
     for (size_t i = 0; i < path.size(); ++i) {
         const std::string& key = path[i];
         
-        if (!current.isObject() || !current.hasMember(key)) {
+        if (!current.isObject() || !current.isMember(key)) {
             values[path[0]] = "null";
             break;
         }
-        
+
         current = current[key];
     }
-    
-    values[path[0]] = current.toString();
+
+    values[path[0]] = current.asString();
     return values;
 }
 
@@ -111,14 +101,14 @@ void JsonCppHelper::SetNestedValue(Json::Value& root,
         
         if (!current.isObject()) {
             current = Json::Value();
-        } else if (!current.hasMember(key)) {
+        } else if (!current.isMember(key)) {
             current[key] = Json::Value();
         }
         current = current[key];
     }
-    
+
     const std::string& lastKey = path.back();
-    if (current.isObject() && current.hasMember(lastKey)) {
+    if (current.isObject() && current.isMember(lastKey)) {
         current[lastKey] = value;
     } else {
         current = Json::Value(value);
@@ -159,7 +149,7 @@ bool JsonCppHelper::ContainsKey(const Json::Value& root, const std::string& key)
     if (!root.isObject()) {
         return false;
     }
-    return root.hasMember(key);
+    return root.isMember(key);
 }
 
 bool JsonCppHelper::IsObject(const Json::Value& value) {

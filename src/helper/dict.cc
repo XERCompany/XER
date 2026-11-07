@@ -97,7 +97,7 @@ Dict* Dict::GetOrCreateDict(const std::string& key) {
     if (it != data_.end() && std::holds_alternative<std::unique_ptr<Dict>>(it->second)) {
         return std::get<std::unique_ptr<Dict>>(it->second).get();
     }
-    auto new_dict = std::make_unique<Dict>();
+    auto new_dict = std::unique_ptr<Dict>(new Dict());
     Dict* ptr = new_dict.get();
     data_[key] = std::move(new_dict);
     return ptr;
@@ -197,7 +197,7 @@ bool Dict::FromJson(const Json::Value& json) {
             }
             data_[key] = arr;
         } else if (value.isObject()) {
-            auto nested_dict = std::make_unique<Dict>();
+            auto nested_dict = std::unique_ptr<Dict>(new Dict());
             if (nested_dict->FromJson(value)) {
                 data_[key] = std::move(nested_dict);
             }
@@ -332,7 +332,26 @@ void Dict::AsyncLoadFromFile(v8::Isolate* isolate,
 
 void Dict::Merge(const Dict& other) {
     for (const auto& pair : other.data_) {
-        data_[pair.first] = pair.second;
+        // Since variant contains unique_ptr, we need to handle it specially
+        if (std::holds_alternative<std::unique_ptr<Dict>>(pair.second)) {
+            // Copy the nested dict's contents
+            const auto& nested = std::get<std::unique_ptr<Dict>>(pair.second);
+            if (nested) {
+                auto new_dict = std::unique_ptr<Dict>(new Dict());
+                new_dict->Merge(*nested);
+                data_[pair.first] = std::move(new_dict);
+            }
+        } else if (std::holds_alternative<bool>(pair.second)) {
+            data_[pair.first] = std::get<bool>(pair.second);
+        } else if (std::holds_alternative<int>(pair.second)) {
+            data_[pair.first] = std::get<int>(pair.second);
+        } else if (std::holds_alternative<double>(pair.second)) {
+            data_[pair.first] = std::get<double>(pair.second);
+        } else if (std::holds_alternative<std::string>(pair.second)) {
+            data_[pair.first] = std::get<std::string>(pair.second);
+        } else if (std::holds_alternative<std::vector<std::string>>(pair.second)) {
+            data_[pair.first] = std::get<std::vector<std::string>>(pair.second);
+        }
     }
 }
 
@@ -413,7 +432,7 @@ std::string Dict::GetString(const std::string& key, const std::string& default_v
 // ---------------------------------------------------------------------------
 
 std::unique_ptr<Dict> Dict::Create() {
-    return std::make_unique<Dict>();
+    return std::unique_ptr<Dict>(new Dict());
 }
 
 std::unique_ptr<Dict> Dict::FromJsonFile(const std::string& filepath, std::string* error_out) {

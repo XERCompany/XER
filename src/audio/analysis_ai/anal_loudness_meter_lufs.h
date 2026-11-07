@@ -27,7 +27,7 @@ public:
 	std::string GetReport() const;
 
 private:
-	IO::AsyncIO::AsyncBufferPool buffer_pool_;
+	AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
 	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 	AsyncIO::IO::Sync::MutexWrapper mutex_;
 	std::vector<double> loudness_history_;

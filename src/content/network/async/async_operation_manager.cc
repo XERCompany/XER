@@ -7,7 +7,7 @@
 namespace network::async {
 
 AsyncOperationManager::AsyncOperationManager()
-    : thread_pool_(IO::AsyncIO::IOThreadPool::GetSharedInstance()) {
+    : thread_pool_(AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {
 }
 
 AsyncOperationManager& AsyncOperationManager::Instance() {
@@ -20,7 +20,7 @@ void AsyncOperationManager::Enqueue(std::function<void()> operation) {
     thread_pool_.Enqueue(std::move(operation));
 }
 
-IO::AsyncIO::IOThreadPool& AsyncOperationManager::GetThreadPool() {
+AsyncIO::IO::Async::IOThreadPool& AsyncOperationManager::GetThreadPool() {
     return thread_pool_;
 }
 

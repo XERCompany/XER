@@ -29,7 +29,7 @@ public:
     const uint8_t* end()   const { return data_ + size_; }
 
 private:
-    IO::AsyncIO::IOBufferPool::BufferPtr holder_;
+    AsyncIO::IO::Async::IOBufferPool::BufferPtr holder_;
     uint8_t* data_  = nullptr;
     size_t   size_  = 0;
 };

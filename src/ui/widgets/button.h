@@ -8,13 +8,20 @@
 
 namespace XER::UI::Widgets {
 
+enum class ButtonStyle {
+    Primary,
+    Secondary,
+    Outline
+};
+
 class Button final : public Widget {
 public:
-    explicit Button(std::string text = {});
+    explicit Button(std::string text = {}, ButtonStyle style = ButtonStyle::Secondary);
 
     void SetText(std::string text);
     const std::string& GetText() const;
     void SetOnClick(std::function<void()> callback);
+    void SetStyle(ButtonStyle style);
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
@@ -29,6 +36,7 @@ private:
 
     std::string text_;
     std::function<void()> on_click_;
+    ButtonStyle style_;
 };
 
 } // namespace XER::UI::Widgets

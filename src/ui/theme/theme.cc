@@ -3,40 +3,42 @@
 namespace XER::UI::Theme {
 namespace {
 
+// Neutral theme based on ui-widget-preview.html (A · Neutral)
 constexpr Tokens kLightTokens{
-    .background = {0.97f, 0.97f, 0.98f, 1.0f},
-    .foreground = {0.10f, 0.11f, 0.13f, 1.0f},
-    .surface = {1.0f, 1.0f, 1.0f, 1.0f},
-    .muted = {0.42f, 0.45f, 0.50f, 1.0f},
-    .border = {0.82f, 0.84f, 0.87f, 1.0f},
-    .accent = {0.12f, 0.36f, 0.78f, 1.0f},
-    .focus = {0.08f, 0.42f, 0.96f, 1.0f},
-    .radius_small = 3.0f,
-    .radius_medium = 6.0f,
-    .spacing_small = 4.0f,
-    .spacing_medium = 8.0f,
-    .spacing_large = 16.0f,
+    .background = {0.96f, 0.96f, 0.96f, 1.0f}, // #f5f5f5
+    .foreground = {0.09f, 0.09f, 0.09f, 1.0f}, // #171717
+    .surface = {1.0f, 1.0f, 1.0f, 1.0f},      // #ffffff
+    .muted = {0.45f, 0.45f, 0.45f, 1.0f},     // #737373
+    .border = {0.87f, 0.87f, 0.87f, 1.0f},     // #dedede
+    .accent = {0.09f, 0.40f, 0.20f, 1.0f},    // #166534 (green accent)
+    .focus = {0.09f, 0.09f, 0.11f, 1.0f},     // #18181b
+    .radius_small = 6.0f,
+    .radius_medium = 9.0f,
+    .spacing_small = 9.0f,
+    .spacing_medium = 16.0f,
+    .spacing_large = 20.0f,
     .font_small = 12.0f,
     .font_body = 14.0f,
-    .font_title = 20.0f,
+    .font_title = 30.0f,
 };
 
+// Midnight theme based on ui-widget-preview.html (B · Midnight)
 constexpr Tokens kDarkTokens{
-    .background = {0.08f, 0.09f, 0.11f, 1.0f},
-    .foreground = {0.91f, 0.92f, 0.94f, 1.0f},
-    .surface = {0.13f, 0.14f, 0.17f, 1.0f},
-    .muted = {0.62f, 0.65f, 0.70f, 1.0f},
-    .border = {0.29f, 0.31f, 0.35f, 1.0f},
-    .accent = {0.35f, 0.60f, 0.96f, 1.0f},
-    .focus = {0.45f, 0.68f, 1.0f, 1.0f},
-    .radius_small = 3.0f,
-    .radius_medium = 6.0f,
-    .spacing_small = 4.0f,
-    .spacing_medium = 8.0f,
-    .spacing_large = 16.0f,
+    .background = {0.06f, 0.07f, 0.09f, 1.0f}, // #111318
+    .foreground = {0.96f, 0.96f, 0.96f, 1.0f}, // #f4f4f5
+    .surface = {0.12f, 0.13f, 0.15f, 1.0f},    // #202127
+    .muted = {0.63f, 0.63f, 0.66f, 1.0f},     // #a1a1aa
+    .border = {0.22f, 0.23f, 0.27f, 1.0f},     // #393b44
+    .accent = {0.06f, 0.45f, 0.14f, 1.0f},    // #0f6b24 (green accent)
+    .focus = {0.96f, 0.96f, 0.96f, 1.0f},     // #f4f4f5
+    .radius_small = 6.0f,
+    .radius_medium = 9.0f,
+    .spacing_small = 9.0f,
+    .spacing_medium = 16.0f,
+    .spacing_large = 20.0f,
     .font_small = 12.0f,
     .font_body = 14.0f,
-    .font_title = 20.0f,
+    .font_title = 30.0f,
 };
 
 } // namespace

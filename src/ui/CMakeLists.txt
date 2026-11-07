@@ -33,9 +33,9 @@ target_compile_features(XER_UI_Core PUBLIC cxx_std_23)
 
 # Compiler flags
 if(MSVC)
-    target_compile_options(XER_UI_Core PRIVATE /W4 /WX- /O2)
+    target_compile_options(XER_UI_Core PRIVATE /W4 /WX- /FS)
 else()
-    target_compile_options(XER_UI_Core PRIVATE -Wall -Wextra -Wpedantic -O3)
+    target_compile_options(XER_UI_Core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 add_library(XER_UI_Flux STATIC
@@ -60,9 +60,9 @@ target_link_libraries(XER_UI_Flux
 target_compile_features(XER_UI_Flux PUBLIC cxx_std_23)
 
 if(MSVC)
-    target_compile_options(XER_UI_Flux PRIVATE /W4 /WX- /O2)
+    target_compile_options(XER_UI_Flux PRIVATE /W4 /WX- /FS)
 else()
-    target_compile_options(XER_UI_Flux PRIVATE -Wall -Wextra -Wpedantic -O3)
+    target_compile_options(XER_UI_Flux PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 # Platform-specific linking

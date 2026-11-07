@@ -11,7 +11,7 @@ namespace Engine::Helper {
 bool ToolTo::CopyBinary(const std::filesystem::path& source,
                         const std::filesystem::path& destination,
                         std::string* error_message) {
-    IO::AsyncIO::AsyncFileReader reader;
+    AsyncIO::IO::Async::AsyncFileReader reader;
     if (!reader.OpenFile(source.string())) {
         if (error_message != nullptr) {
             *error_message = "Failed to open source binary: " + source.string();
@@ -19,7 +19,7 @@ bool ToolTo::CopyBinary(const std::filesystem::path& source,
         return false;
     }
 
-    IO::AsyncIO::AsyncFileWriter writer;
+    AsyncIO::IO::Async::AsyncFileWriter writer;
     if (!writer.CreateFile(destination.string(), false)) {
         if (error_message != nullptr) {
             *error_message = "Failed to open destination binary: " + destination.string();
@@ -66,7 +66,7 @@ bool ToolTo::CopyBinary(const std::filesystem::path& source,
 }
 
 std::string ToolTo::ReadTextFile(const std::filesystem::path& path) {
-    IO::AsyncIO::AsyncFileReader reader;
+    AsyncIO::IO::Async::AsyncFileReader reader;
     if (!reader.OpenFile(path.string())) {
         return std::string();
     }
@@ -88,7 +88,7 @@ bool ToolTo::WriteTextFile(const std::filesystem::path& path,
                            const std::string& text,
                            bool append,
                            std::string* error_message) {
-    IO::AsyncIO::AsyncFileWriter writer;
+    AsyncIO::IO::Async::AsyncFileWriter writer;
     if (!writer.CreateFile(path.string(), append)) {
         if (error_message != nullptr) {
             *error_message = writer.GetLastError();

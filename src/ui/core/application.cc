@@ -1,6 +1,7 @@
 #include "application.h"
 #include <windows.h>
 #include <commctrl.h>
+#include <cstdio>
 #include <stdexcept>
 
 namespace XER::UI::Core {
@@ -15,16 +16,28 @@ public:
             return true;
         }
 
-        // // Initialize WinAPI common controls
-        INITCOMMONCONTROLSEX icc = {};
+        INITCOMMONCONTROLSEX icc{};
         icc.dwSize = sizeof(icc);
-        icc.dwICC = ICC_WIN95_CLASSES | ICC_STANDARD_CLASSES | ICC_PROGRESS_CLASS;
+        icc.dwICC = ICC_WIN95_CLASSES | ICC_PROGRESS_CLASS;
+
+        SetLastError(ERROR_SUCCESS);
         if (!InitCommonControlsEx(&icc)) {
+            const DWORD error = GetLastError();
+
+            fprintf(stderr,
+                    "[XER UI] InitCommonControlsEx failed; "
+                    "GetLastError=%lu\n",
+                    static_cast<unsigned long>(error));
             return false;
         }
 
-        // Increase process priority for better UI responsiveness
-        SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS);
+        if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
+            const DWORD error = GetLastError();
+            fprintf(stderr,
+                    "[XER UI] SetPriorityClass failed; "
+                    "GetLastError=%lu\n",
+                    static_cast<unsigned long>(error)); 
+        }
 
         initialized_ = true;
         return true;

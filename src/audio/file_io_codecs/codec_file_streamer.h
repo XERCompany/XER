@@ -23,8 +23,8 @@ public:
     void Close();
 
 private:
-    IO::AsyncIO::AsyncFileReader reader_;
-    IO::AsyncIO::AsyncFileWriter writer_;
+    AsyncIO::IO::Async::AsyncFileReader reader_;
+    AsyncIO::IO::Async::AsyncFileWriter writer_;
     AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
     bool reading_open_;
     bool writing_open_;

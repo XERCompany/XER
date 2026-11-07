@@ -26,7 +26,7 @@ public:
 	std::string GetReport() const;
 
 private:
-	IO::AsyncIO::AsyncBufferPool buffer_pool_;
+	AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
 	AsyncIO::IO::LogDebug::MemoryTracker memory_tracker_;
 	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 	std::vector<float> window_history_;

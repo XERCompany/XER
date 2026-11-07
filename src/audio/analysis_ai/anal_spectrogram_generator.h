@@ -33,7 +33,7 @@ private:
 	size_t fft_size_;
 	size_t hop_size_;
 	Engine::Audio::DSP::STFTProcessor stft_processor_;
-	IO::AsyncIO::AsyncBufferPool buffer_pool_;
+	AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
 	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 	std::vector<std::vector<float>> magnitude_matrix_;
 };

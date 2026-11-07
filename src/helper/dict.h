@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <variant>
 
 #ifdef ENABLE_V8
 #include <v8.h>
@@ -69,6 +70,7 @@ public:
                        absl::string_view name,
                        std::string* error_out);
 
+#ifdef ENABLE_V8
     // Async operations (via async_bridge)
     void AsyncSaveToFile(v8::Isolate* isolate,
                          v8::Local<v8::Function> callback,
@@ -78,6 +80,7 @@ public:
                           v8::Local<v8::Function> callback,
                           v8::Local<v8::Context> context,
                           const std::string& filepath);
+#endif
 
     // Merge operations
     void Merge(const Dict& other);
@@ -99,10 +102,8 @@ public:
     static std::unique_ptr<Dict> FromJsonFile(const std::string& filepath, std::string* error_out);
 
 private:
-    Dict() = default;
-
     // Internal storage
-    std::map<std::string, std::variant<bool, int, double, std::string, 
+    std::map<std::string, std::variant<bool, int, double, std::string,
                                         std::vector<std::string>, std::unique_ptr<Dict>>> data_;
 
     // Helper for variant visiting
@@ -110,8 +111,10 @@ private:
     struct JsonToValueConverter;
 };
 
+#ifdef ENABLE_V8
 // Helper for V8 integration
 v8::Local<v8::Object> DictToV8Object(v8::Isolate* isolate, const Dict& dict);
 std::unique_ptr<Dict> V8ObjectToDict(v8::Isolate* isolate, v8::Local<v8::Object> obj);
+#endif
 
 }  // namespace Engine::Helper

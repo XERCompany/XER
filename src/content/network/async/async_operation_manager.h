@@ -43,7 +43,7 @@ public:
     void Enqueue(std::function<void()> operation);
 
     // Get the shared IOThreadPool instance
-    IO::AsyncIO::IOThreadPool& GetThreadPool();
+    AsyncIO::IO::Async::IOThreadPool& GetThreadPool();
 
     // Start/stop the thread pool
     void Start();
@@ -60,7 +60,7 @@ private:
     AsyncOperationManager(const AsyncOperationManager&) = delete;
     AsyncOperationManager& operator=(const AsyncOperationManager&) = delete;
 
-    IO::AsyncIO::IOThreadPool& thread_pool_;
+    AsyncIO::IO::Async::IOThreadPool& thread_pool_;
     mutable std::mutex mutex_;
 };
 

@@ -46,7 +46,7 @@ bool ApplyCustomEffectProcessors(
 			}
 		}
 	} else {
-		IO::AsyncIO::IOThreadPool& pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+		AsyncIO::IO::Async::IOThreadPool& pool = AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 		std::mutex state_mutex;
 		std::condition_variable state_cv;
 		size_t remaining = processors->size();
