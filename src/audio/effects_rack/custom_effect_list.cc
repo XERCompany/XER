@@ -2,7 +2,7 @@
 
 #include "custom_effect_algorithms.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 std::vector<CustomEffectNode> CreateCustomEffectNodeList(const std::vector<std::string>& algorithm_names) {
 	std::vector<CustomEffectNode> nodes;
@@ -13,4 +13,4 @@ std::vector<CustomEffectNode> CreateCustomEffectNodeList(const std::vector<std::
 	return nodes;
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

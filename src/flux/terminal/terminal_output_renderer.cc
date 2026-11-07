@@ -3,7 +3,7 @@
 #include "flux/terminal/terminal_emulator.h"
 #include "flux/terminal/terminal_manager.h"
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 
 void Write(TerminalInterface& terminal, OutputStream stream, std::string_view text) {
 	terminal.Write(stream, text);
@@ -39,4 +39,4 @@ std::string SnapshotPlainText(OutputStream stream) {
 	return TerminalManager::Instance().SnapshotPlainText(stream);
 }
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

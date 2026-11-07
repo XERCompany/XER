@@ -11,7 +11,7 @@
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 
-namespace network::ssl {
+namespace XER::network::ssl {
 
 // SSL context manager using OpenSSL
 class SslContext {
@@ -111,4 +111,4 @@ private:
 std::string GetSslErrorString(int error_code);
 std::string GetLastSslError();
 
-} // namespace network::ssl
+} // namespace XER::network::ssl

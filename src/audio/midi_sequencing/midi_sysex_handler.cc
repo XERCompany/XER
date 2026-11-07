@@ -1,6 +1,6 @@
 #include "midi_sysex_handler.h"
 
-namespace Engine::Audio::MIDI {
+namespace XER::Engine::Audio::MIDI {
 
 bool MidiSysexHandler::IsValidSysex(const std::vector<uint8_t>& msg) const {
     return msg.size() >= 3 && msg.front() == 0xF0 && msg.back() == 0xF7;
@@ -72,4 +72,4 @@ std::vector<uint8_t> MidiSysexHandler::BuildIdentityReply(
     return reply;
 }
 
-}  // namespace Engine::Audio::MIDI
+}  // namespace XER::Engine::Audio::MIDI

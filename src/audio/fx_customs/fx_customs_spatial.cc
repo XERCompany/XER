@@ -10,7 +10,7 @@
 #include "audio/effects_rack/custom_effect_invoke.h"
 #include "audio/effects_rack/fx_reverb_algorithmic.h"
 
-namespace Engine::Audio::FX::Customs {
+namespace XER::Engine::Audio::FX::Customs {
 
 namespace {
 
@@ -478,4 +478,4 @@ bool ApplyFxCustomSharedSpatialBus(
 	return true;
 }
 
-}  // namespace Engine::Audio::FX::Customs
+}  // namespace XER::Engine::Audio::FX::Customs

@@ -5,7 +5,7 @@
  
 #include <absl/container/flat_hash_map.h> 
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 class SynthModulationMatrix {
 public:
@@ -36,4 +36,4 @@ private:
     absl::flat_hash_map<uint32_t, DestinationState> destination_states_;
 };
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

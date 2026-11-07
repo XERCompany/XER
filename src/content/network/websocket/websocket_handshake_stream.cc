@@ -13,7 +13,7 @@
 #include <vector>
 #include <cstring>
 
-namespace network::websocket {
+namespace XER::network::websocket {
 
 static std::string Base64Encode(const uint8_t* data, size_t len) {
     BIO* b64 = BIO_new(BIO_f_base64());
@@ -89,4 +89,4 @@ bool WebSocketHandshakeStream::DoHandshake(
     return true;
 }
 
-}  // namespace network::websocket
+}  // namespace XER::network::websocket

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 void SynthPolyphonyController::SetMaxVoices(uint32_t max_voices) {
     max_voices_ = std::max<uint32_t>(1, max_voices);
@@ -42,4 +42,4 @@ bool SynthPolyphonyController::IsAllocated(uint8_t note) const {
     return std::find(active_notes_.begin(), active_notes_.end(), note) != active_notes_.end();
 }
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

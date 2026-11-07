@@ -2,7 +2,7 @@
 
 #include "cudnn_bridge.h"
 
-namespace AsyncIO::IO::DNNBackends {
+namespace XER::AsyncIO::IO::DNNBackends {
 
 enum class PoolingKind {
     Max,
@@ -32,5 +32,5 @@ private:
     bool configured_;
 };
 
-} // namespace AsyncIO::IO::DNNBackends
+} // namespace XER::AsyncIO::IO::DNNBackends
  

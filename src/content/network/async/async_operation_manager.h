@@ -12,7 +12,7 @@
 
 #include "async_io/io_thread_pool.h"
 
-namespace network::async {
+namespace XER::network::async {
 
 // Callback type for async operations
 // Parameters: (error_code, bytes_transferred)
@@ -43,7 +43,7 @@ public:
     void Enqueue(std::function<void()> operation);
 
     // Get the shared IOThreadPool instance
-    AsyncIO::IO::Async::IOThreadPool& GetThreadPool();
+    XER::AsyncIO::IO::Async::IOThreadPool& GetThreadPool();
 
     // Start/stop the thread pool
     void Start();
@@ -60,7 +60,7 @@ private:
     AsyncOperationManager(const AsyncOperationManager&) = delete;
     AsyncOperationManager& operator=(const AsyncOperationManager&) = delete;
 
-    AsyncIO::IO::Async::IOThreadPool& thread_pool_;
+    XER::AsyncIO::IO::Async::IOThreadPool& thread_pool_;
     mutable std::mutex mutex_;
 };
 
@@ -74,4 +74,4 @@ public:
                         AsyncCallback callback);
 };
 
-} // namespace network::async
+} // namespace XER::network::async

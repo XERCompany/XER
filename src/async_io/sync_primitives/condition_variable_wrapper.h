@@ -5,7 +5,7 @@
 #include <string>
 #include <chrono>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 class ConditionVariableWrapper {
 public:
@@ -32,4 +32,4 @@ private:
     uint64_t wait_count_;
 };
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

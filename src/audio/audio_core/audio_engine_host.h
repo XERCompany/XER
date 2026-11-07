@@ -4,7 +4,7 @@
 #include <vector>
 #include <string>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 class AudioEngine;
 
@@ -37,4 +37,4 @@ private:
     int global_buffer_size_;
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

@@ -8,7 +8,7 @@
     #include <unistd.h>
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 MemoryMonitor::MemoryMonitor()
     : is_monitoring_(false), peak_memory_mb_(0), tracked_allocation_mb_(0),
@@ -115,4 +115,4 @@ MemoryStats MemoryMonitor::QuerySystemMemory() const {
     return stats;
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

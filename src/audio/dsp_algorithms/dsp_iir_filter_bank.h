@@ -7,7 +7,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include "dsp_biquad_processor.h"
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class IIRFilterBank {
 public:
@@ -22,8 +22,8 @@ public:
 	std::string GetReport() const;
 
 private:
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 	std::vector<BiquadProcessor> filters_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

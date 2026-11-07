@@ -3,9 +3,7 @@
 #include <memory>
 #include <string>
 
-#include "app_audio_controller.h"
-
-namespace App {
+namespace XER::App {
 
 class AppUI {
 public:
@@ -22,8 +20,8 @@ public:
     void HideWindow();
     void CloseWindow();
 
-    // Audio widget integration
-    void SetupAudioPlayerWidget(AudioController* controller);
+    // Node graph editor content
+    void SetupNodeGraphEditor();
 
     // Run UI event loop
     int Run();
@@ -38,4 +36,4 @@ private:
     bool initialized_;
 };
 
-}  // namespace App
+}  // namespace XER::App

@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace Engine::Audio::Demo {
+namespace XER::Engine::Audio::Demo {
 
 struct AudioAnalysisSmokeOptions {
 	std::filesystem::path input_path;
@@ -19,4 +19,4 @@ bool RunAudioAnalysisSmoke(
 	std::string* report_out,
 	std::string* error_out = nullptr);
 
-}  // namespace Engine::Audio::Demo
+}  // namespace XER::Engine::Audio::Demo

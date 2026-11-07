@@ -4,12 +4,13 @@
  * Copyright (C) 2026 Yoshi A.
  */
 #include "content/network/network_util/network_util.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
 #include <regex>
 #include <sstream>
 
-namespace network {
+namespace XER::network {
 
 std::string NetErrorToString(NetError error) {
     switch (error) {
@@ -60,9 +61,7 @@ std::string UnwrapIPv6(const std::string& host) {
 }
 
 std::string CanonicaliseHost(const std::string& host) {
-    std::string out = host;
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::string out = XER::Engine::Helper::String::ToLowerAscii(host);
     // Strip trailing dot.
     if (!out.empty() && out.back() == '.')
         out.pop_back();
@@ -132,9 +131,7 @@ bool SplitHostPort(const std::string& host_port_str,
 }
 
 std::string CanonicalizeScheme(const std::string& scheme) {
-    std::string out = scheme;
-    std::transform(out.begin(), out.end(), out.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    std::string out = XER::Engine::Helper::String::ToLowerAscii(scheme);
     return out;
 }
 
@@ -156,4 +153,4 @@ uint16_t DefaultPortForScheme(const std::string& scheme) {
     return 0;  // Unknown scheme
 }
 
-}  // namespace network
+}  // namespace XER::network

@@ -6,7 +6,7 @@
 #include <immintrin.h>
 #endif
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 SpectralShaper::SpectralShaper(size_t fft_size, size_t hop_size)
 	: fft_size_(fft_size),
@@ -22,7 +22,7 @@ bool SpectralShaper::SetCurve(const std::vector<float>& curve) {
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	shaping_curve_ = curve;
 	return true;
 }
@@ -32,7 +32,7 @@ bool SpectralShaper::ProcessBlock(const float* input, size_t frame_count, float*
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	const size_t positive_bins = stft_processor_.GetPositiveBinCount();
 	for (size_t offset = 0; offset < frame_count; offset += hop_size_) {
 		if (!stft_processor_.Analyze(input + offset, hop_size_)) {
@@ -78,7 +78,7 @@ bool SpectralShaper::ProcessBlock(const float* input, size_t frame_count, float*
 }
 
 void SpectralShaper::Reset() {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	std::fill(shaping_curve_.begin(), shaping_curve_.end(), 1.0f);
 	stft_processor_.Reset();
 }
@@ -89,4 +89,4 @@ std::string SpectralShaper::GetReport() const {
 		", curve_size=" + std::to_string(shaping_curve_.size());
 }
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

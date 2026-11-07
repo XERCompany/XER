@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Audio::Demo {
+namespace XER::Engine::Audio::Demo {
 
 struct AudioFxCustomOptions {
 	std::filesystem::path output_dir;
@@ -36,4 +36,4 @@ bool RunAudioFxBatch(
 	std::string* error_out = nullptr,
 	std::vector<std::uint8_t>* mp3_output_out = nullptr);
 
-}  // namespace Engine::Audio::Demo
+}  // namespace XER::Engine::Audio::Demo

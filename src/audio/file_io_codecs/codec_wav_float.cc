@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace Engine::Audio::CodecIO {
+namespace XER::Engine::Audio::CodecIO {
 
 namespace {
 
@@ -104,4 +104,4 @@ bool WavFloatCodec::Decode32(const uint8_t* data, size_t bytes, std::vector<floa
     return !out.empty();
 }
 
-}  // namespace Engine::Audio::CodecIO
+}  // namespace XER::Engine::Audio::CodecIO

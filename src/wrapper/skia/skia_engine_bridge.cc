@@ -1,3 +1,4 @@
+#include "helper/string_utils.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
 #include <algorithm>
@@ -92,7 +93,7 @@
 #define ENGINE_SKIA_NATIVE_CODEC 0
 #endif
 
-namespace engine::bridge::skia {
+namespace XER::engine::bridge::skia {
 
 namespace {
 
@@ -266,13 +267,6 @@ bool DrawPathOnBitmap(SkBitmap* bitmap,
     return true;
 }
 #endif
-
-std::string LowerAscii(std::string value) {
-    std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
-    return value;
-}
 
 const std::vector<std::string>& BlendModesStorage() {
     static const std::vector<std::string> kBlendModes = {
@@ -525,7 +519,7 @@ uint32_t UnpremultiplyAlpha(uint32_t rgba) {
 }
 
 std::string NormalizeBlendModeName(const std::string& mode_name) {
-    std::string key = LowerAscii(mode_name);
+    std::string key = XER::Engine::Helper::String::ToLowerAscii(mode_name);
     key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char ch) {
         return std::isspace(ch) != 0;
     }), key.end());
@@ -536,7 +530,7 @@ std::string NormalizeBlendModeName(const std::string& mode_name) {
     }
 
     for (const auto& mode : BlendModesStorage()) {
-        if (LowerAscii(mode) == key) {
+        if (XER::Engine::Helper::String::ToLowerAscii(mode) == key) {
             return mode;
         }
     }
@@ -1299,4 +1293,4 @@ bool DecodeImage(const std::vector<uint8_t>& bytes,
 #endif
 }
 
-}  // namespace engine::bridge::skia
+}  // namespace XER::engine::bridge::skia

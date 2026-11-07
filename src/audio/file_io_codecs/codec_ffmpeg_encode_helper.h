@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Audio::CodecIO::detail {
+namespace XER::Engine::Audio::CodecIO::detail {
 
 bool EncodeMonoAudioBufferWithFfmpeg(
 	const float* input,
@@ -26,4 +26,4 @@ bool EncodeInterleavedAudioBufferWithFfmpeg(
 	std::vector<uint8_t>* encoded_bytes,
 	std::string* error_out = nullptr);
 
-}  // namespace Engine::Audio::CodecIO::detail
+}  // namespace XER::Engine::Audio::CodecIO::detail

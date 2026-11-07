@@ -5,7 +5,7 @@
 #include "content/network/proxy/proxy_resolver_factory.h"
 #include "content/network/proxy/proxy_service.h"
 
-namespace network::proxy {
+namespace XER::network::proxy {
 
 // static
 std::unique_ptr<ProxyResolver> ProxyResolverFactory::Create(
@@ -13,4 +13,4 @@ std::unique_ptr<ProxyResolver> ProxyResolverFactory::Create(
     return std::make_unique<ProxyService>(config);
 }
 
-}  // namespace network::proxy
+}  // namespace XER::network::proxy

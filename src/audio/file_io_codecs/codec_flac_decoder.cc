@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-namespace Engine::Audio::CodecIO {
+namespace XER::Engine::Audio::CodecIO {
 
 bool FlacDecoder::Decode(const uint8_t* data, size_t bytes, std::vector<float>& out) const {
     if (data == nullptr || bytes == 0) {
@@ -18,4 +18,4 @@ bool FlacDecoder::Decode(const uint8_t* data, size_t bytes, std::vector<float>& 
     return true;
 }
 
-}  // namespace Engine::Audio::CodecIO
+}  // namespace XER::Engine::Audio::CodecIO

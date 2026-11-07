@@ -8,7 +8,7 @@
 #include <sstream>
 #include <vector>
 
-namespace network::url {
+namespace XER::network::url {
 
 static bool IsUnreserved(char c) {
     return std::isalnum(static_cast<unsigned char>(c)) ||
@@ -78,4 +78,4 @@ std::string NormalizePath(const std::string& path) {
     return out.empty() ? "/" : out;
 }
 
-}  // namespace network::url
+}  // namespace XER::network::url

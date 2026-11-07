@@ -5,7 +5,7 @@
 
 #include "custom_effect_struct.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 bool TryRunAdvancedCustomEffectPackage(
 	const CustomEffectPackage& package,
@@ -16,4 +16,4 @@ bool TryRunAdvancedCustomEffectPackage(
 	bool* handled_out,
 	std::string* error_out = nullptr);
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

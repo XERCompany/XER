@@ -10,7 +10,7 @@
 #include <vector>
 #include "content/network/spdy/spdy_protocol.h"
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 struct SpdyFrame {
     SpdyFrameType  type       = SpdyFrameType::kData;
@@ -27,4 +27,4 @@ std::vector<uint8_t> SerializeSpdyFrame(const SpdyFrame& frame);
 // Parse the next frame from |buf|. Returns bytes consumed, 0 if incomplete.
 size_t ParseSpdyFrame(const uint8_t* buf, size_t len, SpdyFrame* out);
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

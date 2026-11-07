@@ -12,7 +12,7 @@
 
 #include <openssl/ssl.h>
 
-namespace network::ssl {
+namespace XER::network::ssl {
 
 // SSL session cache entry
 struct SslSessionEntry {
@@ -98,4 +98,4 @@ private:
     SSL_SESSION* session_;
 };
 
-} // namespace network::ssl
+} // namespace XER::network::ssl

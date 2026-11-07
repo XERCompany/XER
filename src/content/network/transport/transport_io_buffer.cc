@@ -4,10 +4,10 @@
  */
 #include "content/network/transport/transport_io_buffer.h"
 
-namespace network::transport {
+namespace XER::network::transport {
 
 IOBuffer::IOBuffer(size_t size) {
-    holder_ = AsyncIO::IO::Async::IOBufferPool::Instance().Acquire(size);
+    holder_ = XER::AsyncIO::IO::Async::IOBufferPool::Instance().Acquire(size);
     holder_->resize(size);
     data_ = holder_->data();
     size_ = size;
@@ -15,4 +15,4 @@ IOBuffer::IOBuffer(size_t size) {
 
 IOBuffer::~IOBuffer() = default;
 
-}  // namespace network::transport
+}  // namespace XER::network::transport

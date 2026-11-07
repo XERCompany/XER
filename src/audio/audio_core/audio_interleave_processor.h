@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 class AudioInterleaveProcessor {
 public:
@@ -61,4 +61,4 @@ private:
     }
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

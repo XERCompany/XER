@@ -9,7 +9,7 @@
 
 #include "cache/cache_storage.h"
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 class TemporaryStorage final : public CacheStorage {
 public:
@@ -30,4 +30,4 @@ private:
 	std::unordered_map<std::string, std::vector<std::uint8_t>> entries_;
 };
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

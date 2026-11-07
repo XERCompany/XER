@@ -97,105 +97,174 @@ bool Executor::EvaluateNode(NodeId id, EvalContext& ctx) const {
     return true;
 }
  
-ExecutionResult Executor::Run() {
-    const auto start = std::chrono::steady_clock::now();
-    ExecutionResult result;
-    external_outputs_.clear();
- 
-    std::string cycle_error;
-    if (graph_.TopologicalOrder(&cycle_error).empty() && !graph_.nodes().empty()) {
-        result.ok = false;
-        result.error = cycle_error;
-        return result;
-    }
- 
-    // Remove cache entries of deleted nodes.
-    for (auto it = cache_.begin(); it != cache_.end();) {
-        it = graph_.FindNode(it->first) ? std::next(it) : cache_.erase(it);
-    }
- 
-    const auto levels = graph_.ExecutionLevels();
-    result.levels = levels.size();
-    std::set<NodeId> changed;
-    std::set<NodeId> failed;
-    size_t threads = options_.max_threads ? options_.max_threads : std::max(1u, std::thread::hardware_concurrency());
- 
-    for (const auto& level : levels) {
-        std::vector<NodeId> work;
-        for (NodeId id : level) {
-            const Node* node = graph_.FindNode(id);
-            const NodeTypeDescriptor* desc = graph_.registry().Find(node->type);
-            bool upstream_failed = false;
-            bool needs = !options_.incremental || graph_.IsDirty(id) || !cache_.count(id) || !desc || !desc->pure;
-            for (const auto& link : graph_.LinksOf(id)) {
-                if (link.to.node != id) continue;
-                if (changed.count(link.from.node)) needs = true;
-                if (failed.count(link.from.node)) upstream_failed = true;
-            }
-            if (upstream_failed) {
-                failed.insert(id);
-                result.node_errors[id] = "skipped: upstream node failed";
-                cache_.erase(id);
-                continue;
-            }
-            if (needs) work.push_back(id);
-            else ++result.cached;
+void Executor::EvalLevel(const std::vector<NodeId>& level,
+                         ExecutionResult& result,
+                         std::set<NodeId>& changed, std::set<NodeId>& failed,
+                         std::vector<NodeId>* evaluated_out) {
+    std::vector<NodeId> work;
+    for (NodeId id : level) {
+        const Node* node = graph_.FindNode(id);
+        if (node == nullptr) continue;
+        const NodeTypeDescriptor* desc = graph_.registry().Find(node->type);
+        bool upstream_failed = false;
+        bool needs = !options_.incremental || graph_.IsDirty(id) || !cache_.count(id) || !desc || !desc->pure;
+        for (const auto& link : graph_.LinksOf(id)) {
+            if (link.to.node != id) continue;
+            if (changed.count(link.from.node)) needs = true;
+            if (failed.count(link.from.node)) upstream_failed = true;
         }
- 
-        std::vector<EvalContext> contexts;
-        contexts.reserve(work.size());
-        for (NodeId id : work) contexts.push_back(PrepareContext(*graph_.FindNode(id)));
-        std::vector<char> ok(work.size(), 0);
- 
-        auto eval_range = [&](size_t begin, size_t end) {
-            for (size_t i = begin; i < end; ++i) ok[i] = EvaluateNode(work[i], contexts[i]) ? 1 : 0;
-        };
-        const size_t workers = options_.parallel ? std::min(threads, work.size()) : 1;
-        if (workers <= 1) {
-            eval_range(0, work.size());
-        } else {
-            std::vector<std::thread> pool;
-            const size_t chunk = (work.size() + workers - 1) / workers;
-            for (size_t w = 0; w < workers; ++w) {
-                const size_t b = w * chunk;
-                const size_t e = std::min(work.size(), b + chunk);
-                if (b < e) pool.emplace_back(eval_range, b, e);
-            }
-            for (auto& t : pool) t.join();
+        if (upstream_failed) {
+            failed.insert(id);
+            result.node_errors[id] = "skipped: upstream node failed";
+            cache_.erase(id);
+            continue;
         }
- 
-        for (size_t i = 0; i < work.size(); ++i) {
-            const NodeId id = work[i];
-            auto& ctx = contexts[i];
-            for (auto& l : ctx.logs) result.logs.push_back(std::move(l));
-            ++result.evaluated;
-            if (!ok[i]) {
-                failed.insert(id);
-                result.node_errors[id] = ctx.error;
-                cache_.erase(id);
-                continue;
-            }
-            auto it = cache_.find(id);
-            if (it == cache_.end() || it->second != ctx.outputs) changed.insert(id);
-            cache_[id] = std::move(ctx.outputs);
-            graph_.ClearDirty(id);
-        }
+        if (needs) work.push_back(id);
+        else ++result.cached;
     }
- 
+
+    std::vector<EvalContext> contexts;
+    contexts.reserve(work.size());
+    for (NodeId id : work) contexts.push_back(PrepareContext(*graph_.FindNode(id)));
+    std::vector<char> ok(work.size(), 0);
+
+    auto eval_range = [&](size_t begin, size_t end) {
+        for (size_t i = begin; i < end; ++i) ok[i] = EvaluateNode(work[i], contexts[i]) ? 1 : 0;
+    };
+    const size_t threads = options_.max_threads ? options_.max_threads : std::max(1u, std::thread::hardware_concurrency());
+    const size_t workers = options_.parallel ? std::min(threads, work.size()) : 1;
+    if (workers <= 1) {
+        eval_range(0, work.size());
+    } else {
+        std::vector<std::thread> pool;
+        const size_t chunk = (work.size() + workers - 1) / workers;
+        for (size_t w = 0; w < workers; ++w) {
+            const size_t b = w * chunk;
+            const size_t e = std::min(work.size(), b + chunk);
+            if (b < e) pool.emplace_back(eval_range, b, e);
+        }
+        for (auto& t : pool) t.join();
+    }
+
+    for (size_t i = 0; i < work.size(); ++i) {
+        const NodeId id = work[i];
+        auto& ctx = contexts[i];
+        for (auto& l : ctx.logs) result.logs.push_back(std::move(l));
+        ++result.evaluated;
+        if (!ok[i]) {
+            failed.insert(id);
+            result.node_errors[id] = ctx.error;
+            cache_.erase(id);
+            continue;
+        }
+        auto it = cache_.find(id);
+        if (it == cache_.end() || it->second != ctx.outputs) changed.insert(id);
+        cache_[id] = std::move(ctx.outputs);
+        graph_.ClearDirty(id);
+        if (evaluated_out) evaluated_out->push_back(id);
+    }
+}
+
+void Executor::FinalizeResult(ExecutionResult& result) {
     for (const auto& [id, node] : graph_.nodes()) {
         if (node.type != "graph.output") continue;
         auto name_it = node.params.find("name");
         const std::string name = name_it != node.params.end() ? name_it->second.AsString() : "out";
         external_outputs_[name] = GetOutput(id, "value");
     }
- 
     if (!result.node_errors.empty()) {
         result.ok = false;
         if (result.error.empty()) result.error = std::to_string(result.node_errors.size()) + " node(s) failed";
     }
+}
+
+void Executor::BeginStepSession() {
+    step_started_ = true;
+    step_level_idx_ = 0;
+    step_revision_ = graph_.revision();
+    step_changed_.clear();
+    step_failed_.clear();
+    step_result_ = ExecutionResult{};
+    step_levels_.clear();
+    // Remove cache entries of deleted nodes.
+    for (auto it = cache_.begin(); it != cache_.end();) {
+        it = graph_.FindNode(it->first) ? std::next(it) : cache_.erase(it);
+    }
+    step_levels_ = graph_.ExecutionLevels();
+    step_result_.levels = step_levels_.size();
+    external_outputs_.clear();
+}
+
+void Executor::ResetStep() {
+    step_started_ = false;
+    step_level_idx_ = 0;
+    step_levels_.clear();
+    step_changed_.clear();
+    step_failed_.clear();
+    step_result_ = ExecutionResult{};
+}
+
+bool Executor::StepOnce(StepInfo* info) {
+    if (info == nullptr) return false;
+    *info = StepInfo{};
+    // A graph edit mid-session invalidates the level plan — restart.
+    if (step_started_ && graph_.revision() != step_revision_) {
+        ResetStep();
+    }
+    if (!step_started_) BeginStepSession();
+    info->started = true;
+    info->total_levels = step_levels_.size();
+
+    if (step_level_idx_ >= step_levels_.size()) {
+        info->finished = true;
+        info->level = step_level_idx_;
+        info->error = step_result_.error;
+        return false;
+    }
+
+    const size_t idx = step_level_idx_++;
+    EvalLevel(step_levels_[idx], step_result_, step_changed_, step_failed_,
+              &info->nodes);
+    info->level = idx;
+    info->error = step_result_.error;
+    info->finished = step_level_idx_ >= step_levels_.size();
+    if (info->finished) {
+        FinalizeResult(step_result_);
+    }
+    return true;
+}
+
+ExecutionResult Executor::Run() {
+    const auto start = std::chrono::steady_clock::now();
+    ExecutionResult result;
+    external_outputs_.clear();
+    ResetStep();
+
+    std::string cycle_error;
+    if (graph_.TopologicalOrder(&cycle_error).empty() && !graph_.nodes().empty()) {
+        result.ok = false;
+        result.error = cycle_error;
+        return result;
+    }
+
+    // Remove cache entries of deleted nodes.
+    for (auto it = cache_.begin(); it != cache_.end();) {
+        it = graph_.FindNode(it->first) ? std::next(it) : cache_.erase(it);
+    }
+
+    const auto levels = graph_.ExecutionLevels();
+    result.levels = levels.size();
+    std::set<NodeId> changed;
+    std::set<NodeId> failed;
+
+    for (const auto& level : levels) {
+        EvalLevel(level, result, changed, failed, nullptr);
+    }
+
+    FinalizeResult(result);
     result.elapsed_ms =
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
     return result;
 }
- 
+
 }  // namespace XER::NodeGraph

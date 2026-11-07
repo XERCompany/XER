@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 SpectrogramGenerator::SpectrogramGenerator(size_t fft_size, size_t hop_size)
 	: fft_size_(fft_size),
@@ -17,10 +17,10 @@ SpectrogramGenerator::SpectrogramGenerator(size_t fft_size, size_t hop_size)
 SpectrogramGenerator::~SpectrogramGenerator() = default;
 
 bool SpectrogramGenerator::GenerateFromFile(
-	const Engine::Audio::Core::AudioSourceLoadOptions& load_options,
+	const XER::Engine::Audio::Core::AudioSourceLoadOptions& load_options,
 	std::string* error_out) {
-	Engine::Audio::Core::AudioSourceBuffer source_buffer;
-	if (!Engine::Audio::Core::AudioSourceLoader::Load(load_options, &source_buffer, error_out)) {
+	XER::Engine::Audio::Core::AudioSourceBuffer source_buffer;
+	if (!XER::Engine::Audio::Core::AudioSourceLoader::Load(load_options, &source_buffer, error_out)) {
 		return false;
 	}
 	return Generate(source_buffer.samples.data(), source_buffer.samples.size());
@@ -63,7 +63,7 @@ bool SpectrogramGenerator::ExportAsRaw(const std::string& filepath) const {
 		flat.insert(flat.end(), row.begin(), row.end());
 	}
 
-	return AsyncIO::IO::LogDebug::DumpHelper::DumpMemoryToFile(
+	return XER::AsyncIO::IO::LogDebug::DumpHelper::DumpMemoryToFile(
 		filepath,
 		reinterpret_cast<const uint8_t*>(flat.data()),
 		flat.size() * sizeof(float));
@@ -79,4 +79,4 @@ std::string SpectrogramGenerator::GetReport() const {
 		", bins=" + std::to_string(GetBinCount());
 }
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

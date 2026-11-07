@@ -2,6 +2,7 @@
 
 #include <cmath>
 
+#include "motion/motion.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 
@@ -25,6 +26,15 @@ void Spinner::SetPhase(float phase) {
     Invalidate();
 }
 
+void Spinner::Tick(double dt_seconds) {
+    if (!IsEffectivelyVisible() || Motion::ReducedMotion()) {
+        return;
+    }
+    // One revolution per ~1.1s; the spoke trail does the easing visually.
+    phase_ = std::fmod(phase_ + static_cast<float>(dt_seconds) / 1.1f, 1.0f);
+    Invalidate();
+}
+
 void Spinner::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
     const float center_x = bounds.x + bounds.width / 2.0f;
@@ -44,12 +54,11 @@ void Spinner::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens)
             center_x + std::cos(angle) * radius,
             center_y + std::sin(angle) * radius
         };
-        renderer.DrawLine(
-            start,
-            end,
-            spoke == 0 ? tokens.accent : tokens.muted,
-            2.0f
-        );
+        // Fade the trail behind the leading spoke, like shadcn's Loader2.
+        Theme::Color spoke_color = tokens.foreground;
+        spoke_color.a = 0.15f + 0.85f * static_cast<float>(spoke) /
+            static_cast<float>(kSpokeCount - 1);
+        renderer.DrawLine(start, end, spoke_color, 2.0f);
     }
 }
 

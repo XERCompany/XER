@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 AsyncFileReader::AsyncFileReader()
     : file_size_(0), current_position_(0), pending_ops_(0) {}
@@ -195,4 +195,4 @@ std::string AsyncFileReader::GetLastError() const {
     return last_error_;
 }
 
-}  // namespace AsyncIO::IO::Async
+}  // namespace XER::AsyncIO::IO::Async

@@ -7,7 +7,7 @@
 #include "include/core/SkM44.h"
 #endif
 
-namespace engine::bridge::skia {
+namespace XER::engine::bridge::skia {
 
 #if ENGINE_HAS_SKIA_BRIDGE
 

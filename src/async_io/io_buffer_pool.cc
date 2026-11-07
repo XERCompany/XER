@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cassert>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 IOBufferPool &IOBufferPool::Instance() {
     static IOBufferPool instance;
@@ -119,4 +119,4 @@ void IOBufferPool::Clear() noexcept {
     }
 }
 
-} // namespace AsyncIO::IO::Async
+} // namespace XER::AsyncIO::IO::Async

@@ -13,7 +13,7 @@
 #include <algorithm>
 #include <utility>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 GPUInfoProvider::GPUInfoProvider()
     : current_device_(0), initialized_(false), supports_cuda_(false), 
@@ -269,4 +269,4 @@ void GPUInfoProvider::DetectNvmlDevices() {
     }
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

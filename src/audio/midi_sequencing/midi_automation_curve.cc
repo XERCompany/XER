@@ -2,10 +2,10 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::MIDI {
+namespace XER::Engine::Audio::MIDI {
 
 void MidiAutomationCurve::AddPoint(uint32_t tick, float value) {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     points_.push_back(AutomationPoint{tick, value});
     std::sort(points_.begin(), points_.end(), [](const AutomationPoint& a, const AutomationPoint& b) {
         return a.tick < b.tick;
@@ -13,7 +13,7 @@ void MidiAutomationCurve::AddPoint(uint32_t tick, float value) {
 }
 
 float MidiAutomationCurve::Evaluate(uint32_t tick) const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     if (points_.empty()) {
         return 0.0f;
     }
@@ -36,4 +36,4 @@ float MidiAutomationCurve::Evaluate(uint32_t tick) const {
     return points_.back().value;
 }
 
-}  // namespace Engine::Audio::MIDI
+}  // namespace XER::Engine::Audio::MIDI

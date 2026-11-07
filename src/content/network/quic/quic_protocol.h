@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace network::quic {
+namespace XER::network::quic {
 
 using QuicConnectionId   = uint64_t;
 using QuicStreamId       = uint32_t;
@@ -37,4 +37,4 @@ enum class QuicErrorCode : uint32_t {
 
 std::string QuicErrorCodeToString(QuicErrorCode code);
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

@@ -7,7 +7,7 @@
 #include <mutex>
 #include <vector>
 
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 struct PerformanceMetric {
     std::string name;
@@ -89,4 +89,4 @@ private:
     bool stopped_;
 };
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

@@ -12,6 +12,18 @@ file(GLOB_RECURSE UI_HEADERS
 )
 list(FILTER UI_HEADERS EXCLUDE REGEX "/backends/flux/")
 
+# Skia (unofficial port): GPU-capable 2D canvas used by Canvas/VideoPreview.
+find_package(unofficial-skia CONFIG REQUIRED)
+
+# Intel oneMKL (vcpkg intel-mkl): SIMD vector math for batched animation
+# kernels (motion/accel.*). Sequential threading — animation runs on the UI
+# thread and must never block on OpenMP workers; static link keeps Editor.exe
+# free of extra runtime DLLs.
+set(MKL_THREADING "sequential" CACHE STRING "" FORCE)
+set(MKL_LINK "static" CACHE STRING "" FORCE)
+set(MKL_INTERFACE "lp64" CACHE STRING "" FORCE)
+find_package(mkl CONFIG REQUIRED)
+
 # Create UI core library
 add_library(XER_UI_Core STATIC ${UI_SOURCES} ${UI_HEADERS})
 
@@ -26,10 +38,24 @@ target_link_libraries(XER_UI_Core
     PUBLIC
         absl::strings
         fmt::fmt
+        XER_Cache
+        XER_ContentClipboard
+        XER_ContentVideo
+        XER_NodeGraph
+        XER_AsyncIO
+        unofficial::skia::skia
+        MKL::MKL
 )
+
+# Project avatars are transcoded to icons/<id>/icon.jpg through the FFmpeg
+# wrapper (engine::bridge::ffmpeg::ImageToJpeg).
+if(TARGET XER_FFmpeg)
+    target_link_libraries(XER_UI_Core PUBLIC XER_FFmpeg)
+endif()
 
 # C++ standard
 target_compile_features(XER_UI_Core PUBLIC cxx_std_23)
+target_compile_definitions(XER_UI_Core PUBLIC XER_HAVE_MKL)
 
 # Compiler flags
 if(MSVC)
@@ -72,8 +98,12 @@ if(WIN32)
             user32
             gdi32
             d2d1
+            d3d12
             dxgi
             dwrite
+            comdlg32
+            windowscodecs
+            ole32
     )
     # Prevent winsock.h / min-max macros from interfering with std::
     target_compile_definitions(XER_UI_Core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)

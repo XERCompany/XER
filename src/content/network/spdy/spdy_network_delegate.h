@@ -7,7 +7,7 @@
 #include <string>
 #include "content/network/spdy/spdy_protocol.h"
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 class SpdyNetworkDelegate {
 public:
@@ -20,4 +20,4 @@ public:
 
 class DefaultSpdyNetworkDelegate : public SpdyNetworkDelegate {};
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

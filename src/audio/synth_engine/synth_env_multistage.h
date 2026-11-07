@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 struct EnvStage { float target; float time_s; };
 
@@ -18,4 +18,4 @@ private:
     float value_ = 0.0f;
 };
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

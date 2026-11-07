@@ -11,7 +11,7 @@
     #include <dirent.h>
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 namespace {
 
@@ -225,4 +225,4 @@ bool BatteryInfoProvider::IsOnACPower() const {
 
 #endif
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

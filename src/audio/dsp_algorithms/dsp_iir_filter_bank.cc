@@ -7,7 +7,7 @@
 #include <immintrin.h>
 #endif
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 IIRFilterBank::IIRFilterBank()
 	: mutex_("iir_filter_bank") {}
@@ -15,7 +15,7 @@ IIRFilterBank::IIRFilterBank()
 IIRFilterBank::~IIRFilterBank() = default;
 
 void IIRFilterBank::Clear() {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	filters_.clear();
 }
 
@@ -25,13 +25,13 @@ bool IIRFilterBank::AddBiquad(BiquadType type, float sample_rate, float frequenc
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	filters_.push_back(biquad);
 	return true;
 }
 
 bool IIRFilterBank::ProcessSample(float input, std::vector<float>& outputs) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	outputs.assign(filters_.size(), 0.0f);
 	const size_t hardware_threads = std::max<size_t>(1, std::thread::hardware_concurrency());
 	const size_t num_threads = std::min(hardware_threads, filters_.size());
@@ -83,4 +83,4 @@ std::string IIRFilterBank::GetReport() const {
 	return "IIRBank: filters=" + std::to_string(filters_.size());
 }
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

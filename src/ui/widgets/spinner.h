@@ -13,6 +13,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    void Tick(double dt_seconds) override;
     bool HandleEvent(const Event& event) override;
 
     Layout::Size GetMinSize() const override;

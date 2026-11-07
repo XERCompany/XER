@@ -7,7 +7,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 class ModPhaser {
 public:
@@ -35,7 +35,7 @@ private:
 	float lfo_phase_;
 	float feedback_state_;
 	std::vector<float> ap_state_;
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

@@ -7,9 +7,9 @@
 #include <fstream>
 #include <sstream>
 
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
-namespace network::dns {
+namespace XER::network::dns {
 
 bool DnsConfigService::ReadConfig(DnsConfig* config) const {
     std::ifstream file("/etc/resolv.conf");
@@ -54,4 +54,4 @@ DnsConfig DnsConfigService::DefaultConfig() {
     return cfg;
 }
 
-}  // namespace network::dns
+}  // namespace XER::network::dns

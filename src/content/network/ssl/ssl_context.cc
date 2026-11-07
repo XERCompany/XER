@@ -12,7 +12,7 @@
 #include <openssl/x509err.h>
 #endif
 
-namespace network::ssl {
+namespace XER::network::ssl {
 namespace {
 
 #ifdef _WIN32
@@ -301,4 +301,4 @@ std::string GetLastSslError() {
     return GetSslErrorString(error);
 }
 
-} // namespace network::ssl
+} // namespace XER::network::ssl

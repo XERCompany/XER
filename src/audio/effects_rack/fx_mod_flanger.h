@@ -7,7 +7,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "audio/dsp_algorithms/dsp_delay_line_circular.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 class ModFlanger {
 public:
@@ -33,8 +33,8 @@ private:
 	float mix_;
 	float lfo_phase_;
 	float feedback_state_;
-	Engine::Audio::DSP::CircularDelayLine delay_line_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::Engine::Audio::DSP::CircularDelayLine delay_line_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

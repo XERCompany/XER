@@ -7,7 +7,7 @@
 #include <string>
 #include "content/network/proxy/proxy_info.h"
 
-namespace network::proxy {
+namespace XER::network::proxy {
 
 // Abstract proxy resolver: maps a URL → ProxyInfo.
 class ProxyResolver {
@@ -18,4 +18,4 @@ public:
                          std::string* error) = 0;
 };
 
-}  // namespace network::proxy
+}  // namespace XER::network::proxy

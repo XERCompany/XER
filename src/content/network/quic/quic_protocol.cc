@@ -4,7 +4,7 @@
  */
 #include "content/network/quic/quic_protocol.h"
 
-namespace network::quic {
+namespace XER::network::quic {
 
 std::string QuicErrorCodeToString(QuicErrorCode code) {
     switch (code) {
@@ -17,4 +17,4 @@ std::string QuicErrorCodeToString(QuicErrorCode code) {
     }
 }
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

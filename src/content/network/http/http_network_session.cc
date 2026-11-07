@@ -4,11 +4,11 @@
  */
 #include "content/network/http/http_network_session.h"
 
-namespace network::http {
+namespace XER::network::http {
 
 HttpNetworkSession& HttpNetworkSession::Default() {
     static HttpNetworkSession inst;
     return inst;
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

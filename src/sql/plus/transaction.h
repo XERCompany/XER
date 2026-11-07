@@ -2,11 +2,11 @@
 
 #include <string>
 
-namespace Engine::SQL::Storage {
+namespace XER::Engine::SQL::Storage {
 class SQLiteDatabase;
 }
 
-namespace Engine::SQL::Plus {
+namespace XER::Engine::SQL::Plus {
 
 class Transaction {
 public:
@@ -26,4 +26,4 @@ private:
 	bool active_;
 };
 
-}  // namespace Engine::SQL::Plus
+}  // namespace XER::Engine::SQL::Plus

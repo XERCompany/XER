@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace network::cert {
+namespace XER::network::cert {
 
 enum class CertStatus {
     kOk = 0,
@@ -34,4 +34,4 @@ struct CertVerifyResult {
 
 std::string CertStatusToString(CertStatus s);
 
-}  // namespace network::cert
+}  // namespace XER::network::cert

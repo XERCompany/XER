@@ -12,7 +12,7 @@
 #include "content/network/dns/dns_record_type.h"
 #include "content/network/dns/host_resolver.h"
 
-namespace network::dns {
+namespace XER::network::dns {
 
 // High-level resolver: tries cache → system getaddrinfo fallback.
 class DnsResolver {
@@ -39,4 +39,4 @@ private:
     std::unique_ptr<HostResolver>     host_resolver_;
 };
 
-}  // namespace network::dns
+}  // namespace XER::network::dns

@@ -5,7 +5,7 @@
 #include "content/network/http/http_stream_factory.h"
 #include "content/network/socket/socket_stream.h"
 
-namespace network::http {
+namespace XER::network::http {
 
 namespace {
 
@@ -40,4 +40,4 @@ HttpStreamFactory::CreateFromSocket(
     return std::make_unique<SocketBackedHttpStream>(std::move(socket));
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

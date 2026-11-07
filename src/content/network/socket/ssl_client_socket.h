@@ -13,7 +13,7 @@
 #include "content/network/ssl/ssl_context.h"
 #include "content/network/ssl/ssl_session_cache.h"
 
-namespace network {
+namespace XER::network {
 namespace socket {
 
 class SslClientSocket : public transport::TransportClientSocket {
@@ -79,4 +79,4 @@ private:
 };
 
 }  // namespace socket
-}  // namespace network
+}  // namespace XER::network

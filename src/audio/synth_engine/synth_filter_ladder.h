@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 class SynthFilterLadder {
 public:
@@ -14,4 +14,4 @@ private:
     float z1_ = 0.0f, z2_ = 0.0f, z3_ = 0.0f, z4_ = 0.0f;
 };
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

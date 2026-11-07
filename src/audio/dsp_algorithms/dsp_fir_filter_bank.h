@@ -7,7 +7,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include <future>
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class FIRFilterBank {
 public:
@@ -24,9 +24,9 @@ public:
 	std::string GetReport() const;
 
 private:
-	mutable AsyncIO::IO::Sync::MutexWrapper mutex_;
+	mutable XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 	std::vector<std::vector<float>> filters_;
 	std::vector<std::vector<float>> states_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

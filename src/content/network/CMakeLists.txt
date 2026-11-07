@@ -25,6 +25,7 @@ target_link_libraries(XER_Network
         absl::synchronization
         fmt::fmt
         jsoncpp_lib
+        XER_Hex
 )
 
 # Link with internal modules
@@ -32,7 +33,7 @@ target_link_libraries(XER_Network
     PUBLIC
         XER_AsyncIO
         XER_Cache
-        XER_Flux
+        XER_Flux_Core
 )
 
 # Link with OpenSSL (required for SSL/TLS)

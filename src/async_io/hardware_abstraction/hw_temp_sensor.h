@@ -8,7 +8,7 @@
 #include <mutex>
 #include <functional>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 // Temperature sensor reading.
 struct TemperatureReading {
@@ -99,4 +99,4 @@ private:
     void MonitorLoop(int interval_ms);
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

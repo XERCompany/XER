@@ -6,7 +6,7 @@
 #include "node_graph/node_graph_registry.h"
 #include "node_graph/node_graph_serializer.h"
 
-namespace App {
+namespace XER::App {
 
 class NodeGraphManager {
 public:
@@ -43,4 +43,4 @@ private:
     std::string audio_path_;
 };
 
-}  // namespace App
+}  // namespace XER::App

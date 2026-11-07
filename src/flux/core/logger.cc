@@ -8,7 +8,7 @@
 #include "flux/terminal/terminal_output_renderer.h"
 #include "flux/terminal/terminal_styles.h"
 
-namespace flux::core {
+namespace XER::flux::core {
 namespace {
 
 std::string BuildTimestamp() {
@@ -24,9 +24,9 @@ std::string BuildTimestamp() {
 	return output.str();
 }
 
-flux::terminal::TerminalStyle StyleForLevel(LogLevel level) {
-	using flux::terminal::TerminalColor;
-	using flux::terminal::TerminalStyle;
+XER::flux::terminal::TerminalStyle StyleForLevel(LogLevel level) {
+	using XER::flux::terminal::TerminalColor;
+	using XER::flux::terminal::TerminalStyle;
 	TerminalStyle style;
 	switch (level) {
 	case LogLevel::kDebug:
@@ -79,12 +79,12 @@ void Logger::Log(LogLevel level, std::string_view component, std::string_view me
 	output << " " << message;
 	std::string line = output.str();
 	if (config_.colors) {
-		line = flux::terminal::ApplyStyle(line, StyleForLevel(level));
+		line = XER::flux::terminal::ApplyStyle(line, StyleForLevel(level));
 	}
-	flux::terminal::WriteLine(
+	XER::flux::terminal::WriteLine(
 		level == LogLevel::kWarning || level == LogLevel::kError
-			? flux::terminal::OutputStream::kStderr
-			: flux::terminal::OutputStream::kStdout,
+			? XER::flux::terminal::OutputStream::kStderr
+			: XER::flux::terminal::OutputStream::kStdout,
 		line);
 	}
 
@@ -104,4 +104,4 @@ void Logger::Error(std::string_view component, std::string_view message) const {
 	Log(LogLevel::kError, component, message);
 }
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

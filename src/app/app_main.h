@@ -8,7 +8,7 @@
 #include "flux/core/flux_core.h"
 #include "flux/core/logger.h"
 
-namespace App {
+namespace XER::App {
 
 class Application {
 public:
@@ -27,8 +27,8 @@ private:
     bool SetupUI();
 
     // Systems
-    flux::core::FluxCore flux_core_;
-    flux::core::Logger* logger_;
+    XER::flux::core::FluxCore flux_core_;
+    XER::flux::core::Logger* logger_;
 
     // App components
     AudioController audio_controller_;
@@ -41,4 +41,4 @@ private:
     std::string audio_config_file_;
 };
 
-}  // namespace App
+}  // namespace XER::App

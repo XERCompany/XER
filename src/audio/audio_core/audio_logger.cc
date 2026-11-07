@@ -6,13 +6,13 @@
 
 #include "flux/core/logger.h"
 
-namespace Engine {
+namespace XER::Engine {
 namespace Audio {
 namespace Core {
 
 class AudioLogger::Impl {
 public:
-    flux::core::Logger logger;
+    XER::flux::core::Logger logger;
 };
 
 AudioLogger::AudioLogger() : impl_(std::make_unique<Impl>()) {}
@@ -95,4 +95,4 @@ void AudioLogger::LogFilterOperation(const std::string& filter_type, double dura
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace Engine
+}  // namespace XER::Engine

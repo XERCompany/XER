@@ -6,7 +6,7 @@
 #include "custom_effect_core.h"
 #include "custom_effect_fxdata.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 bool SerializeCustomEffectPackage(
 	const CustomEffectPackage& package,
@@ -133,4 +133,4 @@ bool DeserializeCustomEffectPackage(
 	return true;
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

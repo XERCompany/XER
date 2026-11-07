@@ -16,9 +16,9 @@
 
 #include <sstream>
 
-namespace platform = network::socket::platform;
+namespace platform = XER::network::socket::platform;
 
-namespace network::ftp {
+namespace XER::network::ftp {
 
 FtpStream::~FtpStream() {
     if (ctrl_fd_ >= 0) {
@@ -319,4 +319,4 @@ FtpResponse ExecuteFtpRequest(const FtpRequest& req) {
     return resp;
 }
 
-}  // namespace network::ftp
+}  // namespace XER::network::ftp

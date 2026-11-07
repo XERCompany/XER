@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 void SynthEnvMultistage::SetStages(const std::vector<EnvStage>& stages) {
     stages_ = stages;
@@ -26,4 +26,4 @@ float SynthEnvMultistage::Process(float sample_rate) {
     return value_;
 }
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

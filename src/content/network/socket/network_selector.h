@@ -10,7 +10,7 @@
 #include "content/network/proxy/proxy_config.h"
 #include "content/network/transport/transport_client_socket.h"
 
-namespace network::socket {
+namespace XER::network::socket {
 
 // Selects and creates the right socket type (plain/TLS/proxy) for a URL.
 class NetworkSelector {
@@ -27,4 +27,4 @@ private:
     proxy::ProxyConfig proxy_config_;
 };
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

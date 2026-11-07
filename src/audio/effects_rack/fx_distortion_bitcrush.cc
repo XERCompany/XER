@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 DistortionBitcrush::DistortionBitcrush()
 	: bit_depth_(8),
@@ -51,4 +51,4 @@ std::string DistortionBitcrush::GetReport() const {
 		", downsample=" + std::to_string(downsample_factor_);
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

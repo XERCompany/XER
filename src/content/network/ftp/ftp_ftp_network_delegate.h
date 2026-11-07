@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace network::ftp {
+namespace XER::network::ftp {
 
 class FtpNetworkDelegate {
 public:
@@ -20,4 +20,4 @@ public:
 
 class DefaultFtpNetworkDelegate : public FtpNetworkDelegate {};
 
-}  // namespace network::ftp
+}  // namespace XER::network::ftp

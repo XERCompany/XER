@@ -2,7 +2,7 @@
 
 #include "custom_effect_eq_lite.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 std::vector<std::string> ListCustomEffectAlgorithms() {
 	return {
@@ -21,6 +21,9 @@ std::vector<std::string> ListCustomEffectAlgorithms() {
 		"pitch_shift",
 		"auto_tune_correct_pitch",
 		"delay",
+		"tremolo",
+		"vibrato",
+		"ring_mod",
 		"clap_plugin",
 	};
 }
@@ -108,8 +111,24 @@ CustomEffectNode CreateDefaultCustomEffectNode(const std::string& algorithm_name
 		break;
 	case CustomEffectAlgorithm::kDelay:
 		node.mix_curve.push_back(CustomEffectCurvePoint{0u, 0.45f});
-		node.parameters.push_back(CustomEffectParameter{"delay_samples", 640.0f});
+		node.parameters.push_back(CustomEffectParameter{"time_ms", 350.0f});
 		node.parameters.push_back(CustomEffectParameter{"feedback", 0.35f});
+		node.parameters.push_back(CustomEffectParameter{"damping", 0.35f});
+		break;
+	case CustomEffectAlgorithm::kTremolo:
+		node.mix_curve.push_back(CustomEffectCurvePoint{0u, 0.85f});
+		node.parameters.push_back(CustomEffectParameter{"rate_hz", 4.5f});
+		node.parameters.push_back(CustomEffectParameter{"depth", 0.5f});
+		break;
+	case CustomEffectAlgorithm::kVibrato:
+		node.mix_curve.push_back(CustomEffectCurvePoint{0u, 0.9f});
+		node.parameters.push_back(CustomEffectParameter{"rate_hz", 5.0f});
+		node.parameters.push_back(CustomEffectParameter{"depth_ms", 4.0f});
+		break;
+	case CustomEffectAlgorithm::kRingMod:
+		node.mix_curve.push_back(CustomEffectCurvePoint{0u, 0.8f});
+		node.parameters.push_back(CustomEffectParameter{"frequency_hz", 80.0f});
+		node.parameters.push_back(CustomEffectParameter{"mix", 1.0f});
 		break;
 	case CustomEffectAlgorithm::kPlugin:
 		node.label = "clap_plugin";
@@ -177,4 +196,4 @@ std::vector<std::string> ListCustomEffectPresets() {
 	};
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

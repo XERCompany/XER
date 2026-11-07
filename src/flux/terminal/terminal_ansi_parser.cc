@@ -4,7 +4,7 @@
 #include <string>
 #include <string_view>
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 namespace {
 
 std::size_t SkipCsiSequence(std::string_view text, std::size_t index) {
@@ -107,4 +107,4 @@ std::string StripAnsi(std::string_view text) {
 	return out;
 }
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

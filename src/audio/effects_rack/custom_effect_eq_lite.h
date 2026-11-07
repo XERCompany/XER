@@ -2,8 +2,8 @@
 
 #include "custom_effect_struct.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 CustomEffectNode CreateCustomEffectLiteEqNode(float gain_db);
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

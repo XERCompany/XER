@@ -5,19 +5,19 @@
 #include <vector>
 
 #include "flux/core/flux_context.h"
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
-namespace flux::core {
+namespace XER::flux::core {
 namespace {
 
 std::string CanonicalName(std::string_view name) {
-	return Helper::String::CanonicalizeToken(absl::string_view(name.data(), name.size()));
+	return XER::Engine::Helper::String::CanonicalizeToken(name);
 }
 
 }  // namespace
 
 bool ModuleManager::Register(FluxModule module, std::string* error_out) {
-	if (Helper::String::IsBlank(module.name)) {
+	if (XER::Engine::Helper::String::IsBlank(module.name)) {
 		if (error_out != nullptr) {
 			*error_out = "Flux module name must not be blank";
 		}
@@ -76,4 +76,4 @@ void ModuleManager::StopAll(FluxContext& context) {
 	started_modules_.clear();
 }
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

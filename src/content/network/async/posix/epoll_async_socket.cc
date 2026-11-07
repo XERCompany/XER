@@ -10,7 +10,7 @@
 #include <string.h>
 #include <unistd.h>
 
-namespace network::async::posix {
+namespace XER::network::async::posix {
 
 EpollAsyncManager::EpollAsyncManager()
     : epoll_fd_(-1),
@@ -248,6 +248,6 @@ EpollAsyncManager& GetGlobalEpollManager() {
     return instance;
 }
 
-} // namespace network::async::posix
+} // namespace XER::network::async::posix
 
 #endif // __linux__ || __ANDROID__

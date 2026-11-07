@@ -3,6 +3,7 @@
 
 #include <functional>
 
+#include "motion/motion.h"
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {
@@ -17,6 +18,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    void Tick(double dt_seconds) override;
     bool HandleEvent(const Event& event) override;
 
     Layout::Size GetMinSize() const override;
@@ -28,6 +30,12 @@ private:
 
     bool checked_ = false;
     std::function<void(bool)> on_changed_;
+
+    // Motion: thumb travel 0..1 (springs between states, keeps velocity on
+    // interrupt) and a press-stretch tween while the pointer is held.
+    Motion::Spring thumb_t_;
+    Motion::Tween press_t_;
+    bool held_ = false;
 };
 
 } // namespace XER::UI::Widgets

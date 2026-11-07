@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 namespace {
 float DbToLinear(float db_value) {
@@ -26,10 +26,10 @@ bool GraphicEQ::Initialize(float sample_rate, const std::vector<float>& center_f
 	sample_rate_ = sample_rate;
 	center_frequencies_ = center_frequencies;
 	gains_db_.assign(center_frequencies_.size(), 0.0f);
-	filters_.assign(center_frequencies_.size(), Engine::Audio::DSP::BiquadProcessor());
+	filters_.assign(center_frequencies_.size(), XER::Engine::Audio::DSP::BiquadProcessor());
 
 	for (size_t i = 0; i < filters_.size(); ++i) {
-		filters_[i].Configure(Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, center_frequencies_[i], 0.8f);
+		filters_[i].Configure(XER::Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, center_frequencies_[i], 0.8f);
 	}
 	return true;
 }
@@ -63,4 +63,4 @@ std::string GraphicEQ::GetReport() const {
 		", sr=" + std::to_string(sample_rate_);
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

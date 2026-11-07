@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace Engine::Audio::CodecIO {
+namespace XER::Engine::Audio::CodecIO {
 
 CodecFileStreamer::CodecFileStreamer()
     : reading_open_(false), writing_open_(false) {
@@ -57,4 +57,4 @@ void CodecFileStreamer::Close() {
     writing_open_ = false;
 }
 
-}  // namespace Engine::Audio::CodecIO
+}  // namespace XER::Engine::Audio::CodecIO

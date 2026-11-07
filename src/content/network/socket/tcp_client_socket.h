@@ -11,7 +11,7 @@
 #include "content/network/transport/transport_client_socket.h"
 #include "content/network/socket/socket_stream.h"
 
-namespace network {
+namespace XER::network {
 namespace socket {
 
 class SocketServer;  // forward declaration
@@ -93,4 +93,4 @@ private:
 };
 
 }  // namespace socket
-}  // namespace network
+}  // namespace XER::network

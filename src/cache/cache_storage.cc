@@ -7,7 +7,7 @@
 #include <range/v3/range/conversion.hpp>
 #include <range/v3/view/transform.hpp>
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 bool CacheStorage::ReadText(const CacheEntry& entry,
 			    std::string* text,
@@ -42,4 +42,4 @@ bool CacheStorage::WriteText(const CacheEntry& entry,
 	return WriteBinary(entry, bytes, error_out);
 }
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

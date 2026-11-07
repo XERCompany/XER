@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <chrono>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 struct MemoryStats {
     uint64_t total_mb;
@@ -51,4 +51,4 @@ private:
     MemoryStats QuerySystemMemory() const;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

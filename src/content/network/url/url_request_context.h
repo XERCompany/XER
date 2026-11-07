@@ -11,7 +11,7 @@
 #include "content/network/cert/cert_storage.h"
 #include "content/network/dns/dns_config_service.h"
 
-namespace network::url {
+namespace XER::network::url {
 
 struct URLRequestContext {
     std::string              user_agent   = "XER/1.0";
@@ -23,4 +23,4 @@ struct URLRequestContext {
     cert::CertStorage        cert_storage;
 };
 
-}  // namespace network::url
+}  // namespace XER::network::url

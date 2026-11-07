@@ -31,6 +31,7 @@ target_link_libraries(XER_AudioCore
         unofficial::fxdiv::fxdiv
         FFTW3::fftw3f
         XER_VST3SDK
+        XER_Helper
 )
 
 # Link with internal modules

@@ -12,7 +12,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
-namespace network::cert {
+namespace XER::network::cert {
 
 namespace {
 
@@ -134,4 +134,4 @@ bool CertVerifier::IsTimeValid(const CertVerifyResult& result) {
     return now >= result.not_before && now <= result.not_after;
 }
 
-}  // namespace network::cert
+}  // namespace XER::network::cert

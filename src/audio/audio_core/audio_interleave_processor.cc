@@ -5,7 +5,7 @@
 #include <future>
 #include <thread>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 namespace {
 
@@ -179,4 +179,4 @@ bool AudioInterleaveProcessor::MixChannels(
     return true;
 }
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

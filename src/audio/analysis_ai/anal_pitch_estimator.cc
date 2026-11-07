@@ -1,6 +1,6 @@
 #include "anal_pitch_estimator.h"
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 PitchEstimator::PitchEstimator(int sample_rate)
 	: sample_rate_(sample_rate),
@@ -17,7 +17,7 @@ bool PitchEstimator::Estimate(const float* audio, size_t frame_count) {
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	perf_counter_.StartCounter("pitch_estimate");
 
 	last_pitch_ = detector_.DetectPitch(audio, frame_count);
@@ -28,7 +28,7 @@ bool PitchEstimator::Estimate(const float* audio, size_t frame_count) {
 }
 
 void PitchEstimator::Reset() {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	last_pitch_ = {0.0f, 0.0f, 0};
 	last_harmonics_.clear();
 }
@@ -43,4 +43,4 @@ std::string PitchEstimator::GetReport() const {
 		", note=" + GetLastNote();
 }
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

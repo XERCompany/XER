@@ -6,7 +6,7 @@
 
 #include "content/network/proxy/socks_client_socket.h"
 
-namespace network::socket {
+namespace XER::network::socket {
 
 // static
 std::unique_ptr<TcpClientSocket>
@@ -42,4 +42,4 @@ SocketProxy::ConnectThrough(const proxy::ProxyServer& proxy,
     return sock;
 }
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

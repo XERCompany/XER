@@ -4,6 +4,7 @@
  */
 #include "content/network/http/http_auth.h"
 #include "content/network/http/http_util.h"
+#include "helper/string_utils.h"
 
 #include <vector>
 #include <cstring>
@@ -11,7 +12,7 @@
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
 
-namespace network::http {
+namespace XER::network::http {
 
 static std::string Base64Encode(const std::string& in) {
     BIO* b64 = BIO_new(BIO_f_base64());
@@ -39,15 +40,11 @@ std::string BuildAuthorizationHeader(const HttpAuthCredentials& creds) {
 }
 
 AuthScheme ParseAuthChallenge(const std::string& challenge) {
-    const std::string lc = [&]{
-        std::string s = challenge;
-        for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        return s;
-    }();
+    const std::string lc = XER::Engine::Helper::String::ToLowerAscii(challenge);
     if (lc.find("bearer") == 0)  return AuthScheme::kBearer;
     if (lc.find("digest") == 0)  return AuthScheme::kDigest;
     if (lc.find("basic")  == 0)  return AuthScheme::kBasic;
     return AuthScheme::kNone;
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

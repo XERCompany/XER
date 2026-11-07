@@ -3,6 +3,7 @@
 
 #include <functional>
 
+#include "motion/motion.h"
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {
@@ -14,10 +15,13 @@ public:
     void SetRange(float minimum, float maximum);
     void SetValue(float value);
     float GetValue() const;
+    // True between left MouseDown on the track/thumb and the matching MouseUp.
+    bool IsDragging() const;
     void SetOnValueChanged(std::function<void(float)> callback);
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    void Tick(double dt_seconds) override;
     bool HandleEvent(const Event& event) override;
 
     Layout::Size GetMinSize() const override;
@@ -30,7 +34,10 @@ private:
     float minimum_;
     float maximum_;
     float value_;
+    bool dragging_ = false;
     std::function<void(float)> on_value_changed_;
+    // Thumb swell: eases toward 1 on hover/grab, back to 0 at rest.
+    Motion::Tween swell_;
 };
 
 } // namespace XER::UI::Widgets

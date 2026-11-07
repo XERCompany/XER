@@ -13,7 +13,7 @@
 
 #include "cache/cache_utils.h"
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 // ---------------------------------------------------------------------------
 // TTL sidecar helpers
@@ -276,4 +276,4 @@ bool PersistentStorage::WriteTextRelative(const std::filesystem::path& relative_
 	return WriteBinaryRelative(relative_path, bytes, error_out);
 }
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

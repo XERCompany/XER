@@ -13,7 +13,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace network {
+namespace XER::network {
 namespace socket {
 namespace platform {
 

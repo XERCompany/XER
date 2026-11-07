@@ -13,7 +13,7 @@
 #define ENGINE_CLAP_EXPORT __attribute__((visibility("default")))
 #endif
 
-namespace Engine::Audio::Plugin::ClapAbi {
+namespace XER::Engine::Audio::Plugin::ClapAbi {
 
 struct clap_version_t {
 	uint32_t major;
@@ -302,4 +302,4 @@ inline double clap_clamp_param_value(const clap_minimal_param_descriptor& descri
 	return std::clamp(value, descriptor.min_value, descriptor.max_value);
 }
 
-}  // namespace Engine::Audio::Plugin::ClapAbi
+}  // namespace XER::Engine::Audio::Plugin::ClapAbi

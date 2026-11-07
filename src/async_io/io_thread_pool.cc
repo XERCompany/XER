@@ -10,7 +10,7 @@
 #include <sys/resource.h>
 #endif
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 // Returns the thread count to use for the shared instance.
 // Respects ENGINE_ASYNC_IO_WORKERS (first choice) and ENGINE_MAX_CPU_THREADS (fallback).
@@ -211,4 +211,4 @@ void IOThreadPool::WorkerLoop() {
     }
 }
 
-} // namespace AsyncIO::IO::Async
+} // namespace XER::AsyncIO::IO::Async

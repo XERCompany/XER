@@ -4,7 +4,7 @@
 #include <cmath>
 #include <future>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 std::string ModFlanger::GetMemoryStats() const {
 	std::string stats;
@@ -61,50 +61,16 @@ bool ModFlanger::ProcessBlock(const float* input, size_t frame_count, float* out
 	}
 	perf_counter_.StartCounter("fx_flanger");
 	const float phase_inc = 2.0f * kPi * rate_hz_ / sample_rate_;
+	// Flangers sweep a few milliseconds around a ~4 ms centre delay.
+	const float base_delay = 4.0f * 0.001f * sample_rate_;
+	const float max_delay = static_cast<float>(delay_line_.GetMaxDelaySamples());
 
-	size_t i = 0;
-#if defined(__AVX2__)
-	for (; i + 7 < frame_count; i += 8) {
-		float lfo[8], delay[8], in[8], wet[8];
-		for (int j = 0; j < 8; ++j) {
-			lfo[j] = (std::sin(lfo_phase_ + phase_inc * j) + 1.0f) * 0.5f;
-			delay[j] = static_cast<size_t>(std::max(1.0f, lfo[j] * depth_samples_));
-			delay_line_.SetDelaySamples(delay[j]);
-			in[j] = input[i + j] + feedback_state_ * feedback_;
-			wet[j] = delay_line_.Process(in[j]);
-			feedback_state_ = wet[j];
-			output[i + j] = input[i + j] * (1.0f - mix_) + wet[j] * mix_;
-		}
-		lfo_phase_ += phase_inc * 8;
-		if (lfo_phase_ > 2.0f * kPi) {
-			lfo_phase_ -= 2.0f * kPi;
-		}
-	}
-#endif
-#if defined(__SSE2__)
-	for (; i + 3 < frame_count; i += 4) {
-		float lfo[4], delay[4], in[4], wet[4];
-		for (int j = 0; j < 4; ++j) {
-			lfo[j] = (std::sin(lfo_phase_ + phase_inc * j) + 1.0f) * 0.5f;
-			delay[j] = static_cast<size_t>(std::max(1.0f, lfo[j] * depth_samples_));
-			delay_line_.SetDelaySamples(delay[j]);
-			in[j] = input[i + j] + feedback_state_ * feedback_;
-			wet[j] = delay_line_.Process(in[j]);
-			feedback_state_ = wet[j];
-			output[i + j] = input[i + j] * (1.0f - mix_) + wet[j] * mix_;
-		}
-		lfo_phase_ += phase_inc * 4;
-		if (lfo_phase_ > 2.0f * kPi) {
-			lfo_phase_ -= 2.0f * kPi;
-		}
-	}
-#endif
-	for (; i < frame_count; ++i) {
-		const float lfo = (std::sin(lfo_phase_) + 1.0f) * 0.5f;
-		const size_t delay = static_cast<size_t>(std::max(1.0f, lfo * depth_samples_));
-		delay_line_.SetDelaySamples(delay);
+	for (size_t i = 0; i < frame_count; ++i) {
+		const float lfo = 0.5f - 0.5f * std::cos(lfo_phase_);
+		const float delay = std::clamp(base_delay + lfo * depth_samples_,
+		                               1.0f, max_delay - 1.0f);
 		const float in = input[i] + feedback_state_ * feedback_;
-		const float wet = delay_line_.Process(in);
+		const float wet = delay_line_.ProcessFractional(in, delay);
 		feedback_state_ = wet;
 		output[i] = input[i] * (1.0f - mix_) + wet * mix_;
 		lfo_phase_ += phase_inc;
@@ -129,4 +95,4 @@ std::future<bool> ModFlanger::ProcessBlockAsync(const float* input, size_t frame
 	});
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

@@ -3,7 +3,7 @@
 #include "sql/modern/query.h"
 #include "sql/storage/sqlite_database.h"
 
-namespace Engine::SQL::Plus {
+namespace XER::Engine::SQL::Plus {
 
 Transaction::Transaction(Storage::SQLiteDatabase& database,
 			 std::string* error_out)
@@ -35,4 +35,4 @@ bool Transaction::Rollback(std::string* error_out) {
 	return true;
 }
 
-}  // namespace Engine::SQL::Plus
+}  // namespace XER::Engine::SQL::Plus

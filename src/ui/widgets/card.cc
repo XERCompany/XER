@@ -8,15 +8,15 @@
 namespace XER::UI::Widgets {
 namespace {
 
-constexpr float kPadding = 16.0f;
+constexpr float kPadding = 24.0f;
 constexpr float kMinimumDimension = 32.0f;
 
 } // namespace
 
 void Card::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, tokens.surface, tokens.radius_medium);
-    renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_medium);
+    renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
+    renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
 }
 
 void Card::Layout(const Layout::Rect& bounds) {

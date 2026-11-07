@@ -1,6 +1,7 @@
 #ifndef XER_UI_CORE_WINDOW_H
 #define XER_UI_CORE_WINDOW_H
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -45,6 +46,13 @@ public:
     // Empty after a successful paint; otherwise returns the most recent native paint error.
     std::string GetLastRenderError() const;
 
+    // Schedules a full client-area repaint on the next WM_PAINT.
+    void Invalidate();
+    // Invokes `callback` on the UI thread every `interval_ms` while the window
+    // exists. Pass an empty callback to stop. Repaints only occur when widgets
+    // report changes, so an idle callback is nearly free.
+    void SetFrameCallback(std::function<void()> callback, std::uint32_t interval_ms = 33);
+
     // Callbacks
     void SetOnClose(Callback callback);
     void SetOnResize(std::function<void(int, int)> callback);
@@ -53,8 +61,16 @@ public:
     void SetTitle(const std::string& title);
     std::string GetTitle() const;
 
+    // When true, WM_CLOSE hides the window instead of destroying it, so it
+    // can be shown again with Show(). Used for secondary/tool windows.
+    void SetCloseHides(bool hides);
+
     void SetSize(int width, int height);
     void GetSize(int* width, int* height) const;
+
+    // Window size limits in pixels (outer window size). 0 = unconstrained.
+    // Enforced via WM_GETMINMAXINFO while the window is being resized.
+    void SetSizeLimits(int min_width, int min_height, int max_width, int max_height);
 
     void SetPosition(int x, int y);
     void GetPosition(int* x, int* y) const;

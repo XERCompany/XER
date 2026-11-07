@@ -5,12 +5,12 @@
 #include <iomanip>
 
 #include "app/app_audio_controller.h"
-#include "audio/effects_rack/custom_effect.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widgets/button.h"
-#include "widgets/switch.h"
-#include "layout/geometry.h"
+#include "widgets/context_menu.h"
+#include "widgets/waveform_widget.h"
+#include "widgets/widget_tree.h"
 
 namespace XER::UI::Widgets {
 
@@ -18,58 +18,66 @@ namespace {
 
 std::string FormatTime(double seconds) {
     if (seconds < 0) return "0:00";
-    
     int total_seconds = static_cast<int>(seconds);
-    int minutes = total_seconds / 60;
-    int secs = total_seconds % 60;
-    
     std::ostringstream oss;
-    oss << minutes << ":" << std::setw(2) << std::setfill('0') << secs;
+    oss << (total_seconds / 60) << ":" << std::setw(2) << std::setfill('0') << (total_seconds % 60);
     return oss.str();
 }
 
 } // namespace
 
-AudioPlayerWidget::AudioPlayerWidget(App::AudioController* controller)
+AudioPlayerWidget::AudioPlayerWidget(XER::App::AudioController* controller)
     : controller_(controller)
     , current_time_(0.0)
     , duration_(0.0)
-    , is_playing_(false)
-    , effect_enabled_(false)
-    , current_effect_index_(0) {
+    , is_playing_(false) {
 
-    // Create child widgets with appropriate styles
     play_pause_button_ = std::make_shared<Button>("Play", ButtonStyle::Primary);
     stop_button_ = std::make_shared<Button>("Stop", ButtonStyle::Secondary);
     mute_button_ = std::make_shared<Button>("Mute", ButtonStyle::Outline);
+    fx_button_ = std::make_shared<Button>("FX", ButtonStyle::Secondary);
     seek_slider_ = std::make_shared<Slider>(0.0f, 1.0f, 0.0f);
     volume_slider_ = std::make_shared<Slider>(0.0f, 1.0f, 1.0f);
-    time_label_ = std::make_shared<Label>("0:00");
-    duration_label_ = std::make_shared<Label>("0:00");
-    effect_switch_ = std::make_shared<Switch>(false);
-    effect_label_ = std::make_shared<Label>("Effect: None");
+    volume_label_ = std::make_shared<Label>("Vol", true);
+    time_label_ = std::make_shared<Label>("0:00 / 0:00", true);
+    status_label_ = std::make_shared<Label>("Ready", true);
+    waveform_ = std::make_shared<WaveformWidget>();
 
-    // Set callbacks
     play_pause_button_->SetOnClick([this]() { OnPlayPause(); });
     stop_button_->SetOnClick([this]() { OnStop(); });
     mute_button_->SetOnClick([this]() { OnMute(); });
+    fx_button_->SetOnClick([this]() {
+        if (on_open_fx_) {
+            on_open_fx_();
+        }
+    });
+    play_pause_button_->SetTooltip("Play / Pause  (Space)");
+    stop_button_->SetTooltip("Stop");
+    mute_button_->SetTooltip("Mute / Unmute output");
+    fx_button_->SetTooltip("Open FX rack");
+    seek_slider_->SetTooltip("Seek position");
+    volume_slider_->SetTooltip("Output volume");
+    waveform_->SetTooltip("Playback position");
     seek_slider_->SetOnValueChanged([this](float value) { OnSeek(value); });
     volume_slider_->SetOnValueChanged([this](float value) { OnVolumeChanged(value); });
-    effect_switch_->SetOnChanged([this](bool enabled) { OnEffectToggle(enabled); });
 
-    // Load available effects
-    LoadAvailableEffects();
-
-    // Set position callback for live updates
     if (controller_) {
         controller_->SetPositionCallback([this](double current, double dur) {
             live_position_.store(current, std::memory_order_relaxed);
             live_duration_.store(dur, std::memory_order_relaxed);
         });
-        controller_->SetStateCallback([this](Content::Audio::PlaybackState state) {
+        controller_->SetStateCallback([this](XER::Content::Audio::PlaybackState state) {
             live_state_.store(static_cast<int>(state), std::memory_order_relaxed);
         });
     }
+}
+
+void AudioPlayerWidget::SetOnOpenFx(std::function<void()> callback) {
+    on_open_fx_ = std::move(callback);
+}
+
+void AudioPlayerWidget::SetOnOpenVideoPreview(std::function<void()> callback) {
+    on_open_video_ = std::move(callback);
 }
 
 void AudioPlayerWidget::EnsureChildrenAttached() {
@@ -81,26 +89,52 @@ void AudioPlayerWidget::EnsureChildrenAttached() {
     AddChild(play_pause_button_);
     AddChild(stop_button_);
     AddChild(mute_button_);
+    AddChild(fx_button_);
     AddChild(seek_slider_);
     AddChild(volume_slider_);
+    AddChild(volume_label_);
     AddChild(time_label_);
-    AddChild(duration_label_);
-    AddChild(effect_switch_);
-    AddChild(effect_label_);
+    AddChild(status_label_);
+    AddChild(waveform_);
+
+    // Right-click anywhere on the player (including over child controls that
+    // ignore non-left buttons) opens the transport context menu.
+    if (WidgetTree* tree = GetTree(); tree != nullptr && !context_menu_registered_) {
+        context_menu_registered_ = true;
+        tree->SetContextMenuHandler([this](const Event& event) {
+            return OnContextMenu(event);
+        });
+        // Global transport shortcuts. Runs only when no focused widget
+        // consumed the key, so typing in inputs stays unaffected.
+        tree->SetKeyHandler([this](const Event& event) {
+            if (event.type == Event::Type::KeyDown &&
+                event.key == KeyCode::Space) {
+                OnPlayPause();
+                return true;
+            }
+            if (event.type == Event::Type::TextInput &&
+                (event.text == "m" || event.text == "M" || event.text == "ь" || event.text == "Ь")) {
+                OnMute();
+                return true;
+            }
+            return false;
+        });
+    }
 }
 
 void AudioPlayerWidget::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     EnsureChildrenAttached();
-    SyncPlaybackState();
-
-    // Render background
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, tokens.surface, tokens.radius_medium);
-    renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_medium);
+    renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
+    renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
+    // Subtle accent tick on the leading edge while playing.
+    if (is_playing_) {
+        renderer.FillRect(Layout::Rect{bounds.x, bounds.y + 8.0f, 3.0f, bounds.height - 16.0f},
+                          tokens.accent, 1.5f);
+    }
 }
 
 void AudioPlayerWidget::Layout(const Layout::Rect& bounds) {
-    // Default layout without theme tokens
     Layout(bounds, Theme::Tokens{});
 }
 
@@ -110,62 +144,47 @@ void AudioPlayerWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& 
 
     const float padding = tokens.spacing_large;
     const float spacing = tokens.spacing_small;
-    const float button_height = 32.0f;
-    const float slider_height = 20.0f;
-    const float label_width = 50.0f;
+    const float row_h = 36.0f;
+    const float strip_h = 24.0f;
+    const float strip_gap = tokens.spacing_small;
+    // Transport row sits above the waveform strip, both inside the card.
+    const float controls_h = bounds.height - strip_h - strip_gap;
+    const float y = bounds.y + std::max(0.0f, (controls_h - row_h) * 0.5f);
+    waveform_->Layout(Layout::Rect{
+        bounds.x + padding, bounds.y + bounds.height - strip_h - 2.0f,
+        bounds.width - 2.0f * padding, strip_h});
+    float x = bounds.x + padding;
 
-    float y = padding;
-    float x = padding;
-    const float content_width = bounds.width - 2.0f * padding;
+    play_pause_button_->Layout(Layout::Rect{x, y, 92.0f, row_h});
+    x += 92.0f + spacing;
+    stop_button_->Layout(Layout::Rect{x, y, 56.0f, row_h});
+    x += 56.0f + spacing;
+    mute_button_->Layout(Layout::Rect{x, y, 72.0f, row_h});
+    x += 72.0f + spacing;
 
-    // First row: playback controls and seek slider
-    // Play/Pause button
-    Layout::Rect play_pause_bounds{x, y, 80.0f, button_height};
-    play_pause_button_->Layout(play_pause_bounds);
-    x += 80.0f + spacing;
+    // Right-side fixed cluster, seek takes whatever remains.
+    const float vol_label_w = 34.0f;
+    const float vol_slider_w = 84.0f;
+    const float fx_w = 52.0f;
+    const float status_w = 64.0f;
+    const float time_w = 96.0f;
+    const float right_fixed =
+        vol_label_w + spacing + vol_slider_w + spacing * 2.0f + fx_w + spacing +
+        status_w + spacing + time_w;
+    const float seek_width = std::max(80.0f,
+        bounds.x + bounds.width - padding - x - right_fixed);
 
-    // Stop button
-    Layout::Rect stop_bounds{x, y, 60.0f, button_height};
-    stop_button_->Layout(stop_bounds);
-    x += 60.0f + spacing;
-
-    // Mute button
-    Layout::Rect mute_bounds{x, y, 60.0f, button_height};
-    mute_button_->Layout(mute_bounds);
-    x += 60.0f + spacing;
-
-    // Time label
-    Layout::Rect time_bounds{x, y, label_width, button_height};
-    time_label_->Layout(time_bounds);
-    x += label_width + spacing;
-
-    // Seek slider (takes remaining space)
-    float seek_width = content_width - (80.0f + 60.0f + 60.0f + label_width + spacing * 4);
-    Layout::Rect seek_bounds{x, y + (button_height - slider_height) / 2.0f, seek_width, slider_height};
-    seek_slider_->Layout(seek_bounds);
-
-    // Duration label (to the right of seek slider)
-    Layout::Rect duration_bounds{x + seek_width + spacing, y, label_width, button_height};
-    duration_label_->Layout(duration_bounds);
-
-    // Second row: volume slider and effect controls
-    y += button_height + spacing;
-    x = padding;
-
-    float volume_width = content_width * 0.4f;
-    Layout::Rect volume_bounds{x, y + (button_height - slider_height) / 2.0f, volume_width, slider_height};
-    volume_slider_->Layout(volume_bounds);
-    x += volume_width + spacing * 2;
-
-    // Effect switch
-    Layout::Rect effect_switch_bounds{x, y, 40.0f, button_height};
-    effect_switch_->Layout(effect_switch_bounds);
-    x += 40.0f + spacing;
-
-    // Effect label
-    float effect_label_width = content_width - volume_width - 40.0f - spacing * 4;
-    Layout::Rect effect_label_bounds{x, y, effect_label_width, button_height};
-    effect_label_->Layout(effect_label_bounds);
+    seek_slider_->Layout(Layout::Rect{x, y + 7.0f, seek_width, 22.0f});
+    x += seek_width + spacing;
+    time_label_->Layout(Layout::Rect{x, y, time_w, row_h});
+    x += time_w + spacing;
+    volume_label_->Layout(Layout::Rect{x, y + 2.0f, vol_label_w, 32.0f});
+    x += vol_label_w + spacing;
+    volume_slider_->Layout(Layout::Rect{x, y + 7.0f, vol_slider_w, 22.0f});
+    x += vol_slider_w + spacing * 2.0f;
+    fx_button_->Layout(Layout::Rect{x, y, fx_w, row_h});
+    x += fx_w + spacing;
+    status_label_->Layout(Layout::Rect{x, y + 2.0f, status_w, 32.0f});
 }
 
 bool AudioPlayerWidget::HandleEvent(const Event&) {
@@ -173,20 +192,26 @@ bool AudioPlayerWidget::HandleEvent(const Event&) {
 }
 
 Layout::Size AudioPlayerWidget::GetMinSize() const {
-    return {400.0f, 130.0f};
+    return {560.0f, 72.0f};
 }
 
 Layout::Size AudioPlayerWidget::GetPreferredSize() const {
-    return {600.0f, 150.0f};
+    return {720.0f, 84.0f};
 }
 
 Layout::Size AudioPlayerWidget::GetMaxSize() const {
     return {100000.0f, 100000.0f};
 }
 
+void AudioPlayerWidget::Tick() {
+    SyncPlaybackState();
+    waveform_->Tick();
+    waveform_->SetPlaying(is_playing_);
+}
+
 void AudioPlayerWidget::SyncPlaybackState() {
     is_playing_ = live_state_.load(std::memory_order_relaxed) ==
-        static_cast<int>(Content::Audio::PlaybackState::kPlaying);
+        static_cast<int>(XER::Content::Audio::PlaybackState::kPlaying);
     UpdateLivePosition(
         live_position_.load(std::memory_order_relaxed),
         live_duration_.load(std::memory_order_relaxed));
@@ -196,24 +221,20 @@ void AudioPlayerWidget::UpdateLivePosition(double current_time, double duration)
     current_time_ = current_time;
     duration_ = duration;
 
-    // Update time labels
-    time_label_->SetText(FormatTime(current_time));
-    duration_label_->SetText(FormatTime(duration));
+    time_label_->SetText(FormatTime(current_time) + " / " + FormatTime(duration));
 
-    // Update seek slider (only if not being dragged by user)
-    if (duration > 0) {
+    if (duration > 0 && !seek_slider_->IsDragging()) {
         syncing_seek_ = true;
         seek_slider_->SetValue(static_cast<float>(current_time / duration));
         syncing_seek_ = false;
     }
-
-    // Update play/pause button text
+    waveform_->SetProgress(duration > 0.0
+        ? static_cast<float>(current_time / duration) : 0.0f);
     UpdateButtonStates();
 }
 
 void AudioPlayerWidget::OnPlayPause() {
     if (!controller_) return;
-
     if (is_playing_) {
         controller_->Pause();
         is_playing_ = false;
@@ -221,91 +242,103 @@ void AudioPlayerWidget::OnPlayPause() {
         controller_->Play();
         is_playing_ = true;
     }
-
     UpdateButtonStates();
 }
 
 void AudioPlayerWidget::OnStop() {
     if (!controller_) return;
-
     controller_->Stop();
     is_playing_ = false;
     current_time_ = 0.0;
     live_position_.store(0.0, std::memory_order_relaxed);
     live_duration_.store(duration_, std::memory_order_relaxed);
-
     UpdateButtonStates();
     UpdateLivePosition(0.0, duration_);
 }
 
 void AudioPlayerWidget::OnSeek(float value) {
     if (syncing_seek_ || !controller_ || duration_ <= 0) return;
-
-    double target_time = value * duration_;
-    controller_->Seek(target_time);
+    controller_->Seek(value * duration_);
 }
 
 void AudioPlayerWidget::OnVolumeChanged(float value) {
-    if (!controller_) return;
-
-    controller_->SetVolume(value);
+    if (controller_) {
+        controller_->SetVolume(value);
+    }
 }
 
 void AudioPlayerWidget::OnMute() {
     if (!controller_) return;
-
-    bool currently_muted = controller_->IsMuted();
+    const bool currently_muted = controller_->IsMuted();
     controller_->Mute(!currently_muted);
+    UpdateButtonStates();
+}
 
-    // Update button text
-    mute_button_->SetText(!currently_muted ? "Unmute" : "Mute");
+void AudioPlayerWidget::OnSetVolume(float value) {
+    if (!controller_) return;
+    controller_->SetVolume(value);
+    volume_slider_->SetValue(value);
+    UpdateButtonStates();
+}
+
+bool AudioPlayerWidget::OnContextMenu(const Event& event) {
+    if (event.type != Event::Type::MouseDown ||
+        event.mouse_button != MouseButton::Right || !controller_) {
+        return false;
+    }
+
+    const bool muted = controller_->IsMuted();
+    const float volume = controller_->GetVolume();
+
+    std::vector<ContextMenu::Item> items;
+    items.push_back({is_playing_ ? "Pause" : "Play",
+                     [this]() { OnPlayPause(); }, true, false, false, "Space"});
+    items.push_back({"Stop", [this]() { OnStop(); }, true, false, false, ""});
+    items.push_back({"", nullptr, false, true});
+    items.push_back({muted ? "Unmute" : "Mute", [this]() { OnMute(); },
+                     true, false, muted, "M"});
+    items.push_back({"", nullptr, false, true});
+    for (const float preset : {1.0f, 0.75f, 0.5f, 0.25f}) {
+        items.push_back({"Volume " + std::to_string(static_cast<int>(preset * 100)) + "%",
+                         [this, preset]() { OnSetVolume(preset); },
+                         true, false, std::abs(volume - preset) < 0.03f, ""});
+    }
+    items.push_back({"", nullptr, false, true});
+    items.push_back({"Open FX Rack",
+                     [this]() { if (on_open_fx_) on_open_fx_(); },
+                     on_open_fx_ != nullptr, false, false, ""});
+    items.push_back({"Open Video Preview",
+                     [this]() { if (on_open_video_) on_open_video_(); },
+                     on_open_video_ != nullptr, false, false, ""});
+
+    auto menu = ContextMenu::Create(std::move(items));
+    menu->SetAnchor(event.position);
+    ShowOverlay(menu);
+    return true;
 }
 
 void AudioPlayerWidget::UpdateButtonStates() {
     if (!controller_) return;
-
-    // Update play/pause button text
-    if (is_playing_) {
-        play_pause_button_->SetText("Pause");
+    play_pause_button_->SetText(is_playing_ ? "Pause" : "Play");
+    mute_button_->SetText(controller_->IsMuted() ? "Unmute" : "Mute");
+    const auto state = live_state_.load(std::memory_order_relaxed);
+    if (!controller_->IsLoaded()) {
+        status_label_->SetText("Ready");
     } else {
-        play_pause_button_->SetText("Play");
-    }
-
-    // Update mute button text
-    bool muted = controller_->IsMuted();
-    mute_button_->SetText(muted ? "Unmute" : "Mute");
-}
-
-void AudioPlayerWidget::OnEffectToggle(bool enabled) {
-    if (!controller_) return;
-
-    effect_enabled_ = enabled;
-
-    if (enabled && !available_effects_.empty()) {
-        // Apply the current effect
-        std::string effect_name = available_effects_[current_effect_index_];
-        auto package = Engine::Audio::FX::BuildNamedCustomEffectPackage(effect_name);
-
-        std::string error;
-        if (controller_->ApplyEffectLive(package, &error)) {
-            effect_label_->SetText("Effect: " + effect_name);
-        } else {
-            effect_label_->SetText("Effect: Error");
-            effect_switch_->SetChecked(false);
-            effect_enabled_ = false;
+        switch (static_cast<XER::Content::Audio::PlaybackState>(state)) {
+            case XER::Content::Audio::PlaybackState::kPlaying:
+                status_label_->SetText("Playing");
+                break;
+            case XER::Content::Audio::PlaybackState::kPaused:
+                status_label_->SetText("Paused");
+                break;
+            case XER::Content::Audio::PlaybackState::kError:
+                status_label_->SetText("Error");
+                break;
+            default:
+                status_label_->SetText("Stopped");
+                break;
         }
-    } else {
-        // Disable effect
-        controller_->DisableEffectLive();
-        effect_label_->SetText("Effect: None");
-    }
-}
-
-void AudioPlayerWidget::LoadAvailableEffects() {
-    available_effects_ = Engine::Audio::FX::ListAvailableCustomEffects();
-    
-    if (!available_effects_.empty()) {
-        effect_label_->SetText("Effect: " + available_effects_[0]);
     }
 }
 

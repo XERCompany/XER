@@ -4,7 +4,7 @@
  */
 #include "content/network/quic/quic_network_session.h"
 
-namespace network::quic {
+namespace XER::network::quic {
 
 QuicNetworkSession& QuicNetworkSession::Instance() {
     static QuicNetworkSession inst;
@@ -36,4 +36,4 @@ void QuicNetworkSession::CloseAll() {
     connections_.clear();
 }
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

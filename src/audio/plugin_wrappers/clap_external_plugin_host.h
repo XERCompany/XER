@@ -7,7 +7,7 @@
 #include "clap_minimal.h"
 #include "plugin_parameter_bridge.h"
 
-namespace Engine::Audio::Plugin {
+namespace XER::Engine::Audio::Plugin {
 
 struct ClapPluginMetadata {
 	std::string id;
@@ -73,4 +73,4 @@ private:
 	ClapPluginMetadata loaded_metadata_;
 };
 
-}  // namespace Engine::Audio::Plugin
+}  // namespace XER::Engine::Audio::Plugin

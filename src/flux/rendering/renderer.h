@@ -4,7 +4,7 @@
 
 #include "flux/rendering/render_context.h"
 
-namespace flux::rendering {
+namespace XER::flux::rendering {
 
 class Renderer {
 public:
@@ -12,4 +12,4 @@ public:
 	std::string RenderAnsi(const RenderContext& context) const;
 };
 
-}  // namespace flux::rendering
+}  // namespace XER::flux::rendering

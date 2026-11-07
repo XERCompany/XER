@@ -1,4 +1,5 @@
 #include "app_command.h"
+#include "helper/string_utils.h"
 
 #include <cerrno>
 #include <cctype>
@@ -6,6 +7,8 @@
 #include <cstdlib>
 #include <sstream>
 #include <string>
+
+using XER::AppCommand;
 
 namespace {
 
@@ -55,13 +58,10 @@ void AppendTrimmedCsvValues(const std::string& text, std::vector<std::string>* o
     }
     std::string token;
     auto flush_token = [&token, output]() {
-        const auto first = token.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos) {
-            token.clear();
-            return;
+        token = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(token);
+        if (!token.empty()) {
+            output->push_back(std::move(token));
         }
-        const auto last = token.find_last_not_of(" \t\r\n");
-        output->push_back(token.substr(first, last - first + 1));
         token.clear();
     };
     for (char ch : text) {

@@ -6,7 +6,7 @@
 
 #include "async_io/log_and_debug/io_dump_helper.h"
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class WindowingFunctions {
 public:
@@ -19,4 +19,4 @@ public:
 	static std::string DescribeWindow(const std::vector<float>& window);
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

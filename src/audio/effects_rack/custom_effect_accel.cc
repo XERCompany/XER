@@ -20,7 +20,7 @@
 #define XER_AUDIO_FX_HAS_SSE2 0
 #endif
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 namespace {
 
 bool EnvFlagEnabled(const char* name) {
@@ -188,4 +188,4 @@ void SumNormalizeBuffers(const std::vector<std::vector<float>>& branch_outputs, 
 	}
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace network {
+namespace XER::network {
 
 namespace transport {
 
@@ -43,4 +43,4 @@ public:
 
 }  // namespace transport
 
-}  // namespace network
+}  // namespace XER::network

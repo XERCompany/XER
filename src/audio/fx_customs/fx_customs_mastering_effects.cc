@@ -2,7 +2,7 @@
 
 #include "audio/fx_customs/fx_customs_effect_utils.h"
 
-namespace Engine::Audio::FX::Customs {
+namespace XER::Engine::Audio::FX::Customs {
 
 bool BuildFxCustomMasteringEffectPackage(const std::string& normalized_name, CustomEffectPackage* package_out) {
 	if (package_out == nullptr) {
@@ -87,4 +87,4 @@ bool BuildFxCustomMasteringEffectPackage(const std::string& normalized_name, Cus
 	return false;
 }
 
-}  // namespace Engine::Audio::FX::Customs
+}  // namespace XER::Engine::Audio::FX::Customs

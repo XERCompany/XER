@@ -7,7 +7,7 @@
 #include <immintrin.h>
 #endif
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 namespace {
 
@@ -181,4 +181,4 @@ std::vector<float> STFTProcessor::MakeWindow(STFTWindowMode mode, size_t size) {
 	return WindowingFunctions::GenerateSqrtHann(size);
 }
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

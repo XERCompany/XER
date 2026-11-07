@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 using SpdyStreamId  = uint32_t;
 using SpdySessionId = uint32_t;
@@ -40,4 +40,4 @@ enum class SpdyRstStreamStatus : uint32_t {
 
 std::string SpdyFrameTypeToString(SpdyFrameType t);
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

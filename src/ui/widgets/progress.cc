@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "motion/motion.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 
@@ -9,6 +10,7 @@ namespace XER::UI::Widgets {
 
 Progress::Progress(float value) : value_(std::clamp(value, 0.0f, 1.0f)) {
     SetFocusable(false);
+    shown_.Set(value_);
 }
 
 void Progress::SetValue(float value) {
@@ -24,14 +26,31 @@ float Progress::GetValue() const {
     return value_;
 }
 
+void Progress::Tick(double dt_seconds) {
+    if (!IsEffectivelyVisible()) {
+        return;
+    }
+    if (shown_.to != value_) {
+        shown_.Set(value_, 0.25f);
+    }
+    shown_.Update(static_cast<float>(dt_seconds));
+    if (shown_.Active()) {
+        Invalidate();
+    }
+}
+
 void Progress::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, tokens.muted, tokens.radius_small);
-    renderer.FillRect(
-        {bounds.x, bounds.y, bounds.width * value_, bounds.height},
-        tokens.accent,
-        tokens.radius_small
-    );
+    const float radius = bounds.height / 2.0f;
+    const float shown = shown_.Value();
+    renderer.FillRect(bounds, tokens.secondary, radius);
+    if (shown > 0.0f) {
+        renderer.FillRect(
+            {bounds.x, bounds.y, bounds.width * shown, bounds.height},
+            IsEnabled() ? tokens.foreground : tokens.muted,
+            radius
+        );
+    }
 }
 
 void Progress::Layout(const Layout::Rect& bounds) {

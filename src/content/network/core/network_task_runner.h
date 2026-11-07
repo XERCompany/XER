@@ -6,7 +6,7 @@
 
 #include <functional>
 
-namespace network::core {
+namespace XER::network::core {
 
 // Thin wrapper over IOThreadPool for posting network tasks.
 class NetworkTaskRunner {
@@ -19,4 +19,4 @@ private:
     NetworkTaskRunner() = default;
 };
 
-}  // namespace network::core
+}  // namespace XER::network::core

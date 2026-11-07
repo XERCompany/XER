@@ -1,6 +1,6 @@
 #include "io_perf_counter.h"
 
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 PerformanceCounter::PerformanceCounter()
     : enabled_(true) {}
@@ -165,4 +165,4 @@ void PerformanceCounter::RecordElapsed(const std::string& name, double elapsed_m
     UpdateMetric(name, elapsed_ms);
 }
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

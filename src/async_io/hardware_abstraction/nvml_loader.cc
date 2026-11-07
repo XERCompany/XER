@@ -8,7 +8,7 @@
 
 #include <cstring>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 // Minimal NVML ABI typedefs (kept opaque so we never include nvml.h).
 namespace {
@@ -279,4 +279,4 @@ std::vector<NvmlDeviceSnapshot> NvmlLibrary::GetSnapshots() const {
     return result;
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

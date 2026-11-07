@@ -6,7 +6,7 @@
 
 #include "content/network/network_util/network_util.h"
 
-namespace network::proxy {
+namespace XER::network::proxy {
 
 ProxyService::ProxyService(const ProxyConfig& config) : config_(config) {}
 
@@ -19,7 +19,7 @@ bool ProxyService::Resolve(const std::string& url,
     if (sep != std::string::npos) work = work.substr(sep + 3);
     std::string host;
     uint16_t port = 0;
-    network::SplitHostPort(work, &host, &port);
+    XER::network::SplitHostPort(work, &host, &port);
     // Strip path
     const auto slash = host.find('/');
     if (slash != std::string::npos) host = host.substr(0, slash);
@@ -43,4 +43,4 @@ bool ProxyService::IsBypassed(const std::string& host) const {
     return false;
 }
 
-}  // namespace network::proxy
+}  // namespace XER::network::proxy

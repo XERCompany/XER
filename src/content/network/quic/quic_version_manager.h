@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace network::quic {
+namespace XER::network::quic {
 
 class QuicVersionManager {
 public:
@@ -16,4 +16,4 @@ public:
     static uint32_t LatestVersion();
 };
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

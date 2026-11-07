@@ -4,13 +4,13 @@
 #include <utility>
 #include <vector>
 
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
-namespace flux::core {
+namespace XER::flux::core {
 namespace {
 
 std::string CanonicalKey(std::string_view key) {
-	return Helper::String::CanonicalizeToken(absl::string_view(key.data(), key.size()));
+	return XER::Engine::Helper::String::CanonicalizeToken(key);
 }
 
 }  // namespace
@@ -36,11 +36,11 @@ const Logger& FluxContext::logger() const {
 	return logger_;
 }
 
-flux::terminal::TerminalWindow& FluxContext::window() {
+XER::flux::terminal::TerminalWindow& FluxContext::window() {
 	return window_;
 }
 
-const flux::terminal::TerminalWindow& FluxContext::window() const {
+const XER::flux::terminal::TerminalWindow& FluxContext::window() const {
 	return window_;
 }
 
@@ -72,4 +72,4 @@ std::vector<std::string> FluxContext::Keys() const {
 	return keys;
 }
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

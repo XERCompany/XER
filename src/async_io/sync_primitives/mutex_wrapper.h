@@ -4,7 +4,7 @@
 #include <string>
 #include <chrono>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 class MutexWrapper {
 public:
@@ -47,4 +47,4 @@ private:
     uint64_t contention_count_;
 };
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

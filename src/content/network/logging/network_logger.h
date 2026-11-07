@@ -10,7 +10,7 @@
 
 #include "flux/core/logger.h"
 
-namespace network::logging {
+namespace XER::network::logging {
 
 // Network logger - integrates with Flux logger
 class NetworkLogger {
@@ -18,7 +18,7 @@ public:
     static NetworkLogger& Instance();
 
     // Initialize with Flux logger
-    void Initialize(flux::core::Logger* flux_logger);
+    void Initialize(XER::flux::core::Logger* flux_logger);
 
     // Connection logging
     void LogConnectionAttempt(const std::string& host, uint16_t port);
@@ -74,8 +74,8 @@ public:
     bool IsEnabled() const { return enabled_; }
 
     // Set log level
-    void SetLogLevel(flux::core::LogLevel level) { log_level_ = level; }
-    flux::core::LogLevel GetLogLevel() const { return log_level_; }
+    void SetLogLevel(XER::flux::core::LogLevel level) { log_level_ = level; }
+    XER::flux::core::LogLevel GetLogLevel() const { return log_level_; }
 
 private:
     NetworkLogger();
@@ -84,9 +84,9 @@ private:
     NetworkLogger(const NetworkLogger&) = delete;
     NetworkLogger& operator=(const NetworkLogger&) = delete;
 
-    flux::core::Logger* flux_logger_;
+    XER::flux::core::Logger* flux_logger_;
     bool enabled_;
-    flux::core::LogLevel log_level_;
+    XER::flux::core::LogLevel log_level_;
 };
 
-} // namespace network::logging
+} // namespace XER::network::logging

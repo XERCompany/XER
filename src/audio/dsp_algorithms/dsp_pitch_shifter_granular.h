@@ -8,7 +8,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "dsp_windowing_functions.h"
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class GranularPitchShifter {
 public:
@@ -41,7 +41,7 @@ private:
 	std::vector<float> grain_window_;
 	std::vector<float> delay_buffer_;
 	std::array<GrainState, 4> grains_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

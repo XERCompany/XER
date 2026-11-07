@@ -11,9 +11,9 @@
 
 #include <chrono>
 
-namespace platform = network::socket::platform;
+namespace platform = XER::network::socket::platform;
 
-namespace network::dns {
+namespace XER::network::dns {
 
 namespace {
 uint64_t NowMs() {
@@ -148,4 +148,4 @@ void HostResolverImpl::ClearCache() {
     cache_mgr.ClearDnsCache();
 }
 
-}  // namespace network::dns
+}  // namespace XER::network::dns

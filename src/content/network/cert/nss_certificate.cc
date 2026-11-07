@@ -8,7 +8,7 @@
 #include <openssl/pem.h>
 #include <openssl/x509.h>
 
-namespace network::cert {
+namespace XER::network::cert {
 
 NssCertificate::NssCertificate(std::vector<uint8_t> der)
     : der_(std::move(der)) {}
@@ -44,4 +44,4 @@ NssCertificate NssCertificate::FromPEM(const std::string& pem) {
     return NssCertificate(std::move(der));
 }
 
-}  // namespace network::cert
+}  // namespace XER::network::cert

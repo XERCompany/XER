@@ -5,7 +5,7 @@
 #include <vector>
 #include <memory>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 enum class AudioBitDepth {
     BITS_8,
@@ -57,4 +57,4 @@ private:
     bool ConvertFloatTo16(const float* in, int16_t* out, size_t count);
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

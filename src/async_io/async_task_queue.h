@@ -8,7 +8,7 @@
 #include <set>
 #include <cstdint>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 // Task functor type
 using AsyncTask = std::function<void()>;
@@ -73,4 +73,4 @@ private:
     bool is_running_;
 };
 
-}  // namespace AsyncIO::IO::Async
+}  // namespace XER::AsyncIO::IO::Async

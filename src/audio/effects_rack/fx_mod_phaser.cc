@@ -4,7 +4,7 @@
 #include <cmath>
 #include <future>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 std::string ModPhaser::GetMemoryStats() const {
 	std::string stats;
@@ -61,7 +61,7 @@ bool ModPhaser::ProcessBlock(const float* input, size_t frame_count, float* outp
 	if (input == nullptr || output == nullptr) {
 		return false;
 	}
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	const float phase_inc = 2.0f * kPi * rate_hz_ / sample_rate_;
     size_t i = 0;
 #if defined(__AVX2__)
@@ -146,4 +146,4 @@ std::future<bool> ModPhaser::ProcessBlockAsync(const float* input, size_t frame_
 	});
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

@@ -2,6 +2,9 @@
 
 #include <string>
 
+namespace XER {
+
+
 // Central runtime-configuration object built from CLI flags before execution.
 // Passed through the execution stack so every component reads a single
 // source-of-truth instead of consulting environment variables directly.
@@ -106,3 +109,5 @@ struct EngineParams {
 // Build EngineParams from the raw environment variables set by main().
 // Called early in FlowScript::Run() so every subsystem reads from one object.
 EngineParams EngineParamsFromEnv();
+
+}  // namespace XER

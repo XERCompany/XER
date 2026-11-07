@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace flux::rendering {
+namespace XER::flux::rendering {
 namespace {
 
 std::string TrimRightSpaces(std::string line) {
@@ -27,7 +27,7 @@ void FrameBuffer::Resize(std::size_t width, std::size_t height) {
 	cells_.assign(width_ * height_, FrameCell{});
 }
 
-void FrameBuffer::Clear(char fill, const flux::terminal::TerminalStyle& style) {
+void FrameBuffer::Clear(char fill, const XER::flux::terminal::TerminalStyle& style) {
 	for (FrameCell& cell : cells_) {
 		cell.glyph = fill;
 		cell.style = style;
@@ -42,7 +42,7 @@ std::size_t FrameBuffer::height() const {
 	return height_;
 }
 
-void FrameBuffer::SetCell(std::size_t x, std::size_t y, char glyph, const flux::terminal::TerminalStyle& style) {
+void FrameBuffer::SetCell(std::size_t x, std::size_t y, char glyph, const XER::flux::terminal::TerminalStyle& style) {
 	if (!InBounds(x, y)) {
 		return;
 	}
@@ -53,7 +53,7 @@ FrameCell FrameBuffer::GetCell(std::size_t x, std::size_t y) const {
 	return InBounds(x, y) ? cells_[Index(x, y)] : FrameCell{};
 }
 
-void FrameBuffer::WriteText(std::size_t x, std::size_t y, std::string_view text, const flux::terminal::TerminalStyle& style) {
+void FrameBuffer::WriteText(std::size_t x, std::size_t y, std::string_view text, const XER::flux::terminal::TerminalStyle& style) {
 	std::size_t cursor_x = x;
 	std::size_t cursor_y = y;
 	for (char ch : text) {
@@ -96,4 +96,4 @@ bool FrameBuffer::InBounds(std::size_t x, std::size_t y) const {
 	return x < width_ && y < height_;
 }
 
-}  // namespace flux::rendering
+}  // namespace XER::flux::rendering

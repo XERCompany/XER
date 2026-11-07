@@ -4,53 +4,40 @@
 #include "../widgets/widget_tree.h"
 #include "../rendering/windows/direct2d_renderer.h"
 #include "../platform/windows/input_translator.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
-#include <mutex>
 #include <stdexcept>
-#include <unordered_map>
 
 #include <windowsx.h>
+#include <dwmapi.h>
+
+#pragma comment(lib, "dwmapi.lib")
 
 namespace XER::UI::Core {
 
 // Static window class registration
 static const wchar_t* WINDOW_CLASS_NAME = L"XER_UI_WINDOW";
 
-// Global map to associate HWND with Window instances
-static std::unordered_map<HWND, Window*> g_window_map;
-static std::mutex g_window_map_mutex;
-
-// Window procedure - forwards to Window instance
+// Window procedure - the Window instance is stored in GWLP_USERDATA so lookup
+// stays a single pointer read with no locking on the message path.
 static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     Window* window = nullptr;
 
-    // Associate HWND with Window instance on WM_NCCREATE
     if (msg == WM_NCCREATE) {
-        CREATESTRUCT* cs = reinterpret_cast<CREATESTRUCT*>(lParam);
-        window = static_cast<Window*>(cs->lpCreateParams);
-
-        std::lock_guard<std::mutex> lock(g_window_map_mutex);
-        g_window_map[hwnd] = window;
+        const auto* create_struct = reinterpret_cast<CREATESTRUCT*>(lParam);
+        window = static_cast<Window*>(create_struct->lpCreateParams);
+        SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(window));
     } else {
-        std::lock_guard<std::mutex> lock(g_window_map_mutex);
-        auto it = g_window_map.find(hwnd);
-        if (it != g_window_map.end()) {
-            window = it->second;
-        }
+        window = reinterpret_cast<Window*>(
+            GetWindowLongPtrW(hwnd, GWLP_USERDATA));
     }
 
-    if (window) {
-        const auto result = window->HandleNativeMessage(hwnd, msg, wParam, lParam);
-        if (msg == WM_NCDESTROY) {
-            std::lock_guard<std::mutex> lock(g_window_map_mutex);
-            g_window_map.erase(hwnd);
-        }
-        return result;
+    if (window != nullptr) {
+        return window->HandleNativeMessage(hwnd, msg, wParam, lParam);
     }
-
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
 
@@ -67,6 +54,10 @@ public:
         , visible_(false)
         , closed_(false)
         , dpi_(USER_DEFAULT_SCREEN_DPI)
+        , min_width_(0)
+        , min_height_(0)
+        , max_width_(0)
+        , max_height_(0)
         , window_(nullptr) {}
 
     ~Impl() {
@@ -104,16 +95,14 @@ public:
         }
 
         // Convert title to wide string
-        int len = MultiByteToWideChar(CP_UTF8, 0, title.c_str(), -1, nullptr, 0);
-        std::wstring wtitle(len, 0);
-        MultiByteToWideChar(CP_UTF8, 0, title.c_str(), -1, &wtitle[0], len);
+        const std::wstring wtitle = XER::Engine::Helper::String::Utf8ToWide(title);
 
         // Create window
         hwnd_ = CreateWindowExW(
             0,                              // Extended style
             WINDOW_CLASS_NAME,              // Class name
             wtitle.c_str(),                  // Window title
-            WS_OVERLAPPEDWINDOW,            // Window style
+            WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, // Window style
             x_, y_,                         // Position
             width_, height_,                // Size
             nullptr,                        // Parent window
@@ -122,6 +111,13 @@ public:
             window_                         // Creation parameter (this)
         );
 
+        if (hwnd_ != nullptr) {
+            // Dark title bar / caption buttons to match the studio theme.
+            BOOL dark = TRUE;
+            DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE,
+                                  &dark, sizeof(dark));
+            UpdateFrameTimer();
+        }
         return hwnd_ != nullptr;
     }
 
@@ -177,12 +173,26 @@ public:
         on_resize_ = callback;
     }
 
+    void Invalidate() {
+        // Drop pending dirty flags so the explicit invalidate below is the
+        // single source of the next repaint.
+        widget_tree_.ConsumeDirtyPaint();
+        widget_tree_.ConsumeLayoutRequest();
+        if (hwnd_ != nullptr) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+
+    void SetFrameCallback(std::function<void()> callback, std::uint32_t interval_ms) {
+        frame_callback_ = std::move(callback);
+        frame_interval_ms_ = interval_ms == 0 ? 33 : interval_ms;
+        UpdateFrameTimer();
+    }
+
     void SetTitle(const std::string& title) {
         title_ = title;
         if (hwnd_) {
-            int len = MultiByteToWideChar(CP_UTF8, 0, title.c_str(), -1, nullptr, 0);
-            std::wstring wtitle(len, 0);
-            MultiByteToWideChar(CP_UTF8, 0, title.c_str(), -1, &wtitle[0], len);
+            const std::wstring wtitle = XER::Engine::Helper::String::Utf8ToWide(title);
             SetWindowTextW(hwnd_, wtitle.c_str());
         }
     }
@@ -197,6 +207,30 @@ public:
         if (hwnd_) {
             SetWindowPos(hwnd_, nullptr, 0, 0, width, height,
                         SWP_NOMOVE | SWP_NOZORDER);
+        }
+    }
+
+    void SetSizeLimits(int min_width, int min_height, int max_width, int max_height) {
+        min_width_ = min_width;
+        min_height_ = min_height;
+        max_width_ = max_width;
+        max_height_ = max_height;
+        if (hwnd_ != nullptr) {
+            // Clamp the current size immediately if it violates the new limits.
+            RECT rect{};
+            GetWindowRect(hwnd_, &rect);
+            const int w = rect.right - rect.left;
+            const int h = rect.bottom - rect.top;
+            int new_w = w;
+            int new_h = h;
+            if (min_width_ > 0) new_w = std::max(new_w, min_width_);
+            if (min_height_ > 0) new_h = std::max(new_h, min_height_);
+            if (max_width_ > 0) new_w = std::min(new_w, max_width_);
+            if (max_height_ > 0) new_h = std::min(new_h, max_height_);
+            if (new_w != w || new_h != h) {
+                SetWindowPos(hwnd_, nullptr, 0, 0, new_w, new_h,
+                            SWP_NOMOVE | SWP_NOZORDER);
+            }
         }
     }
 
@@ -242,6 +276,12 @@ public:
         }
         switch (msg) {
             case WM_CLOSE:
+                if (close_hides_) {
+                    ShowWindow(message_hwnd, SW_HIDE);
+                    visible_ = false;
+                    return 0;
+                }
+                KillFrameTimer();
                 if (on_close_) {
                     on_close_();
                 }
@@ -252,8 +292,19 @@ public:
                 return 0;
 
             case WM_DESTROY:
+                KillFrameTimer();
                 PostQuitMessage(0);
                 return 0;
+
+            case WM_TIMER:
+                if (wParam == kFrameTimerId) {
+                    if (frame_callback_) {
+                        frame_callback_();
+                    }
+                    FlushDirtyState(message_hwnd);
+                    return 0;
+                }
+                return DefWindowProc(message_hwnd, msg, wParam, lParam);
 
             case WM_SIZE:
             {
@@ -308,6 +359,53 @@ public:
             case WM_ERASEBKGND:
                 return 1;
 
+            case WM_MOUSELEAVE:
+                widget_tree_.ClearHover();
+                FlushDirtyState(message_hwnd);
+                return 0;
+
+            case WM_MOUSEWHEEL: {
+                // lParam carries screen coordinates for wheel messages.
+                POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                if (!ScreenToClient(message_hwnd, &point)) {
+                    return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                }
+                Widgets::Event event;
+                event.type = Widgets::Event::Type::MouseWheel;
+                const float scale = 96.0f / static_cast<float>(dpi_);
+                event.position = Layout::Point(
+                    static_cast<float>(point.x) * scale,
+                    static_cast<float>(point.y) * scale
+                );
+                event.wheel_delta = GET_WHEEL_DELTA_WPARAM(wParam);
+                event.is_shift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+                event.is_ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+                event.is_alt = (GetKeyState(VK_MENU) & 0x8000) != 0;
+                widget_tree_.HandleEvent(event);
+                FlushDirtyState(message_hwnd);
+                return 0;
+            }
+
+            case WM_GETMINMAXINFO: {
+                auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
+                if (info == nullptr) {
+                    return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                }
+                if (min_width_ > 0) {
+                    info->ptMinTrackSize.x = min_width_;
+                }
+                if (min_height_ > 0) {
+                    info->ptMinTrackSize.y = min_height_;
+                }
+                if (max_width_ > 0) {
+                    info->ptMaxTrackSize.x = max_width_;
+                }
+                if (max_height_ > 0) {
+                    info->ptMaxTrackSize.y = max_height_;
+                }
+                return 0;
+            }
+
             case WM_LBUTTONDOWN:
                 SetFocus(message_hwnd);
                 SetCapture(message_hwnd);
@@ -325,6 +423,13 @@ public:
             case WM_CHAR:
             case WM_SETFOCUS:
             case WM_KILLFOCUS: {
+                if (msg == WM_MOUSEMOVE) {
+                    TRACKMOUSEEVENT tme{};
+                    tme.cbSize = sizeof(tme);
+                    tme.dwFlags = TME_LEAVE;
+                    tme.hwndTrack = message_hwnd;
+                    TrackMouseEvent(&tme);
+                }
                 if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP) {
                     if (GetCapture() == message_hwnd) {
                         ReleaseCapture();
@@ -340,7 +445,7 @@ public:
                         event->position.y *= scale;
                     }
                     widget_tree_.HandleEvent(*event);
-                    InvalidateRect(message_hwnd, nullptr, FALSE);
+                    FlushDirtyState(message_hwnd);
                     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
                         return DefWindowProc(message_hwnd, msg, wParam, lParam);
                     }
@@ -370,7 +475,47 @@ public:
         window_ = window;
     }
 
+    // When true, WM_CLOSE hides the window instead of closing it — used by
+    // secondary windows that should not terminate the shared message loop.
+    bool close_hides_ = false;
+
 private:
+    // Repaints only when widgets reported changes since the last flush.
+    void FlushDirtyState(HWND hwnd) {
+        if (hwnd == nullptr) {
+            return;
+        }
+        const bool layout_requested = widget_tree_.ConsumeLayoutRequest();
+        const bool paint_requested = widget_tree_.ConsumeDirtyPaint();
+        if (layout_requested) {
+            LayoutContent(hwnd);
+        }
+        if (layout_requested || paint_requested) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
+    }
+
+    void UpdateFrameTimer() {
+        if (hwnd_ == nullptr) {
+            return;
+        }
+        if (frame_timer_active_) {
+            KillTimer(hwnd_, kFrameTimerId);
+            frame_timer_active_ = false;
+        }
+        if (frame_callback_) {
+            SetTimer(hwnd_, kFrameTimerId, frame_interval_ms_, nullptr);
+            frame_timer_active_ = true;
+        }
+    }
+
+    void KillFrameTimer() {
+        if (frame_timer_active_ && hwnd_ != nullptr) {
+            KillTimer(hwnd_, kFrameTimerId);
+        }
+        frame_timer_active_ = false;
+    }
+
     void LayoutContent(HWND hwnd, int client_width = -1, int client_height = -1) {
         if (hwnd == nullptr || root_widget_ == nullptr) {
             return;
@@ -407,19 +552,19 @@ private:
                 }
                 renderer_->SetDpi(dpi_);
                 renderer_->SetClearColor(background);
-                static bool logged_paint_once = false;
-                if (!logged_paint_once) {
-                    logged_paint_once = true;
-                    RECT cr{};
-                    GetClientRect(hwnd, &cr);
-                    fprintf(stderr,
-                            "[DEBUG-paint] dpi=%u client=%ldx%ld root_children=%zu\n",
-                            static_cast<unsigned>(dpi_),
-                            static_cast<long>(cr.right),
-                            static_cast<long>(cr.bottom),
-                            root_widget_->GetChildren().size());
-                }
                 widget_tree_.Render(*renderer_, theme_.GetTokens());
+                // Flush pending child-window paints (the NodeGraph canvas
+                // HWND) synchronously inside this WM_PAINT, right after the
+                // parent surface commits. Without this the two HWNDs can
+                // present one frame apart — the visible "half-frame"
+                // flicker. Only children with a non-empty update region
+                // repaint, so an idle canvas costs nothing.
+                RedrawWindow(hwnd, nullptr, nullptr,
+                             RDW_ALLCHILDREN | RDW_UPDATENOW);
+                // Clear any stray dirty flags raised during rendering so a
+                // misbehaving widget cannot trigger a paint loop.
+                widget_tree_.ConsumeDirtyPaint();
+                widget_tree_.ConsumeLayoutRequest();
             }
             last_render_error_.clear();
         } catch (const std::exception& error) {
@@ -468,6 +613,10 @@ private:
     bool visible_;
     bool closed_;
     UINT dpi_;
+    int min_width_;
+    int min_height_;
+    int max_width_;
+    int max_height_;
 
     Window* window_;
     std::shared_ptr<Widgets::Widget> root_widget_;
@@ -479,6 +628,10 @@ private:
 
     Callback on_close_;
     std::function<void(int, int)> on_resize_;
+    std::function<void()> frame_callback_;
+    std::uint32_t frame_interval_ms_ = 33;
+    bool frame_timer_active_ = false;
+    static constexpr UINT_PTR kFrameTimerId = 0x4552; // 'ER'
 };
 
 // Window implementation
@@ -528,6 +681,14 @@ void Window::SetOnResize(std::function<void(int, int)> callback) {
     impl_->SetOnResize(callback);
 }
 
+void Window::Invalidate() {
+    impl_->Invalidate();
+}
+
+void Window::SetFrameCallback(std::function<void()> callback, std::uint32_t interval_ms) {
+    impl_->SetFrameCallback(std::move(callback), interval_ms);
+}
+
 void Window::SetTitle(const std::string& title) {
     impl_->SetTitle(title);
 }
@@ -536,8 +697,16 @@ std::string Window::GetTitle() const {
     return impl_->GetTitle();
 }
 
+void Window::SetCloseHides(bool hides) {
+    impl_->close_hides_ = hides;
+}
+
 void Window::SetSize(int width, int height) {
     impl_->SetSize(width, height);
+}
+
+void Window::SetSizeLimits(int min_width, int min_height, int max_width, int max_height) {
+    impl_->SetSizeLimits(min_width, min_height, max_width, max_height);
 }
 
 void Window::GetSize(int* width, int* height) const {

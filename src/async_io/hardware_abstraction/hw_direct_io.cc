@@ -10,7 +10,7 @@
     #include <sstream>
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 DirectIOManager::DirectIOManager()
     : initialized_(false), optimal_alignment_(4096), minimum_alignment_(512), 
@@ -213,4 +213,4 @@ void DirectIOManager::DetectAlignmentRequirements() {
 #endif
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

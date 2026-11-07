@@ -24,6 +24,7 @@ target_link_libraries(XER_AudioDSP
         absl::strings
         unofficial::pthreadpool
         unofficial::fxdiv::fxdiv
+        MKL::MKL
 )
 
 # C++ standard

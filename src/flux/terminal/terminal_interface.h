@@ -3,7 +3,7 @@
 #include <memory>
 #include <string_view>
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 
 enum class OutputStream {
 	kStdout,
@@ -21,4 +21,4 @@ public:
 TerminalInterface& GetDefaultTerminal();
 void SetDefaultTerminal(std::unique_ptr<TerminalInterface> terminal);
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

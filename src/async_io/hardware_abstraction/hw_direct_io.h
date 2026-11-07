@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 // Direct I/O operation modes
 enum class DirectIOMode {
@@ -60,4 +60,4 @@ private:
     void DetectAlignmentRequirements();
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

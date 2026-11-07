@@ -39,6 +39,12 @@ messages become widget events, with UTF-16 character pairs encoded as UTF-8.
 retained by `GetLastRenderError()` and sent to the Windows debugger output; an empty
 content tree paints the selected background.
 
+Widgets report visual changes through internal dirty flags propagated to the tree
+root; the window schedules a repaint only when a widget actually changed, so idle
+input costs nothing. `Window::Invalidate()` forces a repaint, and
+`Window::SetFrameCallback(cb, ms)` runs `cb` on the UI thread on a timer for
+polling-style updates (e.g. playback position) without forcing repaints.
+
 ## Design Principles
 
 ### Deep Module Strategy

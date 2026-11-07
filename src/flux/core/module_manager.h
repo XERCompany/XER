@@ -6,7 +6,7 @@
 #include <string_view>
 #include <vector>
 
-namespace flux::core {
+namespace XER::flux::core {
 
 class FluxContext;
 
@@ -30,4 +30,4 @@ private:
 	std::vector<std::size_t> started_modules_;
 };
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

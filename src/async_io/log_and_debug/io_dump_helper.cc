@@ -1,40 +1,25 @@
 #include "io_dump_helper.h"
 
+#include "content/hex/hex.h"
+
 #include <sstream>
 #include <iomanip>
 #include <fstream>
 #include <cstring>
 #include <algorithm>
 
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 DumpHelper::DumpHelper() {}
 
 DumpHelper::~DumpHelper() {}
 
 std::string DumpHelper::HexDump(const uint8_t* data, size_t size, size_t bytes_per_line) {
-    std::ostringstream oss;
-    HexDumpToStream(oss, data, size);
-    return oss.str();
+    return XER::Content::Hex::Dump(data, size, static_cast<int>(bytes_per_line));
 }
 
 void DumpHelper::HexDumpToStream(std::ostream& os, const uint8_t* data, size_t size) {
-    for (size_t i = 0; i < size; i += 16) {
-        os << std::hex << std::setfill('0') << std::setw(8) << i << "  ";
-        
-        for (size_t j = 0; j < 16 && i + j < size; ++j) {
-            os << std::setw(2) << static_cast<int>(data[i + j]) << " ";
-        }
-        
-        os << " | ";
-        
-        for (size_t j = 0; j < 16 && i + j < size; ++j) {
-            char ch = IsPrintable(data[i + j]) ? data[i + j] : '.';
-            os << ch;
-        }
-        
-        os << "\n";
-    }
+    os << XER::Content::Hex::Dump(data, size);
 }
 
 std::string DumpHelper::BinaryDump(const uint8_t* data, size_t size) {
@@ -79,25 +64,12 @@ std::string DumpHelper::InspectMemory(const void* ptr, size_t size) {
 }
 
 std::string DumpHelper::RawStringToHex(const std::string& str) {
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    
-    for (unsigned char c : str) {
-        oss << std::setw(2) << static_cast<int>(c);
-    }
-    
-    return oss.str();
+    return XER::Content::Hex::Encode(str);
 }
 
 std::string DumpHelper::HexToRawString(const std::string& hex) {
     std::string result;
-    
-    for (size_t i = 0; i < hex.size(); i += 2) {
-        std::string byte_str = hex.substr(i, 2);
-        char byte = static_cast<char>(std::stoi(byte_str, nullptr, 16));
-        result += byte;
-    }
-    
+    XER::Content::Hex::Decode(hex, &result);
     return result;
 }
 
@@ -149,14 +121,8 @@ std::string DumpHelper::GetDataStatistics(const uint8_t* data, size_t size) {
     return oss.str();
 }
 
-std::string DumpHelper::ByteToHex(uint8_t byte) {
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0') << std::setw(2) << static_cast<int>(byte);
-    return oss.str();
-}
-
 bool DumpHelper::IsPrintable(uint8_t byte) {
-    return byte >= 32 && byte <= 126;
+    return XER::Content::Hex::IsPrintable(byte);
 }
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

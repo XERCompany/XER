@@ -8,7 +8,7 @@
 
 #include "dsp_stft_processor.h"
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class PhaseVocoder {
 public:
@@ -31,7 +31,7 @@ private:
 	STFTProcessor stft_processor_;
 	std::vector<float> previous_phase_;
 	std::vector<float> phase_accumulator_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

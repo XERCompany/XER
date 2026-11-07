@@ -7,7 +7,7 @@
 #include "dsp_fft_engine.h"
 #include "dsp_windowing_functions.h"
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 enum class STFTWindowMode {
 	kHann,
@@ -58,4 +58,4 @@ private:
 	std::vector<float> normalization_buffer_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

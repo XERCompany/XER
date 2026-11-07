@@ -4,7 +4,7 @@
  */
 #include "content/network/quic/quic_connection.h"
 
-namespace network::quic {
+namespace XER::network::quic {
 
 QuicConnection::QuicConnection(QuicConnectionId id,
                                  const std::string& peer_host,
@@ -34,4 +34,4 @@ void QuicConnection::Close(QuicErrorCode /*code*/) {
     streams_.clear();
 }
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

@@ -8,7 +8,7 @@
 
 #include <chrono>
 
-namespace network::ssl {
+namespace XER::network::ssl {
 
 SslSessionCache::SslSessionCache()
     : max_sessions_(100),
@@ -187,4 +187,4 @@ void ScopedSslSession::reset(SSL_SESSION* session) {
     session_ = session;
 }
 
-} // namespace network::ssl
+} // namespace XER::network::ssl

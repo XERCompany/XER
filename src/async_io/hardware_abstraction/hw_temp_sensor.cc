@@ -14,7 +14,7 @@
     #include <fstream>
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 namespace {
 
@@ -490,4 +490,4 @@ void TemperatureSensor::UpdateReadings() {
     readings_ = std::move(next);
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

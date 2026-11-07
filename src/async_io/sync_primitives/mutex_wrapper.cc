@@ -2,7 +2,7 @@
 
 #include <thread>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 MutexWrapper::MutexWrapper(const std::string& name)
     : name_(name), lock_count_(0), contention_count_(0) {}
@@ -43,4 +43,4 @@ void MutexWrapper::Unlock() {
     mutex_.unlock();
 }
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

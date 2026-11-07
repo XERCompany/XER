@@ -5,7 +5,7 @@
 
 #include "custom_effect_core.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 bool CustomEffectFlow::Initialize(const CustomEffectPackage& package, float sample_rate, size_t max_block_size, std::string* error_out) {
 	if (!ValidateCustomEffectPackage(package, error_out)) {
@@ -57,7 +57,7 @@ bool CustomEffectFlow::Process(const std::vector<float>& input, std::vector<floa
 	for (size_t stage = 0; stage < stage_processors_.size(); ++stage) {
 		size_t stage_workers = 1;
 		std::string stage_error;
-		if (!ApplyCustomEffectProcessors(&stage_processors_[stage], current, render_config_, &stage_output, &stage_workers, &stage_error)) {
+		if (!ApplyCustomEffectProcessors(&stage_processors_[stage], current, render_config_, &stage_output, &stage_workers, &stage_error, !streaming_)) {
 			if (error_out != nullptr) {
 				*error_out = stage_error;
 			}
@@ -82,4 +82,4 @@ std::string CustomEffectFlow::GetReport() const {
 	return BuildCustomEffectReportText(last_report_);
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

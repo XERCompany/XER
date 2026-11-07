@@ -49,7 +49,6 @@ public:
     static std::string NormalizeConfigToken(const std::string& text);
 
     // Trim whitespace from string
-    static std::string TrimCopy(const std::string& text);
 
     // Parse CSV string into vector
     static void AppendCsvStrings(

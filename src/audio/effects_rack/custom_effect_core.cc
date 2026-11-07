@@ -5,7 +5,7 @@
 
 #include "custom_effect_node.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 bool ValidateCustomEffectPackage(const CustomEffectPackage& package, std::string* error_out) {
 	if (package.nodes.empty()) {
@@ -44,4 +44,4 @@ void ComputeCustomEffectReportStats(const std::vector<float>& samples, CustomEff
 	report->rms = std::sqrt(sum_squared / static_cast<double>(samples.size()));
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

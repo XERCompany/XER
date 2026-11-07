@@ -9,7 +9,7 @@
 
 #include "audio_pitch_detector.h"
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 class PitchEstimator {
 public:
@@ -26,11 +26,11 @@ public:
 
 private:
 	int sample_rate_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 	AudioPitchDetector detector_;
 	PitchInfo last_pitch_;
 	std::vector<float> last_harmonics_;
 };
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

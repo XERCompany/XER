@@ -1,6 +1,9 @@
 #include "audio_config_helper.h"
 #include "json_config_helper.h"
+#include "helper/string_utils.h"
 #include <absl/strings/str_cat.h>
+
+using XER::AppCommand;
 
 namespace XER {
 
@@ -15,7 +18,7 @@ std::vector<std::string> AudioConfigHelper::GetJsonConfigEffects(const Json::Val
     if (value->isArray()) {
         for (const Json::Value& item : *value) {
             if (item.isString()) {
-                const std::string effect = JsonConfigHelper::TrimCopy(item.asString());
+                const std::string effect = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(item.asString());
                 if (!effect.empty()) {
                     effects.push_back(effect);
                 }
@@ -88,7 +91,7 @@ bool AudioConfigHelper::ApplyAudioConfigFile(
         parsed->audio_pipe_mp3);
 
     std::vector<std::string> effects = GetJsonConfigEffects(root);
-    const std::string single_effect = JsonConfigHelper::TrimCopy(
+    const std::string single_effect = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(
         JsonConfigHelper::GetJsonConfigString(
             root,
             {"effect", "effectName", "effect_name", "audioEffect", "audio_effect"},

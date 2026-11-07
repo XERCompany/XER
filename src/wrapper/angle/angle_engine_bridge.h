@@ -2,9 +2,9 @@
 
 #include <string>
 
-namespace engine::bridge::angle {
+namespace XER::engine::bridge::angle {
 
 bool IsAvailable();
 std::string Summary();
 
-}  // namespace engine::bridge::angle
+}  // namespace XER::engine::bridge::angle

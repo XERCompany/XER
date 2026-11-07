@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 
-namespace network::socket {
+namespace XER::network::socket {
 
 UdpClientSocket::UdpClientSocket() {
 }
@@ -155,4 +155,4 @@ void UdpClientSocket::RecvFromAsync(UdpCallback cb) {
         });
 }
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

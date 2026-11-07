@@ -39,6 +39,3 @@ endif()
 if(WIN32)
     target_compile_definitions(XER_SQL PRIVATE _USE_MATH_DEFINES)
 endif()
-
-# Expose SQL integration to the main app when needed
-target_link_libraries(xer PRIVATE XER_SQL)

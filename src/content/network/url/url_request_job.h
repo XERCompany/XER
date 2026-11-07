@@ -8,7 +8,7 @@
 #include "content/network/url/url_request.h"
 #include "content/network/url/url_request_context.h"
 
-namespace network::url {
+namespace XER::network::url {
 
 // Executes a single URLRequest synchronously.
 class URLRequestJob {
@@ -30,4 +30,4 @@ private:
     const URLRequestContext& ctx_;
 };
 
-}  // namespace network::url
+}  // namespace XER::network::url

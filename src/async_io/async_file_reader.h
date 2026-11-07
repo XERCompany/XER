@@ -9,7 +9,7 @@
 #include <atomic>
 #include <fstream>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 // Read completion callback: (error_code, bytes_read, data)
 using ReadCallback = std::function<void(int, size_t, const uint8_t*)>;
@@ -77,4 +77,4 @@ private:
     std::unique_ptr<std::ifstream> OpenForRead() const;
 };
 
-}  // namespace AsyncIO::IO::Async
+}  // namespace XER::AsyncIO::IO::Async

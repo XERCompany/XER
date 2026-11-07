@@ -8,7 +8,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include "audio/dsp_algorithms/dsp_biquad_processor.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 struct ParametricBand {
 	float frequency;
@@ -33,9 +33,9 @@ public:
 
 private:
 	float sample_rate_;
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 	std::vector<ParametricBand> bands_;
-	std::vector<Engine::Audio::DSP::BiquadProcessor> filters_;
+	std::vector<XER::Engine::Audio::DSP::BiquadProcessor> filters_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

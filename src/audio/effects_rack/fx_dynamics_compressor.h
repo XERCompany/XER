@@ -5,13 +5,14 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 class DynamicsCompressor {
 public:
 	DynamicsCompressor();
 	~DynamicsCompressor();
 
+	void SetSampleRate(float sample_rate);
 	void SetThresholdDb(float threshold_db);
 	void SetRatio(float ratio);
 	void SetAttackMs(float attack_ms);
@@ -21,12 +22,14 @@ public:
 	std::string GetReport() const;
 
 private:
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
+	float sample_rate_;
 	float threshold_db_;
 	float ratio_;
 	float attack_ms_;
 	float release_ms_;
 	float envelope_;
+	float gain_db_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

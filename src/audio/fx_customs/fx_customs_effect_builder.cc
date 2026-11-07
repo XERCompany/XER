@@ -1,3 +1,4 @@
+#include "helper/string_utils.h"
 #include "fx_customs_effect_builder.h"
 
 #include <algorithm>
@@ -12,7 +13,7 @@
 #include "audio/fx_customs/fx_customs_vintage_effects.h"
 #include "audio/fx_customs/fx_customs_vocal_effects.h"
 
-namespace Engine::Audio::FX::Customs {
+namespace XER::Engine::Audio::FX::Customs {
 
 namespace {
 
@@ -40,9 +41,7 @@ CustomEffectPackage MakePresetPackage(const std::string& label, std::vector<Cust
 }  // namespace
 
 std::string NormalizeFxCustomPresetName(std::string name) {
-	std::transform(name.begin(), name.end(), name.begin(), [](unsigned char ch) {
-		return static_cast<char>(std::tolower(ch));
-	});
+	name = XER::Engine::Helper::String::ToLowerAscii(name);
 	name.erase(std::remove(name.begin(), name.end(), ' '), name.end());
 	return name;
 }
@@ -475,4 +474,4 @@ bool BuildFxCustomEffectPackage(
 	return false;
 }
 
-}  // namespace Engine::Audio::FX::Customs
+}  // namespace XER::Engine::Audio::FX::Customs

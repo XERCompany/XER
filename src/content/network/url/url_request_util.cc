@@ -7,7 +7,7 @@
 #include "content/network/cache/network_cache_manager.h"
 #include "content/network/logging/network_logger.h"
 
-namespace network::url {
+namespace XER::network::url {
 
 URLResponse SyncGet(const std::string& url,
                     const URLRequestContext& ctx,
@@ -75,4 +75,4 @@ URLResponse SyncPost(const std::string& url,
     return resp;
 }
 
-}  // namespace network::url
+}  // namespace XER::network::url

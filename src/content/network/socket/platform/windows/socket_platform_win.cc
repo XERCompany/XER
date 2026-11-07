@@ -12,7 +12,7 @@
 
 #pragma comment(lib, "ws2_32.lib")
 
-namespace network {
+namespace XER::network {
 namespace socket {
 namespace platform {
 

@@ -9,7 +9,7 @@
 
 #include <chrono>
 
-namespace network::http {
+namespace XER::network::http {
 
 HttpCache& HttpCache::Instance() {
     static HttpCache inst;
@@ -94,4 +94,4 @@ void HttpCache::Clear() {
     store_.clear();
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

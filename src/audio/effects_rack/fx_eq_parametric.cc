@@ -5,12 +5,12 @@
 #include <future>
 #include <vector>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 std::string ParametricEQ::GetMemoryStats() const {
 	std::string stats;
 	stats += "Bands: " + std::to_string(bands_.size() * sizeof(ParametricBand)) + " bytes\n";
-	stats += "Filters: " + std::to_string(filters_.size() * sizeof(Engine::Audio::DSP::BiquadProcessor)) + " bytes\n";
+	stats += "Filters: " + std::to_string(filters_.size() * sizeof(XER::Engine::Audio::DSP::BiquadProcessor)) + " bytes\n";
 	return stats;
 }
 
@@ -31,25 +31,25 @@ bool ParametricEQ::Initialize(float sample_rate, size_t band_count) {
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	sample_rate_ = sample_rate;
 	bands_.assign(band_count, ParametricBand{1000.0f, 1.0f, 0.0f, true});
-	filters_.assign(band_count, Engine::Audio::DSP::BiquadProcessor());
+	filters_.assign(band_count, XER::Engine::Audio::DSP::BiquadProcessor());
 
 	for (size_t i = 0; i < band_count; ++i) {
-		filters_[i].Configure(Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, bands_[i].frequency, bands_[i].q);
+		filters_[i].Configure(XER::Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, bands_[i].frequency, bands_[i].q);
 	}
 	return true;
 }
 
 bool ParametricEQ::SetBand(size_t index, const ParametricBand& band) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	if (index >= bands_.size()) {
 		return false;
 	}
 
 	bands_[index] = band;
-	return filters_[index].Configure(Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, band.frequency, band.q);
+	return filters_[index].Configure(XER::Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, band.frequency, band.q);
 }
 
 ParametricBand ParametricEQ::GetBand(size_t index) const {
@@ -64,7 +64,7 @@ bool ParametricEQ::ProcessBlock(const float* input, size_t frame_count, float* o
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	std::vector<float> band_gains(bands_.size(), 0.0f);
 	for (size_t band = 0; band < bands_.size(); ++band) {
 		if (bands_[band].enabled) {
@@ -96,4 +96,4 @@ std::future<bool> ParametricEQ::ProcessBlockAsync(const float* input, size_t fra
 	});
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

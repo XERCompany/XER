@@ -1,13 +1,14 @@
 #include "custom_effect_node_wrapper.h"
 
 #include <algorithm>
+#include <cmath>
 #include <optional>
 
 #include "custom_effect_accel.h"
 #include "custom_effect_core.h"
 #include "custom_effect_fxdata.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 namespace {
 
@@ -59,6 +60,8 @@ bool CustomEffectNodeWrapper::Initialize(const CustomEffectNode& node, float sam
 	switch (node_.algorithm) {
 	case CustomEffectAlgorithm::kPassthrough:
 	case CustomEffectAlgorithm::kCompressor:
+		compressor_.SetSampleRate(sample_rate_);
+		return true;
 	case CustomEffectAlgorithm::kExpander:
 	case CustomEffectAlgorithm::kGate:
 	case CustomEffectAlgorithm::kLimiter:
@@ -67,15 +70,15 @@ bool CustomEffectNodeWrapper::Initialize(const CustomEffectNode& node, float sam
 		return true;
 	case CustomEffectAlgorithm::kChorus:
 		chorus_.SetRateHz(GetCustomEffectParameterValue(node_.parameters, "rate_hz", 0.8f));
-		chorus_.SetDepthSamples(GetCustomEffectParameterValue(node_.parameters, "depth_samples", 14.0f));
+		chorus_.SetDepthSamples(GetCustomEffectParameterValue(node_.parameters, "depth_ms", 4.0f) * sample_rate_ * 0.001f);
 		chorus_.SetMix(1.0f);
-		return chorus_.Initialize(sample_rate_, std::max<size_t>(4096u, max_block_size_ * 2));
+		return chorus_.Initialize(sample_rate_, std::max<size_t>(8192u, static_cast<size_t>(sample_rate_ * 0.1f)));
 	case CustomEffectAlgorithm::kFlanger:
 		flanger_.SetRateHz(GetCustomEffectParameterValue(node_.parameters, "rate_hz", 0.35f));
-		flanger_.SetDepthSamples(GetCustomEffectParameterValue(node_.parameters, "depth_samples", 10.0f));
+		flanger_.SetDepthSamples(GetCustomEffectParameterValue(node_.parameters, "depth_ms", 0.4f) * sample_rate_ * 0.001f);
 		flanger_.SetFeedback(GetCustomEffectParameterValue(node_.parameters, "feedback", 0.25f));
 		flanger_.SetMix(1.0f);
-		return flanger_.Initialize(sample_rate_, std::max<size_t>(4096u, max_block_size_ * 2));
+		return flanger_.Initialize(sample_rate_, std::max<size_t>(8192u, static_cast<size_t>(sample_rate_ * 0.1f)));
 	case CustomEffectAlgorithm::kPhaser:
 		phaser_.SetRateHz(GetCustomEffectParameterValue(node_.parameters, "rate_hz", 0.30f));
 		phaser_.SetDepth(GetCustomEffectParameterValue(node_.parameters, "depth", 0.7f));
@@ -118,7 +121,22 @@ bool CustomEffectNodeWrapper::Initialize(const CustomEffectNode& node, float sam
 		return true;
 	case CustomEffectAlgorithm::kDelay:
 		delay_feedback_state_ = 0.0f;
-		return delay_line_.Initialize(std::max<size_t>(4096u, max_block_size_ * 8));
+		delay_damp_state_ = 0.0f;
+		return delay_line_.Initialize(std::max<size_t>(8192u, static_cast<size_t>(sample_rate_ * 2.5f)));
+	case CustomEffectAlgorithm::kTremolo:
+		tremolo_.SetRateHz(GetCustomEffectParameterValue(node_.parameters, "rate_hz", 4.5f));
+		tremolo_.SetDepth(GetCustomEffectParameterValue(node_.parameters, "depth", 0.5f));
+		tremolo_.SetMix(1.0f);
+		return tremolo_.Initialize(sample_rate_);
+	case CustomEffectAlgorithm::kVibrato:
+		vibrato_.SetRateHz(GetCustomEffectParameterValue(node_.parameters, "rate_hz", 5.0f));
+		vibrato_.SetDepthMs(GetCustomEffectParameterValue(node_.parameters, "depth_ms", 4.0f));
+		vibrato_.SetMix(1.0f);
+		return vibrato_.Initialize(sample_rate_, std::max<size_t>(4096u, static_cast<size_t>(sample_rate_ * 0.05f)));
+	case CustomEffectAlgorithm::kRingMod:
+		ring_mod_.SetFrequencyHz(GetCustomEffectParameterValue(node_.parameters, "frequency_hz", 80.0f));
+		ring_mod_.SetMix(GetCustomEffectParameterValue(node_.parameters, "mix", 1.0f));
+		return ring_mod_.Initialize(sample_rate_);
 	case CustomEffectAlgorithm::kPlugin:
 		return false;
 	case CustomEffectAlgorithm::kUnknown:
@@ -143,7 +161,7 @@ bool CustomEffectNodeWrapper::ProcessBlock(
 		return false;
 	}
 
-	if (!node_.enabled) {
+	if (!node_.enabled && bypass_fade_ <= 0.0f) {
 		std::copy(input, input + static_cast<std::ptrdiff_t>(frame_count), output);
 		return true;
 	}
@@ -219,17 +237,38 @@ bool CustomEffectNodeWrapper::ProcessBlock(
 		processed = auto_tune_correct_pitch_.ProcessBlock(input, frame_count, wet_buffer_.data());
 		break;
 	case CustomEffectAlgorithm::kDelay: {
-		const size_t delay_samples = static_cast<size_t>(std::max(1.0f, GetCustomEffectParameterValue(node_.parameters, "delay_samples", 640.0f)));
+		const float time_ms = GetCustomEffectParameterValue(node_.parameters, "time_ms", 350.0f);
 		const float feedback = std::clamp(GetCustomEffectParameterValue(node_.parameters, "feedback", 0.35f), -0.95f, 0.95f);
-		delay_line_.SetDelaySamples(delay_samples);
+		const float damping = std::clamp(GetCustomEffectParameterValue(node_.parameters, "damping", 0.35f), 0.0f, 0.95f);
+		const float delay_f = std::clamp(time_ms * sample_rate_ * 0.001f, 1.0f,
+		                                 static_cast<float>(delay_line_.GetMaxDelaySamples()) - 1.0f);
+		// Damped feedback: a one-pole lowpass in the feedback path keeps
+		// repeats dark and prevents the high-end build-up of plain feedback.
+		const float damp_coeff = damping * 0.92f;
 		for (size_t i = 0; i < frame_count; ++i) {
-			const float delayed = delay_line_.Process(input[i] + delay_feedback_state_ * feedback);
-			delay_feedback_state_ = delayed;
+			const float write = input[i] + delay_damp_state_ * feedback;
+			const float delayed = delay_line_.ProcessFractional(write, delay_f);
+			delay_damp_state_ += (delayed - delay_damp_state_) * (1.0f - damp_coeff);
 			wet_buffer_[i] = delayed;
 		}
 		processed = true;
 		break;
 	}
+	case CustomEffectAlgorithm::kTremolo:
+		tremolo_.SetRateHz(GetCustomEffectParameterValue(node_.parameters, "rate_hz", 4.5f));
+		tremolo_.SetDepth(GetCustomEffectParameterValue(node_.parameters, "depth", 0.5f));
+		processed = tremolo_.ProcessBlock(input, frame_count, wet_buffer_.data());
+		break;
+	case CustomEffectAlgorithm::kVibrato:
+		vibrato_.SetRateHz(GetCustomEffectParameterValue(node_.parameters, "rate_hz", 5.0f));
+		vibrato_.SetDepthMs(GetCustomEffectParameterValue(node_.parameters, "depth_ms", 4.0f));
+		processed = vibrato_.ProcessBlock(input, frame_count, wet_buffer_.data());
+		break;
+	case CustomEffectAlgorithm::kRingMod:
+		ring_mod_.SetFrequencyHz(GetCustomEffectParameterValue(node_.parameters, "frequency_hz", 80.0f));
+		ring_mod_.SetMix(GetCustomEffectParameterValue(node_.parameters, "mix", 1.0f));
+		processed = ring_mod_.ProcessBlock(input, frame_count, wet_buffer_.data());
+		break;
 	case CustomEffectAlgorithm::kPlugin:
 		break;
 	case CustomEffectAlgorithm::kUnknown:
@@ -250,6 +289,23 @@ bool CustomEffectNodeWrapper::ProcessBlock(
 		for (size_t index = 0; index < frame_count; ++index) {
 			const float mix = ResolveCustomEffectNodeMix(node_, frame_offset + index);
 			output[index] = MixCustomEffectDryWet(input[index], wet_buffer_[index], mix);
+		}
+	}
+
+	// Smooth bypass: ramps the processed signal in/out over ~8 ms so toggling
+	// a node (or its wet mix) never produces a click — the wet path fades
+	// against the untouched dry signal instead of switching instantly.
+	const float target = node_.enabled ? 1.0f : 0.0f;
+	if (bypass_fade_ != target) {
+		const float coeff = 1.0f - std::exp(-1.0f / (0.008f * sample_rate_));
+		for (size_t i = 0; i < frame_count; ++i) {
+			bypass_fade_ += (target - bypass_fade_) * coeff;
+			output[i] = input[i] * (1.0f - bypass_fade_) + output[i] * bypass_fade_;
+		}
+		if (node_.enabled && bypass_fade_ > 0.999f) {
+			bypass_fade_ = 1.0f;
+		} else if (!node_.enabled && bypass_fade_ < 0.0005f) {
+			bypass_fade_ = 0.0f;
 		}
 	}
 	return true;
@@ -288,6 +344,12 @@ std::string CustomEffectNodeWrapper::GetReport() const {
 		return node_.label + ":" + auto_tune_correct_pitch_.GetReport();
 	case CustomEffectAlgorithm::kDelay:
 		return node_.label + ":delay";
+	case CustomEffectAlgorithm::kTremolo:
+		return node_.label + ":" + tremolo_.GetReport();
+	case CustomEffectAlgorithm::kVibrato:
+		return node_.label + ":" + vibrato_.GetReport();
+	case CustomEffectAlgorithm::kRingMod:
+		return node_.label + ":" + ring_mod_.GetReport();
 	case CustomEffectAlgorithm::kPassthrough:
 		return node_.label + ":passthrough";
 	case CustomEffectAlgorithm::kPlugin:
@@ -298,4 +360,4 @@ std::string CustomEffectNodeWrapper::GetReport() const {
 	return node_.label + ":unknown";
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

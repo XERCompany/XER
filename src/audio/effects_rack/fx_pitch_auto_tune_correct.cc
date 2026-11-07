@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 namespace {
 
@@ -254,4 +254,4 @@ float AutoTuneCorrectPitch::ComputeCorrectionRatio(const PitchEstimate& pitch) {
 	return std::clamp(std::pow(2.0f, correction_semitones / 12.0f), 0.943874f, 1.059463f);
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

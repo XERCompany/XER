@@ -10,7 +10,7 @@
 
 #include "content/network/proxy/proxy_config.h"
 
-namespace network::proxy {
+namespace XER::network::proxy {
 
 // Proxy callback type: (success, error_message)
 using ProxyCallback = std::function<void(bool, const std::string&)>;
@@ -43,4 +43,4 @@ private:
     ProxyServer  proxy_;
 };
 
-}  // namespace network::proxy
+}  // namespace XER::network::proxy

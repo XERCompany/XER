@@ -4,7 +4,7 @@
 
 #include "custom_effect_node_curve_line.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 bool ValidateCustomEffectNode(const CustomEffectNode& node, std::string* error_out) {
 	if (node.label.empty()) {
@@ -54,4 +54,4 @@ float ResolveCustomEffectNodeMix(const CustomEffectNode& node, size_t frame_inde
 	return std::clamp(EvaluateCustomEffectCurve(node.mix_curve, frame_index, 1.0f), 0.0f, 1.0f);
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace engine::bridge::ffmpeg {
+namespace XER::engine::bridge::ffmpeg {
 
 struct LibraryVersion {
 	std::string name;
@@ -235,9 +235,18 @@ bool CaptureDeviceToStream(const std::string& format_name,
 bool Transcode(const TranscodingParams& params,
                std::string* out_error);
 
+// Decodes the first frame of an image file (any format FFmpeg's image2
+// demuxer handles: png/jpg/bmp/webp/...), scales it so the longest side is
+// at most max_size pixels (0 = keep original size, dims forced even), and
+// writes a JPEG to output_path.
+bool ImageToJpeg(const std::string& input_path,
+                 const std::string& output_path,
+                 int max_size,
+                 std::string* out_error);
+
 bool ExtractStream(const std::string& input_path,
 				   int stream_index,
 				   const std::string& output_path,
 				   std::string* out_error);
 
-}  // namespace engine::bridge::ffmpeg
+}  // namespace XER::engine::bridge::ffmpeg

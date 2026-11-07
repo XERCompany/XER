@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 namespace {
 float DbToLinear(float db_value) {
@@ -24,17 +24,17 @@ DynamicsExpander::DynamicsExpander()
 DynamicsExpander::~DynamicsExpander() = default;
 
 void DynamicsExpander::SetThresholdDb(float threshold_db) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	threshold_db_ = threshold_db;
 }
 
 void DynamicsExpander::SetRatio(float ratio) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	ratio_ = std::max(1.0f, ratio);
 }
 
 void DynamicsExpander::SetRangeDb(float range_db) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	range_db_ = std::max(0.0f, range_db);
 }
 
@@ -43,7 +43,7 @@ bool DynamicsExpander::ProcessBlock(const float* input, size_t frame_count, floa
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	for (size_t i = 0; i < frame_count; ++i) {
 		const float in = input[i];
 		const float level_db = LinearToDb(std::abs(in));
@@ -65,4 +65,4 @@ std::string DynamicsExpander::GetReport() const {
 		", range=" + std::to_string(range_db_);
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

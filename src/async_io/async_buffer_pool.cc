@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 AsyncBufferPool::AsyncBufferPool(size_t block_size, size_t initial_blocks)
     : block_size_(block_size) {
@@ -111,4 +111,4 @@ void AsyncBufferPool::AllocateBlocks(size_t count) {
     }
 }
 
-}  // namespace AsyncIO::IO::Async
+}  // namespace XER::AsyncIO::IO::Async

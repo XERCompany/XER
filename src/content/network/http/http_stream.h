@@ -8,7 +8,7 @@
 #include <string>
 #include <functional>
 
-namespace network::http {
+namespace XER::network::http {
 
 // Abstract streaming interface over an established HTTP connection.
 class HttpStream {
@@ -24,4 +24,4 @@ public:
     virtual int  ReadChunk(uint8_t* buf, size_t capacity, std::string* error) = 0;
 };
 
-}  // namespace network::http
+}  // namespace XER::network::http

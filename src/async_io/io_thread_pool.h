@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 class IOThreadPool {
 public:
@@ -49,6 +49,6 @@ private:
     bool started_ = false;
 };
 
-} // namespace AsyncIO::IO::Async
+} // namespace XER::AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_THREAD_POOL_H

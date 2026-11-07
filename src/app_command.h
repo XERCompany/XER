@@ -3,6 +3,9 @@
 #include <string>
 #include <vector>
 
+namespace XER {
+
+
 class AppCommand {
 public:
     enum class Type {
@@ -138,3 +141,5 @@ public:
     static Parsed Parse(int argc, char** argv);
     static std::string BuildHelpText(const std::string& binary_name);
 }; 
+
+}  // namespace XER

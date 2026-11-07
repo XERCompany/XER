@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <string>
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 struct LockOptions {
 	int max_attempts = 100;
@@ -20,4 +20,4 @@ bool CleanupDirectoryLock(const std::filesystem::path& lock_path,
 bool CleanupScriptLock(const std::filesystem::path& script_path,
 		       std::string* error_out);
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

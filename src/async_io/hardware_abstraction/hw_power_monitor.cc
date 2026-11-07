@@ -10,7 +10,7 @@
     #include <thread>
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 namespace {
 
@@ -129,4 +129,4 @@ PowerStats HwPowerMonitor::GetStats() const {
     return last_stats_;
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

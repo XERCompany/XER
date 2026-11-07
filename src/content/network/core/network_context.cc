@@ -4,7 +4,7 @@
  */
 #include "content/network/core/network_context.h"
 
-namespace network::core {
+namespace XER::network::core {
 
 NetworkContext& NetworkContext::Instance() {
     static NetworkContext inst;
@@ -17,4 +17,4 @@ void NetworkContext::Reset() {
     ServerProperties().Clear();
 }
 
-}  // namespace network::core
+}  // namespace XER::network::core

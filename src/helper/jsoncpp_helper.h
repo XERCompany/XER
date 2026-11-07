@@ -5,7 +5,7 @@
 #include <map>
 #include <json/json.h>
 
-namespace Engine::Helper {
+namespace XER::Engine::Helper {
 
 class JsonCppHelper {
 public:
@@ -41,4 +41,4 @@ private:
     static std::string EscapeJsonString(const std::string& str);
 };
 
-}  // namespace Engine::Helper
+}  // namespace XER::Engine::Helper

@@ -6,7 +6,7 @@
 #include <mutex>
 #include <memory>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 class AudioFIFOQueue {
 public:
@@ -49,4 +49,4 @@ private:
     size_t overflow_count_;
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

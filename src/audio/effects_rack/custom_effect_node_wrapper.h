@@ -15,12 +15,13 @@
 #include "fx_dynamics_limiter.h"
 #include "fx_eq_parametric.h"
 #include "fx_mod_chorus.h"
+#include "fx_mod_extra.h"
 #include "fx_mod_flanger.h"
 #include "fx_mod_phaser.h"
 #include "fx_pitch_auto_tune_correct.h"
 #include "fx_reverb_algorithmic.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 class CustomEffectNodeWrapper {
 public:
@@ -50,11 +51,16 @@ private:
 	ModChorus chorus_;
 	ModFlanger flanger_;
 	ModPhaser phaser_;
+	ModTremolo tremolo_;
+	ModVibrato vibrato_;
+	ModRingMod ring_mod_;
 	ParametricEQ parametric_eq_;
 	AutoTuneCorrectPitch auto_tune_correct_pitch_;
 	ReverbAlgorithmic reverb_algorithmic_;
 	float delay_feedback_state_ = 0.0f;
+	float delay_damp_state_ = 0.0f;
+	float bypass_fade_ = 0.0f;
 	std::vector<float> wet_buffer_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

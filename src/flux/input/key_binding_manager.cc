@@ -5,7 +5,7 @@
 #include <utility>
 #include <vector>
 
-namespace flux::input {
+namespace XER::flux::input {
 
 bool KeyBindingManager::Register(std::string sequence, std::string command, std::string description, std::string* error_out) {
 	if (sequence.empty()) {
@@ -52,4 +52,4 @@ std::vector<KeyBinding> KeyBindingManager::Bindings() const {
 	return bindings_;
 }
 
-}  // namespace flux::input
+}  // namespace XER::flux::input

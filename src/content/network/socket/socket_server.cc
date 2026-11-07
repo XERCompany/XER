@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 
-namespace network::socket {
+namespace XER::network::socket {
 
 SocketServer::~SocketServer() {
     Close();
@@ -118,4 +118,4 @@ uint16_t SocketServer::GetListenPort() const {
     return listen_port_;
 }
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

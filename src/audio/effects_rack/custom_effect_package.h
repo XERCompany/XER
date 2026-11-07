@@ -4,7 +4,7 @@
 
 #include "custom_effect_struct.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 bool SerializeCustomEffectPackage(
 	const CustomEffectPackage& package,
@@ -16,4 +16,4 @@ bool DeserializeCustomEffectPackage(
 	CustomEffectPackage* package_out,
 	std::string* error_out = nullptr);
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <map>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 // Topology level
 enum class TopologyLevel {
@@ -69,4 +69,4 @@ private:
     void DiscoverTopology();
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

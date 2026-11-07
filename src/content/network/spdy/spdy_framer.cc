@@ -4,7 +4,7 @@
  */
 #include "content/network/spdy/spdy_framer.h"
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -204,4 +204,4 @@ size_t ParseSpdyFrame(const uint8_t* buf, size_t len, SpdyFrame* out) {
     return ParseControlFrame(buf, len, out);
 }
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

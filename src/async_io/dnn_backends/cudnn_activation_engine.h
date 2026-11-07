@@ -2,7 +2,7 @@
 
 #include "cudnn_bridge.h"
 
-namespace AsyncIO::IO::DNNBackends {
+namespace XER::AsyncIO::IO::DNNBackends {
 
 enum class ActivationKind {
     Relu,
@@ -26,5 +26,5 @@ private:
     double coef_;
 };
 
-} // namespace AsyncIO::IO::DNNBackends
+} // namespace XER::AsyncIO::IO::DNNBackends
  

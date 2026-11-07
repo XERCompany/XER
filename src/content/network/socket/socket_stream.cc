@@ -16,7 +16,7 @@
 
 #include "content/network/socket/net_log.h"
 
-namespace network::socket {
+namespace XER::network::socket {
 
 namespace {
 
@@ -97,4 +97,4 @@ bool SocketStream::WriteAll(const std::string& data, std::string* error) {
                     data.size(), error);
 }
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

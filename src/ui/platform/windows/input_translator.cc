@@ -130,6 +130,15 @@ std::optional<Widgets::Event> InputTranslator::Translate(
             static_cast<float>(GET_X_LPARAM(lParam)),
             static_cast<float>(GET_Y_LPARAM(lParam))
         );
+        // wParam carries the currently held buttons so widgets can distinguish
+        // hover moves from drag moves.
+        if (wParam & MK_LBUTTON) {
+            event.mouse_button = Widgets::MouseButton::Left;
+        } else if (wParam & MK_MBUTTON) {
+            event.mouse_button = Widgets::MouseButton::Middle;
+        } else if (wParam & MK_RBUTTON) {
+            event.mouse_button = Widgets::MouseButton::Right;
+        }
         return event;
     }
 

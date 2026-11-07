@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 class IOFileMap {
 public:
@@ -30,6 +30,6 @@ private:
     std::map<std::string, std::vector<MappedRegion>> map_; 
 };
 
-} // namespace AsyncIO::IO::Async
+} // namespace XER::AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_FILE_MAP_H

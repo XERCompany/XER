@@ -1,6 +1,6 @@
 #include "barrier.h"
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 Barrier::Barrier(int thread_count, const std::string& name)
     : thread_count_(thread_count), waiting_count_(0), generation_(0), name_(name) {}
@@ -35,4 +35,4 @@ bool Barrier::Reset() {
     return false;
 }
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

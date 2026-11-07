@@ -17,7 +17,7 @@
 #include <unistd.h>
 #endif
 
-namespace network::socket {
+namespace XER::network::socket {
 
 SslClientSocket::SslClientSocket() {
 }
@@ -346,4 +346,4 @@ bool SslClientSocket::SaveSession() {
     return true;
 }
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

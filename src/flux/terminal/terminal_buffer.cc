@@ -1,25 +1,8 @@
 #include "flux/terminal/terminal_buffer.h"
+#include "helper/string_utils.h"
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 namespace {
-
-std::vector<std::string> SplitLines(const std::string& text) {
-	std::vector<std::string> lines;
-	std::size_t start = 0;
-	while (start < text.size()) {
-		const std::size_t newline = text.find('\n', start);
-		if (newline == std::string::npos) {
-			lines.push_back(text.substr(start));
-			return lines;
-		}
-		lines.push_back(text.substr(start, newline - start));
-		start = newline + 1;
-	}
-	if (!text.empty() && text.back() == '\n') {
-		lines.emplace_back();
-	}
-	return lines;
-}
 
 }  // namespace
 
@@ -71,7 +54,7 @@ std::string TerminalBuffer::SnapshotPlainText(OutputStream stream) const {
 }
 
 std::vector<std::string> TerminalBuffer::Lines(OutputStream stream) const {
-	return SplitLines(Storage(stream));
+	return XER::Engine::Helper::String::SplitLines(Storage(stream));
 }
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

@@ -1,7 +1,7 @@
 #include "io_stream_reader.h"
 #include <fstream>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 IOStreamReader::IOStreamReader(std::string path)
     : path_(std::move(path)), open_(false) {}
@@ -61,4 +61,4 @@ void IOStreamReader::ReadAsync(size_t offset, size_t length, std::function<void(
     });
 }
 
-} // namespace AsyncIO::IO::Async
+} // namespace XER::AsyncIO::IO::Async

@@ -7,7 +7,7 @@
 #include <cstring>
 #include <random>
 
-namespace network::websocket {
+namespace XER::network::websocket {
 
 static uint32_t RandomMask() {
     static thread_local std::mt19937 rng(std::random_device{}());
@@ -88,4 +88,4 @@ WebSocketFrame MakeCloseFrame(uint16_t code, const std::string& reason) {
     return f;
 }
 
-}  // namespace network::websocket
+}  // namespace XER::network::websocket

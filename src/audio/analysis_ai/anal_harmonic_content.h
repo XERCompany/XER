@@ -9,7 +9,7 @@
 #include "audio_fft_analyzer.h"
 #include "audio_pitch_detector.h"
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 class HarmonicContentAnalyzer {
 public:

@@ -1,10 +1,21 @@
 #include "app_ui.h"
 
+#include <cstdint>
+#include <functional>
+#include <memory>
+
+#include "app/crash_handler.h"
+#include "node_graph_app_nodes.h"
 #include "ui/core/window.h"
 #include "ui/core/application.h"
-#include "ui/widgets/audio_player_widget.h"
+#include "ui/widgets/dialog.h"
+#include "ui/widgets/label.h"
+#include "ui/widgets/node_graph_editor_widget.h"
+#include "ui/widgets/projects_widget.h"
+#include "ui/widgets/scroll_area.h"
+#include "ui/widgets/screen_loading_widget.h"
 
-namespace App {
+namespace XER::App {
 
 class AppUI::Impl {
 public:
@@ -34,6 +45,7 @@ public:
     }
 
     void Shutdown() {
+        XER::App::NodeGraphApp::CloseAllPluginEditors();
         if (ui_initialized_) {
             XER::UI::Core::Application::Instance().Shutdown();
             ui_initialized_ = false;
@@ -51,7 +63,10 @@ public:
             return false;
         }
 
+        window_->SetTheme(XER::UI::Theme::Variant::Dark);
+
         window_created_ = true;
+        window_->SetSizeLimits(560, 400, 2560, 1600);
         return true;
     }
 
@@ -73,22 +88,137 @@ public:
         }
     }
 
-    void SetupAudioPlayerWidget(AudioController* controller) {
-        if (!window_ || !controller) {
+    void SetupNodeGraphEditor() {
+        if (!window_) {
             return;
         }
 
-        audio_widget_ = std::make_shared<XER::UI::Widgets::AudioPlayerWidget>(controller);
-        window_->SetContent(audio_widget_);
+        // Application-level node types (audio file I/O, Lua scripting,
+        // VST3 plugin processing) into the shared registry.
+        XER::App::NodeGraphApp::RegisterAppNodes();
 
-        // Set up close callback to stop audio
-        window_->SetOnClose([controller]() {
-            controller->Stop();
-        });
+        // Splash first: boot checklist (project DB, projects, cache files,
+        // drivers) runs on a worker thread; the project browser is shown
+        // when it completes. Content swaps are deferred by one frame:
+        // assigning std::function members or swapping the widget tree from
+        // inside the running frame/event callback is unsafe, so handlers
+        // only stash pending_action_, executed at the top of the next
+        // frame callback before tick_fn_ is invoked.
+        auto loading = std::make_shared<XER::UI::Widgets::ScreenLoadingWidget>(
+            [this]() {
+                pending_action_ = [this]() { ShowProjectsBrowser(); };
+            });
+        tick_fn_ = [loading]() { loading->Tick(); };
+        window_->SetContent(loading);
+        window_->SetFrameCallback([this]() {
+            if (pending_action_) {
+                auto action = std::move(pending_action_);
+                pending_action_ = nullptr;
+                action();
+            }
+            if (tick_fn_) {
+                tick_fn_();
+            }
+        }, 33);
+    }
 
-        SetTimer(window_->GetHWND(), 1, 100, [](HWND hwnd, UINT, UINT_PTR, DWORD) {
-            InvalidateRect(hwnd, nullptr, FALSE);
+    // Landing screen: project browser (Select / Configure / Duplicate /
+    // Delete + search). Selecting a project lazily creates the editor,
+    // loads the project and swaps it in as window content.
+    void ShowProjectsBrowser() {
+        if (!window_) return;
+
+        XER::UI::Widgets::ProjectsWidget::Hooks hooks;
+        hooks.on_open_project = [this](std::int64_t id) {
+            pending_action_ = [this, id]() { OpenEditorForProject(id, ""); };
+        };
+        hooks.on_open_project_graph =
+            [this](std::int64_t id, const std::string& graph_name) {
+                pending_action_ = [this, id, graph_name]() {
+                    OpenEditorForProject(id, graph_name);
+                };
+            };
+        hooks.on_notify = [](const std::string& text, bool is_error) {
+            OutputDebugStringA(
+                (std::string(is_error ? "[error] " : "") + text + "\n").c_str());
+        };
+
+        auto projects = std::make_shared<XER::UI::Widgets::ProjectsWidget>(
+            window_->GetHWND(), std::move(hooks));
+        projects->SetMode(XER::UI::Widgets::ProjectsWidget::Mode::kBrowser);
+        browser_ = std::make_shared<XER::UI::Widgets::ScrollArea>(projects);
+        browser_projects_ = projects;
+
+        // Detach VST3/CLAP editor HWNDs — they are children of the frame
+        // and would otherwise linger over the project browser.
+        XER::App::NodeGraphApp::CloseAllPluginEditors();
+        // The editor's canvas/param-overlay are raw HWND children of the
+        // frame — the widget tree does not hide them on content swap.
+        if (editor_) editor_->SetHostVisible(false);
+        window_->SetContent(browser_);
+        tick_fn_ = [browser = browser_]() { browser->TickTree(0.033); };
+        MaybeShowCrashReportDialog();
+    }
+
+    // One-shot dialog after a crash-handler auto-restart: the pending
+    // marker is consumed here so it shows exactly once per report.
+    void MaybeShowCrashReportDialog() {
+        if (!window_) return;
+        const auto report = Crash::ConsumePendingReport();
+        if (!report.has_value()) return;
+        auto content = std::make_shared<XER::UI::Widgets::Label>(
+            "The application was restarted after a crash.\n"
+            "Crash report saved to:\n" + report->string(), true);
+        auto dialog = XER::UI::Widgets::Dialog::Create(
+            "Crash report", content, "Open folder", "Close");
+        dialog->SetOnClosed([dlg = dialog.get(), dir = *report]() {
+            if (dlg->WasConfirmed()) {
+                Crash::OpenReportFolder(dir);
+            }
         });
+        browser_->ShowOverlay(dialog);
+    }
+
+    void OpenEditorForProject(std::int64_t project_id,
+                              const std::string& graph_name = "") {
+        if (!window_) return;
+        Crash::SetSessionProject(project_id, graph_name);
+        XER::App::NodeGraphApp::CloseAllPluginEditors();
+
+        if (!editor_) {
+            editor_ = std::make_shared<XER::UI::Widgets::NodeGraphEditorWidget>(
+                window_->GetHWND(),
+                [window = window_](XER::UI::Theme::Variant v) {
+                    window->SetTheme(v);
+                },
+                project_id);
+            if (!graph_name.empty()) {
+                // Constructor opens the project's default graph; reload the
+                // explicitly requested one.
+                editor_->OpenProjectGraph(project_id, graph_name);
+            }
+            editor_->SetPluginEditorHandler(
+                [hwnd = window_->GetHWND()](std::uint64_t id, float x,
+                                            float y, float w, float h) {
+                    std::string err;
+                    if (!XER::App::NodeGraphApp::OpenPluginEditor(id, hwnd, x, y, w, h,
+                                                             &err)) {
+                        OutputDebugStringA(
+                            ("Plugin editor: " + err + "\n").c_str());
+                    }
+                });
+            editor_->SetBrowserBackHook([this]() {
+                pending_action_ = [this]() { ShowProjectsBrowser(); };
+            });
+        } else {
+            editor_->OpenProjectGraph(project_id, graph_name);
+        }
+
+        window_->SetContent(editor_);
+        // Restore the editor's HWND chrome (canvas + param overlay); the
+        // following Layout pass also re-asserts per-view visibility.
+        if (editor_) editor_->SetHostVisible(true);
+        tick_fn_ = [editor = editor_]() { editor->Tick(); };
     }
 
     int Run() {
@@ -107,7 +237,12 @@ private:
     bool ui_initialized_;
     bool window_created_;
     std::shared_ptr<XER::UI::Core::Window> window_;
-    std::shared_ptr<XER::UI::Widgets::AudioPlayerWidget> audio_widget_;
+    std::shared_ptr<XER::UI::Widgets::NodeGraphEditorWidget> editor_;
+    std::shared_ptr<XER::UI::Widgets::ScrollArea> browser_;
+    std::shared_ptr<XER::UI::Widgets::ProjectsWidget> browser_projects_;
+    // Per-frame tick target + deferred content swap (see SetupNodeGraphEditor).
+    std::function<void()> tick_fn_;
+    std::function<void()> pending_action_;
 };
 
 AppUI::AppUI()
@@ -145,7 +280,6 @@ bool AppUI::CreateMainWindow(const std::string& title, int width, int height) {
     if (!initialized_) {
         return false;
     }
-
     return impl_->CreateMainWindow(title, width, height);
 }
 
@@ -161,8 +295,8 @@ void AppUI::CloseWindow() {
     impl_->CloseWindow();
 }
 
-void AppUI::SetupAudioPlayerWidget(AudioController* controller) {
-    impl_->SetupAudioPlayerWidget(controller);
+void AppUI::SetupNodeGraphEditor() {
+    impl_->SetupNodeGraphEditor();
 }
 
 int AppUI::Run() {
@@ -173,4 +307,4 @@ bool AppUI::IsWindowVisible() const {
     return impl_->IsWindowVisible();
 }
 
-}  // namespace App
+} // namespace XER::App

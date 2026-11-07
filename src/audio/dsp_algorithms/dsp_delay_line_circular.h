@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class CircularDelayLine {
 public:
@@ -18,6 +18,10 @@ public:
 	void Reset();
 
 	float Process(float sample);
+	// Fractional-delay read with linear interpolation — eliminates the
+	// zipper/aliasing artifacts of integer-sample modulation delays.
+	float ProcessFractional(float sample, float delay_samples);
+	size_t GetMaxDelaySamples() const { return max_delay_samples_; }
 	std::string GetReport() const;
 
 private:
@@ -27,4 +31,4 @@ private:
 	std::vector<float> buffer_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

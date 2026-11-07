@@ -6,7 +6,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include "plugin_builtin_host.h"
 
-namespace Engine::Audio::Plugin {
+namespace XER::Engine::Audio::Plugin {
 
 class AuHostInterface {
 public:
@@ -26,7 +26,7 @@ public:
 	std::string GetBackendMode() const;
 
 private:
-    mutable AsyncIO::IO::Sync::MutexWrapper mutex_{"au_host"};
+    mutable XER::AsyncIO::IO::Sync::MutexWrapper mutex_{"au_host"};
     BuiltinPluginHost builtin_host_;
     double sample_rate_ = 44100.0;
     uint32_t max_block_size_ = 512;
@@ -34,4 +34,4 @@ private:
 	BackendMode backend_mode_ = BackendMode::kNone;
 };
 
-}  // namespace Engine::Audio::Plugin
+}  // namespace XER::Engine::Audio::Plugin

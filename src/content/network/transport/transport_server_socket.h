@@ -10,7 +10,7 @@
 
 #include "content/network/transport/transport_client_socket.h"
 
-namespace network::transport {
+namespace XER::network::transport {
 
 // Abstract server socket interface.
 class TransportServerSocket {
@@ -26,4 +26,4 @@ public:
     virtual bool IsListening() const = 0;
 };
 
-}  // namespace network::transport
+}  // namespace XER::network::transport

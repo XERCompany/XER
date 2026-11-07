@@ -162,6 +162,41 @@ private:
     bool captured_ = false;
 };
  
+class GroupCommand : public Command {
+public:
+    // add_ == true  -> Apply inserts group_, Revert removes it.
+    // add_ == false -> Apply captures group_ then removes it, Revert re-adds.
+    GroupCommand(Group group, bool add)
+        : group_(std::move(group)), add_(add) {}
+    bool Apply(Graph& g) override {
+        if (add_) {
+            const uint64_t id = g.AddGroup(group_);
+            group_.id = id;  // remember the assigned id for Revert
+            return true;
+        }
+        const auto it = g.groups().find(group_.id);
+        if (it == g.groups().end()) return false;
+        if (!captured_) {
+            group_ = it->second;
+            captured_ = true;
+        }
+        return g.RemoveGroup(group_.id);
+    }
+    bool Revert(Graph& g) override {
+        if (add_) return g.RemoveGroup(group_.id);
+        g.AddGroup(group_);  // preserves group_.id
+        return true;
+    }
+    std::string Label() const override {
+        return add_ ? "Add group" : "Remove group";
+    }
+
+private:
+    Group group_;
+    bool add_;
+    bool captured_ = false;
+};
+
 // Whole-graph snapshot for structural edits that touch many elements at once.
 class SnapshotCommand : public Command {
 public:
@@ -305,6 +340,14 @@ bool History::MoveNode(NodeId id, double x, double y) { return Execute(std::make
  
 bool History::SetParam(NodeId id, const std::string& name, Value value) {
     return Execute(std::make_unique<SetParamCommand>(id, name, std::move(value)));
+}
+
+bool History::AddGroup(Group group) {
+    return Execute(std::make_unique<GroupCommand>(std::move(group), true));
+}
+
+bool History::RemoveGroup(uint64_t group_id) {
+    return Execute(std::make_unique<GroupCommand>(Group{.id = group_id}, false));
 }
  
 NodeId History::CollapseToSubgraph(const std::vector<NodeId>& nodes, std::string* error_out) {

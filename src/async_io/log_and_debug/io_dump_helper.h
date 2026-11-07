@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <ostream>
 
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 class DumpHelper {
 public:
@@ -35,8 +35,7 @@ public:
     static std::string GetDataStatistics(const uint8_t* data, size_t size);
 
 private:
-    static std::string ByteToHex(uint8_t byte);
     static bool IsPrintable(uint8_t byte);
 };
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

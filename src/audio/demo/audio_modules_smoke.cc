@@ -29,12 +29,13 @@
 #include "audio/plugin_wrappers/au_host_interface.h"
 #include "audio/plugin_wrappers/clap_host_interface.h"
 #include "audio/plugin_wrappers/vst3_host_interface.h"
+#include "audio/plugin_wrappers/vst3_external_host.h"
 #include "audio/synth_engine/synth_modulation_matrix.h"
 #include "audio/synth_engine/synth_voice_manager.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 #include <cmath>
 
-namespace Engine::Audio::Demo {
+namespace XER::Engine::Audio::Demo {
 
 namespace {
 
@@ -83,7 +84,7 @@ bool ReadInputBytes(const std::filesystem::path& path, std::vector<uint8_t>* byt
 		return false;
 	}
 
-	Engine::Audio::CodecIO::CodecFileStreamer streamer;
+	XER::Engine::Audio::CodecIO::CodecFileStreamer streamer;
 	if (!streamer.OpenRead(path.string())) {
 		if (error_out != nullptr) {
 			*error_out = "failed to open input through CodecFileStreamer: " + path.string();
@@ -104,8 +105,8 @@ bool ReadInputBytes(const std::filesystem::path& path, std::vector<uint8_t>* byt
 }
 
 int DetectSampleRate(const std::filesystem::path& path) {
-	engine::bridge::ffmpeg::MediaInfo media_info;
-	if (!engine::bridge::ffmpeg::ProbeMedia(path.string(), &media_info, nullptr)) {
+	XER::engine::bridge::ffmpeg::MediaInfo media_info;
+	if (!XER::engine::bridge::ffmpeg::ProbeMedia(path.string(), &media_info, nullptr)) {
 		return 44100;
 	}
 	for (const auto& stream : media_info.streams) {
@@ -134,7 +135,7 @@ bool ProcessInBlocks(Wrapper* wrapper, const std::vector<float>& input, std::vec
 }
 
 bool WriteWaveArtifact(const std::filesystem::path& path, const std::vector<float>& samples, int sample_rate) {
-	Engine::Audio::CodecIO::WavPcmCodec codec;
+	XER::Engine::Audio::CodecIO::WavPcmCodec codec;
 	std::vector<uint8_t> bytes;
 	if (!codec.Encode16(samples.data(), samples.size(), bytes, sample_rate)) {
 		return false;
@@ -178,8 +179,8 @@ SynthSmokeResult RunSynthVoiceManagerSmoke(int sample_rate) {
 	if (sample_rate <= 0) {
 		return result;
 	}
-	Engine::Audio::Synth::SynthVoiceManager synth;
-	Engine::Audio::Synth::SynthModulationMatrix modulation_matrix;
+	XER::Engine::Audio::Synth::SynthVoiceManager synth;
+	XER::Engine::Audio::Synth::SynthModulationMatrix modulation_matrix;
 	constexpr uint32_t kLfoSource = 1u;
 	constexpr uint32_t kDensitySource = 2u;
 	constexpr uint32_t kOutputGainDestination = 10u;
@@ -232,7 +233,7 @@ SynthSmokeResult RunSynthVoiceManagerSmoke(int sample_rate) {
 	return result;
 }
 
-bool ProcessEffectInBlocks(Engine::Audio::FX::ReverbConvolution* effect, const std::vector<float>& input, std::vector<float>* output, size_t block_size) {
+bool ProcessEffectInBlocks(XER::Engine::Audio::FX::ReverbConvolution* effect, const std::vector<float>& input, std::vector<float>* output, size_t block_size) {
 	if (effect == nullptr || output == nullptr || block_size == 0) {
 		return false;
 	}
@@ -249,7 +250,7 @@ bool ProcessEffectInBlocks(Engine::Audio::FX::ReverbConvolution* effect, const s
 }
 
 bool ProcessGranularInBlocks(
-	Engine::Audio::DSP::GranularPitchShifter* shifter,
+	XER::Engine::Audio::DSP::GranularPitchShifter* shifter,
 	const std::vector<float>& input,
 	std::vector<float>* output,
 	size_t block_size) {
@@ -302,7 +303,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::CodecIO::Mp3LameCodec mp3_codec;
+	XER::Engine::Audio::CodecIO::Mp3LameCodec mp3_codec;
 	std::vector<float> decoded_mono;
 	if (!mp3_codec.Decode(input_bytes.data(), input_bytes.size(), decoded_mono)) {
 		if (error_out != nullptr) {
@@ -321,7 +322,7 @@ bool RunAudioModulesSmoke(
 	}
 	const std::vector<float>& processing_input = options.output_dir.empty() ? smoke_input : decoded_mono;
 
-	Engine::Audio::MIDI::MidiParser midi_parser;
+	XER::Engine::Audio::MIDI::MidiParser midi_parser;
 	const std::vector<uint8_t> midi_bytes = {
 		0x90, 60, 100,
 		64, 110,
@@ -329,7 +330,7 @@ bool RunAudioModulesSmoke(
 		0xF0, 0x7E, 0x7F, 0x06, 0x01, 0xF7,
 		0xFA,
 	};
-	std::vector<Engine::Audio::MIDI::MidiEvent> midi_events;
+	std::vector<XER::Engine::Audio::MIDI::MidiEvent> midi_events;
 	if (!midi_parser.ParseStream(midi_bytes.data(), midi_bytes.size(), midi_events)) {
 		if (error_out != nullptr) {
 			*error_out = "MIDI parser smoke sequence failed";
@@ -337,14 +338,14 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::MIDI::MidiEventDispatcher dispatcher;
+	XER::Engine::Audio::MIDI::MidiEventDispatcher dispatcher;
 	size_t dispatched_events = 0;
-	dispatcher.AddListener([&dispatched_events](const Engine::Audio::MIDI::MidiEvent&) {
+	dispatcher.AddListener([&dispatched_events](const XER::Engine::Audio::MIDI::MidiEvent&) {
 		++dispatched_events;
 	});
 	dispatcher.DispatchBatch(midi_events);
 
-	Engine::Audio::MIDI::MidiControllerMapping controller_mapping;
+	XER::Engine::Audio::MIDI::MidiControllerMapping controller_mapping;
 	controller_mapping.Bind(74, 0, -12.0f, 12.0f, false, 0, "gain_db");
 	uint32_t mapped_param_id = 0;
 	float mapped_gain_db = 0.0f;
@@ -362,11 +363,11 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::MIDI::MidiSysexHandler sysex_handler;
-	Engine::Audio::MIDI::MidiSysexMessage sysex_message;
+	XER::Engine::Audio::MIDI::MidiSysexHandler sysex_handler;
+	XER::Engine::Audio::MIDI::MidiSysexMessage sysex_message;
 	bool parsed_sysex = false;
 	for (const auto& event : midi_events) {
-		if (event.type == Engine::Audio::MIDI::MidiMessageType::kSysEx) {
+		if (event.type == XER::Engine::Audio::MIDI::MidiMessageType::kSysEx) {
 			parsed_sysex = sysex_handler.Parse(event.message, &sysex_message);
 			break;
 		}
@@ -378,16 +379,16 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::MIDI::MidiPatternSequencer sequencer;
+	XER::Engine::Audio::MIDI::MidiPatternSequencer sequencer;
 	sequencer.SetPattern(midi_events);
 	sequencer.SetLoopLength(4);
-	const std::vector<Engine::Audio::MIDI::MidiEvent> looped_events = sequencer.CollectRange(0, 8);
+	const std::vector<XER::Engine::Audio::MIDI::MidiEvent> looped_events = sequencer.CollectRange(0, 8);
 
-	Engine::Audio::MIDI::MidiClockGenerator clock_generator;
+	XER::Engine::Audio::MIDI::MidiClockGenerator clock_generator;
 	clock_generator.SetTempoBpm(120.0);
 	const uint32_t clock_pulses = clock_generator.AdvanceSamples(static_cast<uint32_t>(sample_rate), static_cast<uint32_t>(sample_rate));
 
-	Engine::Audio::Plugin::Vst3HostInterface vst3_host;
+	XER::Engine::Audio::Plugin::Vst3HostInterface vst3_host;
 	if (!vst3_host.Initialize(static_cast<double>(sample_rate), 1024u)
 		|| !vst3_host.LoadPlugin("builtin://gain")
 		|| !vst3_host.SetParameter(mapped_param_id, mapped_gain_db)) {
@@ -404,7 +405,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::Plugin::ClapHostInterface clap_host;
+	XER::Engine::Audio::Plugin::ClapHostInterface clap_host;
 	const std::filesystem::path external_clap_plugin = ResolveExternalClapSmokePluginPath();
 	const bool use_external_clap = !external_clap_plugin.empty();
 	if (!clap_host.Initialize(static_cast<double>(sample_rate), 1024u)
@@ -424,7 +425,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::Plugin::AuHostInterface au_host;
+	XER::Engine::Audio::Plugin::AuHostInterface au_host;
 	if (!au_host.Initialize(static_cast<double>(sample_rate), 1024u)
 		|| !au_host.LoadComponent("builtin://parametric_eq")
 		|| !au_host.SetParameter(0u, 1800.0f)
@@ -443,7 +444,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::FX::ReverbConvolution convolution_reverb;
+	XER::Engine::Audio::FX::ReverbConvolution convolution_reverb;
 	const std::vector<float> convolution_ir = BuildSyntheticImpulseResponse(128u);
 	if (!convolution_reverb.LoadImpulseResponse(convolution_ir.data(), convolution_ir.size())) {
 		if (error_out != nullptr) {
@@ -460,11 +461,11 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	const Engine::Audio::FX::CustomEffectPackage custom_effect_package =
-		Engine::Audio::FX::BuildExampleCustomEffectPackage("builtin://gain");
+	const XER::Engine::Audio::FX::CustomEffectPackage custom_effect_package =
+		XER::Engine::Audio::FX::BuildExampleCustomEffectPackage("builtin://gain");
 	std::vector<float> custom_effect_output;
-	Engine::Audio::FX::CustomEffectReport custom_effect_report;
-	if (!Engine::Audio::FX::RunCustomEffectPackage(
+	XER::Engine::Audio::FX::CustomEffectReport custom_effect_report;
+	if (!XER::Engine::Audio::FX::RunCustomEffectPackage(
 			custom_effect_package,
 			static_cast<float>(sample_rate),
 			processing_input,
@@ -478,7 +479,7 @@ bool RunAudioModulesSmoke(
 	}
 	std::string custom_effect_package_text;
 	std::string custom_effect_package_error;
-	if (!Engine::Audio::FX::SerializeCustomEffectPackage(
+	if (!XER::Engine::Audio::FX::SerializeCustomEffectPackage(
 			custom_effect_package,
 			&custom_effect_package_text,
 			&custom_effect_package_error)) {
@@ -498,7 +499,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::DSP::GranularPitchShifter granular_shifter;
+	XER::Engine::Audio::DSP::GranularPitchShifter granular_shifter;
 	if (!granular_shifter.Initialize(static_cast<float>(sample_rate), 384u, 4096u)) {
 		if (error_out != nullptr) {
 			*error_out = "granular pitch shifter initialization failed";
@@ -514,7 +515,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::CodecIO::WavFloatCodec wav_float_codec;
+	XER::Engine::Audio::CodecIO::WavFloatCodec wav_float_codec;
 	std::vector<uint8_t> wav_float_bytes;
 	if (!wav_float_codec.Encode32(smoke_input.data(), std::min<size_t>(smoke_input.size(), 4096u), wav_float_bytes)) {
 		if (error_out != nullptr) {
@@ -530,10 +531,10 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::CodecIO::MetadataId3 id3_codec;
-	const Engine::Audio::CodecIO::Id3Tag synthetic_tag{"hoodak", "smoke", "modules"};
+	XER::Engine::Audio::CodecIO::MetadataId3 id3_codec;
+	const XER::Engine::Audio::CodecIO::Id3Tag synthetic_tag{"hoodak", "smoke", "modules"};
 	const std::vector<uint8_t> id3_bytes = id3_codec.Build(synthetic_tag);
-	Engine::Audio::CodecIO::Id3Tag parsed_tag;
+	XER::Engine::Audio::CodecIO::Id3Tag parsed_tag;
 	if (!id3_codec.Parse(id3_bytes.data(), id3_bytes.size(), parsed_tag)) {
 		if (error_out != nullptr) {
 			*error_out = "ID3 parse/build smoke failed";
@@ -541,7 +542,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::CodecIO::AacAdtsCodec aac_codec;
+	XER::Engine::Audio::CodecIO::AacAdtsCodec aac_codec;
 	std::vector<uint8_t> aac_bytes;
 	if (!aac_codec.Encode(smoke_input.data(), std::min<size_t>(smoke_input.size(), 8192u), aac_bytes)) {
 		if (error_out != nullptr) {
@@ -557,7 +558,7 @@ bool RunAudioModulesSmoke(
 		return false;
 	}
 
-	Engine::Audio::CodecIO::OggVorbisCodec ogg_codec;
+	XER::Engine::Audio::CodecIO::OggVorbisCodec ogg_codec;
 	std::vector<uint8_t> ogg_bytes;
 	if (!ogg_codec.Encode(smoke_input.data(), std::min<size_t>(smoke_input.size(), 8192u), ogg_bytes)) {
 		if (error_out != nullptr) {
@@ -679,4 +680,4 @@ bool RunAudioModulesSmoke(
 	return true;
 }
 
-}  // namespace Engine::Audio::Demo
+}  // namespace XER::Engine::Audio::Demo

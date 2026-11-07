@@ -3,11 +3,14 @@
 #include <algorithm>
 #include <cmath>
 
-#if ENGINE_HAS_FFTW3F
+#if ENGINE_HAS_MKL
+#include <mkl_dfti.h>
+#include <mkl_types.h>
+#elif ENGINE_HAS_FFTW3F
 #include <fftw3.h>
 #endif
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
@@ -41,7 +44,21 @@ void ComputeInverseNaive(
 }
 }
 
-#if ENGINE_HAS_FFTW3F
+#if ENGINE_HAS_MKL
+struct FFTEngine::BackendState {
+	BackendState() = default;
+
+	~BackendState() {
+		if (handle_ != nullptr) {
+			DftiFreeDescriptor(&handle_);
+		}
+	}
+
+	DFTI_DESCRIPTOR_HANDLE handle_ = nullptr;
+	std::vector<MKL_Complex8> time_domain_;
+	std::vector<MKL_Complex8> frequency_domain_;
+};
+#elif ENGINE_HAS_FFTW3F
 struct FFTEngine::BackendState {
 	BackendState() = default;
 
@@ -72,7 +89,22 @@ struct FFTEngine::BackendState {};
 FFTEngine::FFTEngine(size_t fft_size)
 	: fft_size_(fft_size), spectrum_(fft_size) {
 	if (fft_size_ > 0) {
-#if ENGINE_HAS_FFTW3F
+#if ENGINE_HAS_MKL
+		backend_ = std::make_unique<BackendState>();
+		backend_->time_domain_.resize(fft_size_);
+		backend_->frequency_domain_.resize(fft_size_);
+		DFTI_DESCRIPTOR_HANDLE handle = nullptr;
+		if (DftiCreateDescriptor(&handle, DFTI_SINGLE, DFTI_COMPLEX, 1,
+		                          static_cast<MKL_LONG>(fft_size_)) == DFTI_NO_ERROR &&
+		    DftiCommitDescriptor(handle) == DFTI_NO_ERROR) {
+			backend_->handle_ = handle;
+		} else {
+			if (handle != nullptr) {
+				DftiFreeDescriptor(&handle);
+			}
+			backend_.reset();
+		}
+#elif ENGINE_HAS_FFTW3F
 		backend_ = std::make_unique<BackendState>();
 		backend_->time_domain = fftwf_alloc_complex(static_cast<int>(fft_size_));
 		backend_->frequency_domain = fftwf_alloc_complex(static_cast<int>(fft_size_));
@@ -109,7 +141,26 @@ bool FFTEngine::Forward(const float* input, size_t frame_count) {
 
 	perf_counter_.StartCounter("fft_forward");
 
-#if ENGINE_HAS_FFTW3F
+#if ENGINE_HAS_MKL
+	if (backend_ != nullptr && backend_->handle_ != nullptr) {
+		for (size_t i = 0; i < fft_size_; ++i) {
+			backend_->time_domain_[i].real = input[i];
+			backend_->time_domain_[i].imag = 0.0f;
+		}
+
+		if (DftiComputeForward(backend_->handle_, backend_->time_domain_.data(),
+		                       backend_->frequency_domain_.data()) == DFTI_NO_ERROR) {
+			for (size_t i = 0; i < fft_size_; ++i) {
+				spectrum_[i] = Complex(backend_->frequency_domain_[i].real,
+				                      backend_->frequency_domain_[i].imag);
+			}
+		} else {
+			ComputeForwardNaive(input, fft_size_, &spectrum_);
+		}
+	} else {
+		ComputeForwardNaive(input, fft_size_, &spectrum_);
+	}
+#elif ENGINE_HAS_FFTW3F
 	if (backend_ != nullptr && backend_->forward_plan != nullptr) {
 		for (size_t i = 0; i < fft_size_; ++i) {
 			backend_->time_domain[i][0] = input[i];
@@ -136,7 +187,26 @@ bool FFTEngine::Inverse(float* output, size_t frame_count) const {
 		return false;
 	}
 
-#if ENGINE_HAS_FFTW3F
+#if ENGINE_HAS_MKL
+	if (backend_ != nullptr && backend_->handle_ != nullptr) {
+		perf_counter_.StartCounter("fft_inverse");
+		for (size_t i = 0; i < fft_size_; ++i) {
+			backend_->frequency_domain_[i].real = spectrum_[i].real();
+			backend_->frequency_domain_[i].imag = spectrum_[i].imag();
+		}
+
+		// MKL backward transform is unnormalized, same as FFTW — scale by N.
+		if (DftiComputeBackward(backend_->handle_, backend_->frequency_domain_.data(),
+		                        backend_->time_domain_.data()) == DFTI_NO_ERROR) {
+			const float scale = 1.0f / static_cast<float>(fft_size_);
+			for (size_t i = 0; i < fft_size_; ++i) {
+				output[i] = backend_->time_domain_[i].real * scale;
+			}
+			perf_counter_.StopCounter("fft_inverse");
+			return true;
+		}
+	}
+#elif ENGINE_HAS_FFTW3F
 	if (backend_ != nullptr && backend_->inverse_plan != nullptr) {
 		perf_counter_.StartCounter("fft_inverse");
 		for (size_t i = 0; i < fft_size_; ++i) {
@@ -162,7 +232,16 @@ bool FFTEngine::Inverse(float* output, size_t frame_count) const {
 void FFTEngine::Reset() {
 	std::fill(spectrum_.begin(), spectrum_.end(), Complex(0.0f, 0.0f));
 
-#if ENGINE_HAS_FFTW3F
+#if ENGINE_HAS_MKL
+	if (backend_ != nullptr) {
+		for (size_t i = 0; i < fft_size_; ++i) {
+			backend_->time_domain_[i].real = 0.0f;
+			backend_->time_domain_[i].imag = 0.0f;
+			backend_->frequency_domain_[i].real = 0.0f;
+			backend_->frequency_domain_[i].imag = 0.0f;
+		}
+	}
+#elif ENGINE_HAS_FFTW3F
 	if (backend_ != nullptr) {
 		for (size_t i = 0; i < fft_size_; ++i) {
 			backend_->time_domain[i][0] = 0.0f;
@@ -184,7 +263,11 @@ std::vector<float> FFTEngine::GetMagnitude() const {
 
 std::string FFTEngine::GetReport() const {
 	const char* backend_name = "naive_dft";
-#if ENGINE_HAS_FFTW3F
+#if ENGINE_HAS_MKL
+	if (backend_ != nullptr && backend_->handle_ != nullptr) {
+		backend_name = "mkl_dfti";
+	}
+#elif ENGINE_HAS_FFTW3F
 	if (backend_ != nullptr) {
 		backend_name = "fftw3f";
 	}

@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 struct NetworkAdapter {
     std::string name;            // OS interface name ("Ethernet", "eth0", "Wi-Fi")
@@ -43,4 +43,4 @@ private:
     bool initialized_ = false;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware
