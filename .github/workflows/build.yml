@@ -70,10 +70,13 @@ jobs:
           else
             VCPKG_BIN="$VCPKG_ROOT/vcpkg"
           fi
-          "$VCPKG_BIN" install --triplet="$TRIPLET" --clean-after-build \
-            icu zlib ffmpeg libuv abseil fmt jsoncpp re2 sqlite3 zstd brotli \
+          PACKAGES="icu zlib ffmpeg libuv abseil fmt jsoncpp re2 sqlite3 zstd brotli \
             openssl curl pthreadpool fxdiv cudnn eigen3 range-v3 mimalloc ggml \
-            folly intel-mkl boost-headers cereal fftw3 skia pugixml
+            folly boost-headers cereal fftw3 skia pugixml"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PACKAGES="$PACKAGES intel-mkl"
+          fi
+          "$VCPKG_BIN" install --triplet="$TRIPLET" --clean-after-build $PACKAGES
 
       - name: Configure & Build — Debug
         shell: bash
@@ -86,7 +89,7 @@ jobs:
             -DVCPKG_MANIFEST_MODE=OFF
           )
           if [ "$RUNNER_OS" = "Windows" ]; then
-            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64)
+            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64 -DENABLE_AI=ON)
           else
             CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Debug)
           fi
@@ -108,7 +111,7 @@ jobs:
             -DVCPKG_MANIFEST_MODE=OFF
           )
           if [ "$RUNNER_OS" = "Windows" ]; then
-            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64)
+            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64 -DENABLE_AI=ON)
           else
             CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Release)
           fi
