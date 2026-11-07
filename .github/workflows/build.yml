@@ -94,7 +94,8 @@ jobs:
             Linux)   FFMPEG_HW="amf,nvcodec,qsv";   SKIA_HW="";         PACKAGES_EXTRA="" ;;
             macOS)   FFMPEG_HW="";                  SKIA_HW="";         PACKAGES_EXTRA="" ;;
           esac
-          FFMPEG_FEATURES="$FFMPEG_BASE,$FFMPEG_HW"
+          FFMPEG_FEATURES="$FFMPEG_BASE"
+          [ -n "$FFMPEG_HW" ] && FFMPEG_FEATURES="$FFMPEG_FEATURES,$FFMPEG_HW"
           SKIA_FEATURES="$SKIA_BASE"
           [ -n "$SKIA_HW" ] && SKIA_FEATURES="$SKIA_FEATURES,$SKIA_HW"
           PACKAGES="cereal[*] boost-accumulators icu zlib ffmpeg[$FFMPEG_FEATURES] libuv abseil fmt jsoncpp re2 tiff[*] sqlite3[*] zstd brotli \
