@@ -90,9 +90,9 @@ jobs:
           FFMPEG_BASE="aom,ass,avcodec,avdevice,avfilter,avformat,bzip2,fontconfig,freetype,fribidi,iconv,ilbc,lzma,modplug,mp3lame,opencl,opengl,openh264,openjpeg,openmpt,opus,sdl2,snappy,soxr,speex,srt,ssh,svt-av1,swresample,swscale,theora,twolame,vorbis,vpx,vulkan,webp,xml2,zlib,x265,x264"
           SKIA_BASE="avif,dawn,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp"
           case "$RUNNER_OS" in
-            Windows) FFMPEG_HW="amf,nvcodec,qsv";   SKIA_HW="direct3d"; PACKAGES_EXTRA="dlfcn-win32 intel-mkl" ;;
-            Linux)   FFMPEG_HW="amf,nvcodec,qsv,tesseract"; SKIA_HW=""; PACKAGES_EXTRA="" ;;
-            macOS)   FFMPEG_HW="tesseract";         SKIA_HW=""; PACKAGES_EXTRA="" ;;
+            Windows) FFMPEG_HW="amf,nvcodec,qsv,tesseract";   SKIA_HW="direct3d"; PACKAGES_EXTRA="dlfcn-win32 intel-mkl" ;;
+            Linux)   FFMPEG_HW="amf,nvcodec,qsv";             SKIA_HW="";         PACKAGES_EXTRA="" ;;
+            macOS)   FFMPEG_HW="";                            SKIA_HW="";         PACKAGES_EXTRA="" ;;
           esac
           FFMPEG_FEATURES="$FFMPEG_BASE,$FFMPEG_HW"
           SKIA_FEATURES="$SKIA_BASE"
