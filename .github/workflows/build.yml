@@ -1,0 +1,178 @@
+name: Build & Package
+
+# CI/CD: static vcpkg build (Debug + Release) for Windows / Linux / macOS.
+# Output: xer-editor-<platform>.zip containing include/, bin/{Debug,Release},
+# lib/{Debug,Release} — project headers + vcpkg headers, all binaries,
+# project libs + all static vcpkg libs.
+#
+# NOTE: the codebase is Win32-native (HWND, Direct2D/D3D12, WASAPI).
+# Linux/macOS jobs are marked experimental (continue-on-error) until the
+# platform layer is ported — they will fail at compile time today.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: windows-x64
+            triplet: x64-windows-static
+            experimental: false
+          - os: ubuntu-latest
+            name: linux-x64
+            triplet: x64-linux-static
+            experimental: true
+          - os: macos-latest
+            name: macos-x64
+            triplet: x64-osx-static
+            experimental: true
+
+    env:
+      VCPKG_ROOT: ${{ github.workspace }}/vcpkg
+      TRIPLET: ${{ matrix.triplet }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup vcpkg
+        shell: bash
+        run: |
+          set -e
+          # Pin to a release tag for reproducible builds, e.g.:
+          #   git clone --depth 1 --branch 2025.10.27 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          git clone --depth 1 https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmd //c "$VCPKG_ROOT\\bootstrap-vcpkg.bat -disableMetrics"
+          else
+            "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
+          fi
+
+      - name: Install dependencies (vcpkg ${{ matrix.triplet }})
+        shell: bash
+        run: |
+          set -e
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            VCPKG_BIN="$VCPKG_ROOT/vcpkg.exe"
+          else
+            VCPKG_BIN="$VCPKG_ROOT/vcpkg"
+          fi
+          "$VCPKG_BIN" install --triplet="$TRIPLET" --clean-after-build \
+            icu zlib ffmpeg libuv abseil fmt jsoncpp re2 sqlite3 zstd brotli \
+            openssl curl pthreadpool fxdiv cudnn eigen3 range-v3 mimalloc ggml \
+            folly intel-mkl boost-headers cereal "fftw3[float]" vst3sdk skia pugixml
+
+      - name: Configure & Build — Debug
+        shell: bash
+        run: |
+          set -e
+          CMAKE_ARGS=(
+            -S . -B build-debug
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DVCPKG_TARGET_TRIPLET="$TRIPLET"
+            -DVCPKG_MANIFEST_MODE=OFF
+          )
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64)
+          else
+            CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Debug)
+          fi
+          cmake "${CMAKE_ARGS[@]}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmake --build build-debug --config Debug --parallel
+          else
+            cmake --build build-debug --parallel
+          fi
+
+      - name: Configure & Build — Release
+        shell: bash
+        run: |
+          set -e
+          CMAKE_ARGS=(
+            -S . -B build-release
+            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+            -DVCPKG_TARGET_TRIPLET="$TRIPLET"
+            -DVCPKG_MANIFEST_MODE=OFF
+          )
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64)
+          else
+            CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Release)
+          fi
+          cmake "${CMAKE_ARGS[@]}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cmake --build build-release --config Release --parallel
+          else
+            cmake --build build-release --parallel
+          fi
+
+      - name: Package — include / bin / lib
+        shell: bash
+        run: |
+          set -e
+          PKG="xer-editor-${{ matrix.name }}"
+          rm -rf "$PKG"
+          mkdir -p "$PKG/include" "$PKG/bin/Debug" "$PKG/bin/Release" \
+                   "$PKG/lib/Debug" "$PKG/lib/Release"
+
+          # --- include/: project headers (src/** tree + repo root) ---
+          ( cd src && find . -type f \( -name '*.h' -o -name '*.hpp' \) -print \
+              | tar -cf - -T - ) | ( cd "$PKG/include" && tar xf - )
+          for f in ./*.h ./*.hpp; do
+            [ -e "$f" ] && cp "$f" "$PKG/include/"
+          done
+          # third-party headers from vcpkg (static redistributable)
+          cp -r "$VCPKG_ROOT/installed/$TRIPLET/include/." "$PKG/include/" 2>/dev/null || true
+
+          # --- bin/: executables (Editor, tests, lsui, EngineScanVST3, ...) ---
+          cp build-debug/bin/* "$PKG/bin/Debug/" 2>/dev/null || true
+          cp build-release/bin/* "$PKG/bin/Release/" 2>/dev/null || true
+
+          # --- lib/: project libs + all static vcpkg libs ---
+          cp -r build-debug/lib/. "$PKG/lib/Debug/" 2>/dev/null || true
+          cp -r build-release/lib/. "$PKG/lib/Release/" 2>/dev/null || true
+          cp -r "$VCPKG_ROOT/installed/$TRIPLET/lib/." "$PKG/lib/Release/" 2>/dev/null || true
+          if [ -d "$VCPKG_ROOT/installed/$TRIPLET/debug/lib" ]; then
+            cp -r "$VCPKG_ROOT/installed/$TRIPLET/debug/lib/." "$PKG/lib/Debug/" 2>/dev/null || true
+          fi
+          # runtime shared objects, if any port produced them
+          for cfg in Debug Release; do
+            vdir="$VCPKG_ROOT/installed/$TRIPLET"
+            [ "$cfg" = "Debug" ] && vdir="$vdir/debug"
+            find "$vdir/bin" -maxdepth 1 -type f \
+              \( -name '*.dll' -o -name '*.so*' -o -name '*.dylib' \) \
+              -exec cp {} "$PKG/bin/$cfg/" \; 2>/dev/null || true
+          done
+
+      - name: Zip package
+        shell: bash
+        run: |
+          PKG="xer-editor-${{ matrix.name }}"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            powershell -NoProfile -Command \
+              "Compress-Archive -Path '${PKG}' -DestinationPath '${PKG}.zip' -Force"
+          else
+            zip -qr "${PKG}.zip" "$PKG"
+          fi
+          ls -lh "${PKG}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xer-editor-${{ matrix.name }}
+          path: xer-editor-${{ matrix.name }}.zip
+          retention-days: 30
+          if-no-files-found: error
