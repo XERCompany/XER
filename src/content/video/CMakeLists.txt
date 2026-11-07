@@ -8,6 +8,10 @@ find_package(libyuv CONFIG QUIET)
 file(GLOB VIDEO_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(APPLE)
+    file(GLOB _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
+    list(APPEND VIDEO_SOURCES ${_xer_apple_mm})
+endif()
 
 file(GLOB VIDEO_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"

@@ -4,6 +4,10 @@
 file(GLOB_RECURSE AUDIO_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(APPLE)
+    file(GLOB_RECURSE _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
+    list(APPEND AUDIO_SOURCES ${_xer_apple_mm})
+endif()
 list(FILTER AUDIO_SOURCES EXCLUDE REGEX "/dsp_algorithms/")
 
 file(GLOB_RECURSE AUDIO_HEADERS

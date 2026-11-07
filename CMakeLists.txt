@@ -35,6 +35,12 @@ set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Use preinstalled vcpkg packages")
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
 
 project(XER LANGUAGES C CXX)
+
+# Objective-C++ (.mm) sources are collected on macOS only (see the
+# if(APPLE) blocks next to the *.cc globs in src/**/CMakeLists.txt).
+if(APPLE)
+    enable_language(OBJC OBJCXX)
+endif()
 include(GNUInstallDirs)
 include(CTest)
 
@@ -82,6 +88,7 @@ find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(unofficial-pthreadpool CONFIG REQUIRED)
 find_package(unofficial-fxdiv CONFIG REQUIRED)
+find_package(Threads REQUIRED)
 if(XER_BUILD_APP)
     find_package(FFTW3f CONFIG REQUIRED)
 endif()

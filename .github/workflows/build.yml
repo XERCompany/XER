@@ -61,14 +61,15 @@ jobs:
             "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
           fi
 
-      - name: Install nasm
+      - name: Install build tools
         shell: bash
         run: |
           # ffmpeg requires nasm on x86/x64 for all platforms.
+          # gperf (skia dep chain) runs autoreconf -> needs autotools on macOS.
           if [ "$RUNNER_OS" = "Windows" ]; then
             choco install nasm -y --no-progress
           elif [ "$RUNNER_OS" = "macOS" ]; then
-            brew install nasm
+            brew install nasm autoconf autoconf-archive automake libtool
           else
             sudo apt-get update
             sudo apt-get install -y nasm
@@ -87,8 +88,10 @@ jobs:
           #  - ffmpeg[core] / skia[core] do not exist as features
           #  - ffmpeg[tesseract] is !static -> excluded on x64-windows-static
           #  - ffmpeg[amf,nvcodec,qsv] need amd-amf/ffnvcodec/libvpl -> unsupported on macOS
+          #  - skia[dawn] pulls the dawn port which fails to build on Linux/macOS
+          #    (WebGPU backend is not used by the 2D canvas)
           FFMPEG_BASE="aom,ass,avcodec,avdevice,avfilter,avformat,bzip2,fontconfig,freetype,fribidi,iconv,ilbc,lzma,modplug,mp3lame,opencl,opengl,openh264,openjpeg,openmpt,opus,sdl2,snappy,soxr,speex,srt,ssh,svt-av1,swresample,swscale,theora,twolame,vorbis,vpx,vulkan,webp,xml2,zlib,x265,x264"
-          SKIA_BASE="avif,dawn,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp"
+          SKIA_BASE="avif,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp"
           case "$RUNNER_OS" in
             Windows) FFMPEG_HW="amf,nvcodec,qsv";   SKIA_HW="direct3d"; PACKAGES_EXTRA="dlfcn-win32 intel-mkl" ;;
             Linux)   FFMPEG_HW="amf,nvcodec,qsv";   SKIA_HW="";         PACKAGES_EXTRA="" ;;
