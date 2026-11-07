@@ -61,6 +61,19 @@ jobs:
             "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
           fi
 
+      - name: Install nasm
+        shell: bash
+        run: |
+          # ffmpeg requires nasm on x86/x64 for all platforms.
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            choco install nasm -y --no-progress
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            brew install nasm
+          else
+            sudo apt-get update
+            sudo apt-get install -y nasm
+          fi
+
       - name: Install dependencies (vcpkg ${{ matrix.triplet }})
         shell: bash
         run: |
@@ -70,12 +83,23 @@ jobs:
           else
             VCPKG_BIN="$VCPKG_ROOT/vcpkg"
           fi
-          PACKAGES="icu zlib ffmpeg libuv abseil fmt jsoncpp re2 sqlite3 zstd brotli \
+          # Feature availability differs per OS:
+          #  - ffmpeg[core] / skia[core] do not exist as features
+          #  - ffmpeg[tesseract] is !static -> excluded on x64-windows-static
+          #  - ffmpeg[amf,nvcodec,qsv] need amd-amf/ffnvcodec/libvpl -> unsupported on macOS
+          FFMPEG_BASE="aom,ass,avcodec,avdevice,avfilter,avformat,bzip2,fontconfig,freetype,fribidi,iconv,ilbc,lzma,modplug,mp3lame,opencl,opengl,openh264,openjpeg,openmpt,opus,sdl2,snappy,soxr,speex,srt,ssh,svt-av1,swresample,swscale,theora,twolame,vorbis,vpx,vulkan,webp,xml2,zlib,x265,x264"
+          SKIA_BASE="avif,dawn,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp"
+          case "$RUNNER_OS" in
+            Windows) FFMPEG_HW="amf,nvcodec,qsv";   SKIA_HW="direct3d"; PACKAGES_EXTRA="dlfcn-win32 intel-mkl" ;;
+            Linux)   FFMPEG_HW="amf,nvcodec,qsv,tesseract"; SKIA_HW=""; PACKAGES_EXTRA="" ;;
+            macOS)   FFMPEG_HW="tesseract";         SKIA_HW=""; PACKAGES_EXTRA="" ;;
+          esac
+          FFMPEG_FEATURES="$FFMPEG_BASE,$FFMPEG_HW"
+          SKIA_FEATURES="$SKIA_BASE"
+          [ -n "$SKIA_HW" ] && SKIA_FEATURES="$SKIA_FEATURES,$SKIA_HW"
+          PACKAGES="cereal[*] boost-accumulators icu zlib ffmpeg[$FFMPEG_FEATURES] libuv abseil fmt jsoncpp re2 tiff[*] sqlite3[*] zstd brotli \
             openssl curl pthreadpool fxdiv eigen3 range-v3 mimalloc ggml \
-            folly boost-headers cereal fftw3 skia pugixml"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            PACKAGES="$PACKAGES intel-mkl"
-          fi
+            folly boost-headers cereal fftw3 pugixml mp3lame libraw[*] skia[$SKIA_FEATURES] $PACKAGES_EXTRA"
           "$VCPKG_BIN" install --triplet="$TRIPLET" --clean-after-build $PACKAGES
 
       - name: Configure & Build — Debug
