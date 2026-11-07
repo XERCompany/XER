@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 
-namespace network::socket {
+namespace XER::network::socket {
 
 TcpClientSocket::~TcpClientSocket() {
     Disconnect();
@@ -118,4 +118,4 @@ void TcpClientSocket::WriteAsync(const uint8_t* buf, size_t len,
         });
 }
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

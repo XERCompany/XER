@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <limits>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 AudioFIFOQueue::AudioFIFOQueue(size_t capacity)
     : capacity_(capacity), read_pos_(0), write_pos_(0), available_frames_(0),
@@ -142,4 +142,4 @@ void AudioFIFOQueue::Reset() {
     overflow_count_ = 0;
 }
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

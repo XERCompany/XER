@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 void SynthOscWavetable::SetTable(const std::vector<float>& table) {
     table_ = table;
@@ -42,4 +42,4 @@ float SynthOscWavetable::Process(float sample_rate) {
     return out;
 }
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

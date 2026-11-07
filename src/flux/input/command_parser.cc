@@ -1,4 +1,5 @@
 #include "flux/input/command_parser.h"
+#include "helper/string_utils.h"
 
 #include <cctype>
 #include <string>
@@ -6,11 +7,11 @@
 #include <unordered_map>
 #include <vector>
 
-namespace flux::input {
+namespace XER::flux::input {
 namespace {
 
 bool StartsWith(std::string_view text, std::string_view prefix) {
-	return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
+	return XER::Engine::Helper::String::StartsWith(text, prefix);
 }
 
 std::string TrimDashPrefix(std::string_view text) {
@@ -119,4 +120,4 @@ ParsedCommand ParseCommandLine(std::string_view input) {
 	return parsed;
 }
 
-}  // namespace flux::input
+}  // namespace XER::flux::input

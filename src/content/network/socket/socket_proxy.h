@@ -10,7 +10,7 @@
 #include "content/network/proxy/proxy_config.h"
 #include "content/network/socket/tcp_client_socket.h"
 
-namespace network::socket {
+namespace XER::network::socket {
 
 // Opens a TCP socket through a proxy (HTTP CONNECT or SOCKS).
 class SocketProxy {
@@ -23,4 +23,4 @@ public:
                    std::string* error);
 };
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

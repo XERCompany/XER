@@ -1,7 +1,7 @@
 #include "io_stream_writer.h"
 #include <fstream>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 IOStreamWriter::IOStreamWriter(std::string path)
     : path_(std::move(path)), open_(false) {}
@@ -53,4 +53,4 @@ void IOStreamWriter::WriteAsync(size_t offset, const std::vector<std::uint8_t> &
     });
 }
 
-} // namespace AsyncIO::IO::Async
+} // namespace XER::AsyncIO::IO::Async

@@ -3,7 +3,7 @@
 #include <cuda_runtime.h> 
 #include <cudnn.h> 
 
-namespace AsyncIO::IO::DNNBackends {
+namespace XER::AsyncIO::IO::DNNBackends {
 
 namespace {
  
@@ -94,4 +94,4 @@ bool CuDnnPoolingEngine::Forward(
     return ok; 
 }
 
-} // namespace AsyncIO::IO::DNNBackends
+} // namespace XER::AsyncIO::IO::DNNBackends

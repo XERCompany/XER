@@ -6,7 +6,7 @@
 #include "content/network/quic/quic_protocol.h"
 #include <algorithm>
 
-namespace network::quic {
+namespace XER::network::quic {
 
 const std::vector<uint32_t>& QuicVersionManager::SupportedVersions() {
     static const std::vector<uint32_t> kVersions = { kQuicVersion1 };
@@ -22,4 +22,4 @@ uint32_t QuicVersionManager::LatestVersion() {
     return SupportedVersions().front();
 }
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

@@ -12,7 +12,7 @@
 #include <string>
 #include <algorithm>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 DiskInfoProvider::DiskInfoProvider() = default;
 DiskInfoProvider::~DiskInfoProvider() = default;
@@ -195,4 +195,4 @@ DiskIoStats DiskInfoProvider::GetIoStats() const {
     return stats;
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

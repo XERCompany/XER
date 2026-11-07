@@ -5,7 +5,7 @@
 #include <thread>
 #include <mutex>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 struct PowerStats {
     double cpu_temp_celsius;        // Best-effort CPU temperature (0 if unsupported)
@@ -39,4 +39,4 @@ private:
     PowerStats last_stats_;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

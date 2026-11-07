@@ -1,5 +1,7 @@
 #include "helper/buffer.h"
 
+#include "content/hex/hex.h"
+
 #include <absl/strings/ascii.h>
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_format.h>
@@ -15,34 +17,7 @@
 #include <unicode/normalizer2.h>
 #include <unicode/unistr.h> 
 
-namespace Engine::Helper {
-namespace {
-
-constexpr char kHexDigits[] = "0123456789abcdef";
-
-int HexNibble(char ch) {
-	if (ch >= '0' && ch <= '9') {
-		return ch - '0';
-	}
-	if (ch >= 'a' && ch <= 'f') {
-		return 10 + (ch - 'a');
-	}
-	return -1;
-}
-
-std::string StripAsciiWhitespace(std::string_view text) {
-	std::string compact;
-	compact.reserve(text.size());
-	for (char ch : text) {
-		if (!absl::ascii_isspace(static_cast<unsigned char>(ch))) {
-			compact.push_back(ch);
-		}
-	}
-	return compact;
-}
-
-}  // namespace
-
+namespace XER::Engine::Helper {
 Buffer::Bytes Buffer::FromString(std::string_view text, bool normalize_utf8) {
 	Bytes out;
 	AppendString(&out, text, normalize_utf8);
@@ -91,13 +66,8 @@ void Buffer::AppendBytes(Bytes* target, ConstSpan bytes) {
 }
 
 std::string Buffer::HexEncode(ConstSpan bytes) {
-	std::string hex;
-	hex.reserve(bytes.size() * 2u);
-	for (Byte value : bytes) {
-		hex.push_back(kHexDigits[(value >> 4u) & 0x0Fu]);
-		hex.push_back(kHexDigits[value & 0x0Fu]);
-	}
-	return hex;
+	return XER::Content::Hex::Encode(
+		std::string_view(reinterpret_cast<const char*>(bytes.data()), bytes.size()));
 }
 
 bool Buffer::HexDecode(std::string_view hex, Bytes* bytes_out, std::string* error_out) {
@@ -107,33 +77,11 @@ bool Buffer::HexDecode(std::string_view hex, Bytes* bytes_out, std::string* erro
 		}
 		return false;
 	}
-	std::string compact = StripAsciiWhitespace(hex);
-	absl::AsciiStrToLower(&compact);
-	if ((compact.size() % 2u) != 0u) {
-		if (error_out != nullptr) {
-			*error_out = absl::StrCat("hex input must contain an even number of digits: ", compact.size());
-		}
+	std::string decoded;
+	if (!XER::Content::Hex::Decode(hex, &decoded, error_out)) {
 		return false;
 	}
-
-	Bytes out;
-	out.reserve(compact.size() / 2u);
-	for (size_t index = 0; index < compact.size(); index += 2u) {
-		const int high = HexNibble(compact[index]);
-		const int low = HexNibble(compact[index + 1u]);
-		if (high < 0 || low < 0) {
-			if (error_out != nullptr) {
-				*error_out = absl::StrCat("invalid hex digit at index ", index);
-			}
-			return false;
-		}
-		out.push_back(static_cast<Byte>((high << 4u) | low));
-	}
-
-	*bytes_out = std::move(out);
-	if (error_out != nullptr) {
-		error_out->clear();
-	}
+	bytes_out->assign(decoded.begin(), decoded.end());
 	return true;
 }
 
@@ -280,4 +228,4 @@ bool Buffer::Swap64(MutableSpan bytes, std::string* error_out) {
 	return SwapChunks(bytes, 8u, error_out);
 }
 
-}  // namespace Engine::Helper
+}  // namespace XER::Engine::Helper

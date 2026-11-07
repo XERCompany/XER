@@ -8,7 +8,7 @@
 
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class FFTEngine {
 public:
@@ -32,7 +32,7 @@ private:
 	size_t fft_size_;
 	std::vector<Complex> spectrum_;
 	std::unique_ptr<BackendState> backend_;
-	mutable AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	mutable XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

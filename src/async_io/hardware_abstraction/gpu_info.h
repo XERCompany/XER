@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 struct GPUDevice {
     int device_id;
@@ -74,4 +74,4 @@ private:
     void DetectNvmlDevices();
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

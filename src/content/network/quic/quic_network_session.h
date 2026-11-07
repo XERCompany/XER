@@ -11,7 +11,7 @@
 #include "content/network/quic/quic_connection.h"
 #include "content/network/quic/quic_server_id.h"
 
-namespace network::quic {
+namespace XER::network::quic {
 
 class QuicNetworkSession {
 public:
@@ -29,4 +29,4 @@ private:
     QuicConnectionId next_id_ = 1;
 };
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

@@ -33,6 +33,7 @@ target_link_libraries(XER_AsyncIO
         absl::flat_hash_map
         absl::flat_hash_set
         jsoncpp_lib
+        XER_Hex
 )
 
 # Optional CUDA/cuDNN backend (only when explicitly enabled; the hardware

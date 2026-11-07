@@ -10,7 +10,7 @@
 #include <string>
 #include "content/network/spdy/spdy_stream.h"
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 class SpdySession {
 public:
@@ -31,4 +31,4 @@ private:
     bool         closed_  = false;
 };
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

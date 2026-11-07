@@ -15,7 +15,7 @@
 #include "helper/jsoncpp_helper.h"
 #include "cache/cache_manager.h"
 
-namespace Engine::Helper {
+namespace XER::Engine::Helper {
 
 // ---------------------------------------------------------------------------
 // Dict — generic key-value storage with JSON serialization,
@@ -117,4 +117,4 @@ v8::Local<v8::Object> DictToV8Object(v8::Isolate* isolate, const Dict& dict);
 std::unique_ptr<Dict> V8ObjectToDict(v8::Isolate* isolate, v8::Local<v8::Object> obj);
 #endif
 
-}  // namespace Engine::Helper
+}  // namespace XER::Engine::Helper

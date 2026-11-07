@@ -9,7 +9,7 @@
 
 #include "audio_fft_analyzer.h"
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 struct BeatEvent {
 	size_t frame_index;
@@ -33,8 +33,8 @@ public:
 private:
 	size_t window_size_;
 	size_t hop_size_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 	AudioFFTAnalyzer fft_analyzer_;
 	std::vector<BeatEvent> beat_events_;
 	std::vector<float> energy_curve_;

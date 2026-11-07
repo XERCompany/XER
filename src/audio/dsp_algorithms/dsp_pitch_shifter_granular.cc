@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 GranularPitchShifter::GranularPitchShifter()
 	: sample_rate_(44100.0f),
@@ -138,4 +138,4 @@ void GranularPitchShifter::AdvanceGrain(GrainState* grain) {
 	}
 }
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

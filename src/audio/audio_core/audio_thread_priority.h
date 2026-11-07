@@ -6,7 +6,7 @@
 
 #include "async_io/hardware_abstraction/cpu_info.h"
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 enum class ThreadPriority {
     LOW,
@@ -37,7 +37,7 @@ public:
     static int GetOptimalAudioCore();
 
 private:
-    AsyncIO::IO::Hardware::CPUInfoProvider cpu_info_;
+    XER::AsyncIO::IO::Hardware::CPUInfoProvider cpu_info_;
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

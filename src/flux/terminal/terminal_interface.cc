@@ -4,7 +4,7 @@
 #include <memory>
 #include <mutex>
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 namespace {
 
 class StdTerminal final : public TerminalInterface {
@@ -40,4 +40,4 @@ void SetDefaultTerminal(std::unique_ptr<TerminalInterface> terminal) {
 	TerminalStorage() = terminal ? std::move(terminal) : std::make_unique<StdTerminal>();
 }
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

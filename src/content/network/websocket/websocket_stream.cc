@@ -9,7 +9,7 @@
 
 #include <vector>
 
-namespace network::websocket {
+namespace XER::network::websocket {
 
 WebSocketStream::WebSocketStream(
     std::unique_ptr<transport::TransportClientSocket> socket)
@@ -136,4 +136,4 @@ void WebSocketStream::ReadLoopAsync() {
         });
 }
 
-}  // namespace network::websocket
+}  // namespace XER::network::websocket

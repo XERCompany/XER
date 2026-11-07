@@ -7,16 +7,16 @@
 #include <string>
 #include "flux/core/logger.h"
 
-namespace network::socket {
+namespace XER::network::socket {
 
 // Thin adapter: routes socket-layer events to flux Logger.
 class NetLog {
 public:
-    static void Debug(const std::string& msg)   { flux::core::Logger().Debug("net", msg); }
-    static void Info(const std::string& msg)    { flux::core::Logger().Info("net", msg); }
-    static void Warning(const std::string& msg) { flux::core::Logger().Warning("net", msg); }
-    static void Error(const std::string& msg)   { flux::core::Logger().Error("net", msg); }
+    static void Debug(const std::string& msg)   { XER::flux::core::Logger().Debug("net", msg); }
+    static void Info(const std::string& msg)    { XER::flux::core::Logger().Info("net", msg); }
+    static void Warning(const std::string& msg) { XER::flux::core::Logger().Warning("net", msg); }
+    static void Error(const std::string& msg)   { XER::flux::core::Logger().Error("net", msg); }
 };
 
-}  // namespace network::socket
+}  // namespace XER::network::socket
 

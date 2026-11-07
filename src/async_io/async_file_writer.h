@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <mutex>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 // Write completion callback: (error_code, bytes_written)
 using WriteCallback = std::function<void(int, size_t)>;
@@ -50,4 +50,4 @@ private:
     std::string last_error_;
 };
 
-}  // namespace AsyncIO::IO::Async
+}  // namespace XER::AsyncIO::IO::Async

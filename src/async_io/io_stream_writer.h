@@ -9,7 +9,7 @@
 
 #include "io_thread_pool.h"
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 class IOStreamWriter {
 public:
@@ -26,6 +26,6 @@ private:
     bool open_ = false;
 };
 
-} // namespace AsyncIO::IO::Async
+} // namespace XER::AsyncIO::IO::Async
 
 #endif // IO_ASYNC_IO_STREAM_WRITER_H

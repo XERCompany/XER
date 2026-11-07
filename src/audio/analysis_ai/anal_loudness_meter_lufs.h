@@ -8,7 +8,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 class LoudnessMeterLUFS {
 public:
@@ -27,9 +27,9 @@ public:
 	std::string GetReport() const;
 
 private:
-	AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 	std::vector<double> loudness_history_;
 	double momentary_lufs_;
 	double short_term_lufs_;
@@ -40,4 +40,4 @@ private:
 	static double MeanSquareToLUFS(double mean_square);
 };
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

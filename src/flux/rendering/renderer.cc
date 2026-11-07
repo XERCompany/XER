@@ -5,12 +5,12 @@
 
 #include "flux/terminal/terminal_styles.h"
 
-namespace flux::rendering {
+namespace XER::flux::rendering {
 namespace {
 
-bool IsDefaultStyle(const flux::terminal::TerminalStyle& style) {
-	return style.foreground == flux::terminal::TerminalColor::kDefault
-		&& style.background == flux::terminal::TerminalColor::kDefault
+bool IsDefaultStyle(const XER::flux::terminal::TerminalStyle& style) {
+	return style.foreground == XER::flux::terminal::TerminalColor::kDefault
+		&& style.background == XER::flux::terminal::TerminalColor::kDefault
 		&& !style.bold
 		&& !style.dim
 		&& !style.italic
@@ -18,7 +18,7 @@ bool IsDefaultStyle(const flux::terminal::TerminalStyle& style) {
 		&& !style.inverse;
 }
 
-bool StylesEqual(const flux::terminal::TerminalStyle& left, const flux::terminal::TerminalStyle& right) {
+bool StylesEqual(const XER::flux::terminal::TerminalStyle& left, const XER::flux::terminal::TerminalStyle& right) {
 	return left.foreground == right.foreground
 		&& left.background == right.background
 		&& left.bold == right.bold
@@ -53,7 +53,7 @@ std::string Renderer::RenderAnsi(const RenderContext& context) const {
 			}
 		}
 
-		flux::terminal::TerminalStyle current_style;
+		XER::flux::terminal::TerminalStyle current_style;
 		bool style_active = false;
 		const std::size_t width = has_visible_cells ? last_non_blank + 1 : 0;
 		for (std::size_t x = 0; x < width; ++x) {
@@ -61,10 +61,10 @@ std::string Renderer::RenderAnsi(const RenderContext& context) const {
 			const bool cell_is_default = IsDefaultStyle(cell.style);
 			if (!style_active || !StylesEqual(current_style, cell.style)) {
 				if (style_active) {
-					out += flux::terminal::ResetStyleSequence();
+					out += XER::flux::terminal::ResetStyleSequence();
 				}
 				if (!cell_is_default) {
-					out += flux::terminal::BeginStyleSequence(cell.style);
+					out += XER::flux::terminal::BeginStyleSequence(cell.style);
 					style_active = true;
 				} else {
 					style_active = false;
@@ -74,11 +74,11 @@ std::string Renderer::RenderAnsi(const RenderContext& context) const {
 			out.push_back(cell.glyph);
 		}
 		if (style_active) {
-			out += flux::terminal::ResetStyleSequence();
+			out += XER::flux::terminal::ResetStyleSequence();
 		}
 		out.push_back('\n');
 	}
 	return out;
 }
 
-}  // namespace flux::rendering
+}  // namespace XER::flux::rendering

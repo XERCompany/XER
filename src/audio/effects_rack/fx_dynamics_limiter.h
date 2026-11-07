@@ -5,7 +5,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 class DynamicsLimiter {
 public:
@@ -19,10 +19,10 @@ public:
 	std::string GetReport() const;
 
 private:
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 	float ceiling_db_;
 	float release_;
 	float gain_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

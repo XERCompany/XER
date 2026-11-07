@@ -2,7 +2,7 @@
 
 #include <chrono>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 AsyncTaskQueue::AsyncTaskQueue(size_t max_queue_size)
     : max_queue_size_(max_queue_size), task_id_counter_(0), tasks_processed_(0), is_running_(true) {}
@@ -185,4 +185,4 @@ size_t AsyncTaskQueue::GetMaxQueueSize() const {
     return max_queue_size_;
 }
 
-}  // namespace AsyncIO::IO::Async
+}  // namespace XER::AsyncIO::IO::Async

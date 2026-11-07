@@ -1,7 +1,7 @@
 #include "audio_engine_host.h"
 #include "audio_engine.h"
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 AudioEngineHost::AudioEngineHost()
     : global_sample_rate_(44100), global_buffer_size_(512) {}
@@ -99,4 +99,4 @@ std::string AudioEngineHost::GetHostInfo() const {
     return info;
 }
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

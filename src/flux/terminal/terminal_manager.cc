@@ -1,7 +1,7 @@
 #include "flux/terminal/terminal_manager.h"
 #include "flux/terminal/terminal_interface.h"
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 
 TerminalManager& TerminalManager::Instance() {
 	static TerminalManager manager;
@@ -52,4 +52,4 @@ const TerminalBuffer& TerminalManager::buffer() const {
 	return buffer_;
 }
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

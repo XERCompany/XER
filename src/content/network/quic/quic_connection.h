@@ -11,7 +11,7 @@
 #include "content/network/quic/quic_stream.h"
 #include "content/network/quic/quic_crypto_stream.h"
 
-namespace network::quic {
+namespace XER::network::quic {
 
 enum class QuicConnectionState {
     kIdle, kHandshaking, kConnected, kClosing, kClosed
@@ -40,4 +40,4 @@ private:
     QuicCryptoStream  crypto_stream_;
 };
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

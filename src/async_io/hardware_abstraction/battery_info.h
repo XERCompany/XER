@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 enum class BatteryState {
     Unknown,
@@ -51,4 +51,4 @@ private:
     bool initialized_ = false;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

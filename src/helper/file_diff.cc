@@ -1,37 +1,14 @@
 #include "file_diff.h"
+#include "string_utils.h"
 
 #include <algorithm>
 #include <cstddef>
 #include <utility>
 #include <vector>
 
-namespace Engine::Helper {
+namespace XER::Engine::Helper {
 
 namespace {
-
-std::vector<std::string> SplitLines(const std::string& text) {
-	std::vector<std::string> out;
-	std::string current;
-	current.reserve(128);
-
-	for (char ch : text) {
-		if (ch == '\n') {
-			out.push_back(current);
-			current.clear();
-			continue;
-		}
-
-		if (ch != '\r') {
-			current.push_back(ch);
-		}
-	}
-
-	if (!current.empty() || (!text.empty() && text.back() == '\n')) {
-		out.push_back(current);
-	}
-
-	return out;
-}
 
 }  // namespace
 
@@ -41,8 +18,8 @@ FileDiff::FileDiff(std::string before, std::string after)
 	diff_.after = std::move(after);
 	diff_.equal = (diff_.before == diff_.after);
 
-	const auto left = SplitLines(diff_.before);
-	const auto right = SplitLines(diff_.after);
+	const auto left = String::SplitLines(diff_.before);
+	const auto right = String::SplitLines(diff_.after);
 
 	const std::size_t n = left.size();
 	const std::size_t m = right.size();

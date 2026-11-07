@@ -21,6 +21,7 @@ NodeTypeRegistry& NodeTypeRegistry::Shared() {
     static NodeTypeRegistry* registry = [] {
         auto* r = new NodeTypeRegistry();
         RegisterBuiltinNodes(*r);
+        RegisterExtendedNodes(*r);
         return r;
     }();
     return *registry;

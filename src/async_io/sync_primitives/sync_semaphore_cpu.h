@@ -5,7 +5,7 @@
 #include <string>
 #include <cstdint>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 // Counting semaphore with an optional maximum count.
 //
@@ -46,4 +46,4 @@ private:
     std::string name_;
 };
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

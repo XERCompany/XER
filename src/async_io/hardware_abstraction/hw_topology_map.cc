@@ -14,7 +14,7 @@
 
 #include <algorithm>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 namespace {
 
@@ -475,4 +475,4 @@ void HardwareTopologyMap::DiscoverTopology() {
 #endif
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

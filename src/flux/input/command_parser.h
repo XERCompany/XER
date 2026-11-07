@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace flux::input {
+namespace XER::flux::input {
 
 struct ParsedCommand {
 	std::string raw;
@@ -21,4 +21,4 @@ struct ParsedCommand {
 std::vector<std::string> TokenizeCommandLine(std::string_view input);
 ParsedCommand ParseCommandLine(std::string_view input);
 
-}  // namespace flux::input
+}  // namespace XER::flux::input

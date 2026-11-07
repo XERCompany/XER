@@ -7,7 +7,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "audio/dsp_algorithms/dsp_biquad_processor.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 class GraphicEQ {
 public:
@@ -24,8 +24,8 @@ private:
 	float sample_rate_;
 	std::vector<float> center_frequencies_;
 	std::vector<float> gains_db_;
-	std::vector<Engine::Audio::DSP::BiquadProcessor> filters_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	std::vector<XER::Engine::Audio::DSP::BiquadProcessor> filters_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

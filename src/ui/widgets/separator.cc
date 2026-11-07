@@ -16,7 +16,7 @@ void Separator::Render(Rendering::Renderer& renderer, const Theme::Tokens& token
         renderer.DrawLine(
             {bounds.x, y},
             {bounds.x + bounds.width, y},
-            tokens.muted,
+            tokens.border,
             1.0f
         );
         return;
@@ -26,7 +26,7 @@ void Separator::Render(Rendering::Renderer& renderer, const Theme::Tokens& token
     renderer.DrawLine(
         {x, bounds.y},
         {x, bounds.y + bounds.height},
-        tokens.muted,
+        tokens.border,
         1.0f
     );
 }

@@ -6,15 +6,15 @@
 
 #include "async_io/io_thread_pool.h"
 
-namespace Engine {
+namespace XER::Engine {
 namespace Audio {
 namespace Core {
 
 class AudioAsyncManager::Impl {
 public:
-    Impl() : thread_pool_(AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {}
+    Impl() : thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {}
 
-    AsyncIO::IO::Async::IOThreadPool& thread_pool_;
+    XER::AsyncIO::IO::Async::IOThreadPool& thread_pool_;
 };
 
 AudioAsyncManager::AudioAsyncManager() : impl_(std::make_unique<Impl>()) {}
@@ -116,4 +116,4 @@ size_t AudioAsyncManager::GetPendingOperationCount() const {
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace Engine
+}  // namespace XER::Engine

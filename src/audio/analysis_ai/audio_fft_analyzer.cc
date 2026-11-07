@@ -4,7 +4,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 const float PI = 3.14159265359f;
 
@@ -68,7 +68,7 @@ std::vector<float> AudioFFTAnalyzer::GetFrequencyBands() const {
 }
 
 void AudioFFTAnalyzer::GenerateWindow() {
-    window_ = Engine::Audio::DSP::WindowingFunctions::GenerateHann(fft_size_);
+    window_ = XER::Engine::Audio::DSP::WindowingFunctions::GenerateHann(fft_size_);
 }
 
 void AudioFFTAnalyzer::ComputeMagnitudePhase() {
@@ -86,4 +86,4 @@ std::string AudioFFTAnalyzer::GetAnalysisReport() const {
     return report;
 }
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

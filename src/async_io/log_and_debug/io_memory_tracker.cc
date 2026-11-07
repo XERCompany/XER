@@ -2,7 +2,7 @@
 
 #include <chrono>
 
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 MemoryTracker::MemoryTracker()
     : enabled_(true), total_allocations_(0), total_deallocations_(0), peak_allocated_mb_(0) {}
@@ -131,4 +131,4 @@ uint64_t MemoryTracker::GetCurrentAllocatedBytes() const {
     return total;
 }
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

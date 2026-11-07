@@ -8,7 +8,7 @@
 
 #include "flux/terminal/terminal_input_handler.h"
 
-namespace flux::input {
+namespace XER::flux::input {
 namespace {
 
 bool IsBlank(std::string_view text) {
@@ -25,11 +25,11 @@ bool IsBlank(std::string_view text) {
 InputManager::InputManager(std::size_t history_limit)
 	: history_(history_limit) {}
 
-flux::history::CommandHistory& InputManager::history() {
+XER::flux::history::CommandHistory& InputManager::history() {
 	return history_;
 }
 
-const flux::history::CommandHistory& InputManager::history() const {
+const XER::flux::history::CommandHistory& InputManager::history() const {
 	return history_;
 }
 
@@ -52,21 +52,21 @@ void InputManager::ClearCurrentBuffer() {
 
 std::vector<InputDispatch> InputManager::Feed(std::string_view input) {
 	std::vector<InputDispatch> dispatches;
-	const std::vector<flux::terminal::InputEvent> events = flux::terminal::ParseInputBuffer(input);
-	for (const flux::terminal::InputEvent& event : events) {
+	const std::vector<XER::flux::terminal::InputEvent> events = XER::flux::terminal::ParseInputBuffer(input);
+	for (const XER::flux::terminal::InputEvent& event : events) {
 		switch (event.kind) {
-		case flux::terminal::InputEventKind::kText:
+		case XER::flux::terminal::InputEventKind::kText:
 			current_buffer_ += event.text;
 			break;
-		case flux::terminal::InputEventKind::kTab:
+		case XER::flux::terminal::InputEventKind::kTab:
 			current_buffer_.push_back('\t');
 			break;
-		case flux::terminal::InputEventKind::kBackspace:
+		case XER::flux::terminal::InputEventKind::kBackspace:
 			if (!current_buffer_.empty()) {
 				current_buffer_.pop_back();
 			}
 			break;
-		case flux::terminal::InputEventKind::kSubmit:
+		case XER::flux::terminal::InputEventKind::kSubmit:
 			if (!IsBlank(current_buffer_)) {
 				InputDispatch dispatch;
 				dispatch.kind = InputDispatchKind::kCommand;
@@ -78,7 +78,7 @@ std::vector<InputDispatch> InputManager::Feed(std::string_view input) {
 			}
 			ClearCurrentBuffer();
 			break;
-		case flux::terminal::InputEventKind::kInterrupt: {
+		case XER::flux::terminal::InputEventKind::kInterrupt: {
 			InputDispatch dispatch;
 			dispatch.kind = InputDispatchKind::kInterrupt;
 			dispatch.raw = event.raw;
@@ -86,7 +86,7 @@ std::vector<InputDispatch> InputManager::Feed(std::string_view input) {
 			dispatches.push_back(std::move(dispatch));
 			break;
 		}
-		case flux::terminal::InputEventKind::kArrowUp: {
+		case XER::flux::terminal::InputEventKind::kArrowUp: {
 			if (!history_.empty()) {
 				current_buffer_ = history_.Previous();
 				InputDispatch dispatch;
@@ -97,7 +97,7 @@ std::vector<InputDispatch> InputManager::Feed(std::string_view input) {
 			}
 			break;
 		}
-		case flux::terminal::InputEventKind::kArrowDown: {
+		case XER::flux::terminal::InputEventKind::kArrowDown: {
 			if (!history_.empty()) {
 				current_buffer_ = history_.Next();
 				InputDispatch dispatch;
@@ -123,4 +123,4 @@ std::vector<InputDispatch> InputManager::Feed(std::string_view input) {
 	return dispatches;
 }
 
-}  // namespace flux::input
+}  // namespace XER::flux::input

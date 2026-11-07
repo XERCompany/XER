@@ -4,11 +4,13 @@
  */
 #include "content/network/cert/cert_transparency.h"
 
+#include "content/hex/hex.h"
+
 #include <cstring>
 #include <iomanip>
 #include <sstream>
 
-namespace network::cert {
+namespace XER::network::cert {
 
 namespace {
 
@@ -36,14 +38,6 @@ static inline uint64_t Read64BE(const uint8_t* p) {
     uint64_t v = 0;
     for (int i = 0; i < 8; ++i) v = (v << 8) | p[i];
     return v;
-}
-
-static std::string HexEncode(const uint8_t* data, size_t len) {
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0');
-    for (size_t i = 0; i < len; ++i)
-        oss << std::setw(2) << static_cast<unsigned>(data[i]);
-    return oss.str();
 }
 
 }  // namespace
@@ -75,7 +69,7 @@ bool CertTransparency::ParseSCTs(const std::vector<uint8_t>& extension_data,
         if (version != 0x00) { pos = sct_end; continue; }  // only v1
 
         SignedCertTimestamp sct;
-        sct.log_id       = HexEncode(p + pos, 32); pos += 32;
+        sct.log_id       = XER::Content::Hex::Encode(p + pos, 32); pos += 32;
         sct.timestamp_ms = Read64BE(p + pos);       pos += 8;
 
         // Skip extensions.
@@ -89,7 +83,7 @@ bool CertTransparency::ParseSCTs(const std::vector<uint8_t>& extension_data,
         pos += 2;  // hash + sign alg
         const uint16_t sig_len = Read16BE(p + pos); pos += 2;
         if (pos + sig_len > sct_end) { pos = sct_end; continue; }
-        sct.signature = HexEncode(p + pos, sig_len); pos += sig_len;
+        sct.signature = XER::Content::Hex::Encode(p + pos, sig_len); pos += sig_len;
 
         scts->push_back(std::move(sct));
         pos = sct_end;
@@ -105,4 +99,4 @@ bool CertTransparency::PolicySatisfied(
     return static_cast<int>(scts.size()) >= min_scts;
 }
 
-}  // namespace network::cert
+}  // namespace XER::network::cert

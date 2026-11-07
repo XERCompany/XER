@@ -5,7 +5,7 @@
 
 #include <absl/strings/string_view.h>
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 std::string HashKey(absl::string_view text);
 std::string SanitizeFileName(absl::string_view text);
@@ -18,4 +18,4 @@ bool CommitTempFile(const std::filesystem::path& tmp,
 		    const std::filesystem::path& target,
 		    std::string* error_out);
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

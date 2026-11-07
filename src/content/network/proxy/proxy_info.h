@@ -7,7 +7,7 @@
 #include <string>
 #include "content/network/proxy/proxy_config.h"
 
-namespace network::proxy {
+namespace XER::network::proxy {
 
 // Result of proxy resolution for a specific URL.
 struct ProxyInfo {
@@ -18,4 +18,4 @@ struct ProxyInfo {
     static ProxyInfo Via(const ProxyServer& s) { return {false, s}; }
 };
 
-}  // namespace network::proxy
+}  // namespace XER::network::proxy

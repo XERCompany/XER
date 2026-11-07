@@ -9,7 +9,7 @@
 #include <immintrin.h>
 #endif
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 namespace {
 
@@ -83,7 +83,7 @@ float ProcessFilter(const std::vector<float>& taps, std::vector<float>& state, f
 }  // namespace
 
 std::string FIRFilterBank::GetMemoryStats() const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     size_t filters_bytes = 0;
     for (const auto& filter : filters_) {
         filters_bytes += filter.size() * sizeof(float);
@@ -105,7 +105,7 @@ FIRFilterBank::FIRFilterBank()
 FIRFilterBank::~FIRFilterBank() = default;
 
 void FIRFilterBank::Clear() {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     filters_.clear();
     states_.clear();
 }
@@ -115,19 +115,19 @@ bool FIRFilterBank::AddFilter(const std::vector<float>& taps) {
         return false;
     }
 
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     filters_.push_back(taps);
     states_.push_back(std::vector<float>(taps.size(), 0.0f));
     return true;
 }
 
 size_t FIRFilterBank::GetFilterCount() const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     return filters_.size();
 }
 
 bool FIRFilterBank::ProcessSample(float input, std::vector<float>& outputs) {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     const size_t filter_count = filters_.size();
     outputs.resize(filter_count);
     if (filter_count == 0) {
@@ -167,7 +167,7 @@ bool FIRFilterBank::ProcessSample(float input, std::vector<float>& outputs) {
 }
 
 std::string FIRFilterBank::GetReport() const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     return "FIRBank: filters=" + std::to_string(filters_.size());
 }
 
@@ -177,4 +177,4 @@ std::future<bool> FIRFilterBank::ProcessSampleAsync(float input, std::vector<flo
     });
 }
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

@@ -19,7 +19,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace network::dns {
+namespace XER::network::dns {
 
 DnsClient::DnsClient(const DnsConfig& config) : config_(config) {}
 
@@ -158,4 +158,4 @@ bool DnsClient::ParseResponse(const std::vector<uint8_t>& buf,
     return true;
 }
 
-}  // namespace network::dns
+}  // namespace XER::network::dns

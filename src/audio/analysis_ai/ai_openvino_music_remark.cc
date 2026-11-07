@@ -1,3 +1,4 @@
+#include "helper/string_utils.h"
 #include "ai_openvino_music_remark.h"
 
 #include <algorithm>
@@ -12,7 +13,7 @@
 #define XER_AUDIO_AI_HAS_OPENVINO 0
 #endif
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 namespace {
 
 float Clamp01(float value) {
@@ -130,8 +131,7 @@ OpenVinoModelCandidate ResolveOpenVinoModel(const MusicRemarkOptions& options) {
 		for (const auto& entry : std::filesystem::recursive_directory_iterator(root, std::filesystem::directory_options::skip_permission_denied, error)) {
 			if (error || !entry.is_regular_file()) continue;
 			const std::string filename = entry.path().filename().string();
-			std::string lower = filename;
-			std::transform(lower.begin(), lower.end(), lower.begin(), [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
+						const std::string lower = XER::Engine::Helper::String::ToLowerAscii(filename);
 			if (!IsXmlModelPath(entry.path())) continue;
 			if (lower.find("music") == std::string::npos && lower.find("audio") == std::string::npos && lower.find("stem") == std::string::npos && lower.find("vocal") == std::string::npos && lower.find("beat") == std::string::npos) continue;
 			try_path(entry.path(), "scan:" + PathString(root));
@@ -370,4 +370,4 @@ MusicRemarkMixPlan BuildOpenVinoMusicRemarkMixPlan(const MusicRemarkMetrics& met
 	return plan;
 }
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

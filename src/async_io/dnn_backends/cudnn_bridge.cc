@@ -23,7 +23,7 @@
     using PfnCudnnError   = const char* (*)(cudnnStatus_t_alias);
 #endif
 
-namespace AsyncIO::IO::DNNBackends {
+namespace XER::AsyncIO::IO::DNNBackends {
 
 #if !defined(XER_ASYNC_IO_HAS_CUDNN)
 namespace {
@@ -132,4 +132,4 @@ bool CuDnnBridge::IsReady() const { return ready_; }
 std::string CuDnnBridge::LastError() const { return lastError_; }
 void *CuDnnBridge::Handle() const { return handle_; }
 
-} // namespace AsyncIO::IO::DNNBackends
+} // namespace XER::AsyncIO::IO::DNNBackends

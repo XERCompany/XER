@@ -20,11 +20,16 @@ std::size_t Utf8Length(std::string_view text) {
 
 } // namespace
 
-Label::Label(std::string text) : text_(std::move(text)) {
+Label::Label(std::string text, bool muted)
+    : text_(std::move(text))
+    , muted_(muted) {
     SetFocusable(false);
 }
 
 void Label::SetText(std::string text) {
+    if (text_ == text) {
+        return;
+    }
     text_ = std::move(text);
     Invalidate();
     RequestLayout();
@@ -34,16 +39,25 @@ const std::string& Label::GetText() const {
     return text_;
 }
 
+void Label::SetMuted(bool muted) {
+    if (muted_ == muted) {
+        return;
+    }
+    muted_ = muted;
+    Invalidate();
+}
+
+bool Label::IsMuted() const {
+    return muted_;
+}
+
 void Label::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
-    renderer.DrawText(
-        text_,
-        GetBounds(),
-        Rendering::TextStyle{
-            IsEnabled() ? tokens.foreground : tokens.muted,
-            tokens.font_body,
-            false
-        }
-    );
+    const Rendering::TextStyle style{
+        !IsEnabled() || muted_ ? tokens.muted : tokens.foreground,
+        tokens.font_body,
+        400
+    };
+    renderer.DrawText(text_, CenteredTextRect(renderer, text_, style, 0.0f), style);
 }
 
 void Label::Layout(const Layout::Rect& bounds) {

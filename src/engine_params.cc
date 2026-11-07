@@ -3,6 +3,8 @@
 #include <cstdlib>
 #include <string>
 
+using XER::EngineParams;
+
 namespace {
 
 bool EnvBool(const char* key) {

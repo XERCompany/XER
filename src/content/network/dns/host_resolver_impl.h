@@ -12,7 +12,7 @@
 #include "content/network/dns/host_resolver.h"
 #include "async_io/io_thread_pool.h"
 
-namespace network::dns {
+namespace XER::network::dns {
 
 // Default HostResolver implementation using getaddrinfo(3).
 class HostResolverImpl : public HostResolver {
@@ -44,7 +44,7 @@ private:
     DnsConfig config_;
     mutable std::mutex cache_mu_;
     std::unordered_map<std::string, CacheEntry> cache_;
-    AsyncIO::IO::Async::IOThreadPool pool_{2};
+    XER::AsyncIO::IO::Async::IOThreadPool pool_{2};
 };
 
-}  // namespace network::dns
+}  // namespace XER::network::dns

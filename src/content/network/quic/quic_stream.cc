@@ -4,7 +4,7 @@
  */
 #include "content/network/quic/quic_stream.h"
 
-namespace network::quic {
+namespace XER::network::quic {
 
 void QuicStream::OnDataAvailable(const uint8_t* data, size_t len, bool fin) {
     recv_buf_.insert(recv_buf_.end(), data, data + len);
@@ -16,4 +16,4 @@ void QuicStream::Reset(QuicErrorCode /*code*/) {
     fin_ = true;
 }
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

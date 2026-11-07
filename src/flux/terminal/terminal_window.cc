@@ -5,7 +5,7 @@
 
 #include "flux/terminal/terminal_output_renderer.h"
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 
 TerminalWindow::TerminalWindow(TerminalSize size)
 	: size_(ClampTerminalSize(size, 20, 5)) {}
@@ -65,4 +65,4 @@ void TerminalWindow::WriteTitle(OutputStream stream, std::string_view title) con
 	WriteLine(stream, Centered(title));
 }
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

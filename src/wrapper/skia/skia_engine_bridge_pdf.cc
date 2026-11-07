@@ -14,7 +14,7 @@
 #endif
 #endif
 
-namespace engine::bridge::skia {
+namespace XER::engine::bridge::skia {
 
 #if ENGINE_HAS_SKIA_BRIDGE && defined(ENGINE_SKIA_HAS_PDF)
 

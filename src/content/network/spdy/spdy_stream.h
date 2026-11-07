@@ -11,7 +11,7 @@
 #include <vector>
 #include "content/network/spdy/spdy_protocol.h"
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 using SpdyDataCallback = std::function<void(const uint8_t*, size_t, bool fin)>;
 
@@ -37,4 +37,4 @@ private:
     std::map<std::string, std::string>  req_hdrs_;
 };
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

@@ -5,7 +5,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace Engine::Audio::MIDI {
+namespace XER::Engine::Audio::MIDI {
 
 struct AutomationPoint {
     uint32_t tick;
@@ -18,8 +18,8 @@ public:
     float Evaluate(uint32_t tick) const;
 
 private:
-    mutable AsyncIO::IO::Sync::MutexWrapper mutex_{"midi_automation_curve"};
+    mutable XER::AsyncIO::IO::Sync::MutexWrapper mutex_{"midi_automation_curve"};
     std::vector<AutomationPoint> points_;
 };
 
-}  // namespace Engine::Audio::MIDI
+}  // namespace XER::Engine::Audio::MIDI

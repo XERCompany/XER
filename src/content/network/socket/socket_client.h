@@ -6,8 +6,8 @@
 #include "content/network/socket/tcp_client_socket.h"
 #include "content/network/socket/ssl_client_socket.h"
 
-namespace network::socket {
+namespace XER::network::socket {
 // Factory: creates a TcpClientSocket or SslClientSocket based on scheme.
 std::unique_ptr<transport::TransportClientSocket>
 CreateSocketForScheme(const std::string& scheme);
-}  // namespace network::socket
+}  // namespace XER::network::socket

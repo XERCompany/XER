@@ -1,6 +1,6 @@
 #include "app/app_node_graph_manager.h"
 
-namespace App {
+namespace XER::App {
 
 NodeGraphManager::NodeGraphManager()
     : initialized_(false) {
@@ -66,4 +66,4 @@ bool NodeGraphManager::DeserializeGraph(const std::string& json, std::string* er
     return XER::NodeGraph::DeserializeGraph(json, &graph_, error_out);
 }
 
-}  // namespace App
+}  // namespace XER::App

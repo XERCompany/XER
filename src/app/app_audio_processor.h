@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace App {
+namespace XER::App {
 
 // Live audio effect application
 class AudioProcessor {
@@ -31,4 +31,4 @@ private:
     bool initialized_;
 };
 
-}  // namespace App
+}  // namespace XER::App

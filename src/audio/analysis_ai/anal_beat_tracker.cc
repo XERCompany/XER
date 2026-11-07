@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 BeatTracker::BeatTracker(size_t window_size, size_t hop_size)
 	: window_size_(window_size),
@@ -21,7 +21,7 @@ bool BeatTracker::Analyze(const float* audio, size_t frame_count, int sample_rat
 		return false;
 	}
 
- 	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+ 	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	perf_counter_.StartCounter("beat_analysis");
 
 	beat_events_.clear();
@@ -57,7 +57,7 @@ bool BeatTracker::Analyze(const float* audio, size_t frame_count, int sample_rat
 }
 
 void BeatTracker::Reset() {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	beat_events_.clear();
 	energy_curve_.clear();
 	estimated_bpm_ = 0.0;

@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 struct ProcessorCore {
     int core_id;            // Physical core index (0-based); same for sibling SMT threads
@@ -68,4 +68,4 @@ private:
     void DetectCoreCount();
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

@@ -6,7 +6,7 @@
 #include <dlfcn.h>
 #endif
   
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 namespace {
 
@@ -247,4 +247,4 @@ bool GPUUsageLogger::QueryGPUUsage(int device_id, GPUUsageSnapshot& snapshot) {
     return ok || true;  // always succeed; caller can use zeros for missing data
 }
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

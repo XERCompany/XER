@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace Engine::Helper {
+namespace XER::Engine::Helper {
 
 class Buffer {
 public:
@@ -53,6 +53,6 @@ public:
 	static bool Swap64(MutableSpan bytes, std::string* error_out = nullptr);
 };
 
-}  // namespace Engine::Helper
+}  // namespace XER::Engine::Helper
 
-using Buffer = Engine::Helper::Buffer;
+using Buffer = XER::Engine::Helper::Buffer;

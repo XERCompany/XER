@@ -4,7 +4,7 @@
 #include <mutex>
 #include <string>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 class Barrier {
 public:
@@ -29,4 +29,4 @@ private:
     std::string name_;
 };
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

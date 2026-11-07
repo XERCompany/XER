@@ -21,7 +21,7 @@
     #include <sched.h>
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 namespace {
 
@@ -638,4 +638,4 @@ void CPUInfoProvider::RefreshFrequencies() {
 #endif
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

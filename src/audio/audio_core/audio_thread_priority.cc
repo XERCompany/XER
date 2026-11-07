@@ -10,7 +10,7 @@
     #include <pthread.h>
 #endif
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 AudioThreadPriority::AudioThreadPriority() {
     cpu_info_.Initialize();
@@ -127,4 +127,4 @@ int AudioThreadPriority::GetOptimalAudioCore() {
     return optimal_core;
 }
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

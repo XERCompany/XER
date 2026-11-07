@@ -6,12 +6,12 @@
 #include <algorithm>
 #include <cstdint>
 
-namespace Engine::Helper {
+namespace XER::Engine::Helper {
 
 bool ToolTo::CopyBinary(const std::filesystem::path& source,
                         const std::filesystem::path& destination,
                         std::string* error_message) {
-    AsyncIO::IO::Async::AsyncFileReader reader;
+    XER::AsyncIO::IO::Async::AsyncFileReader reader;
     if (!reader.OpenFile(source.string())) {
         if (error_message != nullptr) {
             *error_message = "Failed to open source binary: " + source.string();
@@ -19,7 +19,7 @@ bool ToolTo::CopyBinary(const std::filesystem::path& source,
         return false;
     }
 
-    AsyncIO::IO::Async::AsyncFileWriter writer;
+    XER::AsyncIO::IO::Async::AsyncFileWriter writer;
     if (!writer.CreateFile(destination.string(), false)) {
         if (error_message != nullptr) {
             *error_message = "Failed to open destination binary: " + destination.string();
@@ -66,7 +66,7 @@ bool ToolTo::CopyBinary(const std::filesystem::path& source,
 }
 
 std::string ToolTo::ReadTextFile(const std::filesystem::path& path) {
-    AsyncIO::IO::Async::AsyncFileReader reader;
+    XER::AsyncIO::IO::Async::AsyncFileReader reader;
     if (!reader.OpenFile(path.string())) {
         return std::string();
     }
@@ -88,7 +88,7 @@ bool ToolTo::WriteTextFile(const std::filesystem::path& path,
                            const std::string& text,
                            bool append,
                            std::string* error_message) {
-    AsyncIO::IO::Async::AsyncFileWriter writer;
+    XER::AsyncIO::IO::Async::AsyncFileWriter writer;
     if (!writer.CreateFile(path.string(), append)) {
         if (error_message != nullptr) {
             *error_message = writer.GetLastError();

@@ -6,7 +6,7 @@
 #include "content/network/url/url_request_job.h"
 #include "content/network/core/network_task_runner.h"
 
-namespace network::core {
+namespace XER::network::core {
 
 NetworkService& NetworkService::Instance() {
     static NetworkService inst;
@@ -44,4 +44,4 @@ void NetworkService::Shutdown() {
     if (delegate_) delegate_->OnNetworkStopped();
 }
 
-}  // namespace network::core
+}  // namespace XER::network::core

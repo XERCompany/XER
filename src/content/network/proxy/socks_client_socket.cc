@@ -19,9 +19,9 @@
 #include <arpa/inet.h>
 #endif
 
-namespace platform = network::socket::platform;
+namespace platform = XER::network::socket::platform;
 
-namespace network::proxy {
+namespace XER::network::proxy {
 
 SocksClientSocket::SocksClientSocket(int fd, const ProxyServer& proxy)
     : fd_(fd), proxy_(proxy) {}
@@ -125,4 +125,4 @@ bool SocksClientSocket::Socks5Handshake(const std::string& host,
     return true;
 }
 
-}  // namespace network::proxy
+}  // namespace XER::network::proxy

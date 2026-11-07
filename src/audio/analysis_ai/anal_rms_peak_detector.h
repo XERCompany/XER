@@ -8,7 +8,7 @@
 #include "async_io/log_and_debug/io_memory_tracker.h"
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 class RMSPeakDetector {
 public:
@@ -26,12 +26,12 @@ public:
 	std::string GetReport() const;
 
 private:
-	AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
-	AsyncIO::IO::LogDebug::MemoryTracker memory_tracker_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
+	XER::AsyncIO::IO::LogDebug::MemoryTracker memory_tracker_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 	std::vector<float> window_history_;
 	float rms_;
 	float peak_;
 };
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

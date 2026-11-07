@@ -9,7 +9,7 @@
 #include "content/network/core/network_service_delegate.h"
 #include "content/network/url/url_request.h"
 
-namespace network::core {
+namespace XER::network::core {
 
 // Facade over the entire network stack.
 class NetworkService {
@@ -33,4 +33,4 @@ private:
     std::unique_ptr<NetworkServiceDelegate> delegate_;
 };
 
-}  // namespace network::core
+}  // namespace XER::network::core

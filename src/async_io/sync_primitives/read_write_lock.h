@@ -3,7 +3,7 @@
 #include <shared_mutex>
 #include <string>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 class ReadWriteLock {
 public:
@@ -61,4 +61,4 @@ private:
     uint64_t write_lock_count_;
 };
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

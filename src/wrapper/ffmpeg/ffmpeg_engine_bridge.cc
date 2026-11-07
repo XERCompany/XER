@@ -1,3 +1,4 @@
+#include "helper/string_utils.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
 #include <algorithm>
@@ -42,7 +43,7 @@ extern "C" {
 }
 #endif
 
-namespace engine::bridge::ffmpeg {
+namespace XER::engine::bridge::ffmpeg {
 
 namespace {
 
@@ -106,9 +107,7 @@ std::string SampleFormatName(int format) {
 }
 
 AVSampleFormat ResolveSampleFormat(std::string sample_format, bool planar) {
-    std::transform(sample_format.begin(), sample_format.end(), sample_format.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    sample_format = XER::Engine::Helper::String::ToLowerAscii(sample_format);
     if (!sample_format.empty() && sample_format.back() == 'p') {
         planar = true;
         sample_format.pop_back();
@@ -1509,9 +1508,7 @@ bool EncodeVideoFrameStream(const EncodeVideoParams& params,
     }
 
     auto parse_input_pix_fmt = [](std::string text) -> AVPixelFormat {
-        std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
-            return static_cast<char>(std::tolower(ch));
-        });
+        text = XER::Engine::Helper::String::ToLowerAscii(text);
         if (text == "rgba") return AV_PIX_FMT_RGBA;
         if (text == "bgra") return AV_PIX_FMT_BGRA;
         if (text == "rgb" || text == "rgb24") return AV_PIX_FMT_RGB24;
@@ -2157,6 +2154,237 @@ bool EncodeAudioFrames(const EncodeAudioParams& params,
 #endif
 }
 
+bool ImageToJpeg(const std::string& input_path,
+                 const std::string& output_path,
+                 int max_size,
+                 std::string* out_error) {
+#if ENGINE_HAS_FFMPEG_BRIDGE
+    if (input_path.empty() || output_path.empty()) {
+        SetError(out_error, "ImageToJpeg requires input and output paths");
+        return false;
+    }
+
+    // Decode the first frame: image2 demuxer exposes still images as a
+    // single-frame video stream.
+    AVFormatContext* input = nullptr;
+    if (!OpenInputContext(input_path, &input, out_error)) {
+        return false;
+    }
+    int stream_index = -1;
+    AVCodecContext* decoder = nullptr;
+    if (!OpenDecoderContext(input, AVMEDIA_TYPE_VIDEO, -1, &stream_index,
+                            &decoder, out_error)) {
+        avformat_close_input(&input);
+        return false;
+    }
+    AVPacket* packet = av_packet_alloc();
+    AVFrame* decoded = av_frame_alloc();
+    bool got_frame = false;
+    if (packet != nullptr && decoded != nullptr) {
+        while (!got_frame && av_read_frame(input, packet) >= 0) {
+            if (packet->stream_index != stream_index) {
+                av_packet_unref(packet);
+                continue;
+            }
+            if (avcodec_send_packet(decoder, packet) >= 0 &&
+                avcodec_receive_frame(decoder, decoded) >= 0) {
+                got_frame = true;
+            }
+            av_packet_unref(packet);
+        }
+        if (!got_frame) {
+            avcodec_send_packet(decoder, nullptr);
+            got_frame = avcodec_receive_frame(decoder, decoded) >= 0;
+        }
+    }
+    av_packet_free(&packet);
+    avcodec_free_context(&decoder);
+    avformat_close_input(&input);
+    if (!got_frame) {
+        av_frame_free(&decoded);
+        SetError(out_error,
+                 "ImageToJpeg: no decodable video frame in " + input_path);
+        return false;
+    }
+
+    const AVCodec* codec = avcodec_find_encoder(AV_CODEC_ID_MJPEG);
+    AVFormatContext* output = nullptr;
+    AVStream* stream = nullptr;
+    AVCodecContext* encoder = nullptr;
+    AVFrame* out_frame = nullptr;
+    AVPacket* out_packet = av_packet_alloc();
+    SwsContext* sws = nullptr;
+    bool success = false;
+
+    do {
+        if (codec == nullptr) {
+            SetError(out_error, "mjpeg encoder not found");
+            break;
+        }
+        int result = avformat_alloc_output_context2(
+            &output, nullptr, nullptr, output_path.c_str());
+        if (result < 0 || output == nullptr) {
+            SetError(out_error,
+                     "avformat_alloc_output_context2 failed: " +
+                         ErrorString(result));
+            break;
+        }
+        stream = avformat_new_stream(output, codec);
+        encoder = avcodec_alloc_context3(codec);
+        if (stream == nullptr || encoder == nullptr) {
+            SetError(out_error, "failed to allocate mjpeg stream/context");
+            break;
+        }
+
+        // Prefer 4:2:0 (small avatars); fall back to the first supported.
+        AVPixelFormat out_pix_fmt = AV_PIX_FMT_NONE;
+        int fmt_count = 0;
+        const AVPixelFormat* fmts =
+            SupportedPixelFormats(codec, &fmt_count);
+        for (int i = 0; i < fmt_count; ++i) {
+            if (fmts[i] == AV_PIX_FMT_YUVJ420P) {
+                out_pix_fmt = fmts[i];
+                break;
+            }
+            if (out_pix_fmt == AV_PIX_FMT_NONE) out_pix_fmt = fmts[i];
+        }
+        if (out_pix_fmt == AV_PIX_FMT_NONE) {
+            out_pix_fmt = AV_PIX_FMT_YUVJ420P;
+        }
+
+        // Longest side <= max_size (0 keeps the source size); yuv420
+        // requires even dimensions.
+        int dst_w = decoded->width;
+        int dst_h = decoded->height;
+        if (max_size > 0) {
+            const int longest = std::max(dst_w, dst_h);
+            if (longest > max_size) {
+                dst_w = std::max(2, dst_w * max_size / longest);
+                dst_h = std::max(2, dst_h * max_size / longest);
+            }
+        }
+        dst_w = std::max(2, dst_w & ~1);
+        dst_h = std::max(2, dst_h & ~1);
+
+        encoder->codec_type = AVMEDIA_TYPE_VIDEO;
+        encoder->width = dst_w;
+        encoder->height = dst_h;
+        encoder->pix_fmt = out_pix_fmt;
+        encoder->time_base = AVRational{1, 25};
+        encoder->framerate = AVRational{25, 1};
+        result = avcodec_open2(encoder, codec, nullptr);
+        if (result < 0) {
+            SetError(out_error,
+                     "avcodec_open2 (mjpeg) failed: " + ErrorString(result));
+            break;
+        }
+        result = avcodec_parameters_from_context(stream->codecpar, encoder);
+        if (result < 0) {
+            SetError(out_error,
+                     "avcodec_parameters_from_context failed: " +
+                         ErrorString(result));
+            break;
+        }
+        stream->time_base = encoder->time_base;
+
+        if ((output->oformat->flags & AVFMT_NOFILE) == 0) {
+            result = avio_open(&output->pb, output_path.c_str(),
+                               AVIO_FLAG_WRITE);
+            if (result < 0) {
+                SetError(out_error,
+                         "avio_open failed: " + ErrorString(result));
+                break;
+            }
+        }
+        result = avformat_write_header(output, nullptr);
+        if (result < 0) {
+            SetError(out_error,
+                     "avformat_write_header failed: " + ErrorString(result));
+            break;
+        }
+
+        sws = sws_getContext(decoded->width, decoded->height,
+                             static_cast<AVPixelFormat>(decoded->format),
+                             dst_w, dst_h, out_pix_fmt,
+                             SWS_BILINEAR, nullptr, nullptr, nullptr);
+        out_frame = av_frame_alloc();
+        if (sws == nullptr || out_frame == nullptr ||
+            out_packet == nullptr) {
+            SetError(out_error, "failed to allocate scale/encode resources");
+            break;
+        }
+        out_frame->format = out_pix_fmt;
+        out_frame->width = dst_w;
+        out_frame->height = dst_h;
+        out_frame->pts = 0;
+        result = av_frame_get_buffer(out_frame, 0);
+        if (result < 0) {
+            SetError(out_error, "av_frame_get_buffer failed: " +
+                                    ErrorString(result));
+            break;
+        }
+        const int scaled = sws_scale(
+            sws, decoded->data, decoded->linesize, 0, decoded->height,
+            out_frame->data, out_frame->linesize);
+        if (scaled <= 0) {
+            SetError(out_error, "sws_scale failed");
+            break;
+        }
+        result = avcodec_send_frame(encoder, out_frame);
+        if (result < 0 ||
+            !PushEncoderPackets(output, encoder, stream, out_packet,
+                                out_error)) {
+            if (result < 0) {
+                SetError(out_error,
+                         "avcodec_send_frame failed: " + ErrorString(result));
+            }
+            break;
+        }
+        result = avcodec_send_frame(encoder, nullptr);
+        if (result < 0 ||
+            !PushEncoderPackets(output, encoder, stream, out_packet,
+                                out_error)) {
+            if (result < 0) {
+                SetError(out_error,
+                         "avcodec_send_frame flush failed: " +
+                             ErrorString(result));
+            }
+            break;
+        }
+        result = av_write_trailer(output);
+        if (result < 0) {
+            SetError(out_error,
+                     "av_write_trailer failed: " + ErrorString(result));
+            break;
+        }
+        success = true;
+    } while (false);
+
+    if (sws != nullptr) {
+        sws_freeContext(sws);
+    }
+    av_frame_free(&out_frame);
+    av_packet_free(&out_packet);
+    if (encoder != nullptr) {
+        avcodec_free_context(&encoder);
+    }
+    if (output != nullptr) {
+        if ((output->oformat->flags & AVFMT_NOFILE) == 0) {
+            avio_closep(&output->pb);
+        }
+        avformat_free_context(output);
+    }
+    av_frame_free(&decoded);
+    return success;
+#else
+    (void)input_path;
+    (void)output_path;
+    (void)max_size;
+    SetError(out_error, "FFmpeg bridge unavailable");
+    return false;
+#endif
+}
+
 bool RunFilterGraph(const std::string& input_path,
                     const std::string& output_path,
                     const std::string& filter_graph,
@@ -2248,4 +2476,4 @@ bool Transcode(const TranscodingParams& params,
 #endif
 }
 
-}  // namespace engine::bridge::ffmpeg
+}  // namespace XER::engine::bridge::ffmpeg

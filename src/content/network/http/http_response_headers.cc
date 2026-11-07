@@ -6,7 +6,7 @@
 #include "content/network/http/http_util.h"
 #include <sstream>
 
-namespace network::http {
+namespace XER::network::http {
 
 void HttpResponseHeaders::Parse(const std::string& block,
                                  int* status_code,
@@ -56,4 +56,4 @@ int HttpResponseHeaders::ContentLength() const {
     try { return std::stoi(it->second); } catch (...) { return -1; }
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

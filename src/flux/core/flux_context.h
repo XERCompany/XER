@@ -9,7 +9,7 @@
 #include "flux/core/logger.h"
 #include "flux/terminal/terminal_window.h"
 
-namespace flux::core {
+namespace XER::flux::core {
 
 class FluxContext {
 public:
@@ -21,8 +21,8 @@ public:
 	Logger& logger();
 	const Logger& logger() const;
 
-	flux::terminal::TerminalWindow& window();
-	const flux::terminal::TerminalWindow& window() const;
+	XER::flux::terminal::TerminalWindow& window();
+	const XER::flux::terminal::TerminalWindow& window() const;
 
 	void RefreshTerminalWindow();
 
@@ -34,8 +34,8 @@ public:
 private:
 	FluxConfig config_;
 	Logger logger_;
-	flux::terminal::TerminalWindow window_;
+	XER::flux::terminal::TerminalWindow window_;
 	std::unordered_map<std::string, std::string> values_;
 };
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

@@ -8,7 +8,7 @@
 #include "content/network/url/url_request_job.h"
 #include "async_io/io_thread_pool.h"
 
-namespace network::http {
+namespace XER::network::http {
 
 HttpTransactionResult HttpTransaction::Execute(const url::URLRequest& request) {
     // Attempt cache for GET
@@ -35,10 +35,10 @@ HttpTransactionResult HttpTransaction::Execute(const url::URLRequest& request) {
 
 void HttpTransaction::ExecuteAsync(const url::URLRequest& request,
                                     HttpTransactionCallback callback) {
-    AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
+    XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
         [this, request, cb = std::move(callback)]() mutable {
             cb(Execute(request));
         });
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

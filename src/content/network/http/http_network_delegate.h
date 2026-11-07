@@ -7,7 +7,7 @@
 #include <string>
 #include "content/network/url/url_request.h"
 
-namespace network::http {
+namespace XER::network::http {
 
 // Observer interface for HTTP network events.
 class HttpNetworkDelegate {
@@ -22,4 +22,4 @@ public:
 
 class DefaultHttpNetworkDelegate : public HttpNetworkDelegate {};
 
-}  // namespace network::http
+}  // namespace XER::network::http

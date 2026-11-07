@@ -26,7 +26,7 @@
     #include <dirent.h>
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 namespace {
 
@@ -304,4 +304,4 @@ uint64_t NetworkInfoProvider::GetTotalBytesSent() const {
     return total;
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

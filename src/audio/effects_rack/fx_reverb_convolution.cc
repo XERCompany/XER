@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 ReverbConvolution::ReverbConvolution()
 	: mix_(0.3f),
@@ -12,12 +12,12 @@ ReverbConvolution::ReverbConvolution()
 ReverbConvolution::~ReverbConvolution() = default;
 
 bool ReverbConvolution::LoadImpulseResponse(const float* ir, size_t ir_size) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	return convolution_.SetImpulseResponse(ir, ir_size);
 }
 
 void ReverbConvolution::SetMix(float mix) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	mix_ = std::clamp(mix, 0.0f, 1.0f);
 }
 
@@ -26,7 +26,7 @@ bool ReverbConvolution::ProcessBlock(const float* input, size_t frame_count, flo
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	std::vector<float> wet(frame_count, 0.0f);
 	if (!convolution_.ProcessBlock(input, frame_count, wet.data())) {
 		return false;
@@ -43,4 +43,4 @@ std::string ReverbConvolution::GetReport() const {
 		", ir_size=" + std::to_string(convolution_.GetImpulseSize());
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

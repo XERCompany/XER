@@ -3,7 +3,7 @@
 #include <string_view>
 #include <unordered_set>
 
-namespace Engine::SQL::ORM {
+namespace XER::Engine::SQL::ORM {
 namespace {
 
 std::string QuoteIdentifier(std::string_view identifier) {
@@ -69,4 +69,4 @@ std::optional<std::string> TableSchema::CreateTableSql(
 	return sql;
 }
 
-}  // namespace Engine::SQL::ORM
+}  // namespace XER::Engine::SQL::ORM

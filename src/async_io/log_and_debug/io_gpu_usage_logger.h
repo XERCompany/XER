@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <chrono>
 
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 struct GPUUsageSnapshot {
     int device_id;
@@ -53,4 +53,4 @@ private:
     bool QueryGPUUsage(int device_id, GPUUsageSnapshot& snapshot);
 };
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

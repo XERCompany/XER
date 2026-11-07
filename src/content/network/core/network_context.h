@@ -15,7 +15,7 @@
 #include "content/network/cert/cert_storage.h"
 #include "content/network/proxy/proxy_config.h"
 
-namespace network::core {
+namespace XER::network::core {
 
 // Top-level network context that aggregates all subsystem singletons.
 // Provides centralized access to HTTP session, DNS, proxy, certificate,
@@ -55,4 +55,4 @@ private:
     url::URLRequestContext request_ctx_;
 };
 
-}  // namespace network::core
+}  // namespace XER::network::core

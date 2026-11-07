@@ -5,7 +5,7 @@
 #include <numeric>
 #include <vector>
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 OnsetDetector::OnsetDetector(size_t window_size, size_t hop_size)
 	: window_size_(window_size),
@@ -18,10 +18,10 @@ OnsetDetector::OnsetDetector(size_t window_size, size_t hop_size)
 OnsetDetector::~OnsetDetector() = default;
 
 bool OnsetDetector::DetectOnsetsFromFile(
-	const Engine::Audio::Core::AudioSourceLoadOptions& load_options,
+	const XER::Engine::Audio::Core::AudioSourceLoadOptions& load_options,
 	std::string* error_out) {
-	Engine::Audio::Core::AudioSourceBuffer source_buffer;
-	if (!Engine::Audio::Core::AudioSourceLoader::Load(load_options, &source_buffer, error_out)) {
+	XER::Engine::Audio::Core::AudioSourceBuffer source_buffer;
+	if (!XER::Engine::Audio::Core::AudioSourceLoader::Load(load_options, &source_buffer, error_out)) {
 		return false;
 	}
 	return DetectOnsets(source_buffer.samples.data(), source_buffer.samples.size(), source_buffer.sample_rate);
@@ -32,7 +32,7 @@ bool OnsetDetector::DetectOnsets(const float* audio, size_t frame_count, int sam
 		return false;
 	}
 
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	perf_counter_.StartCounter("onset_detection");
 
 	onset_frames_.clear();
@@ -71,7 +71,7 @@ bool OnsetDetector::DetectOnsets(const float* audio, size_t frame_count, int sam
 }
 
 void OnsetDetector::Reset() {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	onset_frames_.clear();
 	onset_strengths_.clear();
 	flux_curve_.clear();
@@ -118,4 +118,4 @@ float OnsetDetector::ComputeAdaptiveThreshold(const std::vector<float>& flux_cur
 	return std::max(local_mean, 1e-6f);
 }
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

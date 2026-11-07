@@ -6,7 +6,7 @@
 
 #include <json/json.h>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 namespace {
 
@@ -359,4 +359,4 @@ std::string SystemInfoProvider::ToJson(const SystemSnapshot& s, bool pretty) con
     return Json::writeString(Json::StreamWriterBuilder(), root);
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

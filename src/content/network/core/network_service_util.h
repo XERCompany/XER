@@ -7,7 +7,7 @@
 #include <string>
 #include <cstdint>
 
-namespace network::core {
+namespace XER::network::core {
 
 // Returns true if the current process has outbound network access.
 bool HasNetworkAccess();
@@ -18,4 +18,4 @@ bool ResolvePublicIPv4(const std::string& host, std::string* ip);
 // Format a network endpoint as "host:port".
 std::string FormatEndpoint(const std::string& host, uint16_t port);
 
-}  // namespace network::core
+}  // namespace XER::network::core

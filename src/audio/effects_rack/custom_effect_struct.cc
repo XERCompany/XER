@@ -1,3 +1,4 @@
+#include "helper/string_utils.h"
 #include "custom_effect_struct.h"
 
 #include <algorithm>
@@ -5,15 +6,12 @@
 #include <iomanip>
 #include <sstream>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 namespace {
 
 std::string NormalizeText(std::string text) {
-	std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
-		return static_cast<char>(std::tolower(ch));
-	});
-	return text;
+	return XER::Engine::Helper::String::ToLowerAscii(text);
 }
 
 }  // namespace
@@ -76,6 +74,12 @@ std::string CustomEffectAlgorithmToString(CustomEffectAlgorithm algorithm) {
 		return "auto_tune_correct_pitch";
 	case CustomEffectAlgorithm::kDelay:
 		return "delay";
+	case CustomEffectAlgorithm::kTremolo:
+		return "tremolo";
+	case CustomEffectAlgorithm::kVibrato:
+		return "vibrato";
+	case CustomEffectAlgorithm::kRingMod:
+		return "ring_mod";
 	case CustomEffectAlgorithm::kPlugin:
 		return "plugin";
 	case CustomEffectAlgorithm::kUnknown:
@@ -149,6 +153,18 @@ bool ParseCustomEffectAlgorithm(const std::string& text, CustomEffectAlgorithm* 
 		*algorithm_out = CustomEffectAlgorithm::kDelay;
 		return true;
 	}
+	if (normalized == "tremolo") {
+		*algorithm_out = CustomEffectAlgorithm::kTremolo;
+		return true;
+	}
+	if (normalized == "vibrato") {
+		*algorithm_out = CustomEffectAlgorithm::kVibrato;
+		return true;
+	}
+	if (normalized == "ring_mod" || normalized == "ringmod" || normalized == "ring") {
+		*algorithm_out = CustomEffectAlgorithm::kRingMod;
+		return true;
+	}
 	if (normalized == "plugin" || normalized == "clap_plugin") {
 		*algorithm_out = CustomEffectAlgorithm::kPlugin;
 		return true;
@@ -177,4 +193,4 @@ std::string BuildCustomEffectReportText(const CustomEffectReport& report) {
 	return output.str();
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

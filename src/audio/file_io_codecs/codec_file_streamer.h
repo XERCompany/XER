@@ -9,7 +9,7 @@
 #include "async_io/async_file_writer.h"
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace Engine::Audio::CodecIO {
+namespace XER::Engine::Audio::CodecIO {
 
 class CodecFileStreamer {
 public:
@@ -23,11 +23,11 @@ public:
     void Close();
 
 private:
-    AsyncIO::IO::Async::AsyncFileReader reader_;
-    AsyncIO::IO::Async::AsyncFileWriter writer_;
-    AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+    XER::AsyncIO::IO::Async::AsyncFileReader reader_;
+    XER::AsyncIO::IO::Async::AsyncFileWriter writer_;
+    XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
     bool reading_open_;
     bool writing_open_;
 };
 
-}  // namespace Engine::Audio::CodecIO
+}  // namespace XER::Engine::Audio::CodecIO

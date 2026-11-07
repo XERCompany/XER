@@ -3,7 +3,7 @@
 #include <cuda_runtime.h> 
 #include <cudnn.h> 
 
-namespace AsyncIO::IO::DNNBackends {
+namespace XER::AsyncIO::IO::DNNBackends {
 
 CuDnnConvolutionEngine::CuDnnConvolutionEngine()
     : inChannels_(0), outChannels_(0), kernel_(0), stride_(1), padding_(0), configured_(false) {
@@ -116,4 +116,4 @@ bool CuDnnConvolutionEngine::Forward(
     return ok; 
 }
 
-} // namespace AsyncIO::IO::DNNBackends
+} // namespace XER::AsyncIO::IO::DNNBackends

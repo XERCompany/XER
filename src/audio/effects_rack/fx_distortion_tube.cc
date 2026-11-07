@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 DistortionTube::DistortionTube()
 	: drive_(2.0f),
@@ -41,4 +41,4 @@ std::string DistortionTube::GetReport() const {
 		", gain=" + std::to_string(output_gain_);
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

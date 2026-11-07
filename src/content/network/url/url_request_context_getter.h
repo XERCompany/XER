@@ -7,7 +7,7 @@
 #include <memory>
 #include "content/network/url/url_request_context.h"
 
-namespace network::url {
+namespace XER::network::url {
 
 // Lazily constructs and caches a URLRequestContext.
 class URLRequestContextGetter {
@@ -22,4 +22,4 @@ private:
     mutable std::unique_ptr<URLRequestContext> ctx_;
 };
 
-}  // namespace network::url
+}  // namespace XER::network::url

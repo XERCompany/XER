@@ -11,7 +11,7 @@
 
 #include "cache/cache_manager.h"
 
-namespace Engine {
+namespace XER::Engine {
 namespace Audio {
 namespace Core {
 
@@ -130,7 +130,7 @@ private:
                                   AnalysisResultCache* out,
                                   std::string* error);
 
-    Engine::Cache::CacheManager& cache_manager_;
+    XER::Engine::Cache::CacheManager& cache_manager_;
     std::chrono::seconds default_metadata_ttl_ = std::chrono::seconds(3600);   // 1 hour
     std::chrono::seconds default_preset_ttl_ = std::chrono::seconds(86400);     // 24 hours
     std::chrono::seconds default_analysis_ttl_ = std::chrono::seconds(1800);    // 30 minutes
@@ -138,4 +138,4 @@ private:
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace Engine
+}  // namespace XER::Engine

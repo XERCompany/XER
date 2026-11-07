@@ -1,4 +1,5 @@
 #include "flux/history/command_history.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -6,33 +7,13 @@
 #include <string_view>
 #include <vector>
 
-namespace flux::history {
-namespace {
-
-std::string TrimAsciiWhitespace(std::string_view text) {
-	std::size_t start = 0;
-	while (start < text.size() && std::isspace(static_cast<unsigned char>(text[start])) != 0) {
-		++start;
-	}
-	std::size_t end = text.size();
-	while (end > start && std::isspace(static_cast<unsigned char>(text[end - 1])) != 0) {
-		--end;
-	}
-	return std::string(text.substr(start, end - start));
-}
-
-bool StartsWith(std::string_view text, std::string_view prefix) {
-	return text.size() >= prefix.size() && text.substr(0, prefix.size()) == prefix;
-}
-
-}  // namespace
-
+namespace XER::flux::history {
 CommandHistory::CommandHistory(std::size_t max_entries)
 	: max_entries_(max_entries == 0 ? 1 : max_entries),
 	  cursor_(0) {}
 
 void CommandHistory::Push(std::string command) {
-	command = TrimAsciiWhitespace(command);
+	command = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(command);
 	if (command.empty()) {
 		ResetCursor();
 		return;
@@ -98,7 +79,7 @@ std::vector<std::string> CommandHistory::Entries() const {
 std::vector<std::string> CommandHistory::MatchingPrefix(std::string_view prefix, std::size_t limit) const {
 	std::vector<std::string> matches;
 	for (auto iterator = entries_.rbegin(); iterator != entries_.rend(); ++iterator) {
-		if (StartsWith(*iterator, prefix)) {
+		if (XER::Engine::Helper::String::StartsWith(*iterator, prefix)) {
 			matches.push_back(*iterator);
 			if (limit > 0 && matches.size() >= limit) {
 				break;
@@ -108,4 +89,4 @@ std::vector<std::string> CommandHistory::MatchingPrefix(std::string_view prefix,
 	return matches;
 }
 
-}  // namespace flux::history
+}  // namespace XER::flux::history

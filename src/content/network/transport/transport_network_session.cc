@@ -18,7 +18,7 @@
 #include <cerrno>
 #include <cstring>
 
-namespace network::transport {
+namespace XER::network::transport {
 
 namespace {
 
@@ -117,4 +117,4 @@ int TransportNetworkSession::Write(const uint8_t* buf, size_t len, std::string* 
     return static_cast<int>(n);
 }
 
-}  // namespace network::transport
+}  // namespace XER::network::transport

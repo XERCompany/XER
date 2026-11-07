@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 SyncBarrier::SyncBarrier(int count, const std::string& name)
     : count_(count), waiting_(0), phase_(0), name_(name) {
@@ -40,4 +40,4 @@ bool SyncBarrier::Reset() {
     return true;
 }
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

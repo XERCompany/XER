@@ -5,7 +5,7 @@
 
 #include "flux/terminal/terminal_size_detector.h"
 
-namespace flux::core {
+namespace XER::flux::core {
 
 enum class LogLevel {
 	kDebug = 0,
@@ -27,4 +27,4 @@ LogLevel ParseLogLevel(std::string_view text);
 const char* ToString(LogLevel level);
 std::string BuildConfigSummary(const FluxConfig& config);
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

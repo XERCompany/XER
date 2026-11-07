@@ -10,7 +10,7 @@
 #include <chrono>
 #include <mutex>
 
-namespace network::http {
+namespace XER::network::http {
 
 struct CachedResponse {
     int                     status_code = 0;
@@ -34,4 +34,4 @@ private:
     std::map<std::string, CachedResponse> store_;
 };
 
-}  // namespace network::http
+}  // namespace XER::network::http

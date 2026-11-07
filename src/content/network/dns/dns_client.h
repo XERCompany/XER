@@ -11,7 +11,7 @@
 #include "content/network/dns/dns_config_service.h"
 #include "content/network/dns/dns_record_type.h"
 
-namespace network::dns {
+namespace XER::network::dns {
 
 struct DnsRecord {
     DnsRecordType type;
@@ -46,4 +46,4 @@ private:
     DnsConfig config_;
 };
 
-}  // namespace network::dns
+}  // namespace XER::network::dns

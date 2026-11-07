@@ -6,7 +6,7 @@
 
 #include <string>
 
-namespace network::http {
+namespace XER::network::http {
 
 enum class AuthScheme { kNone, kBasic, kDigest, kBearer };
 
@@ -23,4 +23,4 @@ std::string BuildAuthorizationHeader(const HttpAuthCredentials& creds);
 // Parse a "WWW-Authenticate" challenge.
 AuthScheme ParseAuthChallenge(const std::string& challenge);
 
-}  // namespace network::http
+}  // namespace XER::network::http

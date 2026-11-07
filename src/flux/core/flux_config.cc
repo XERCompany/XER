@@ -5,9 +5,9 @@
 
 #include <absl/strings/str_cat.h>
 
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
-namespace flux::core {
+namespace XER::flux::core {
 namespace {
 
 std::string EnvString(const char* key, const std::string& fallback = {}) {
@@ -23,7 +23,7 @@ absl::string_view AsAbsl(std::string_view text) {
 }
 
 bool EnvBool(const char* key) {
-	const std::string raw = Helper::String::CanonicalizeToken(EnvString(key));
+	const std::string raw = XER::Engine::Helper::String::CanonicalizeToken(EnvString(key));
 	return raw == "1" || raw == "true" || raw == "on" || raw == "yes";
 }
 
@@ -44,7 +44,7 @@ std::size_t EnvPositiveSize(const char* key, std::size_t fallback) {
 
 FluxConfig FluxConfigFromEnvironment() {
 	FluxConfig config;
-	config.application_name = Helper::String::DefaultString(
+	config.application_name = XER::Engine::Helper::String::DefaultString(
 		EnvString("FLUX_APP_NAME", EnvString("ENGINE_APP_NAME", "flux")),
 		"flux");
 	config.log_level = ParseLogLevel(EnvString("FLUX_LOG_LEVEL", EnvString("ENGINE_LOG_LEVEL", "info")));
@@ -58,7 +58,7 @@ FluxConfig FluxConfigFromEnvironment() {
 }
 
 LogLevel ParseLogLevel(std::string_view text) {
-	const std::string token = Helper::String::CanonicalizeToken(AsAbsl(text));
+	const std::string token = XER::Engine::Helper::String::CanonicalizeToken(AsAbsl(text));
 	if (token == "debug") {
 		return LogLevel::kDebug;
 	}
@@ -95,4 +95,4 @@ std::string BuildConfigSummary(const FluxConfig& config) {
 		", interactive=", config.terminal_size.interactive ? "true" : "false");
 }
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

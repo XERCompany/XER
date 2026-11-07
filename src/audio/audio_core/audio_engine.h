@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <functional>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 // Processing callback
 using AudioProcessCallback = std::function<void(float** inputs, float** outputs, int channels, size_t frames)>;
@@ -60,4 +60,4 @@ private:
     void UpdateMeters(float** inputs, float** outputs, size_t frame_count);
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

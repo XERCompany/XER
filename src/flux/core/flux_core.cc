@@ -5,7 +5,7 @@
 
 #include <absl/strings/str_join.h>
 
-namespace flux::core {
+namespace XER::flux::core {
 namespace {
 
 std::string BuildStartupMessage(const FluxContext& context, const ModuleManager& module_manager) {
@@ -68,4 +68,4 @@ bool FluxCore::is_running() const {
 	return running_;
 }
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

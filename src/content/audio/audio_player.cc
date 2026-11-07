@@ -2,11 +2,12 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cfloat>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <thread>
 
-namespace Content::Audio {
+namespace XER::Content::Audio {
 
 static DWORD WINAPI AudioThreadProc(LPVOID param) {
     AudioPlayer* player = static_cast<AudioPlayer*>(param);
@@ -185,13 +186,13 @@ void AudioPlayer::CleanupWASAPI() {
 }
 
 bool AudioPlayer::LoadFromFile(const std::string& file_path, std::string* error_out) {
-    Engine::Audio::Core::AudioSourceLoadOptions options;
+    XER::Engine::Audio::Core::AudioSourceLoadOptions options;
     options.input_path = file_path;
     options.target_sample_rate = sample_rate_;
     options.target_channels = channel_count_;
 
-    Engine::Audio::Core::AudioSourceBuffer buffer;
-    if (!Engine::Audio::Core::AudioSourceLoader::Load(options, &buffer, error_out)) {
+    XER::Engine::Audio::Core::AudioSourceBuffer buffer;
+    if (!XER::Engine::Audio::Core::AudioSourceLoader::Load(options, &buffer, error_out)) {
         return false;
     }
 
@@ -310,6 +311,12 @@ void AudioPlayer::SetVolume(float volume) {
 }
 
 void AudioPlayer::ProcessAudio() {
+    // Flush denormals to zero on this thread: IIR filters and reverb tails
+    // generate denormal floats that cause massive slowdowns (audible
+    // crackling) on processors without FTZ/DAZ enabled by default.
+    unsigned int cw = 0;
+    _controlfp_s(&cw, _DN_FLUSH, _MCW_DN);
+
     while (!stop_thread_) {
         UINT32 num_padding_frames = 0;
         HRESULT hr = audio_client_->GetCurrentPadding(&num_padding_frames);
@@ -333,15 +340,36 @@ void AudioPlayer::ProcessAudio() {
         const std::vector<float>& samples = audio_buffer_.samples;
         size_t total_samples = samples.size();
 
+        // When a block processor (live FX) is installed, render into a
+        // reusable vector and let it transform the samples in place before
+        // they are copied to the device buffer.
+        const bool use_processor = static_cast<bool>(block_processor_);
+        const size_t block_samples = static_cast<size_t>(num_available_frames) * channel_count_;
+        if (use_processor) {
+            // Exact size matters: the processor sees the whole vector.
+            block_scratch_.resize(block_samples);
+        }
+        float* dest = use_processor ? block_scratch_.data() : output;
+
         for (UINT32 i = 0; i < num_available_frames; ++i) {
             for (int ch = 0; ch < channel_count_; ++ch) {
                 if (playback_position_ < total_samples) {
                     float sample = samples[playback_position_] * volume_;
-                    output[i * channel_count_ + ch] = sample;
+                    dest[i * channel_count_ + ch] = sample;
                     ++playback_position_;
                 } else {
-                    output[i * channel_count_ + ch] = 0.0f;
+                    dest[i * channel_count_ + ch] = 0.0f;
                 }
+            }
+        }
+
+        if (use_processor) {
+            block_processor_(block_scratch_);
+            const size_t copy_count = (std::min)(block_scratch_.size(), block_samples);
+            std::copy(block_scratch_.begin(),
+                      block_scratch_.begin() + static_cast<std::ptrdiff_t>(copy_count), output);
+            for (size_t i = copy_count; i < block_samples; ++i) {
+                output[i] = 0.0f;
             }
         }
 
@@ -379,4 +407,4 @@ void AudioPlayer::UpdateState(PlaybackState new_state) {
     }
 }
 
-}  // namespace Content::Audio
+}  // namespace XER::Content::Audio

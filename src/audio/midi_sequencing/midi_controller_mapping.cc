@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::MIDI {
+namespace XER::Engine::Audio::MIDI {
 
 void MidiControllerMapping::Bind(
     uint8_t cc,
@@ -12,12 +12,12 @@ void MidiControllerMapping::Bind(
     bool invert,
     int channel,
     const std::string& label) {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     map_[cc] = MidiControllerBinding{param_id, min_value, max_value, invert, channel, label};
 }
 
 bool MidiControllerMapping::Resolve(uint8_t cc, uint32_t& param_id) const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     const auto it = map_.find(cc);
     if (it == map_.end()) {
         return false;
@@ -30,7 +30,7 @@ bool MidiControllerMapping::ResolveBinding(uint8_t cc, MidiControllerBinding* bi
     if (binding == nullptr) {
         return false;
     }
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     const auto it = map_.find(cc);
     if (it == map_.end()) {
         return false;
@@ -60,8 +60,8 @@ bool MidiControllerMapping::MapEvent(const MidiEvent& event, uint32_t* param_id,
 }
 
 void MidiControllerMapping::Clear() {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     map_.clear();
 }
 
-}  // namespace Engine::Audio::MIDI
+}  // namespace XER::Engine::Audio::MIDI

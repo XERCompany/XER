@@ -18,7 +18,7 @@ double Sinc(double x) {
 
 }  // namespace
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 AudioSampleRateConverter::AudioSampleRateConverter(ResampleQuality quality)
     : input_rate_(0), output_rate_(0), ratio_(1.0), quality_(quality),
@@ -171,4 +171,4 @@ float AudioSampleRateConverter::InterpolateWindowedSinc(const float* buffer, siz
     return static_cast<float>(weighted_sum / weight_total);
 }
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

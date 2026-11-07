@@ -19,7 +19,7 @@
     #endif
 #endif
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 HwCapabilityScanner& HwCapabilityScanner::Instance() {
     static HwCapabilityScanner instance;
@@ -84,4 +84,4 @@ HwCapabilities HwCapabilityScanner::Scan() {
     return caps;
 }
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

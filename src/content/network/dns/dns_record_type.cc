@@ -4,7 +4,7 @@
  */
 #include "content/network/dns/dns_record_type.h"
 
-namespace network::dns {
+namespace XER::network::dns {
 
 std::string DnsRecordTypeToString(DnsRecordType type) {
     switch (type) {
@@ -38,4 +38,4 @@ bool DnsRecordTypeFromString(const std::string& name, DnsRecordType* out) {
     return false;
 }
 
-}  // namespace network::dns
+}  // namespace XER::network::dns

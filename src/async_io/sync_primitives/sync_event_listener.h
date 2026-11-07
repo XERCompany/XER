@@ -5,7 +5,7 @@
 #include <string>
 #include <chrono>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 class SyncEventListener {
 public:
@@ -31,4 +31,4 @@ private:
     std::string event_name_;
 };
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

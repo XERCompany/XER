@@ -9,7 +9,7 @@
 #include "content/network/http/http_stream.h"
 #include "content/network/transport/transport_client_socket.h"
 
-namespace network::http {
+namespace XER::network::http {
 
 // Creates an HttpStream from a connected TransportClientSocket.
 class HttpStreamFactory {
@@ -20,4 +20,4 @@ public:
                      std::string* error);
 };
 
-}  // namespace network::http
+}  // namespace XER::network::http

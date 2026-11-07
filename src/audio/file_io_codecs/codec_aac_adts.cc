@@ -5,7 +5,7 @@
 
 #include <cstdint>
 
-namespace Engine::Audio::CodecIO {
+namespace XER::Engine::Audio::CodecIO {
 
 bool AacAdtsCodec::Encode(const float* input, size_t frames, std::vector<uint8_t>& out) const {
     if (input == nullptr || frames == 0) {
@@ -62,4 +62,4 @@ bool AacAdtsCodec::Decode(const uint8_t* data, size_t bytes, std::vector<float>&
     return true;
 }
 
-}  // namespace Engine::Audio::CodecIO
+}  // namespace XER::Engine::Audio::CodecIO

@@ -4,7 +4,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 HarmonicContentAnalyzer::HarmonicContentAnalyzer(size_t fft_size)
 	: fft_size_(fft_size),
@@ -80,7 +80,7 @@ std::string HarmonicContentAnalyzer::GetSummary() const {
 	return "HarmonicContent: f0=" + std::to_string(fundamental_frequency_) +
 		", ratio=" + std::to_string(harmonic_ratio_) +
 		", inharmonicity=" + std::to_string(inharmonicity_) +
-		", bits=" + AsyncIO::IO::LogDebug::DumpHelper::BitDump(harmonic_bits);
+		", bits=" + XER::AsyncIO::IO::LogDebug::DumpHelper::BitDump(harmonic_bits);
 }
 
 size_t HarmonicContentAnalyzer::FrequencyToBin(float frequency, int sample_rate) const {

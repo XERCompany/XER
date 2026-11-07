@@ -2,10 +2,10 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::Plugin {
+namespace XER::Engine::Audio::Plugin {
 
 void PluginParameterBridge::Clear() {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     values_.clear();
 }
 
@@ -26,7 +26,7 @@ void PluginParameterBridge::RegisterParameter(
 }
 
 void PluginParameterBridge::RegisterParameter(const PluginParameterInfo& info) {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     PluginParameterInfo normalized = info;
     float min_value = normalized.min_value;
     float max_value = normalized.max_value;
@@ -44,7 +44,7 @@ void PluginParameterBridge::RegisterParameter(const PluginParameterInfo& info) {
 }
 
 bool PluginParameterBridge::SetValue(uint32_t id, float value) {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     const auto it = values_.find(id);
     if (it == values_.end()) {
         return false;
@@ -54,7 +54,7 @@ bool PluginParameterBridge::SetValue(uint32_t id, float value) {
 }
 
 bool PluginParameterBridge::SetNormalizedValue(uint32_t id, float normalized_value) {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     const auto it = values_.find(id);
     if (it == values_.end()) {
         return false;
@@ -65,7 +65,7 @@ bool PluginParameterBridge::SetNormalizedValue(uint32_t id, float normalized_val
 }
 
 bool PluginParameterBridge::GetValue(uint32_t id, float& value) const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     const auto it = values_.find(id);
     if (it == values_.end()) {
         return false;
@@ -78,7 +78,7 @@ bool PluginParameterBridge::GetInfo(uint32_t id, PluginParameterInfo* info) cons
     if (info == nullptr) {
         return false;
     }
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     const auto it = values_.find(id);
     if (it == values_.end()) {
         return false;
@@ -88,7 +88,7 @@ bool PluginParameterBridge::GetInfo(uint32_t id, PluginParameterInfo* info) cons
 }
 
 std::vector<PluginParameterInfo> PluginParameterBridge::Snapshot() const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     std::vector<PluginParameterInfo> snapshot;
     snapshot.reserve(values_.size());
     for (const auto& entry : values_) {
@@ -100,4 +100,4 @@ std::vector<PluginParameterInfo> PluginParameterBridge::Snapshot() const {
     return snapshot;
 }
 
-}  // namespace Engine::Audio::Plugin
+}  // namespace XER::Engine::Audio::Plugin

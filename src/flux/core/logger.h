@@ -4,7 +4,7 @@
 
 #include "flux/core/flux_config.h"
 
-namespace flux::core {
+namespace XER::flux::core {
 
 class Logger {
 public:
@@ -25,4 +25,4 @@ private:
 	FluxConfig config_;
 };
 
-}  // namespace flux::core
+}  // namespace XER::flux::core

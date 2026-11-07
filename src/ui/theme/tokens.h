@@ -12,9 +12,23 @@ struct Tokens {
     Color muted;
     Color border;
     Color accent;
+    // Text/icon color drawn on top of `accent` fills.
+    Color accent_foreground;
     Color focus;
+    // Subtle filled backgrounds (slider/progress tracks, secondary badge).
+    Color secondary;
+    // Background shown behind hovered interactive controls.
+    Color hover;
+    // Outer ring drawn around the focused control (shadcn "ring").
+    Color ring;
+    // Destructive actions (shadcn "destructive"): filled danger buttons,
+    // danger menu items, error accents.
+    Color danger;
+    // Text/icon color drawn on top of `danger` fills.
+    Color danger_foreground;
     float radius_small;
     float radius_medium;
+    float radius_large;
     float spacing_small;
     float spacing_medium;
     float spacing_large;

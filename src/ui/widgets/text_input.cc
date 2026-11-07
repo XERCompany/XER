@@ -62,38 +62,60 @@ void TextInput::SetOnValueChanged(
     on_value_changed_ = std::move(callback);
 }
 
+void TextInput::SetPlaceholder(std::string placeholder) {
+    if (placeholder_ == placeholder) {
+        return;
+    }
+    placeholder_ = std::move(placeholder);
+    Invalidate();
+}
+
 void TextInput::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, tokens.surface, tokens.radius_small);
-    renderer.StrokeRect(
+    constexpr float kHorizontalPadding = 12.0f;
+    renderer.FillRect(
         bounds,
-        IsFocused() ? tokens.focus : tokens.border,
-        1.0f,
+        IsEnabled() ? tokens.surface : tokens.secondary,
         tokens.radius_small
     );
-    const Layout::Rect text_bounds{
-        bounds.x + tokens.spacing_medium,
-        bounds.y,
-        std::max(0.0f, bounds.width - 2.0f * tokens.spacing_medium),
-        bounds.height
-    };
+    renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_small);
+
     const Rendering::TextStyle style{
         IsEnabled() ? tokens.foreground : tokens.muted,
         tokens.font_body,
-        false
+        400
     };
-    renderer.DrawText(value_, text_bounds, style);
+    const auto text_bounds = CenteredTextRect(
+        renderer, value_, style, kHorizontalPadding);
+
+    if (pending_caret_x_.has_value()) {
+        caret_ = CaretIndexForX(*pending_caret_x_, renderer, text_bounds, style);
+        pending_caret_x_.reset();
+    }
+
+    if (value_.empty() && !placeholder_.empty() && !IsFocused()) {
+        const Rendering::TextStyle ph{tokens.muted, tokens.font_body, 400};
+        renderer.DrawText(placeholder_, text_bounds, ph);
+    } else {
+        renderer.DrawText(value_, text_bounds, style);
+    }
 
     if (IsFocused()) {
         const auto prefix = std::string_view(value_).substr(0, caret_);
-        const float caret_x = text_bounds.x + renderer.MeasureText(prefix, style).width;
+        const float caret_x = std::clamp(
+            text_bounds.x + renderer.MeasureText(prefix, style).width,
+            text_bounds.x,
+            text_bounds.x + text_bounds.width
+        );
         renderer.DrawLine(
-            {caret_x, bounds.y + tokens.spacing_small},
-            {caret_x, bounds.y + bounds.height - tokens.spacing_small},
-            tokens.focus,
+            {caret_x, text_bounds.y},
+            {caret_x, text_bounds.y + text_bounds.height},
+            tokens.foreground,
             1.0f
         );
     }
+
+    RenderFocusRing(renderer, tokens, tokens.radius_small);
 }
 
 void TextInput::Layout(const Layout::Rect& bounds) {
@@ -101,7 +123,17 @@ void TextInput::Layout(const Layout::Rect& bounds) {
 }
 
 bool TextInput::HandleEvent(const Event& event) {
-    if (!IsEnabled() || !IsFocused()) {
+    if (!IsEnabled()) {
+        return false;
+    }
+
+    if (event.type == Event::Type::MouseDown &&
+        event.mouse_button == MouseButton::Left && IsFocused()) {
+        pending_caret_x_ = event.position.x;
+        Invalidate();
+        return true;
+    }
+    if (!IsFocused()) {
         return false;
     }
 
@@ -163,11 +195,11 @@ bool TextInput::HandleEvent(const Event& event) {
 }
 
 Layout::Size TextInput::GetMinSize() const {
-    return {80.0f, 18.0f + 2.0f * 8.0f};
+    return {80.0f, 36.0f};
 }
 
 Layout::Size TextInput::GetPreferredSize() const {
-    return {160.0f, 18.0f + 2.0f * 8.0f};
+    return {160.0f, 36.0f};
 }
 
 Layout::Size TextInput::GetMaxSize() const {
@@ -188,6 +220,30 @@ void TextInput::NotifyValueChanged() {
     if (on_value_changed_) {
         on_value_changed_(value_);
     }
+}
+
+std::size_t TextInput::CaretIndexForX(
+    float x,
+    Rendering::Renderer& renderer,
+    const Layout::Rect& text_bounds,
+    const Rendering::TextStyle& style
+) const {
+    const float local_x = x - text_bounds.x;
+    if (local_x <= 0.0f) {
+        return 0;
+    }
+    for (std::size_t pos = 0; pos <= value_.size();) {
+        const float width = renderer.MeasureText(
+            std::string_view(value_).substr(0, pos), style).width;
+        if (width > local_x) {
+            return pos == 0 ? 0 : PreviousCodePoint(value_, pos);
+        }
+        if (pos == value_.size()) {
+            break;
+        }
+        pos = NextCodePoint(value_, pos);
+    }
+    return value_.size();
 }
 
 } // namespace XER::UI::Widgets

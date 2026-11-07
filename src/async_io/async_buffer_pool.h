@@ -6,7 +6,7 @@
 #include <mutex>
 #include <cstdint>
 
-namespace AsyncIO::IO::Async {
+namespace XER::AsyncIO::IO::Async {
 
 struct BufferBlock {
     std::vector<uint8_t> data;
@@ -46,4 +46,4 @@ private:
     void AllocateBlocks(size_t count);
 };
 
-}  // namespace AsyncIO::IO::Async
+}  // namespace XER::AsyncIO::IO::Async

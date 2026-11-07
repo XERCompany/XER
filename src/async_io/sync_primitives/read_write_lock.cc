@@ -1,6 +1,6 @@
 #include "read_write_lock.h"
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 ReadWriteLock::ReadWriteLock(const std::string& name)
     : name_(name), read_lock_count_(0), write_lock_count_(0) {}
@@ -41,4 +41,4 @@ void ReadWriteLock::UnlockWrite() {
     rwlock_.unlock();
 }
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

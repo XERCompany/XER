@@ -12,7 +12,7 @@
 #include "audio/audio_core/audio_source_loader.h"
 #include "audio/dsp_algorithms/dsp_stft_processor.h"
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 class SpectrogramGenerator {
 public:
@@ -20,7 +20,7 @@ public:
 	~SpectrogramGenerator();
 
 	bool Generate(const float* audio, size_t frame_count);
-	bool GenerateFromFile(const Engine::Audio::Core::AudioSourceLoadOptions& load_options, std::string* error_out = nullptr);
+	bool GenerateFromFile(const XER::Engine::Audio::Core::AudioSourceLoadOptions& load_options, std::string* error_out = nullptr);
 	bool ExportAsRaw(const std::string& filepath) const;
 	void Reset();
 
@@ -32,10 +32,10 @@ public:
 private:
 	size_t fft_size_;
 	size_t hop_size_;
-	Engine::Audio::DSP::STFTProcessor stft_processor_;
-	AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::Engine::Audio::DSP::STFTProcessor stft_processor_;
+	XER::AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 	std::vector<std::vector<float>> magnitude_matrix_;
 };
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

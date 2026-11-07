@@ -3,27 +3,21 @@
  * Copyright (C) 2026 Yoshi A.
  */
 #include "content/network/http/http_util.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
 #include <cctype>
 #include <sstream>
 #include <vector>
 
-namespace network::http {
+namespace XER::network::http {
 
 std::string TrimWhitespace(const std::string& s) {
-    const size_t start = s.find_first_not_of(" \t\r\n");
-    if (start == std::string::npos) return {};
-    const size_t end = s.find_last_not_of(" \t\r\n");
-    return s.substr(start, end - start + 1);
+    return XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(s);
 }
 
 bool IEqualASCII(const std::string& a, const std::string& b) {
-    if (a.size() != b.size()) return false;
-    return std::equal(a.begin(), a.end(), b.begin(), [](char x, char y){
-        return std::tolower(static_cast<unsigned char>(x)) ==
-               std::tolower(static_cast<unsigned char>(y));
-    });
+    return XER::Engine::Helper::String::EqualsIgnoreAsciiCase(a, b);
 }
 
 std::vector<std::string> SplitHeaderValue(const std::string& value, char delimiter) {
@@ -69,4 +63,4 @@ std::string ReasonPhrase(int code) {
     }
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

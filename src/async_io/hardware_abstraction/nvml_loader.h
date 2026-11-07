@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 // Snapshot of an NVIDIA GPU as reported by NVML (loaded dynamically, no link-time dependency).
 struct NvmlDeviceSnapshot {
@@ -77,4 +77,4 @@ private:
     Impl* impl_;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

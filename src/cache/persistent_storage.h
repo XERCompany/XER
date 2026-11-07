@@ -9,7 +9,7 @@
 
 #include "cache/cache_storage.h"
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 class PersistentStorage final : public CacheStorage {
 public:
@@ -52,4 +52,4 @@ private:
 	std::filesystem::path root_;
 };
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

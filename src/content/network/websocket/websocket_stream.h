@@ -10,7 +10,7 @@
 #include "content/network/websocket/websocket_frame.h"
 #include "content/network/transport/transport_client_socket.h"
 
-namespace network::websocket {
+namespace XER::network::websocket {
 
 using MessageCallback = std::function<void(const WebSocketFrame& frame)>;
 using CloseCallback   = std::function<void(uint16_t code, const std::string& reason)>;
@@ -54,4 +54,4 @@ private:
     bool            open_ = false;
 };
 
-}  // namespace network::websocket
+}  // namespace XER::network::websocket

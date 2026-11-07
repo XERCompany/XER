@@ -7,7 +7,7 @@
 
 #include "cache/cache_entry.h"
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 class CacheStorage {
 public:
@@ -31,4 +31,4 @@ public:
 		       std::string* error_out);
 };
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

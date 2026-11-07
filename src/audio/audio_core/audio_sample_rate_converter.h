@@ -7,7 +7,7 @@
 
 #include "async_io/async_buffer_pool.h"
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 enum class ResampleQuality {
     FAST,
@@ -55,7 +55,7 @@ private:
     std::vector<float> filter_kernel_;
     double buffer_pos_;
 
-    AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
+    XER::AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
 
     void GenerateFilterKernel();
     size_t GetKernelRadius() const;
@@ -63,4 +63,4 @@ private:
     float InterpolateWindowedSinc(const float* buffer, size_t frame_count, double pos) const;
 };
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

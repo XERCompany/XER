@@ -10,7 +10,7 @@
 #include <vector>
 #include "content/network/quic/quic_protocol.h"
 
-namespace network::quic {
+namespace XER::network::quic {
 
 // QUIC protocol stream for multiplexed, reliable communication.
 // Each QUIC connection can have multiple concurrent streams.
@@ -41,4 +41,4 @@ protected:
     std::vector<uint8_t> recv_buf_;
 };
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

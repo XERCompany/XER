@@ -4,7 +4,7 @@
 #include <cmath>
 #include <future>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 std::string ModChorus::GetMemoryStats() const {
 	std::string stats;
@@ -14,6 +14,8 @@ std::string ModChorus::GetMemoryStats() const {
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
+// Chorus sits in the 15-45 ms range; the LFO sweeps around a 20 ms centre.
+constexpr float kBaseDelayMs = 20.0f;
 }
 
 ModChorus::ModChorus()
@@ -41,7 +43,7 @@ void ModChorus::SetRateHz(float rate_hz) {
 }
 
 void ModChorus::SetDepthSamples(float depth_samples) {
-	depth_samples_ = std::max(1.0f, depth_samples);
+	depth_samples_ = std::max(0.5f, depth_samples);
 }
 
 void ModChorus::SetMix(float mix) {
@@ -54,45 +56,16 @@ bool ModChorus::ProcessBlock(const float* input, size_t frame_count, float* outp
 	}
 	perf_counter_.StartCounter("fx_chorus");
 	const float phase_inc = 2.0f * kPi * rate_hz_ / sample_rate_;
+	const float base_delay = kBaseDelayMs * 0.001f * sample_rate_;
+	const float max_delay = static_cast<float>(delay_line_.GetMaxDelaySamples());
 
-	size_t i = 0;
-#if defined(__AVX2__)
-	for (; i + 7 < frame_count; i += 8) {
-		float lfo[8], delay[8], wet[8];
-		for (int j = 0; j < 8; ++j) {
-			lfo[j] = (std::sin(lfo_phase_ + phase_inc * j) + 1.0f) * 0.5f;
-			delay[j] = static_cast<size_t>(std::max(1.0f, lfo[j] * depth_samples_));
-			delay_line_.SetDelaySamples(delay[j]);
-			wet[j] = delay_line_.Process(input[i + j]);
-			output[i + j] = input[i + j] * (1.0f - mix_) + wet[j] * mix_;
-		}
-		lfo_phase_ += phase_inc * 8;
-		if (lfo_phase_ > 2.0f * kPi) {
-			lfo_phase_ -= 2.0f * kPi;
-		}
-	}
-#endif
-#if defined(__SSE2__)
-	for (; i + 3 < frame_count; i += 4) {
-		float lfo[4], delay[4], wet[4];
-		for (int j = 0; j < 4; ++j) {
-			lfo[j] = (std::sin(lfo_phase_ + phase_inc * j) + 1.0f) * 0.5f;
-			delay[j] = static_cast<size_t>(std::max(1.0f, lfo[j] * depth_samples_));
-			delay_line_.SetDelaySamples(delay[j]);
-			wet[j] = delay_line_.Process(input[i + j]);
-			output[i + j] = input[i + j] * (1.0f - mix_) + wet[j] * mix_;
-		}
-		lfo_phase_ += phase_inc * 4;
-		if (lfo_phase_ > 2.0f * kPi) {
-			lfo_phase_ -= 2.0f * kPi;
-		}
-	}
-#endif
-	for (; i < frame_count; ++i) {
-		const float lfo = (std::sin(lfo_phase_) + 1.0f) * 0.5f;
-		const size_t delay = static_cast<size_t>(std::max(1.0f, lfo * depth_samples_));
-		delay_line_.SetDelaySamples(delay);
-		const float wet = delay_line_.Process(input[i]);
+	for (size_t i = 0; i < frame_count; ++i) {
+		// Raised-cosine LFO is cheaper than sin() per sample and just as
+		// smooth for a modulation source.
+		const float lfo = 0.5f - 0.5f * std::cos(lfo_phase_);
+		const float delay = std::clamp(base_delay + lfo * depth_samples_,
+		                               1.0f, max_delay - 1.0f);
+		const float wet = delay_line_.ProcessFractional(input[i], delay);
 		output[i] = input[i] * (1.0f - mix_) + wet * mix_;
 		lfo_phase_ += phase_inc;
 		if (lfo_phase_ > 2.0f * kPi) {
@@ -115,4 +88,4 @@ std::future<bool> ModChorus::ProcessBlockAsync(const float* input, size_t frame_
 	});
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

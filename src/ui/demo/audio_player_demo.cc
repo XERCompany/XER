@@ -15,7 +15,7 @@ int main() {
     }
 
     // Create audio controller
-    auto audio_controller = std::make_unique<App::AudioController>();
+    auto audio_controller = std::make_unique<XER::App::AudioController>();
     if (!audio_controller->Initialize()) {
         return 1;
     }
@@ -40,6 +40,9 @@ int main() {
     window->SetOnClose([&]() {
         audio_controller->Stop();
     });
+
+    // Poll playback state; the window repaints only on real changes.
+    window->SetFrameCallback([audio_widget]() { audio_widget->Tick(); }, 100);
 
     // Show window
     window->Show();

@@ -1,4 +1,5 @@
 #include "au_host_interface.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
 #include <cctype>
@@ -6,9 +7,7 @@
 namespace {
 
 std::string NormalizeBuiltinReference(std::string reference) {
-    std::transform(reference.begin(), reference.end(), reference.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    reference = XER::Engine::Helper::String::ToLowerAscii(reference);
     constexpr const char* kBuiltinPrefix = "builtin://";
     if (reference.rfind(kBuiltinPrefix, 0) == 0) {
         reference.erase(0, std::char_traits<char>::length(kBuiltinPrefix));
@@ -32,13 +31,13 @@ bool IsBuiltinComponentReference(const std::string& reference) {
 
 }  // namespace
 
-namespace Engine::Audio::Plugin {
+namespace XER::Engine::Audio::Plugin {
 
 bool AuHostInterface::Initialize(double sample_rate, uint32_t max_block_size) {
     if (sample_rate <= 0.0 || max_block_size == 0) {
         return false;
     }
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     sample_rate_ = sample_rate;
     max_block_size_ = max_block_size;
 	component_id_.clear();
@@ -47,7 +46,7 @@ bool AuHostInterface::Initialize(double sample_rate, uint32_t max_block_size) {
 }
 
 bool AuHostInterface::LoadComponent(const std::string& component_id) {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     if (!builtin_host_.Load(component_id)) {
 		backend_mode_ = IsBuiltinComponentReference(component_id) ? BackendMode::kNone : BackendMode::kUnsupportedExternal;
 		component_id_ = backend_mode_ == BackendMode::kUnsupportedExternal
@@ -64,7 +63,7 @@ bool AuHostInterface::Process(const float* input, float* output, uint32_t frames
     if (input == nullptr || output == nullptr || frames == 0 || frames > max_block_size_) {
         return false;
     }
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     if (backend_mode_ != BackendMode::kBuiltin) {
         return false;
     }
@@ -72,7 +71,7 @@ bool AuHostInterface::Process(const float* input, float* output, uint32_t frames
 }
 
 bool AuHostInterface::SetParameter(uint32_t id, float value) {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     if (backend_mode_ != BackendMode::kBuiltin) {
         return false;
     }
@@ -80,7 +79,7 @@ bool AuHostInterface::SetParameter(uint32_t id, float value) {
 }
 
 bool AuHostInterface::GetParameter(uint32_t id, float* value) const {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     if (backend_mode_ != BackendMode::kBuiltin) {
         return false;
     }
@@ -88,7 +87,7 @@ bool AuHostInterface::GetParameter(uint32_t id, float* value) const {
 }
 
 std::vector<PluginParameterInfo> AuHostInterface::GetParameters() const {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     if (backend_mode_ != BackendMode::kBuiltin) {
         return {};
     }
@@ -96,12 +95,12 @@ std::vector<PluginParameterInfo> AuHostInterface::GetParameters() const {
 }
 
 std::string AuHostInterface::GetLoadedComponentId() const {
-	AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	return component_id_;
 }
 
 std::string AuHostInterface::GetBackendMode() const {
-    AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
+    XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
     switch (backend_mode_) {
     case BackendMode::kBuiltin:
         return "builtin";
@@ -113,4 +112,4 @@ std::string AuHostInterface::GetBackendMode() const {
     return "none";
 }
 
-}  // namespace Engine::Audio::Plugin
+}  // namespace XER::Engine::Audio::Plugin

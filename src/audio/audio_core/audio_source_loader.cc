@@ -3,6 +3,7 @@
 #include "audio/audio_core/audio_interleave_processor.h"
 #include "audio/file_io_codecs/codec_wav_pcm.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
 #include <array>
@@ -15,7 +16,7 @@
 #include <thread>
 #include <vector>
 
-namespace Engine::Audio::Core {
+namespace XER::Engine::Audio::Core {
 
 namespace {
 
@@ -70,13 +71,6 @@ enum class SampleFormatKind {
 	F32,
 	F64,
 };
-
-std::string ToLowerCopy(std::string value) {
-	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-		return static_cast<char>(std::tolower(ch));
-	});
-	return value;
-}
 
 bool ReadBinaryFile(
 	const std::filesystem::path& path,
@@ -175,7 +169,7 @@ bool LooksLikeMp3FrameHeader(const std::uint8_t* data, size_t bytes) {
 }
 
 bool IsStrictMp3Input(const std::filesystem::path& path, std::string* error_out) {
-	if (ToLowerCopy(path.extension().string()) != ".mp3") {
+	if (XER::Engine::Helper::String::ToLowerAscii(path.extension().string()) != ".mp3") {
 		if (error_out != nullptr) {
 			*error_out = "audio fx processing accepts only strict .mp3 input: " + path.string();
 		}
@@ -197,7 +191,7 @@ bool IsStrictMp3Input(const std::filesystem::path& path, std::string* error_out)
 }
 
 std::string CanonicalSampleFormat(std::string sample_format) {
-	sample_format = ToLowerCopy(std::move(sample_format));
+	sample_format = XER::Engine::Helper::String::ToLowerAscii(std::move(sample_format));
 	if (!sample_format.empty() && sample_format.back() == 'p') {
 		sample_format.pop_back();
 	}
@@ -293,7 +287,7 @@ bool DecodeSample(const std::string& sample_format, const std::uint8_t* data, fl
 }
 
 bool AppendFrameChannels(
-	const engine::bridge::ffmpeg::AudioFrameInfo& frame,
+	const XER::engine::bridge::ffmpeg::AudioFrameInfo& frame,
 	DecodedAudioData* decoded_audio,
 	std::string* error_out) {
 	if (decoded_audio == nullptr || frame.channels <= 0 || frame.sample_count <= 0) {
@@ -447,7 +441,7 @@ bool DecodeWavPcmFile(
 		return false;
 	}
 
-	Engine::Audio::CodecIO::WavPcmCodec codec;
+	XER::Engine::Audio::CodecIO::WavPcmCodec codec;
 	int sample_rate = 0;
 	int channel_count = 0;
 	std::vector<float> interleaved_samples;
@@ -493,18 +487,18 @@ bool DecodeWithFFmpeg(
 		}
 		return false;
 	}
-	if (!engine::bridge::ffmpeg::IsAvailable()) {
+	if (!XER::engine::bridge::ffmpeg::IsAvailable()) {
 		if (error_out != nullptr) {
 			*error_out = "ffmpeg bridge is unavailable";
 		}
 		return false;
 	}
 
-	engine::bridge::ffmpeg::MediaInfo media_info;
-	const bool have_media_info = engine::bridge::ffmpeg::ProbeMedia(path.string(), &media_info, nullptr);
+	XER::engine::bridge::ffmpeg::MediaInfo media_info;
+	const bool have_media_info = XER::engine::bridge::ffmpeg::ProbeMedia(path.string(), &media_info, nullptr);
 
-	std::vector<engine::bridge::ffmpeg::AudioFrameInfo> frames;
-	if (!engine::bridge::ffmpeg::DecodeAudioFrames(path.string(), -1, 0, &frames, error_out)) {
+	std::vector<XER::engine::bridge::ffmpeg::AudioFrameInfo> frames;
+	if (!XER::engine::bridge::ffmpeg::DecodeAudioFrames(path.string(), -1, 0, &frames, error_out)) {
 		return false;
 	}
 	if (frames.empty()) {
@@ -822,7 +816,7 @@ bool AudioSourceLoader::Load(
 	}
 
 	DecodedAudioData decoded_audio;
-	const std::string extension = ToLowerCopy(options.input_path.extension().string());
+	const std::string extension = XER::Engine::Helper::String::ToLowerAscii(options.input_path.extension().string());
 	if (extension == ".raw" || extension == ".pcm") {
 		if (!DecodeRawPcmFile(options.input_path, options.raw_sample_rate, &decoded_audio, error_out)) {
 			return false;
@@ -834,7 +828,7 @@ bool AudioSourceLoader::Load(
 		if (extension == ".wav") {
 			decoded = DecodeWavPcmFile(options.input_path, &decoded_audio, &wav_error);
 		}
-		if (!decoded && engine::bridge::ffmpeg::IsAvailable()) {
+		if (!decoded && XER::engine::bridge::ffmpeg::IsAvailable()) {
 			decoded = DecodeWithFFmpeg(options.input_path, &decoded_audio, &ffmpeg_error);
 		}
 		if (!decoded) {
@@ -889,4 +883,4 @@ bool AudioSourceLoader::Load(
 	return !output->samples.empty();
 }
 
-}  // namespace Engine::Audio::Core
+}  // namespace XER::Engine::Audio::Core

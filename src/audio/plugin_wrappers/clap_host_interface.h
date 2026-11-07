@@ -9,7 +9,7 @@
 #include "clap_external_plugin_host.h"
 #include "plugin_builtin_host.h"
 
-namespace Engine::Audio::Plugin {
+namespace XER::Engine::Audio::Plugin {
 
 class ClapHostInterface {
 public:
@@ -30,7 +30,7 @@ private:
         kExternal,
     };
 
-    mutable AsyncIO::IO::Sync::MutexWrapper mutex_{"clap_host"};
+    mutable XER::AsyncIO::IO::Sync::MutexWrapper mutex_{"clap_host"};
     BuiltinPluginHost builtin_host_;
     std::unique_ptr<ClapExternalPluginHost> external_host_;
     double sample_rate_ = 44100.0;
@@ -39,4 +39,4 @@ private:
     Backend backend_ = Backend::kNone;
 };
 
-}  // namespace Engine::Audio::Plugin
+}  // namespace XER::Engine::Audio::Plugin

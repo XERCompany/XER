@@ -4,7 +4,7 @@
  */
 #include "content/network/spdy/spdy_stream.h"
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 void SpdyStream::OnDataReceived(const uint8_t* data, size_t len, bool fin) {
     fin_ = fin;
@@ -15,4 +15,4 @@ void SpdyStream::Reset(SpdyRstStreamStatus /*status*/) {
     fin_ = true;
 }
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

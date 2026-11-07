@@ -11,7 +11,7 @@
 
 #include "content/network/socket/tcp_client_socket.h"
 
-namespace network::socket {
+namespace XER::network::socket {
 
 class TcpClientSocket;  // forward declaration
 
@@ -69,4 +69,4 @@ private:
     uint16_t listen_port_ = 0;
 };
 
-}  // namespace network::socket
+}  // namespace XER::network::socket

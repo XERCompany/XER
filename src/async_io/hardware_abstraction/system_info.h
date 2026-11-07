@@ -18,7 +18,7 @@
 #include <mutex>
 #include <thread>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 // One coherent snapshot of the entire machine. SystemInfoProvider owns one
 // instance of every subsystem provider and produces this snapshot on demand.
@@ -147,4 +147,4 @@ private:
     std::promise<SystemSnapshot> async_promise_;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

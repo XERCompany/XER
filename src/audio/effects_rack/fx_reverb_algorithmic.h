@@ -8,7 +8,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "audio/dsp_algorithms/dsp_delay_line_circular.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 class ReverbAlgorithmic {
 public:
@@ -30,12 +30,12 @@ private:
 	float room_size_;
 	float damping_;
 	float mix_;
-	std::array<Engine::Audio::DSP::CircularDelayLine, 6> combs_;
-	std::array<Engine::Audio::DSP::CircularDelayLine, 3> allpasses_;
-	std::array<Engine::Audio::DSP::CircularDelayLine, 4> early_reflections_;
+	std::array<XER::Engine::Audio::DSP::CircularDelayLine, 6> combs_;
+	std::array<XER::Engine::Audio::DSP::CircularDelayLine, 3> allpasses_;
+	std::array<XER::Engine::Audio::DSP::CircularDelayLine, 4> early_reflections_;
 	std::array<float, 6> comb_damping_state_{};
 	std::array<float, 3> allpass_state_{};
-	AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

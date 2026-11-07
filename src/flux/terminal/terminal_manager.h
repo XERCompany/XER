@@ -6,7 +6,7 @@
 
 #include "flux/terminal/terminal_buffer.h"
 
-namespace flux::terminal {
+namespace XER::flux::terminal {
 
 class TerminalManager {
 public:
@@ -29,4 +29,4 @@ private:
 	TerminalBuffer buffer_;
 };
 
-}  // namespace flux::terminal
+}  // namespace XER::flux::terminal

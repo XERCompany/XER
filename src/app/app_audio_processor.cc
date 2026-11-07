@@ -1,6 +1,6 @@
 #include "app/app_audio_processor.h"
 
-namespace App {
+namespace XER::App {
 
 AudioProcessor::AudioProcessor()
     : initialized_(false) {
@@ -61,4 +61,4 @@ std::vector<std::string> AudioProcessor::GetAvailablePresets() const {
     };
 }
 
-}  // namespace App
+}  // namespace XER::App

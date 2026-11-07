@@ -7,7 +7,7 @@
 #include <string>
 #include "content/network/cert/cert_verify_result.h"
 
-namespace network::cert {
+namespace XER::network::cert {
 
 // Verifies SSL/TLS certificate chains.
 class CertVerifier {
@@ -24,4 +24,4 @@ public:
     static bool IsTimeValid(const CertVerifyResult& result);
 };
 
-}  // namespace network::cert
+}  // namespace XER::network::cert

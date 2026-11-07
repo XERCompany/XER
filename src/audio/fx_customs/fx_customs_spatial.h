@@ -5,7 +5,7 @@
 
 #include "audio/effects_rack/custom_effect_struct.h"
 
-namespace Engine::Audio::FX::Customs {
+namespace XER::Engine::Audio::FX::Customs {
 
 bool IsFxCustomSpatialPreset(const std::string& normalized_name);
 void ApplyFxCustomSpatialVariant(
@@ -20,4 +20,4 @@ bool ApplyFxCustomSharedSpatialBus(
 	CustomEffectReport* aggregate_report,
 	std::string* error_out);
 
-}  // namespace Engine::Audio::FX::Customs
+}  // namespace XER::Engine::Audio::FX::Customs

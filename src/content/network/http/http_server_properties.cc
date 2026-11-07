@@ -4,7 +4,7 @@
  */
 #include "content/network/http/http_server_properties.h"
 
-namespace network::http {
+namespace XER::network::http {
 
 HttpServerProperties& HttpServerProperties::Instance() {
     static HttpServerProperties inst;
@@ -37,4 +37,4 @@ void HttpServerProperties::Clear() {
     https_required_.clear();
 }
 
-}  // namespace network::http
+}  // namespace XER::network::http

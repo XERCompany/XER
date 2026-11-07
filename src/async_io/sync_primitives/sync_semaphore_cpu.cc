@@ -3,7 +3,7 @@
 #include <chrono>
 #include <stdexcept>
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 SyncSemaphoreCpu::SyncSemaphoreCpu(int initial_count, int max_count,
                                    const std::string& name)
@@ -65,4 +65,4 @@ int SyncSemaphoreCpu::GetCount() const {
     return count_;
 }
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

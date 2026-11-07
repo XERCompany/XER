@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace network::quic {
+namespace XER::network::quic {
 
 struct QuicServerId {
     std::string host;
@@ -19,4 +19,4 @@ struct QuicServerId {
     bool operator<(const QuicServerId& other) const;
 };
 
-}  // namespace network::quic
+}  // namespace XER::network::quic

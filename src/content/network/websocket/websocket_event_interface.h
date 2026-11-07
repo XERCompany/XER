@@ -8,7 +8,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace network::websocket {
+namespace XER::network::websocket {
 
 // Observer interface for WebSocket lifecycle events.
 class WebSocketEventInterface {
@@ -29,4 +29,4 @@ public:
     virtual void OnFailChannel(const std::string& message) {}
 };
 
-}  // namespace network::websocket
+}  // namespace XER::network::websocket

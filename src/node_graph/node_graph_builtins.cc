@@ -310,6 +310,28 @@ void RegisterBuiltinNodes(NodeTypeRegistry& r) {
                     },
                     {}, /*pure=*/false));
  
+    // ── I/O ───────────────────────────────────────────────
+    // File-picker node: the editor draws a "…" browse button on its `path`
+    // parameter row which opens a native open-file dialog and stores the
+    // result into the param. Evaluation only reads the param — the executor
+    // stays headless and never touches UI.
+    r.Register(Make("io.file_open", "Open File…", "I/O",
+                    "Picks a file via the node's browse button; outputs its path",
+                    {},
+                    {Out("path", VT::kString), Out("name", VT::kString),
+                     Out("directory", VT::kString)},
+                    [](EvalContext& c) {
+                        const std::string p = c.Param("path").AsString();
+                        c.Output("path", p);
+                        const auto pos = p.find_last_of("/\\");
+                        c.Output("directory",
+                                 pos == std::string::npos ? std::string() : p.substr(0, pos));
+                        c.Output("name",
+                                 pos == std::string::npos ? p : p.substr(pos + 1));
+                        return true;
+                    },
+                    {{"path", Value(""), {}}}));
+
     // ── Graph (subgraphs) ─────────────────────────────────
     r.Register(Make("graph.input", "Graph Input", "Graph", "Value supplied by the parent graph", {},
                     {Out("value", VT::kAny)},

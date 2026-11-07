@@ -10,7 +10,7 @@
 
 #include "async_io/io_buffer_pool.h"
 
-namespace network::transport {
+namespace XER::network::transport {
 
 // Reference-counted I/O buffer backed by IOBufferPool.
 class IOBuffer {
@@ -29,9 +29,9 @@ public:
     const uint8_t* end()   const { return data_ + size_; }
 
 private:
-    AsyncIO::IO::Async::IOBufferPool::BufferPtr holder_;
+    XER::AsyncIO::IO::Async::IOBufferPool::BufferPtr holder_;
     uint8_t* data_  = nullptr;
     size_t   size_  = 0;
 };
 
-}  // namespace network::transport
+}  // namespace XER::network::transport

@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 struct DiskInfo {
     std::string device;         // "C:", "/dev/sda1", etc.
@@ -47,4 +47,4 @@ private:
     bool initialized_ = false;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware

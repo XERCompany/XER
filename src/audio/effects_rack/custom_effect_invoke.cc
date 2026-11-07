@@ -2,7 +2,7 @@
 
 #include "custom_effect_fxdata.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 bool InvokeCustomEffectParameter(
 	CustomEffectPackage* package,
@@ -22,4 +22,4 @@ bool InvokeCustomEffectParameter(
 	return false;
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

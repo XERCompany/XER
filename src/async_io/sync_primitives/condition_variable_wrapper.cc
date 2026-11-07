@@ -1,6 +1,6 @@
 #include "condition_variable_wrapper.h"
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 ConditionVariableWrapper::ConditionVariableWrapper(const std::string& name)
     : name_(name), notify_count_(0), wait_count_(0) {}
@@ -28,4 +28,4 @@ bool ConditionVariableWrapper::WaitFor(std::unique_lock<std::mutex>& lock, const
     return result;
 }
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

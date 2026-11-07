@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace network::http {
+namespace XER::network::http {
 
 // Trim ASCII whitespace (space, tab, \r, \n) from both ends of string.
 // @param s     Input string
@@ -50,4 +50,4 @@ bool IsMethodIdempotent(const std::string& method);
 // @param status_code   HTTP status code (e.g., 200, 404, 500)
 // @return              Reason phrase (e.g., "OK", "Not Found", "Unknown")
 
-}  // namespace network::http
+}  // namespace XER::network::http

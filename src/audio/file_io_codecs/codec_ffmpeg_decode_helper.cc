@@ -1,4 +1,5 @@
 #include "codec_ffmpeg_decode_helper.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
 #include <chrono>
@@ -13,7 +14,7 @@
 
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
-namespace Engine::Audio::CodecIO::detail {
+namespace XER::Engine::Audio::CodecIO::detail {
 
 namespace {
 
@@ -26,15 +27,8 @@ struct DecodedAudioData {
 	}
 };
 
-std::string ToLowerCopy(std::string value) {
-	std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
-		return static_cast<char>(std::tolower(ch));
-	});
-	return value;
-}
-
 std::string CanonicalSampleFormat(std::string sample_format) {
-	sample_format = ToLowerCopy(std::move(sample_format));
+	sample_format = XER::Engine::Helper::String::ToLowerAscii(std::move(sample_format));
 	if (!sample_format.empty() && sample_format.back() == 'p') {
 		sample_format.pop_back();
 	}
@@ -99,7 +93,7 @@ bool DecodeSample(const std::string& sample_format, const std::uint8_t* data, fl
 }
 
 bool AppendFrameChannels(
-	const engine::bridge::ffmpeg::AudioFrameInfo& frame,
+	const XER::engine::bridge::ffmpeg::AudioFrameInfo& frame,
 	DecodedAudioData* decoded_audio,
 	std::string* error_out) {
 	if (decoded_audio == nullptr || frame.channels <= 0 || frame.sample_count <= 0) {
@@ -262,7 +256,7 @@ bool DecodeAudioBufferWithFfmpeg(
 		}
 		return false;
 	}
-	if (!engine::bridge::ffmpeg::IsAvailable()) {
+	if (!XER::engine::bridge::ffmpeg::IsAvailable()) {
 		if (error_out != nullptr) {
 			*error_out = "ffmpeg bridge is unavailable";
 		}
@@ -287,8 +281,8 @@ bool DecodeAudioBufferWithFfmpeg(
 		}
 	}
 
-	std::vector<engine::bridge::ffmpeg::AudioFrameInfo> frames;
-	if (!engine::bridge::ffmpeg::DecodeAudioFrames(temp_path.path().string(), -1, 0, &frames, error_out)) {
+	std::vector<XER::engine::bridge::ffmpeg::AudioFrameInfo> frames;
+	if (!XER::engine::bridge::ffmpeg::DecodeAudioFrames(temp_path.path().string(), -1, 0, &frames, error_out)) {
 		return false;
 	}
 	if (frames.empty()) {
@@ -325,4 +319,4 @@ bool DecodeAudioBufferWithFfmpeg(
 	return !output->empty();
 }
 
-}  // namespace Engine::Audio::CodecIO::detail
+}  // namespace XER::Engine::Audio::CodecIO::detail

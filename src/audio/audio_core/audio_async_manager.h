@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine {
+namespace XER::Engine {
 namespace Audio {
 namespace Core {
 
@@ -66,4 +66,4 @@ private:
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace Engine
+}  // namespace XER::Engine

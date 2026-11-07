@@ -8,7 +8,7 @@
 #include <string>
 #include "content/network/transport/transport_client_socket.h"
 
-namespace network::websocket {
+namespace XER::network::websocket {
 
 // Performs the WebSocket HTTP Upgrade handshake (RFC 6455 §4).
 class WebSocketHandshakeStream {
@@ -26,4 +26,4 @@ private:
     static std::string ExpectedAcceptKey(const std::string& sec_key);
 };
 
-}  // namespace network::websocket
+}  // namespace XER::network::websocket

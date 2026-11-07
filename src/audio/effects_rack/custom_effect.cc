@@ -13,7 +13,7 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 
 namespace {
 
@@ -121,7 +121,7 @@ bool RunCustomEffectPackageInterleaved(
 
 	const size_t frame_count = input.size() / static_cast<size_t>(channels);
 	std::vector<std::vector<float>> input_channels;
-	if (!Engine::Audio::Core::AudioInterleaveProcessor::DeinterleavePlanar(
+	if (!XER::Engine::Audio::Core::AudioInterleaveProcessor::DeinterleavePlanar(
 			input.data(),
 			channels,
 			frame_count,
@@ -166,7 +166,7 @@ bool RunCustomEffectPackageInterleaved(
 	for (int channel_index = 0; channel_index < channels; ++channel_index) {
 		channel_ptrs[static_cast<size_t>(channel_index)] = output_channels[static_cast<size_t>(channel_index)].data();
 	}
-	if (!Engine::Audio::Core::AudioInterleaveProcessor::Interleave(
+	if (!XER::Engine::Audio::Core::AudioInterleaveProcessor::Interleave(
 			channel_ptrs.data(),
 			channels,
 			frame_count,
@@ -183,4 +183,4 @@ bool RunCustomEffectPackageInterleaved(
 	return true;
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

@@ -45,6 +45,9 @@ public:
     bool Disconnect(LinkId id);
     bool MoveNode(NodeId id, double x, double y);
     bool SetParam(NodeId id, const std::string& name, Value value);
+    // Visual group frames — undoable like every other edit.
+    bool AddGroup(Group group);
+    bool RemoveGroup(uint64_t group_id);
     // Collapses the given nodes into a subgraph node, rewiring external links
     // through generated graph.input / graph.output nodes.
     NodeId CollapseToSubgraph(const std::vector<NodeId>& nodes, std::string* error_out = nullptr);

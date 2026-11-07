@@ -4,7 +4,7 @@
  */
 #include "content/network/spdy/spdy_session.h"
 
-namespace network::spdy {
+namespace XER::network::spdy {
 
 SpdyStream* SpdySession::CreateStream() {
     std::lock_guard<std::mutex> lk(mu_);
@@ -32,4 +32,4 @@ void SpdySession::Close() {
     closed_ = true;
 }
 
-}  // namespace network::spdy
+}  // namespace XER::network::spdy

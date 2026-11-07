@@ -14,7 +14,7 @@
 #include <sys/socket.h>
 #endif
 
-namespace network::socket::platform {
+namespace XER::network::socket::platform {
 
 // Address information structure
 struct AddressInfo {
@@ -138,4 +138,4 @@ private:
     SocketPlatform& operator=(const SocketPlatform&) = delete;
 };
 
-} // namespace network::socket::platform
+} // namespace XER::network::socket::platform

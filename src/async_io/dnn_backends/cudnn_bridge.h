@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace AsyncIO::IO::DNNBackends {
+namespace XER::AsyncIO::IO::DNNBackends {
 
 // Bridge to a cuDNN handle. When built with ENABLE_CUDNN=ON, uses the
 // linked cuDNN directly. Otherwise, falls back to dynamic loading of
@@ -29,4 +29,4 @@ private:
     std::string lastError_;
 };
 
-} // namespace AsyncIO::IO::DNNBackends
+} // namespace XER::AsyncIO::IO::DNNBackends

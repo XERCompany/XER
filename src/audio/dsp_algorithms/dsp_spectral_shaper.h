@@ -8,7 +8,7 @@
 
 #include "dsp_stft_processor.h"
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 class SpectralShaper {
 public:
@@ -27,7 +27,7 @@ private:
 	size_t hop_size_;
 	STFTProcessor stft_processor_;
 	std::vector<float> shaping_curve_;
-	AsyncIO::IO::Sync::MutexWrapper mutex_;
+	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 };
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

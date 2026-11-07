@@ -9,7 +9,7 @@
 #include "audio/effects_rack/fx_mod_chorus.h"
 #include "plugin_parameter_bridge.h"
 
-namespace Engine::Audio::Plugin {
+namespace XER::Engine::Audio::Plugin {
 
 class BuiltinPluginHost {
 public:
@@ -40,9 +40,9 @@ private:
 	void RegisterParametricEqParameters();
 
 	PluginParameterBridge parameter_bridge_;
-	Engine::Audio::FX::DynamicsCompressor compressor_;
-	Engine::Audio::FX::ModChorus chorus_;
-	Engine::Audio::FX::ParametricEQ parametric_eq_;
+	XER::Engine::Audio::FX::DynamicsCompressor compressor_;
+	XER::Engine::Audio::FX::ModChorus chorus_;
+	XER::Engine::Audio::FX::ParametricEQ parametric_eq_;
 	double sample_rate_ = 44100.0;
 	uint32_t max_block_size_ = 512;
 	Kind kind_ = Kind::kNone;
@@ -51,4 +51,4 @@ private:
 	bool effect_initialized_ = false;
 };
 
-}  // namespace Engine::Audio::Plugin
+}  // namespace XER::Engine::Audio::Plugin

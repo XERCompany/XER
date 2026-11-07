@@ -4,10 +4,10 @@
  */
 #include "content/network/async/async_operation_manager.h"
 
-namespace network::async {
+namespace XER::network::async {
 
 AsyncOperationManager::AsyncOperationManager()
-    : thread_pool_(AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {
+    : thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {
 }
 
 AsyncOperationManager& AsyncOperationManager::Instance() {
@@ -20,7 +20,7 @@ void AsyncOperationManager::Enqueue(std::function<void()> operation) {
     thread_pool_.Enqueue(std::move(operation));
 }
 
-AsyncIO::IO::Async::IOThreadPool& AsyncOperationManager::GetThreadPool() {
+XER::AsyncIO::IO::Async::IOThreadPool& AsyncOperationManager::GetThreadPool() {
     return thread_pool_;
 }
 
@@ -66,4 +66,4 @@ void AsyncOperationWrapper::WrapVoid(std::function<void()> operation,
     });
 }
 
-} // namespace network::async
+} // namespace XER::network::async

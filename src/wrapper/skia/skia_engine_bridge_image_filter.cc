@@ -10,7 +10,7 @@
 #include <memory>
 #endif
 
-namespace engine::bridge::skia {
+namespace XER::engine::bridge::skia {
 
 #if ENGINE_HAS_SKIA_BRIDGE
     

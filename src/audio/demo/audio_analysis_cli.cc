@@ -43,7 +43,7 @@ int main(int argc, char** argv) {
 		return 0;
 	}
 
-	Engine::Audio::Demo::AudioAnalysisSmokeOptions options;
+	XER::Engine::Audio::Demo::AudioAnalysisSmokeOptions options;
 	std::string error;
 
 	for (int index = 1; index < argc; ++index) {
@@ -115,7 +115,7 @@ int main(int argc, char** argv) {
 	}
 
 	std::string report;
-	if (!Engine::Audio::Demo::RunAudioAnalysisSmoke(options, &report, &error)) {
+	if (!XER::Engine::Audio::Demo::RunAudioAnalysisSmoke(options, &report, &error)) {
 		std::cerr << error << "\n";
 		return 1;
 	}

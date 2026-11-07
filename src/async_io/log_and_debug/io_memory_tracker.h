@@ -7,7 +7,7 @@
 #include <vector>
 #include <memory>
 
-namespace AsyncIO::IO::LogDebug {
+namespace XER::AsyncIO::IO::LogDebug {
 
 struct AllocationInfo {
     uint64_t address;
@@ -55,4 +55,4 @@ private:
     uint64_t GetCurrentAllocatedBytes() const;
 };
 
-}  // namespace AsyncIO::IO::LogDebug
+}  // namespace XER::AsyncIO::IO::LogDebug

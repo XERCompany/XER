@@ -8,7 +8,7 @@
 
 #include "audio_sample_rate_converter.h"
 
-namespace Engine {
+namespace XER::Engine {
 namespace Audio {
 namespace Core {
 
@@ -51,4 +51,4 @@ public:
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace Engine
+}  // namespace XER::Engine

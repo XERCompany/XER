@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace network::websocket {
+namespace XER::network::websocket {
 
 class WebSocketNetworkDelegate {
 public:
@@ -24,4 +24,4 @@ public:
 
 class DefaultWebSocketNetworkDelegate : public WebSocketNetworkDelegate {};
 
-}  // namespace network::websocket
+}  // namespace XER::network::websocket

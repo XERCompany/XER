@@ -1,6 +1,7 @@
 #ifndef XER_UI_WIDGETS_PROGRESS_H
 #define XER_UI_WIDGETS_PROGRESS_H
 
+#include "motion/motion.h"
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {
@@ -14,6 +15,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    void Tick(double dt_seconds) override;
     bool HandleEvent(const Event& event) override;
 
     Layout::Size GetMinSize() const override;
@@ -22,6 +24,8 @@ public:
 
 private:
     float value_;
+    // Displayed value chases value_ on an ease-out tween.
+    Motion::Tween shown_;
 };
 
 } // namespace XER::UI::Widgets

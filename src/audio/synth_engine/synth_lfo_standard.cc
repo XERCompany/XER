@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 void SynthLfoStandard::SetRateHz(float rate_hz) {
     rate_hz_ = std::max(rate_hz, 0.01f);
@@ -21,4 +21,4 @@ float SynthLfoStandard::Process(float sample_rate) {
     return out;
 }
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

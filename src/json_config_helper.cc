@@ -1,4 +1,5 @@
 #include "json_config_helper.h"
+#include "helper/string_utils.h"
 
 #include <cctype>
 #include <fstream>
@@ -92,7 +93,7 @@ std::vector<std::string> JsonConfigHelper::GetJsonConfigStringList(
     if (value->isArray()) {
         for (const Json::Value& item : *value) {
             if (item.isString()) {
-                const std::string text = TrimCopy(item.asString());
+                const std::string text = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(item.asString());
                 if (!text.empty()) {
                     values.push_back(text);
                 }
@@ -141,23 +142,15 @@ bool JsonConfigHelper::ReadJsonConfigFile(
 }
 
 std::string JsonConfigHelper::NormalizeConfigToken(const std::string& text) {
+    const std::string lowered = XER::Engine::Helper::String::ToLowerAscii(text);
     std::string normalized;
-    for (char ch : text) {
-        const unsigned char byte = static_cast<unsigned char>(ch);
-        if (std::isalnum(byte)) {
-            normalized.push_back(static_cast<char>(std::tolower(byte)));
+    normalized.reserve(lowered.size());
+    for (unsigned char ch : lowered) {
+        if (std::isalnum(ch)) {
+            normalized.push_back(static_cast<char>(ch));
         }
     }
     return normalized;
-}
-
-std::string JsonConfigHelper::TrimCopy(const std::string& text) {
-    const auto first = text.find_first_not_of(" \t\r\n");
-    if (first == std::string::npos) {
-        return {};
-    }
-    const auto last = text.find_last_not_of(" \t\r\n");
-    return text.substr(first, last - first + 1);
 }
 
 void JsonConfigHelper::AppendCsvStrings(
@@ -169,7 +162,7 @@ void JsonConfigHelper::AppendCsvStrings(
     std::string token;
     for (char ch : text) {
         if (ch == ',') {
-            const std::string trimmed = TrimCopy(token);
+            const std::string trimmed = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(token);
             if (!trimmed.empty()) {
                 output->push_back(trimmed);
             }
@@ -178,7 +171,7 @@ void JsonConfigHelper::AppendCsvStrings(
         }
         token.push_back(ch);
     }
-    const std::string trimmed = TrimCopy(token);
+    const std::string trimmed = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(token);
     if (!trimmed.empty()) {
         output->push_back(trimmed);
     }

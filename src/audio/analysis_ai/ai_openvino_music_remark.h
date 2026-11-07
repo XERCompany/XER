@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Audio::AnalysisAI {
+namespace XER::Engine::Audio::AnalysisAI {
 
 struct MusicRemarkMetrics {
 	float bpm = 0.0f;
@@ -98,4 +98,4 @@ MusicRemarkMixPlan BuildOpenVinoMusicRemarkMixPlan(
 	const MusicRemarkMetrics& metrics,
 	const MusicRemarkOptions& options = MusicRemarkOptions{});
 
-}  // namespace Engine::Audio::AnalysisAI
+}  // namespace XER::Engine::Audio::AnalysisAI

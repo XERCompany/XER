@@ -6,12 +6,12 @@
 
 #include <sstream>
 
-namespace Engine {
+namespace XER::Engine {
 namespace Audio {
 namespace Core {
 
 AudioCacheManager::AudioCacheManager()
-    : cache_manager_(Engine::Cache::CacheManager::Instance()) {}
+    : cache_manager_(XER::Engine::Cache::CacheManager::Instance()) {}
 
 AudioCacheManager& AudioCacheManager::Instance() {
     static AudioCacheManager instance;
@@ -247,4 +247,4 @@ size_t AudioCacheManager::GetAnalysisCount() const {
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace Engine
+}  // namespace XER::Engine

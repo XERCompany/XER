@@ -9,7 +9,9 @@
 #include "content/network/socket/platform/socket_platform.h"
 #include "cache/cache_manager.h"
 
-namespace App {
+using XER::AppCommand;
+
+namespace XER::App {
 
 Application::Application()
     : logger_(nullptr) {
@@ -19,15 +21,15 @@ Application::~Application() {
 }
 
 bool Application::Initialize(int argc, char** argv) {
-    flux::core::FluxConfigFromEnvironment();
+    XER::flux::core::FluxConfigFromEnvironment();
 
-    flux_core_ = flux::core::FluxCore();
-    flux::core::FluxConfig config = flux_core_.context().config();
+    flux_core_ = XER::flux::core::FluxCore();
+    XER::flux::core::FluxConfig config = flux_core_.context().config();
 
     logger_ = &flux_core_.context().logger();
 
     config.application_name = "Editor";
-    logger_->ShouldLog(flux::core::LogLevel::kInfo);
+    logger_->ShouldLog(XER::flux::core::LogLevel::kInfo);
     logger_->UpdateConfig(config);
 
     flux_core_.context().RefreshTerminalWindow();
@@ -55,14 +57,14 @@ bool Application::InitializeSystems() {
     std::string error;
     
     // Socket platform
-    auto& socket_platform = network::socket::platform::SocketPlatform::GetInstance();
+    auto& socket_platform = XER::network::socket::platform::SocketPlatform::GetInstance();
     if (!socket_platform.Initialize(&error)) {
         logger_->Error("Network", error);
         return false;
     }
     
     // Cache manager
-    auto& cache_manager = Engine::Cache::CacheManager::Instance();
+    auto& cache_manager = XER::Engine::Cache::CacheManager::Instance();
     logger_->Info("main", "FluxCore initialized successfully.");
     logger_->Info("Cache", "Cache root directory: " + cache_manager.RootDirectory().string());
     
@@ -104,11 +106,7 @@ bool Application::ParseCommandLine(int argc, char** argv) {
         logger_->Info("Audio", "Audio config file: " + parsed.audio_config_file);
     }
     
-    if (parsed.audio_input_path.empty()) {
-        logger_->Error("Audio", "Audio input path is empty");
-        return false;
-    }
-    
+    // Audio input is optional — the node editor runs without it.
     audio_input_path_ = parsed.audio_input_path;
     audio_config_file_ = parsed.audio_config_file;
     
@@ -116,6 +114,10 @@ bool Application::ParseCommandLine(int argc, char** argv) {
 }
 
 bool Application::SetupAudioGraph() {
+    if (audio_input_path_.empty()) {
+        logger_->Info("NodeGraph", "No audio input — skipping audio graph setup");
+        return true;
+    }
     // Register audio input node
     if (!node_graph_manager_.RegisterAudioInputNode(audio_input_path_)) {
         logger_->Error("NodeGraph", "Failed to register audio input node");
@@ -153,13 +155,13 @@ bool Application::SetupUI() {
     }
 
     // Create main window
-    if (!app_ui_.CreateMainWindow("XER Audio Editor", 800, 200)) {
+    if (!app_ui_.CreateMainWindow("XER Node Editor", 1280, 800)) {
         logger_->Error("UI", "Failed to create main window");
         return false;
     }
 
-    // Setup audio player widget
-    app_ui_.SetupAudioPlayerWidget(&audio_controller_);
+    // Node graph editor is the only content.
+    app_ui_.SetupNodeGraphEditor();
 
     // Show window
     app_ui_.ShowWindow();
@@ -190,21 +192,31 @@ bool Application::StartPlayback() {
 }
 
 int Application::Run() {
-    if (!StartPlayback()) {
-        return 1;
-    }
+    const bool has_audio = !audio_input_path_.empty();
 
-    // Run UI event loop if UI is initialized
+    // Run UI event loop if UI is initialized; audio playback (when an input
+    // file was given) is best-effort and must not block the editor.
     if (app_ui_.IsInitialized()) {
+        if (has_audio && !StartPlayback()) {
+            logger_->Warning("AudioController", "Playback failed — continuing in editor");
+        }
         logger_->Info("Main", "Starting UI event loop");
         return app_ui_.Run();
+    }
+
+    if (!has_audio) {
+        logger_->Error("Main", "No audio input and no UI — nothing to do");
+        return 1;
+    }
+    if (!StartPlayback()) {
+        return 1;
     }
 
     // Fallback: playback without UI (already started by StartPlayback)
     logger_->Info("AudioController", "Waiting for playback to complete");
 
     // Wait for playback to complete
-    while (audio_controller_.GetState() == Content::Audio::PlaybackState::kPlaying) {
+    while (audio_controller_.GetState() == XER::Content::Audio::PlaybackState::kPlaying) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
 
@@ -212,4 +224,4 @@ int Application::Run() {
     return 0;
 }
 
-}  // namespace App
+}  // namespace XER::App

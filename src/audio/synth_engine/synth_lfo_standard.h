@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Engine::Audio::Synth {
+namespace XER::Engine::Audio::Synth {
 
 class SynthLfoStandard {
 public:
@@ -12,4 +12,4 @@ private:
     float phase_ = 0.0f;
 };
 
-}  // namespace Engine::Audio::Synth
+}  // namespace XER::Engine::Audio::Synth

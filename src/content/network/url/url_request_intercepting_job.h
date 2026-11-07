@@ -8,7 +8,7 @@
 #include <string>
 #include "content/network/url/url_request.h"
 
-namespace network::url {
+namespace XER::network::url {
 
 using InterceptorFn = std::function<bool(const URLRequest& req,
                                          URLResponse* resp)>;
@@ -28,4 +28,4 @@ private:
     InterceptorFn interceptor_;
 };
 
-}  // namespace network::url
+}  // namespace XER::network::url

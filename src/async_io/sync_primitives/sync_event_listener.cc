@@ -1,6 +1,6 @@
 #include "sync_event_listener.h"
 
-namespace AsyncIO::IO::Sync {
+namespace XER::AsyncIO::IO::Sync {
 
 SyncEventListener::SyncEventListener(const std::string& event_name)
     : triggered_(false), event_name_(event_name) {}
@@ -35,4 +35,4 @@ bool SyncEventListener::IsTriggered() const {
     return triggered_;
 }
 
-}  // namespace AsyncIO::IO::Sync
+}  // namespace XER::AsyncIO::IO::Sync

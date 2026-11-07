@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace Engine::Cache {
+namespace XER::Engine::Cache {
 
 struct CacheConfiguration {
 	std::filesystem::path directory;
@@ -14,4 +14,4 @@ struct CacheConfiguration {
 CacheConfiguration CacheConfigurationFromEnvironment();
 bool PrepareCacheDirectory(const CacheConfiguration& config, std::string* error_out);
 
-}  // namespace Engine::Cache
+}  // namespace XER::Engine::Cache

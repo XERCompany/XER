@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::Audio::MIDI {
+namespace XER::Engine::Audio::MIDI {
 
 void MidiPatternSequencer::SetPattern(const std::vector<MidiEvent>& pattern) {
     pattern_ = pattern;
@@ -50,4 +50,4 @@ std::vector<MidiEvent> MidiPatternSequencer::CollectRange(uint32_t start_tick, u
     return out;
 }
 
-}  // namespace Engine::Audio::MIDI
+}  // namespace XER::Engine::Audio::MIDI

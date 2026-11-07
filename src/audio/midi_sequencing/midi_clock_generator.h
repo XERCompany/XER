@@ -4,7 +4,7 @@
 
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace Engine::Audio::MIDI {
+namespace XER::Engine::Audio::MIDI {
 
 class MidiClockGenerator {
 public:
@@ -14,7 +14,7 @@ public:
 private:
     double tempo_bpm_ = 120.0;
     double pulse_accumulator_ = 0.0;
-    AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+    XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace Engine::Audio::MIDI
+}  // namespace XER::Engine::Audio::MIDI

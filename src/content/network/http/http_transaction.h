@@ -8,7 +8,7 @@
 #include <string>
 #include "content/network/url/url_request.h"
 
-namespace network::http {
+namespace XER::network::http {
 
 struct HttpTransactionResult {
     bool        ok = false;
@@ -31,4 +31,4 @@ public:
                       HttpTransactionCallback callback);
 };
 
-}  // namespace network::http
+}  // namespace XER::network::http

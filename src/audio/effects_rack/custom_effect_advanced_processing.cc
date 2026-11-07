@@ -1,3 +1,4 @@
+#include "helper/string_utils.h"
 #include "custom_effect_advanced_processing.h"
 
 #include <algorithm>
@@ -8,17 +9,18 @@
 #include "custom_effect_accel.h"
 #include "custom_effect_core.h"
 
-namespace Engine::Audio::FX {
+namespace XER::Engine::Audio::FX {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 
 std::string NormalizeName(const std::string& text) {
+	std::string lowered = XER::Engine::Helper::String::ToLowerAscii(text);
 	std::string result;
-	result.reserve(text.size());
-	for (unsigned char ch : text) {
+	result.reserve(lowered.size());
+	for (unsigned char ch : lowered) {
 		if (std::isalnum(ch)) {
-			result.push_back(static_cast<char>(std::tolower(ch)));
+			result.push_back(static_cast<char>(ch));
 		}
 	}
 	return result;
@@ -300,4 +302,4 @@ bool TryRunAdvancedCustomEffectPackage(
 	return true;
 }
 
-}  // namespace Engine::Audio::FX
+}  // namespace XER::Engine::Audio::FX

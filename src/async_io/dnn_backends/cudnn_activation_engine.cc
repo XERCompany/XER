@@ -2,7 +2,7 @@
   
 #include <cudnn.h> 
 
-namespace AsyncIO::IO::DNNBackends {
+namespace XER::AsyncIO::IO::DNNBackends {
 
 namespace {
  
@@ -79,4 +79,4 @@ bool CuDnnActivationEngine::IsReady() const {
     return bridge_.IsReady();
 }
 
-} // namespace AsyncIO::IO::DNNBackends
+} // namespace XER::AsyncIO::IO::DNNBackends

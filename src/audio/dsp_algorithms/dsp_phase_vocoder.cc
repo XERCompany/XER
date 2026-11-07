@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::Audio::DSP {
+namespace XER::Engine::Audio::DSP {
 
 namespace {
 
@@ -106,4 +106,4 @@ std::string PhaseVocoder::GetReport() const {
 		", stft_latency=" + std::to_string(stft_processor_.GetLatencySamples());
 }
 
-}  // namespace Engine::Audio::DSP
+}  // namespace XER::Engine::Audio::DSP

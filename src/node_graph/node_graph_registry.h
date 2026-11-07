@@ -79,5 +79,8 @@ private:
 };
  
 void RegisterBuiltinNodes(NodeTypeRegistry& registry);
+// Extended library: full math/string/array coverage plus block-based audio
+// DSP. Lives in node_graph_ext.cc; may override builtin types.
+void RegisterExtendedNodes(NodeTypeRegistry& registry);
  
 }  // namespace XER::NodeGraph

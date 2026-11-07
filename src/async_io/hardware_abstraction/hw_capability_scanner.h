@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace AsyncIO::IO::Hardware {
+namespace XER::AsyncIO::IO::Hardware {
 
 struct HwCapabilities {
     bool    has_sse4   = false;
@@ -29,4 +29,4 @@ private:
     ~HwCapabilityScanner() = default;
 };
 
-}  // namespace AsyncIO::IO::Hardware
+}  // namespace XER::AsyncIO::IO::Hardware
