@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <mutex>
 #include <stdexcept>
 #include <unordered_map>
@@ -406,6 +407,18 @@ private:
                 }
                 renderer_->SetDpi(dpi_);
                 renderer_->SetClearColor(background);
+                static bool logged_paint_once = false;
+                if (!logged_paint_once) {
+                    logged_paint_once = true;
+                    RECT cr{};
+                    GetClientRect(hwnd, &cr);
+                    fprintf(stderr,
+                            "[DEBUG-paint] dpi=%u client=%ldx%ld root_children=%zu\n",
+                            static_cast<unsigned>(dpi_),
+                            static_cast<long>(cr.right),
+                            static_cast<long>(cr.bottom),
+                            root_widget_->GetChildren().size());
+                }
                 widget_tree_.Render(*renderer_, theme_.GetTokens());
             }
             last_render_error_.clear();
@@ -443,6 +456,7 @@ private:
         output += message;
         output += "\n";
         OutputDebugStringA(output.c_str());
+        fprintf(stderr, "[DEBUG-paint] render error: %s\n", message);
     }
 
     HWND hwnd_;

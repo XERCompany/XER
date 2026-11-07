@@ -18,13 +18,14 @@ public:
     bool Run(const URLRequest& request,
              URLResponse* response,
              std::string* error);
-
-private:
+             
     bool ParseURL(const std::string& url,
                   std::string* scheme,
                   std::string* host,
                   uint16_t* port,
                   std::string* path) const;
+
+private:
 
     const URLRequestContext& ctx_;
 };

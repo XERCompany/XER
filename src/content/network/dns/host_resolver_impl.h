@@ -44,7 +44,7 @@ private:
     DnsConfig config_;
     mutable std::mutex cache_mu_;
     std::unordered_map<std::string, CacheEntry> cache_;
-    IO::AsyncIO::IOThreadPool pool_{2};
+    AsyncIO::IO::Async::IOThreadPool pool_{2};
 };
 
 }  // namespace network::dns

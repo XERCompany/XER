@@ -30,6 +30,7 @@ target_link_libraries(XER_AudioCore
         unofficial::pthreadpool
         unofficial::fxdiv::fxdiv
         FFTW3::fftw3f
+        XER_VST3SDK
 )
 
 # Link with internal modules
@@ -37,7 +38,7 @@ target_link_libraries(XER_AudioCore
     PUBLIC
         XER_AsyncIO
         XER_Cache
-        XER_Flux
+        XER_Flux_Core
 )
 
 # Link with FFmpeg if available

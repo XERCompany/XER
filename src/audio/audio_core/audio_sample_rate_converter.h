@@ -54,8 +54,8 @@ private:
     
     std::vector<float> filter_kernel_;
     double buffer_pos_;
-    
-    IO::AsyncIO::AsyncBufferPool buffer_pool_;
+
+    AsyncIO::IO::Async::AsyncBufferPool buffer_pool_;
 
     void GenerateFilterKernel();
     size_t GetKernelRadius() const;

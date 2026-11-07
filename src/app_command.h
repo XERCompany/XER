@@ -22,6 +22,7 @@ public:
         kHelp,
         kVersion,
         kDoctor,
+        kAudioInput
     };
 
     struct Parsed {

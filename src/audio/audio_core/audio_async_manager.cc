@@ -12,9 +12,9 @@ namespace Core {
 
 class AudioAsyncManager::Impl {
 public:
-    Impl() : thread_pool_(IO::AsyncIO::IOThreadPool::GetSharedInstance()) {}
+    Impl() : thread_pool_(AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {}
 
-    IO::AsyncIO::IOThreadPool& thread_pool_;
+    AsyncIO::IO::Async::IOThreadPool& thread_pool_;
 };
 
 AudioAsyncManager::AudioAsyncManager() : impl_(std::make_unique<Impl>()) {}

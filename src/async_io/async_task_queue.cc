@@ -74,7 +74,7 @@ bool AsyncTaskQueue::WaitAndDequeue(QueuedTask& task, int timeout_ms) {
     auto pred = [this] { return !is_running_ || !task_queue_.empty(); };
 
     if (timeout_ms < 0) {
-        queue_cv_.wait(pred);
+        queue_cv_.wait(lock, pred);
     } else {
         if (!queue_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), pred)) {
             return false;  // timed out

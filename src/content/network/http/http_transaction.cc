@@ -35,7 +35,7 @@ HttpTransactionResult HttpTransaction::Execute(const url::URLRequest& request) {
 
 void HttpTransaction::ExecuteAsync(const url::URLRequest& request,
                                     HttpTransactionCallback callback) {
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(
+    AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
         [this, request, cb = std::move(callback)]() mutable {
             cb(Execute(request));
         });

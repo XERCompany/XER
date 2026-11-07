@@ -13,7 +13,7 @@ NetworkTaskRunner& NetworkTaskRunner::Instance() {
 }
 
 void NetworkTaskRunner::PostTask(std::function<void()> task) {
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(std::move(task));
+    AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(std::move(task));
 }
 
 }  // namespace network::core
