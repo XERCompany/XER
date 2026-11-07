@@ -4,6 +4,10 @@
 file(GLOB_RECURSE ASYNC_IO_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(APPLE)
+    file(GLOB_RECURSE _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
+    list(APPEND ASYNC_IO_SOURCES ${_xer_apple_mm})
+endif()
 if(NOT ENABLE_CUDNN)
     # cudnn_bridge.cc handles dynamic loading on its own, so it builds with
     # or without cuDNN. Only the cudnn_*_engine.cc files require the linked

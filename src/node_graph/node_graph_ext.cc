@@ -9,10 +9,12 @@
 #include <unicode/ustring.h>
 #include <zlib.h>
 
+#ifdef XER_HAVE_MKL
 #include <mkl_cblas.h>
 #include <mkl_dfti.h>
 #include <mkl_types.h>
 #include <mkl_vml.h>
+#endif
 
 #include <range/v3/algorithm/sort.hpp>
 #include <range/v3/view/reverse.hpp>
@@ -161,6 +163,44 @@ std::string UnicodeCaseMap(const std::string& utf8, bool to_upper) {
 double DbToLin(double db) { return std::pow(10.0, db / 20.0); }
 double LinToDb(double x) { return x > 1e-12 ? 20.0 * std::log10(x) : -120.0; }
 
+// Portable BLAS replacements — used when MKL is unavailable (macOS, minimal
+// Linux installs). MKL builds keep the vectorized calls.
+inline void ScaleInPlace(double* x, std::size_t n, double alpha) {
+#ifdef XER_HAVE_MKL
+    if (n > 0) cblas_dscal(static_cast<int>(n), alpha, x, 1);
+#else
+    for (std::size_t i = 0; i < n; ++i) x[i] *= alpha;
+#endif
+}
+
+inline double NormL2(const double* x, std::size_t n) {
+#ifdef XER_HAVE_MKL
+    return cblas_dnrm2(static_cast<int>(n), x, 1);
+#else
+    double s = 0.0;
+    for (std::size_t i = 0; i < n; ++i) s += x[i] * x[i];
+    return std::sqrt(s);
+#endif
+}
+
+// 1-based index of max |x[i]| — same convention as cblas_idamax.
+inline int IndexOfMaxAbs(const double* x, std::size_t n) {
+#ifdef XER_HAVE_MKL
+    return cblas_idamax(static_cast<int>(n), x, 1);
+#else
+    int best = 0;
+    double best_abs = -1.0;
+    for (std::size_t i = 0; i < n; ++i) {
+        const double a = std::fabs(x[i]);
+        if (a > best_abs) {
+            best_abs = a;
+            best = static_cast<int>(i) + 1;
+        }
+    }
+    return best;
+#endif
+}
+
 // ── MKL-accelerated array ops ──────────────────────────────────────────────
 
 // FFT convolution via MKL DFTI (double, real input/output).
@@ -169,6 +209,7 @@ double LinToDb(double x) { return x > 1e-12 ? 20.0 * std::log10(x) : -120.0; }
 // direct O(N*K) loop.
 bool ConvolveFft(const std::vector<double>& s, const std::vector<double>& k,
                  std::vector<double>& out) {
+#ifdef XER_HAVE_MKL
     const std::size_t n = s.size();
     const std::size_t m = k.size();
     if (n == 0 || m == 0) return false;
@@ -208,15 +249,26 @@ bool ConvolveFft(const std::vector<double>& s, const std::vector<double>& k,
     const double inv = 1.0 / static_cast<double>(nfft);
     for (std::size_t i = 0; i < n; ++i) out[i] = real_out[i + m - 1] * inv;
     return true;
+#else
+    (void)s;
+    (void)k;
+    (void)out;
+    return false;  // no MKL — caller falls back to the direct loop
+#endif
 }
 
 // sin(arg) for arg[i] = phase0 + step*i via MKL VML (vdSin = radians,
 // double) — used by LFO-driven nodes instead of per-sample libm sin.
 void FillSinRamp(double* out, std::size_t n, double step, double phase0) {
     if (n == 0) return;
+#ifdef XER_HAVE_MKL
     std::vector<double> args(n);
     for (std::size_t i = 0; i < n; ++i) args[i] = phase0 + step * i;
     vdSin(static_cast<MKL_INT>(n), args.data(), out);
+#else
+    for (std::size_t i = 0; i < n; ++i)
+        out[i] = std::sin(phase0 + step * static_cast<double>(i));
+#endif
 }
 
 // RBJ Audio EQ Cookbook biquad, processed over a whole block.
@@ -840,15 +892,15 @@ void RegisterExtendedNodes(NodeTypeRegistry& r) {
                         const int n = static_cast<int>(a.size());
                         double level = 0.0;
                         if (c.Param("mode").AsString() == "rms") {
-                            const double nrm = cblas_dnrm2(n, a.data(), 1);
+                            const double nrm = NormL2(a.data(), static_cast<std::size_t>(n));
                             level = nrm / std::sqrt(static_cast<double>(n));
                         } else {
-                            const int idx = cblas_idamax(n, a.data(), 1);
+                            const int idx = IndexOfMaxAbs(a.data(), static_cast<std::size_t>(n));
                             level = idx > 0 ? std::fabs(a[static_cast<std::size_t>(idx - 1)]) : 0.0;
                         }
                         const double target = DbToLin(c.Param("targetDb").AsNumber());
                         const double g = level > 1e-9 ? target / level : 1.0;
-                        cblas_dscal(n, g, a.data(), 1);
+                        ScaleInPlace(a.data(), static_cast<std::size_t>(n), g);
                         c.Output("array", std::move(a));
                         return true;
                     },
@@ -1152,7 +1204,7 @@ void RegisterExtendedNodes(NodeTypeRegistry& r) {
                        FillSinRamp(out.data(), n,
                                    2.0 * kPi * rate / sr, 2.0 * kPi * phase);
                        const int ni = static_cast<int>(n);
-                       if (ni > 0) cblas_dscal(ni, depth, out.data(), 1);
+                       if (ni > 0) ScaleInPlace(out.data(), static_cast<std::size_t>(ni), depth);
                    } else {
                        for (std::size_t i = 0; i < n; ++i) {
                            double p = std::fmod(rate * static_cast<double>(i) / sr + phase, 1.0);

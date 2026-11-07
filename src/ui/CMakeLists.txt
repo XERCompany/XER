@@ -4,25 +4,42 @@
 file(GLOB_RECURSE UI_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(APPLE)
+    file(GLOB_RECURSE _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
+    list(APPEND UI_SOURCES ${_xer_apple_mm})
+endif()
 list(FILTER UI_SOURCES EXCLUDE REGEX "/widgets/openai/")
 list(FILTER UI_SOURCES EXCLUDE REGEX "/backends/flux/")
+
+# Windows-only backends: Direct2D renderer and Win32 input translation.
+# POSIX backends are added under platform/{linux,apple} as the port proceeds.
+if(NOT WIN32)
+    list(FILTER UI_SOURCES EXCLUDE REGEX "/platform/windows/")
+    list(FILTER UI_SOURCES EXCLUDE REGEX "/rendering/windows/")
+endif()
 
 file(GLOB_RECURSE UI_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
 list(FILTER UI_HEADERS EXCLUDE REGEX "/backends/flux/")
+if(NOT WIN32)
+    list(FILTER UI_HEADERS EXCLUDE REGEX "/platform/windows/")
+    list(FILTER UI_HEADERS EXCLUDE REGEX "/rendering/windows/")
+endif()
 
 # Skia (unofficial port): GPU-capable 2D canvas used by Canvas/VideoPreview.
 find_package(unofficial-skia CONFIG REQUIRED)
 
 # Intel oneMKL (vcpkg intel-mkl): SIMD vector math for batched animation
-# kernels (motion/accel.*). Sequential threading — animation runs on the UI
-# thread and must never block on OpenMP workers; static link keeps Editor.exe
-# free of extra runtime DLLs.
+# kernels (motion/accel.*). Optional — the port supports Windows/Linux x64
+# only, so macOS and MKL-less installs take the scalar fallback path.
+# Sequential threading — animation runs on the UI thread and must never
+# block on OpenMP workers; static link keeps Editor.exe free of extra
+# runtime DLLs.
 set(MKL_THREADING "sequential" CACHE STRING "" FORCE)
 set(MKL_LINK "static" CACHE STRING "" FORCE)
 set(MKL_INTERFACE "lp64" CACHE STRING "" FORCE)
-find_package(mkl CONFIG REQUIRED)
+find_package(mkl CONFIG QUIET)
 
 # Create UI core library
 add_library(XER_UI_Core STATIC ${UI_SOURCES} ${UI_HEADERS})
@@ -44,8 +61,14 @@ target_link_libraries(XER_UI_Core
         XER_NodeGraph
         XER_AsyncIO
         unofficial::skia::skia
-        MKL::MKL
 )
+
+# MKL is optional: link and enable the XER_HAVE_MKL fast paths only when the
+# package was found (absent on macOS and minimal Linux installs).
+if(TARGET MKL::MKL)
+    target_link_libraries(XER_UI_Core PUBLIC MKL::MKL)
+    target_compile_definitions(XER_UI_Core PUBLIC XER_HAVE_MKL)
+endif()
 
 # Project avatars are transcoded to icons/<id>/icon.jpg through the FFmpeg
 # wrapper (engine::bridge::ffmpeg::ImageToJpeg).
@@ -55,7 +78,6 @@ endif()
 
 # C++ standard
 target_compile_features(XER_UI_Core PUBLIC cxx_std_23)
-target_compile_definitions(XER_UI_Core PUBLIC XER_HAVE_MKL)
 
 # Compiler flags
 if(MSVC)

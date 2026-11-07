@@ -4,6 +4,10 @@
 file(GLOB_RECURSE CONTENT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(APPLE)
+    file(GLOB_RECURSE _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
+    list(APPEND CONTENT_SOURCES ${_xer_apple_mm})
+endif()
 list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/(network|openai)/")
 
 # Exclude CUDA ops when CUDA is disabled (no cuda_runtime.h available)
@@ -13,10 +17,11 @@ endif()
 
 # Exclude platform backends for other platforms
 if(WIN32)
-    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/linux/")
-    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/apple/")
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/(linux|apple)/")
+elseif(APPLE)
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/(linux|windows)/")
 else()
-    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/windows/")
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/platform/(apple|windows)/")
 endif()
 
 file(GLOB_RECURSE CONTENT_HEADERS
@@ -27,10 +32,11 @@ if(NOT ENABLE_CUDA)
     list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/ai/ml/cuda_ops/")
 endif()
 if(WIN32)
-    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/linux/")
-    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/apple/")
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/(linux|apple)/")
+elseif(APPLE)
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/(linux|windows)/")
 else()
-    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/windows/")
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/(apple|windows)/")
 endif()
 
 # Create content library

@@ -4,6 +4,10 @@
 file(GLOB_RECURSE DSP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(APPLE)
+    file(GLOB_RECURSE _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
+    list(APPEND DSP_SOURCES ${_xer_apple_mm})
+endif()
 
 file(GLOB_RECURSE DSP_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"

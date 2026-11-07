@@ -97,7 +97,10 @@ if(WIN32)
 elseif(APPLE)
     target_link_libraries(xer
         PRIVATE
+            Threads::Threads
             "-framework CoreFoundation"
             "-framework Foundation"
     )
+else()
+    target_link_libraries(xer PRIVATE Threads::Threads)
 endif()

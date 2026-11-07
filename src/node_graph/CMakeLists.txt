@@ -4,6 +4,10 @@
 file(GLOB_RECURSE NODE_GRAPH_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(APPLE)
+    file(GLOB_RECURSE _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
+    list(APPEND NODE_GRAPH_SOURCES ${_xer_apple_mm})
+endif()
 file(GLOB_RECURSE NODE_GRAPH_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
@@ -37,8 +41,15 @@ target_link_libraries(XER_NodeGraph
         re2::re2
         ICU::uc
         ZLIB::ZLIB
-        MKL::MKL
 )
+
+# MKL is optional (absent on macOS): extended DSP nodes fall back to scalar
+# loops when it is not found.
+find_package(mkl CONFIG QUIET)
+if(TARGET MKL::MKL)
+    target_link_libraries(XER_NodeGraph PUBLIC MKL::MKL)
+    target_compile_definitions(XER_NodeGraph PUBLIC XER_HAVE_MKL)
+endif()
 
 # Compiler flags
 if(MSVC)
