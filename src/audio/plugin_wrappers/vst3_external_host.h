@@ -9,7 +9,7 @@
 
 namespace XER::Engine::Audio::Plugin {
 
-// Real VST3 plugin host backed by the Steinberg SDK (vcpkg vst3sdk).
+// Real VST3 plugin host backed by the Steinberg SDK (cmake/vst3sdk.cmake).
 // Loads external .vst3 bundles, processes mono float buffers through the
 // plugin's main stereo bus, and exposes normalized parameters via the
 // plugin's IEditController.
