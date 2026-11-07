@@ -65,14 +65,15 @@ jobs:
         shell: bash
         run: |
           # ffmpeg requires nasm on x86/x64 for all platforms.
-          # gperf (skia dep chain) runs autoreconf -> needs autotools on macOS.
+          # gperf (skia dep chain) runs autoreconf -> needs autotools on
+          # Linux and macOS.
           if [ "$RUNNER_OS" = "Windows" ]; then
             choco install nasm -y --no-progress
           elif [ "$RUNNER_OS" = "macOS" ]; then
             brew install nasm autoconf autoconf-archive automake libtool
           else
             sudo apt-get update
-            sudo apt-get install -y nasm
+            sudo apt-get install -y nasm autoconf autoconf-archive automake libtool
           fi
 
       - name: Install dependencies (vcpkg ${{ matrix.triplet }})
@@ -139,7 +140,7 @@ jobs:
             -DVCPKG_MANIFEST_MODE=OFF
           )
           if [ "$RUNNER_OS" = "Windows" ]; then
-            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64 -DENABLE_AI=ON)
+            CMAKE_ARGS+=(-DENABLE_AI=ON)
           else
             CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Release)
           fi
