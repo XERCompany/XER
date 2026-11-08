@@ -102,12 +102,19 @@ add_subdirectory(src/content/video)
 add_subdirectory(src/sql)
 add_subdirectory(src/node_graph)
 add_subdirectory(src/async_io)
+add_subdirectory(src/security_flash)
 add_subdirectory(src/ui)
 add_subdirectory(src/audio)
 add_subdirectory(src/content/audio)
 add_subdirectory(src/content/clipboard)
 add_subdirectory(src/content/hex)
 add_subdirectory(src/content/network)
+add_subdirectory(src/content/nettest)
+add_subdirectory(src/content/sim)
+add_subdirectory(src/content/model3d)
+add_subdirectory(src/content/modeldiff)
+add_subdirectory(src/content/formatconv)
+add_subdirectory(src/content/dawn)
 add_subdirectory(src/content/s3)
 add_subdirectory(src/helper)
 add_subdirectory(src/app)
@@ -123,6 +130,36 @@ target_include_directories(EngineScanVST3 PUBLIC
 target_compile_features(EngineScanVST3 PUBLIC cxx_std_23)
 target_link_libraries(EngineScanVST3 PRIVATE XER_AudioCore XER_Helper)
 set_target_properties(EngineScanVST3 PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# Windows service monitoring removable media for SecurityFlash tokens.
+# The service itself only detects token presence; decryption stays with
+# the interactive unlock flow that holds the passphrase.
+add_executable(SecurityFlashService tools/SecurityFlashService/main.cc)
+target_include_directories(SecurityFlashService PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(SecurityFlashService PRIVATE cxx_std_23)
+target_link_libraries(SecurityFlashService PRIVATE XER_SecurityFlash)
+set_target_properties(SecurityFlashService PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# GUI front-end for SecurityFlashService: service control (SCM) plus
+# removable-drive/token status, built on the XER UI widget set.
+add_executable(ControllAccountsWindows tools/ControllAccountsWindows/main.cc)
+target_include_directories(ControllAccountsWindows PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(ControllAccountsWindows PRIVATE cxx_std_23)
+target_link_libraries(ControllAccountsWindows PRIVATE
+    XER_UI_Core
+    user32
+    gdi32
+    shell32
+)
+set_target_properties(ControllAccountsWindows PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 include(CTest)
