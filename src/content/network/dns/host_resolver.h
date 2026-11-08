@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::dns {
+namespace XER::Network::Dns {
 
 // Resolved DNS address entry with TTL (time-to-live).
 struct ResolvedAddress {
@@ -45,4 +45,4 @@ public:
                               ResolveCallback callback) = 0;
 };
 
-}  // namespace XER::network::dns
+}  // namespace XER::Network::Dns

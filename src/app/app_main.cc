@@ -21,15 +21,15 @@ Application::~Application() {
 }
 
 bool Application::Initialize(int argc, char** argv) {
-    XER::flux::core::FluxConfigFromEnvironment();
+    XER::Flux::Core::FluxConfigFromEnvironment();
 
-    flux_core_ = XER::flux::core::FluxCore();
-    XER::flux::core::FluxConfig config = flux_core_.context().config();
+    flux_core_ = XER::Flux::Core::FluxCore();
+    XER::Flux::Core::FluxConfig config = flux_core_.context().config();
 
     logger_ = &flux_core_.context().logger();
 
     config.application_name = "Editor";
-    logger_->ShouldLog(XER::flux::core::LogLevel::kInfo);
+    logger_->ShouldLog(XER::Flux::Core::LogLevel::kInfo);
     logger_->UpdateConfig(config);
 
     flux_core_.context().RefreshTerminalWindow();
@@ -57,14 +57,14 @@ bool Application::InitializeSystems() {
     std::string error;
     
     // Socket platform
-    auto& socket_platform = XER::network::socket::platform::SocketPlatform::GetInstance();
+    auto& socket_platform = XER::Network::Socket::Platform::SocketPlatform::GetInstance();
     if (!socket_platform.Initialize(&error)) {
         logger_->Error("Network", error);
         return false;
     }
     
     // Cache manager
-    auto& cache_manager = XER::Engine::Cache::CacheManager::Instance();
+    auto& cache_manager = XER::Cache::CacheManager::Instance();
     logger_->Info("main", "FluxCore initialized successfully.");
     logger_->Info("Cache", "Cache root directory: " + cache_manager.RootDirectory().string());
     

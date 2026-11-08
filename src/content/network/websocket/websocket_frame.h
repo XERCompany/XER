@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::websocket {
+namespace XER::Network::WebSocket {
 
 // WebSocket frame opcodes as defined in RFC 6455 Section 5.2.
 enum class WebSocketOpcode : uint8_t {
@@ -50,4 +50,4 @@ size_t DecodeFrame(const uint8_t* data, size_t len, WebSocketFrame* frame);
 WebSocketFrame MakeCloseFrame(uint16_t code = 1000,
                                const std::string& reason = {});
 
-}  // namespace XER::network::websocket
+}  // namespace XER::Network::WebSocket

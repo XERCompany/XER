@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 // Minimal image sample: flat float pixels, width, height, channels.
 struct ImageSample {
@@ -33,4 +33,4 @@ protected:
     bool enabled_ = true;
 };
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

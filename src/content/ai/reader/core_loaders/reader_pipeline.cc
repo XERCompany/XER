@@ -5,7 +5,7 @@
 
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 namespace {
 
@@ -51,5 +51,5 @@ PipelineQualityResult ReaderPipeline::ProcessWithQuality(const std::string& file
 	return out;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

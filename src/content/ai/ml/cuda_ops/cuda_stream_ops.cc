@@ -2,7 +2,7 @@
 
 #include <cuda_runtime.h>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 cudaError_t CudaStreamOps::CreateStream(cudaStream_t* stream, bool blocking) {
     if (!stream) {
@@ -65,4 +65,4 @@ cudaError_t CudaStreamOps::ElapsedTime(cudaEvent_t event_start,
     return cudaEventElapsedTime(milliseconds, event_start, event_end);
 }
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

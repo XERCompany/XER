@@ -1,6 +1,6 @@
 #include "layer_pooling.h"
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 LayerPooling::LayerPooling(const std::string& name, Config config)
     : Core::Layer(Core::LayerType::MaxPool), config_(config) {
@@ -12,4 +12,4 @@ std::shared_ptr<Core::Layer> MakePooling(const std::string& name,
   return std::make_shared<LayerPooling>(name, config);
 }
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

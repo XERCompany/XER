@@ -1,12 +1,12 @@
 #include "flux/rendering/render_context.h"
 
-namespace XER::flux::rendering {
+namespace XER::Flux::Rendering {
 
-RenderContext::RenderContext(const XER::flux::terminal::TerminalSize& size)
-	: size_(XER::flux::terminal::ClampTerminalSize(size, 1, 1)),
+RenderContext::RenderContext(const XER::Flux::Terminal::TerminalSize& size)
+	: size_(XER::Flux::Terminal::ClampTerminalSize(size, 1, 1)),
 	  frame_(size_.columns, size_.rows) {}
 
-RenderContext RenderContext::FromWindow(const XER::flux::terminal::TerminalWindow& window) {
+RenderContext RenderContext::FromWindow(const XER::Flux::Terminal::TerminalWindow& window) {
 	return RenderContext(window.size());
 }
 
@@ -18,16 +18,16 @@ const FrameBuffer& RenderContext::frame() const {
 	return frame_;
 }
 
-const XER::flux::terminal::TerminalSize& RenderContext::size() const {
+const XER::Flux::Terminal::TerminalSize& RenderContext::size() const {
 	return size_;
 }
 
-void RenderContext::Resize(const XER::flux::terminal::TerminalSize& size) {
-	size_ = XER::flux::terminal::ClampTerminalSize(size, 1, 1);
+void RenderContext::Resize(const XER::Flux::Terminal::TerminalSize& size) {
+	size_ = XER::Flux::Terminal::ClampTerminalSize(size, 1, 1);
 	frame_.Resize(size_.columns, size_.rows);
 }
 
-void RenderContext::Clear(char fill, const XER::flux::terminal::TerminalStyle& style) {
+void RenderContext::Clear(char fill, const XER::Flux::Terminal::TerminalStyle& style) {
 	frame_.Clear(fill, style);
 }
 
@@ -39,4 +39,4 @@ const std::string& RenderContext::title() const {
 	return title_;
 }
 
-}  // namespace XER::flux::rendering
+}  // namespace XER::Flux::Rendering

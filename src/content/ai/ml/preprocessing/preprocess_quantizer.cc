@@ -3,7 +3,7 @@
 #include <cmath>
 #include <limits>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessQuantizer::Fit(const std::vector<std::vector<float>>& X) {
     if (X.empty()) return;
@@ -32,4 +32,4 @@ std::vector<std::vector<float>> PreprocessQuantizer::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

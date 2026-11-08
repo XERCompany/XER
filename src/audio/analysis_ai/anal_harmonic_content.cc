@@ -4,7 +4,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 HarmonicContentAnalyzer::HarmonicContentAnalyzer(size_t fft_size)
 	: fft_size_(fft_size),

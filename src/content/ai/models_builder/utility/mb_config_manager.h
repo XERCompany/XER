@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <variant>
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 using ConfigValue = std::variant<bool, int, float, std::string>;
 
@@ -26,4 +26,4 @@ class MbConfigManager {
   std::unordered_map<std::string, ConfigValue> store_;
 };
 
-}  // namespace Engine::ModelsBuilder::Utility
+}  // namespace XER::ModelsBuilder::Utility

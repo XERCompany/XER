@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// Precision = TP / (TP + FP), per-class and macro-averaged
 struct ValPrecision {
@@ -16,4 +16,4 @@ struct ValPrecision {
                                const std::vector<int>& ground_truth);
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

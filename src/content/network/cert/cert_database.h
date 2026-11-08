@@ -11,7 +11,7 @@
 
 #include "content/network/cert/cert_verify_result.h"
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 // In-memory cache of previously verified certificate results keyed by
 // (hostname + fingerprint) to avoid repeated crypto operations.
@@ -33,4 +33,4 @@ private:
     std::unordered_map<std::string, CertVerifyResult> cache_;
 };
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

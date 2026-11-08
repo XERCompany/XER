@@ -4,7 +4,7 @@
 #include <random>
 #include <stdexcept>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugMixup::AugMixup(float alpha) : alpha_(alpha) {}
 
@@ -28,4 +28,4 @@ bool AugMixup::Blend(ImageSample& a, const ImageSample& b, float lambda) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

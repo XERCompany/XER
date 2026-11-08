@@ -4,7 +4,7 @@
 
 #include "../../models_builder/model_core/dense_layer.h"
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 std::shared_ptr<Core::Model> VinoIrConverter::Convert(
     const std::vector<VinoLayerInfo>& layers,
@@ -55,4 +55,4 @@ std::shared_ptr<Core::Layer> VinoIrConverter::ConvertLayer(
   return dense;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

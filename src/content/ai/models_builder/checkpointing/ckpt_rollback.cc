@@ -2,7 +2,7 @@
 
 #include "ckpt_manager.h"
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 bool CheckpointRollback::RollbackTo(const std::string& checkpoint_path,
         Core::Model* model,
@@ -21,5 +21,5 @@ bool CheckpointRollback::RollbackTo(const std::string& checkpoint_path,
 	return true;
 }
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

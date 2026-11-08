@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 CircularDelayLine::CircularDelayLine()
 	: max_delay_samples_(0),
@@ -82,4 +82,4 @@ std::string CircularDelayLine::GetReport() const {
 		", delay=" + std::to_string(delay_samples_);
 }
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

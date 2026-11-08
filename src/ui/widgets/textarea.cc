@@ -10,7 +10,7 @@ namespace XER::UI::Widgets {
 namespace {
 
 std::vector<std::string> SplitLines(const std::string& text) {
-    auto lines = XER::Engine::Helper::String::SplitLines(text);
+    auto lines = XER::Helper::String::SplitLines(text);
     if (lines.empty()) {
         lines.emplace_back();
     }

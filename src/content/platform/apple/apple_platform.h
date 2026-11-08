@@ -2,7 +2,7 @@
 
 #include "../platform_common.h"
 
-namespace Engine::Content::Platform {
+namespace XER::Content::Platform {
 
 class ApplePlatform : public IPlatform {
 public:
@@ -32,4 +32,4 @@ public:
     void SleepMs(uint32_t milliseconds) const override;
 };
 
-}  // namespace Engine::Content::Platform
+}  // namespace XER::Content::Platform

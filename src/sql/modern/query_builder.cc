@@ -4,7 +4,7 @@
 #include <sstream>
 #include <utility>
 
-namespace XER::Engine::SQL::Modern {
+namespace XER::SQL::Modern {
 namespace {
 
 void SetError(std::string* error_out, const char* message) {
@@ -42,13 +42,13 @@ QueryBuilder& QueryBuilder::Columns(std::vector<std::string> columns) {
 	return *this;
 }
 
-QueryBuilder& QueryBuilder::Set(std::string column, XER::Content::Value value) {
+QueryBuilder& QueryBuilder::Set(std::string column, XER::SQL::Content::Value value) {
 	assignments_.emplace_back(std::move(column), std::move(value));
 	return *this;
 }
 
 QueryBuilder& QueryBuilder::Where(std::string column, std::string operation,
-					XER::Content::Value value) {
+					XER::SQL::Content::Value value) {
 	predicates_.emplace_back(std::move(column),
 					 std::make_pair(std::move(operation), std::move(value)));
 	return *this;
@@ -193,4 +193,4 @@ std::optional<Query> QueryBuilder::Build(std::string* error_out) const {
 	return query;
 }
 
-}  // namespace XER::Engine::SQL::Modern
+}  // namespace XER::SQL::Modern

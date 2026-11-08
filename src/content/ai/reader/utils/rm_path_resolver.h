@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 /// Path resolution helpers for model file loading.
 class RmPathResolver {
@@ -30,4 +30,4 @@ public:
     static bool Exists(const std::string& path);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils

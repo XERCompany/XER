@@ -3,7 +3,7 @@
 #include <chrono>
 #include <functional>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 uint64_t SdSeedGenerator::FromPrompt(const std::string& prompt,
                                      const std::string& negative_prompt,
@@ -21,4 +21,4 @@ uint64_t SdSeedGenerator::FromPrompt(const std::string& prompt,
     return mixed == 0 ? 1 : mixed;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

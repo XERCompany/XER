@@ -2,7 +2,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace XER::Engine::Helper {
+namespace XER::Helper {
 
 Json::Value JsonCppHelper::Parse(const std::string& json_str) {
     Json::CharReaderBuilder builder;
@@ -185,4 +185,4 @@ std::string JsonCppHelper::EscapeJsonString(const std::string& str) {
     return escaped;
 }
 
-}  // namespace XER::Engine::Helper
+}  // namespace XER::Helper

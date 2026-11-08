@@ -12,7 +12,7 @@ static std::vector<uint32_t> FrameToSkia(const Frame& f) {
     std::vector<uint32_t> px(n);
     const uint8_t* d = f.Data();
     for (int i = 0; i < n; ++i)
-        px[i] = engine::bridge::skia::MakeColorRGBA(d[i*4+2], d[i*4+1], d[i*4+0], d[i*4+3]);
+        px[i] = XER::Bridge::Skia::MakeColorRGBA(d[i*4+2], d[i*4+1], d[i*4+0], d[i*4+3]);
     return px;
 }
 
@@ -43,7 +43,7 @@ void VideoEffects::BrightnessContrast(Frame& frame, int brightness, float contra
 
 void VideoEffects::Grayscale(Frame& frame) {
     if (!frame.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         // Skia: set R=G=B to same value via per-pixel blend workaround;
         // easier CPU path but we still convert through Skia to keep pipeline consistent
         auto px = FrameToSkia(frame);
@@ -53,7 +53,7 @@ void VideoEffects::Grayscale(Frame& frame) {
             uint8_t b = (c >>  8) & 0xFF;
             uint8_t a =  c        & 0xFF;
             uint8_t luma = static_cast<uint8_t>(0.299f*r + 0.587f*g + 0.114f*b);
-            c = engine::bridge::skia::MakeColorRGBA(luma, luma, luma, a);
+            c = XER::Bridge::Skia::MakeColorRGBA(luma, luma, luma, a);
         }
         SkiaToFrame(px, frame);
     } else {
@@ -69,9 +69,9 @@ void VideoEffects::Grayscale(Frame& frame) {
 
 void VideoEffects::BoxBlur(Frame& frame, int radius) {
     if (!frame.IsValid() || radius <= 0) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterBlur(&px, frame.Width(), frame.Height(),
+        XER::Bridge::Skia::FilterBlur(&px, frame.Width(), frame.Height(),
                                           radius, radius);
         SkiaToFrame(px, frame);
     } else {
@@ -97,9 +97,9 @@ void VideoEffects::BoxBlur(Frame& frame, int radius) {
 
 void VideoEffects::GaussianBlur(Frame& frame, double sigma) {
     if (!frame.IsValid() || sigma <= 0.0) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterGaussianBlur(&px, frame.Width(), frame.Height(),
+        XER::Bridge::Skia::FilterGaussianBlur(&px, frame.Width(), frame.Height(),
                                                    sigma, sigma);
         SkiaToFrame(px, frame);
     } else {
@@ -109,9 +109,9 @@ void VideoEffects::GaussianBlur(Frame& frame, double sigma) {
 
 void VideoEffects::Sharpen(Frame& frame, double amount) {
     if (!frame.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterSharpen(&px, frame.Width(), frame.Height(),
+        XER::Bridge::Skia::FilterSharpen(&px, frame.Width(), frame.Height(),
                                              amount, 1.0, 0);
         SkiaToFrame(px, frame);
     }
@@ -119,27 +119,27 @@ void VideoEffects::Sharpen(Frame& frame, double amount) {
 
 void VideoEffects::EdgeDetect(Frame& frame) {
     if (!frame.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterEdgeDetect(&px, frame.Width(), frame.Height());
+        XER::Bridge::Skia::FilterEdgeDetect(&px, frame.Width(), frame.Height());
         SkiaToFrame(px, frame);
     }
 }
 
 void VideoEffects::Emboss(Frame& frame) {
     if (!frame.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterEmboss(&px, frame.Width(), frame.Height(), 315.0, 1.5);
+        XER::Bridge::Skia::FilterEmboss(&px, frame.Width(), frame.Height(), 315.0, 1.5);
         SkiaToFrame(px, frame);
     }
 }
 
 void VideoEffects::Vignette(Frame& frame, double strength, double radius) {
     if (!frame.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterVignette(&px, frame.Width(), frame.Height(),
+        XER::Bridge::Skia::FilterVignette(&px, frame.Width(), frame.Height(),
                                               strength, radius);
         SkiaToFrame(px, frame);
     }
@@ -147,10 +147,10 @@ void VideoEffects::Vignette(Frame& frame, double strength, double radius) {
 
 void VideoEffects::ChromaticAberration(Frame& frame, double offset) {
     if (!frame.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
         int off = static_cast<int>(offset);
-        engine::bridge::skia::FilterChromaticAberration(&px, frame.Width(), frame.Height(),
+        XER::Bridge::Skia::FilterChromaticAberration(&px, frame.Width(), frame.Height(),
                                                          off, 0, -off, 0);
         SkiaToFrame(px, frame);
     }
@@ -158,27 +158,27 @@ void VideoEffects::ChromaticAberration(Frame& frame, double offset) {
 
 void VideoEffects::Pixelate(Frame& frame, int block_size) {
     if (!frame.IsValid() || block_size <= 0) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterPixelate(&px, frame.Width(), frame.Height(), block_size);
+        XER::Bridge::Skia::FilterPixelate(&px, frame.Width(), frame.Height(), block_size);
         SkiaToFrame(px, frame);
     }
 }
 
 void VideoEffects::OilPaint(Frame& frame, int radius) {
     if (!frame.IsValid() || radius <= 0) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterOilPaint(&px, frame.Width(), frame.Height(), radius, 20);
+        XER::Bridge::Skia::FilterOilPaint(&px, frame.Width(), frame.Height(), radius, 20);
         SkiaToFrame(px, frame);
     }
 }
 
 void VideoEffects::MotionBlur(Frame& frame, double angle, int distance) {
     if (!frame.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(frame);
-        engine::bridge::skia::FilterMotionBlur(&px, frame.Width(), frame.Height(),
+        XER::Bridge::Skia::FilterMotionBlur(&px, frame.Width(), frame.Height(),
                                                 angle, distance);
         SkiaToFrame(px, frame);
     }

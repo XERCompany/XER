@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace XER::Engine::SQL::Content {
+namespace XER::SQL::Content {
 
 Row::Row(std::vector<std::string> columns, std::vector<Value> values)
 	: columns_(std::move(columns)), values_(std::move(values)) {}
@@ -73,4 +73,4 @@ const Blob* Row::GetBlob(std::string_view column) const noexcept {
 	return value == nullptr ? nullptr : std::get_if<Blob>(value);
 }
 
-}  // namespace XER::Engine::SQL::Content
+}  // namespace XER::SQL::Content

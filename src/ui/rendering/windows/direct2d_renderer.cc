@@ -50,7 +50,7 @@ std::wstring ToWideString(std::string_view text) {
         throw std::length_error("Text exceeds the supported UTF-8 length");
     }
 
-    std::wstring wide = XER::Engine::Helper::String::Utf8ToWide(text);
+    std::wstring wide = XER::Helper::String::Utf8ToWide(text);
     if (wide.empty() && !text.empty()) {
         throw std::runtime_error("Text is not valid UTF-8");
     }

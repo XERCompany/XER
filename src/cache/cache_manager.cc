@@ -4,7 +4,7 @@
 
 #include "cache/cache_configuration.h"
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 namespace {
 
 std::filesystem::path ResolveCacheRoot() {
@@ -93,4 +93,4 @@ bool CacheManager::ReadPersistentBinary(absl::string_view scope,
 	return persistent_.ReadBinary(EntryFor(scope, key, name), bytes, error_out);
 }
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

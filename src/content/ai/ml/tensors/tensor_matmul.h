@@ -1,7 +1,7 @@
 #pragma once
 #include "tensor.h"
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 /// Matrix multiplication of two 2D tensors
 Tensor TensorMatMul(const Tensor& a, const Tensor& b);
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

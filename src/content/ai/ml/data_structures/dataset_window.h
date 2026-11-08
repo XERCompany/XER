@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class DatasetWindow {
  public:
@@ -14,5 +14,5 @@ class DatasetWindow {
 											   size_t stride);
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

@@ -12,7 +12,7 @@ static std::vector<uint32_t> FrameToSkia(const Frame& f) {
     std::vector<uint32_t> px(n);
     const uint8_t* d = f.Data();
     for (int i = 0; i < n; ++i)
-        px[i] = engine::bridge::skia::MakeColorRGBA(d[i*4+2], d[i*4+1], d[i*4+0], d[i*4+3]);
+        px[i] = XER::Bridge::Skia::MakeColorRGBA(d[i*4+2], d[i*4+1], d[i*4+0], d[i*4+3]);
     return px;
 }
 static void SkiaToFrame(const std::vector<uint32_t>& px, Frame& f) {
@@ -34,7 +34,7 @@ void MaskProcessor::Apply(Frame& frame, const MaskPointsVector& mask,
 
     int w = frame.Width(), h = frame.Height();
 
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         // Build a greyscale mask via Skia's RasterFillPolygon
         // First, create a mask frame (all-zero = outside polygon)
         std::vector<uint32_t> mask_px(w * h, 0x000000FF);  // black opaque
@@ -45,8 +45,8 @@ void MaskProcessor::Apply(Frame& frame, const MaskPointsVector& mask,
         for (const auto& mp : mask.Points())
             pts.emplace_back(static_cast<int>(mp.x), static_cast<int>(mp.y));
 
-        uint32_t white = engine::bridge::skia::MakeColorRGBA(255, 255, 255, 255);
-        engine::bridge::skia::RasterFillPolygon(&mask_px, w, h, pts, white, "src");
+        uint32_t white = XER::Bridge::Skia::MakeColorRGBA(255, 255, 255, 255);
+        XER::Bridge::Skia::RasterFillPolygon(&mask_px, w, h, pts, white, "src");
 
         // Build greyscale mask: 255 inside polygon, 0 outside
         std::vector<uint8_t> grey(w * h);
@@ -58,7 +58,7 @@ void MaskProcessor::Apply(Frame& frame, const MaskPointsVector& mask,
             // grey[i]==0 means outside → fill those
 
             auto frame_px = FrameToSkia(frame);
-            uint32_t fill_color = engine::bridge::skia::MakeColorRGBA(fill_r, fill_g, fill_b, fill_a);
+            uint32_t fill_color = XER::Bridge::Skia::MakeColorRGBA(fill_r, fill_g, fill_b, fill_a);
             for (int i = 0; i < w * h; ++i) {
                 if (grey[i] == 0)
                     frame_px[i] = fill_color;
@@ -67,7 +67,7 @@ void MaskProcessor::Apply(Frame& frame, const MaskPointsVector& mask,
 
         } else {  // CUT_INSIDE
             auto frame_px = FrameToSkia(frame);
-            uint32_t fill_color = engine::bridge::skia::MakeColorRGBA(fill_r, fill_g, fill_b, fill_a);
+            uint32_t fill_color = XER::Bridge::Skia::MakeColorRGBA(fill_r, fill_g, fill_b, fill_a);
             for (int i = 0; i < w * h; ++i) {
                 if (grey[i] != 0)
                     frame_px[i] = fill_color;

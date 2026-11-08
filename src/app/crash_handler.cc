@@ -420,7 +420,7 @@ void InvalidParamHandler(const wchar_t*, const wchar_t*,
 } // namespace
 
 std::filesystem::path CrashesRoot() {
-    return XER::Engine::Cache::CacheManager::Instance().Persistent().root() /
+    return XER::Cache::CacheManager::Instance().Persistent().root() /
            "crashes";
 }
 

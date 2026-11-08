@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Content::Platform::WinAPI::Audio {
+namespace XER::Content::Platform::WinAPI::Audio {
 
 // Audio device enumeration
 class AudioDeviceEnumerator {
@@ -82,4 +82,4 @@ public:
     static void SetVolume(int volume);  // 0-100
 };
 
-}  // namespace Engine::Content::Platform::WinAPI::Audio
+}  // namespace XER::Content::Platform::WinAPI::Audio

@@ -1,6 +1,6 @@
 ﻿#include "dataset.h"
 
-namespace Engine::MLData::Types {
+namespace XER::MLData::Types {
 
 Dataset::Dataset() : name_("DefaultDataset") {
 }
@@ -29,4 +29,4 @@ uint64_t Dataset::GetTotalSamples() const {
     return total;
 }
 
-} // namespace Engine::MLData::Types
+} // namespace XER::MLData::Types

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 bool CustomEffectProcessor::Initialize(const CustomEffectNode& node, float sample_rate, size_t max_block_size, std::string* error_out) {
 	frame_offset_ = 0;
@@ -52,4 +52,4 @@ std::string CustomEffectProcessor::GetReport() const {
 	return wrapper_.GetReport();
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

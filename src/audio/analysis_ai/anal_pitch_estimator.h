@@ -9,7 +9,7 @@
 
 #include "audio_pitch_detector.h"
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 class PitchEstimator {
 public:
@@ -33,4 +33,4 @@ private:
 	std::vector<float> last_harmonics_;
 };
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

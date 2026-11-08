@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 /// @brief Async memory transfer between host and device
 /// 
@@ -57,4 +57,4 @@ public:
     static void FreePinned(void* ptr);
 };
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

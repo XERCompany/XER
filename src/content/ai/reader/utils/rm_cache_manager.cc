@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 ReaderCacheManager& ReaderCacheManager::GetInstance() {
 	static ReaderCacheManager instance;
@@ -95,5 +95,5 @@ void ReaderCacheManager::EvictIfNeededLocked(size_t incoming_size) {
 	}
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils
 

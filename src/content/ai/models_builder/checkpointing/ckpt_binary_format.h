@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 class CheckpointBinaryFormat {
  public:
@@ -15,5 +15,5 @@ class CheckpointBinaryFormat {
 	static constexpr uint32_t kVersion = 1U;
 };
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

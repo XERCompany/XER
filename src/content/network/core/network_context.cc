@@ -4,7 +4,7 @@
  */
 #include "content/network/core/network_context.h"
 
-namespace XER::network::core {
+namespace XER::Network::Core {
 
 NetworkContext& NetworkContext::Instance() {
     static NetworkContext inst;
@@ -12,9 +12,9 @@ NetworkContext& NetworkContext::Instance() {
 }
 
 void NetworkContext::Reset() {
-    request_ctx_ = url::URLRequestContext();
+    request_ctx_ = Url::URLRequestContext();
     Cache().Clear();
     ServerProperties().Clear();
 }
 
-}  // namespace XER::network::core
+}  // namespace XER::Network::Core

@@ -3,7 +3,7 @@
 #include <cstring>
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Reader::Darknet {
+namespace XER::ModelsBuilder::Reader::Darknet {
 
 bool DarknetVersionV3V4::Parse(const uint8_t* data, size_t size) {
   // Darknet .weights header layout (little-endian):
@@ -49,4 +49,4 @@ std::string DarknetVersionV3V4::GetVersionString() const {
   return oss.str();
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Darknet
+}  // namespace XER::ModelsBuilder::Reader::Darknet

@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 struct ParsedOnnxGraph {
 	std::vector<OnnxNode> nodes;
@@ -20,5 +20,5 @@ class OnnxGraphParser {
 	static std::map<std::string, std::string> ExtractMetadata(const uint8_t* buffer, size_t size);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

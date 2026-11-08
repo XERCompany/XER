@@ -5,7 +5,7 @@
 
 #include "flux/terminal/terminal_size_detector.h"
 
-namespace XER::flux::core {
+namespace XER::Flux::Core {
 
 enum class LogLevel {
 	kDebug = 0,
@@ -19,7 +19,7 @@ struct FluxConfig {
 	LogLevel log_level = LogLevel::kInfo;
 	bool colors = true;
 	bool timestamps = false;
-	terminal::TerminalSize terminal_size = terminal::DefaultTerminalSize();
+	Terminal::TerminalSize terminal_size = Terminal::DefaultTerminalSize();
 };
 
 FluxConfig FluxConfigFromEnvironment();
@@ -27,4 +27,4 @@ LogLevel ParseLogLevel(std::string_view text);
 const char* ToString(LogLevel level);
 std::string BuildConfigSummary(const FluxConfig& config);
 
-}  // namespace XER::flux::core
+}  // namespace XER::Flux::Core

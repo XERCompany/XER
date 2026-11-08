@@ -4,7 +4,7 @@
 #include <map>
 #include <vector>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// Stratified K-Fold — preserves class distribution in each fold
 class ValStratified {
@@ -24,4 +24,4 @@ private:
     unsigned int seed_;
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

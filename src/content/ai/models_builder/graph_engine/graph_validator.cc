@@ -1,6 +1,6 @@
 #include "graph_validator.h"
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 std::vector<ValidationError> GraphValidator::Validate(const GraphBase& graph) {
   std::vector<ValidationError> errors;
@@ -28,4 +28,4 @@ bool GraphValidator::HasCycle(const GraphBase& graph) {
   catch (...) { return true; }
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

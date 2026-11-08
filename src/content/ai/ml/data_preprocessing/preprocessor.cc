@@ -1,7 +1,7 @@
 ﻿#include "preprocessor.h"
 
-namespace Engine::MLData::Preprocessing {
+namespace XER::MLData::Preprocessing {
 
 // Base implementation
 
-} // namespace Engine::MLData::Preprocessing
+} // namespace XER::MLData::Preprocessing

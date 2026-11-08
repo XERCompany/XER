@@ -3,8 +3,8 @@
 #include <string>
 #include <string_view>
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 std::string StripAnsi(std::string_view text);
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

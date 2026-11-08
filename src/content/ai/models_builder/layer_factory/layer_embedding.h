@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Embedding lookup layer (vocabulary → dense vectors)
 class LayerEmbedding : public Core::Layer {
@@ -25,4 +25,4 @@ class LayerEmbedding : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeEmbedding(const std::string& name,
                                               LayerEmbedding::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

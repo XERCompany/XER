@@ -8,7 +8,7 @@
 #include <fstream>
 #include <cstdlib>
 
-namespace Engine::Content::Platform {
+namespace XER::Content::Platform {
 
 LinuxPlatform::LinuxPlatform() {
 }
@@ -111,4 +111,4 @@ void LinuxPlatform::SleepMs(uint32_t milliseconds) const {
     std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
 }
 
-}  // namespace Engine::Content::Platform
+}  // namespace XER::Content::Platform

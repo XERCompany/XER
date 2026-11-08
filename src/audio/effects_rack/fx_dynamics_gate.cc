@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 namespace {
 float LinearToDb(float linear) {
@@ -67,4 +67,4 @@ std::string DynamicsGate::GetReport() const {
 		", open=" + std::to_string(gate_open_ ? 1 : 0);
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

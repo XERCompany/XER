@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 struct WeightStatistics {
 	size_t count;
@@ -22,4 +22,4 @@ public:
 	WeightStatistics AnalyzePack(const std::vector<WeightTensor>& tensors) const;
 };
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

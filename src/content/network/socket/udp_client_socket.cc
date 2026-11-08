@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
 UdpClientSocket::UdpClientSocket() {
 }
@@ -24,7 +24,7 @@ UdpClientSocket::~UdpClientSocket() {
 }
 
 bool UdpClientSocket::Bind(uint16_t local_port, std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
+    auto& platform = Platform::SocketPlatform::GetInstance();
 
     // Create UDP socket
     auto socket = platform.CreateUdpSocket(false, error);
@@ -40,7 +40,7 @@ bool UdpClientSocket::Bind(uint16_t local_port, std::string* error) {
     fd_ = static_cast<int>(socket.Get());
     socket.Detach();  // Prevent auto-close
 
-    logging::NetworkLogger::Instance().LogInfo("udp_socket",
+    Logging::NetworkLogger::Instance().LogInfo("udp_socket",
         "Bound to port " + std::to_string(local_port));
 
     return true;
@@ -48,10 +48,10 @@ bool UdpClientSocket::Bind(uint16_t local_port, std::string* error) {
 
 bool UdpClientSocket::Connect(const std::string& host, uint16_t port,
                                std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
+    auto& platform = Platform::SocketPlatform::GetInstance();
 
     // Resolve address
-    std::vector<platform::AddressInfo> addresses;
+    std::vector<Platform::AddressInfo> addresses;
     if (!platform.ResolveAddress(host, port, &addresses, error)) {
         return false;
     }
@@ -76,7 +76,7 @@ bool UdpClientSocket::Connect(const std::string& host, uint16_t port,
     connected_host_ = host;
     connected_port_ = port;
 
-    logging::NetworkLogger::Instance().LogInfo("udp_socket",
+    Logging::NetworkLogger::Instance().LogInfo("udp_socket",
         "Connected to " + host + ":" + std::to_string(port));
 
     return true;
@@ -98,8 +98,8 @@ void UdpClientSocket::Close() {
 int UdpClientSocket::SendTo(const uint8_t* buf, size_t len,
                              const std::string& host, uint16_t port,
                              std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
 
     if (!socket.IsValid()) {
         if (error) *error = "Socket not created";
@@ -112,8 +112,8 @@ int UdpClientSocket::SendTo(const uint8_t* buf, size_t len,
 int UdpClientSocket::RecvFrom(std::vector<uint8_t>* buf,
                                std::string* from_host, uint16_t* from_port,
                                std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
 
     if (!socket.IsValid()) {
         if (error) *error = "Socket not created";
@@ -135,7 +135,7 @@ void UdpClientSocket::SendToAsync(const uint8_t* buf, size_t len,
                                   const std::string& host, uint16_t port,
                                   UdpCallback cb) {
     std::vector<uint8_t> data(buf, buf + len);
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, data = std::move(data), host, port, cb = std::move(cb)]() mutable {
             std::string error;
             int result = SendTo(data.data(), data.size(), host, port, &error);
@@ -144,7 +144,7 @@ void UdpClientSocket::SendToAsync(const uint8_t* buf, size_t len,
 }
 
 void UdpClientSocket::RecvFromAsync(UdpCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, cb = std::move(cb)]() {
             std::vector<uint8_t> buf;
             std::string from_host;
@@ -155,4 +155,4 @@ void UdpClientSocket::RecvFromAsync(UdpCallback cb) {
         });
 }
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

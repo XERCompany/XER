@@ -2,7 +2,7 @@
 
 #include <charconv>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::string ModelVersioning::ToString(const ModelVersion& version) {
   return std::to_string(version.major) + "." +
@@ -52,4 +52,4 @@ std::string ModelVersioning::AttachVersionToModelName(const std::string& model_n
   return model_name + "@" + ToString(version);
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations

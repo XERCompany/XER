@@ -8,7 +8,7 @@
 
 #include "content/network/network_util/network_util.h"
 
-namespace XER::network::proxy {
+namespace XER::Network::Proxy {
 
 // static
 ProxyConfig ProxyConfig::Direct() {
@@ -36,10 +36,10 @@ ProxyConfig ProxyConfig::FromEnv() {
 
     std::string host;
     uint16_t port = 0;
-    XER::network::SplitHostPort(url, &host, &port);
+    XER::Network::SplitHostPort(url, &host, &port);
 
     cfg.proxy = {type, host, port};
     return cfg;
 }
 
-}  // namespace XER::network::proxy
+}  // namespace XER::Network::Proxy

@@ -3,7 +3,7 @@
 #include <vector>
 #include <cmath>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Stateless loss function utilities
 class TrainLossFunction {
@@ -23,4 +23,4 @@ class TrainLossFunction {
                                   int num_classes);
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

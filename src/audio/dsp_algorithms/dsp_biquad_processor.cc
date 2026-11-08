@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
@@ -189,4 +189,4 @@ bool BiquadProcessor::ComputeCoefficients() {
 	return true;
 }
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

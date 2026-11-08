@@ -3,7 +3,7 @@
 #include "../../models_builder/model_core/model.h"
 #include <memory>
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 /// @brief Inserts explicit Cast layers where data type transitions occur
 class TransTypeCast {
@@ -16,4 +16,4 @@ class TransTypeCast {
                                       DType target_dtype);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

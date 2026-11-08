@@ -2,7 +2,7 @@
 #pragma once
 #include <cstdint>
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
     // Create an Image Shader handle
     int ShaderCreateImage(const std::vector<uint32_t>& pixels, int width, int height,
                           bool repeat_x, bool repeat_y);

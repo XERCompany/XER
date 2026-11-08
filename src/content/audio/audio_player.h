@@ -86,7 +86,7 @@ private:
     UINT32 buffer_frame_count_;
 
     // Audio data
-    XER::Engine::Audio::Core::AudioSourceBuffer audio_buffer_;
+    XER::Audio::Core::AudioSourceBuffer audio_buffer_;
     size_t playback_position_;
 
     // Playback state

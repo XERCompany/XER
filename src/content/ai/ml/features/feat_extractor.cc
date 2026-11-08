@@ -3,7 +3,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 FeatureResult FeatExtractor::ExtractStats(const std::vector<float>& signal,
                                            size_t window_size) const {
@@ -71,4 +71,4 @@ std::vector<float> FeatExtractor::Flatten(const std::vector<FeatureResult>& resu
     return out;
 }
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

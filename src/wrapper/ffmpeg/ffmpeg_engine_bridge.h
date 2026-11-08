@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::engine::bridge::ffmpeg {
+namespace XER::Bridge::FFmpeg {
 
 struct LibraryVersion {
 	std::string name;
@@ -249,4 +249,4 @@ bool ExtractStream(const std::string& input_path,
 				   const std::string& output_path,
 				   std::string* out_error);
 
-}  // namespace XER::engine::bridge::ffmpeg
+}  // namespace XER::Bridge::FFmpeg

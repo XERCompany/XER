@@ -7,7 +7,7 @@
 #include <limits>
 #include <stdexcept>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 QuantizationResult WeightQuantizer::Quantize(WeightTensor& tensor,
                                               QuantizeMode mode) const {
@@ -88,4 +88,4 @@ std::string WeightQuantizer::ModeName(QuantizeMode mode) {
     }
 }
 
-}  // namespace Engine::ModelsBuilder::Weights
+}  // namespace XER::ModelsBuilder::Weights

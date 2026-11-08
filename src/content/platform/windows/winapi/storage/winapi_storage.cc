@@ -2,7 +2,7 @@
 #include <windows.h>
 #include <fileapi.h>
 
-namespace Engine::Content::Platform::WinAPI::Storage {
+namespace XER::Content::Platform::WinAPI::Storage {
 
 // ---------------------------------------------------------------------------
 // Drive Enumerator
@@ -364,4 +364,4 @@ std::vector<uint8_t> StructuredStorage::ReadFromStream(const std::string& stream
     return std::vector<uint8_t>();
 }
 
-}  // namespace Engine::Content::Platform::WinAPI::Storage
+}  // namespace XER::Content::Platform::WinAPI::Storage

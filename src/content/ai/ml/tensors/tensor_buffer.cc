@@ -1,7 +1,7 @@
 #include "tensor_buffer.h"
 #include <cstring>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 TensorBuffer::TensorBuffer(size_t num_floats)
     : buf_(num_floats * sizeof(float), 0) {}
@@ -20,4 +20,4 @@ void TensorBuffer::Fill(float value) {
     for (size_t i = 0; i < n; ++i) p[i] = value;
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

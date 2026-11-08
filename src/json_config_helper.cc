@@ -93,7 +93,7 @@ std::vector<std::string> JsonConfigHelper::GetJsonConfigStringList(
     if (value->isArray()) {
         for (const Json::Value& item : *value) {
             if (item.isString()) {
-                const std::string text = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(item.asString());
+                const std::string text = XER::Helper::String::TrimAsciiWhitespaceCopy(item.asString());
                 if (!text.empty()) {
                     values.push_back(text);
                 }
@@ -142,7 +142,7 @@ bool JsonConfigHelper::ReadJsonConfigFile(
 }
 
 std::string JsonConfigHelper::NormalizeConfigToken(const std::string& text) {
-    const std::string lowered = XER::Engine::Helper::String::ToLowerAscii(text);
+    const std::string lowered = XER::Helper::String::ToLowerAscii(text);
     std::string normalized;
     normalized.reserve(lowered.size());
     for (unsigned char ch : lowered) {
@@ -162,7 +162,7 @@ void JsonConfigHelper::AppendCsvStrings(
     std::string token;
     for (char ch : text) {
         if (ch == ',') {
-            const std::string trimmed = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(token);
+            const std::string trimmed = XER::Helper::String::TrimAsciiWhitespaceCopy(token);
             if (!trimmed.empty()) {
                 output->push_back(trimmed);
             }
@@ -171,7 +171,7 @@ void JsonConfigHelper::AppendCsvStrings(
         }
         token.push_back(ch);
     }
-    const std::string trimmed = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(token);
+    const std::string trimmed = XER::Helper::String::TrimAsciiWhitespaceCopy(token);
     if (!trimmed.empty()) {
         output->push_back(trimmed);
     }

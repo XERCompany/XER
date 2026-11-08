@@ -191,7 +191,7 @@ void VideoSession::Fail(const std::string& message) {
 void VideoSession::DecodeLoop() {
     // Heap + shared_ptr: the audio tap consumer (VideoAudioPlayer) holds a
     // reference via GetAvDecoder() and must outlive this loop's frames.
-    auto decoder = std::make_shared<XER::engine::bridge::ffmpeg::VideoDecoder>();
+    auto decoder = std::make_shared<XER::Bridge::FFmpeg::VideoDecoder>();
     decoder->EnableAudioTap(true);
     std::string error;
     if (!decoder->Open(path_, &error)) {

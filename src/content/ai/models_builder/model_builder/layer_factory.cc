@@ -1,6 +1,6 @@
 ﻿#include "layer_factory.h"
 
-namespace Engine::ModelsBuilder::Builder {
+namespace XER::ModelsBuilder::Builder {
 
 LayerFactory& LayerFactory::GetInstance() {
     static LayerFactory instance;
@@ -23,4 +23,4 @@ void LayerFactory::RegisterLayer(const std::string& name, std::function<std::sha
     creators_[name] = creator;
 }
 
-} // namespace Engine::ModelsBuilder::Builder
+} // namespace XER::ModelsBuilder::Builder

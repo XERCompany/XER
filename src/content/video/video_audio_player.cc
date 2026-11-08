@@ -63,7 +63,7 @@ VideoAudioPlayer::VideoAudioPlayer() = default;
 VideoAudioPlayer::~VideoAudioPlayer() { Close(); }
 
 bool VideoAudioPlayer::Attach(
-    std::shared_ptr<XER::engine::bridge::ffmpeg::VideoDecoder> decoder,
+    std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder> decoder,
     std::string* error_out) {
     Close();
     if (!decoder || !decoder->IsOpen()) {
@@ -180,7 +180,7 @@ void VideoAudioPlayer::StreamWorker() {
         return static_cast<double>(v) * audio_time_base_;
     };
 
-    std::vector<XER::engine::bridge::ffmpeg::AudioFrameInfo> frames;
+    std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> frames;
     while (!stream_stop_.load(std::memory_order_acquire)) {
         if (!decoder->IsOpen()) break;
         frames.clear();
@@ -498,7 +498,7 @@ void VideoAudioPlayer::CleanupWasapi() {
 // ── Sample-format conversion (unchanged from the whole-file path) ──────────
 
 bool VideoAudioPlayer::AppendFrameSamples(
-    const XER::engine::bridge::ffmpeg::AudioFrameInfo& frame, SourceChunk* chunk) {
+    const XER::Bridge::FFmpeg::AudioFrameInfo& frame, SourceChunk* chunk) {
     const int channels = frame.channels;
     const int samples = frame.sample_count;
     if (channels <= 0 || samples <= 0 || chunk == nullptr) return false;

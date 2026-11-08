@@ -8,7 +8,7 @@
 #include "flux/input/command_parser.h"
 #include "flux/input/key_binding_manager.h"
 
-namespace XER::flux::input {
+namespace XER::Flux::Input {
 
 enum class InputDispatchKind {
 	kCommand,
@@ -29,8 +29,8 @@ class InputManager {
 public:
 	explicit InputManager(std::size_t history_limit = 128);
 
-	XER::flux::history::CommandHistory& history();
-	const XER::flux::history::CommandHistory& history() const;
+	XER::Flux::History::CommandHistory& history();
+	const XER::Flux::History::CommandHistory& history() const;
 	KeyBindingManager& bindings();
 	const KeyBindingManager& bindings() const;
 
@@ -40,9 +40,9 @@ public:
 	std::vector<InputDispatch> Feed(std::string_view input);
 
 private:
-	XER::flux::history::CommandHistory history_;
+	XER::Flux::History::CommandHistory history_;
 	KeyBindingManager bindings_;
 	std::string current_buffer_;
 };
 
-}  // namespace XER::flux::input
+}  // namespace XER::Flux::Input

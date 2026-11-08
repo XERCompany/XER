@@ -25,12 +25,12 @@ struct FxEqBandState {
 };
 
 struct FxNodeState {
-    XER::Engine::Audio::FX::CustomEffectAlgorithm algorithm =
-        XER::Engine::Audio::FX::CustomEffectAlgorithm::kUnknown;
+    XER::Audio::FX::CustomEffectAlgorithm algorithm =
+        XER::Audio::FX::CustomEffectAlgorithm::kUnknown;
     bool enabled = true;
     // Wet/dry amount for algorithms that support a node-level mix curve.
     float wet_mix = 1.0f;
-    std::vector<XER::Engine::Audio::FX::CustomEffectParameter> params;
+    std::vector<XER::Audio::FX::CustomEffectParameter> params;
 };
 
 // Shared, UI-free model of the whole FX rack: graphic EQ, bass boost,
@@ -49,9 +49,9 @@ public:
     float reverb_damping = 0.3f;
     std::vector<FxNodeState> nodes;
 
-    XER::Engine::Audio::FX::CustomEffectPackage BuildPackage() const;
+    XER::Audio::FX::CustomEffectPackage BuildPackage() const;
 
-    // Persistence through XER::Engine::Cache (src/cache) — the rack configuration
+    // Persistence through XER::Cache (src/cache) — the rack configuration
     // survives application restarts.
     bool SaveToCache() const;
     bool LoadFromCache();
@@ -59,14 +59,14 @@ public:
     bool Deserialize(const std::string& text);
 
     static std::vector<FxParamSpec> ParamSpecsFor(
-        XER::Engine::Audio::FX::CustomEffectAlgorithm algorithm);
+        XER::Audio::FX::CustomEffectAlgorithm algorithm);
     static std::string AlgorithmDisplayName(
-        XER::Engine::Audio::FX::CustomEffectAlgorithm algorithm);
+        XER::Audio::FX::CustomEffectAlgorithm algorithm);
     static bool SupportsWetMix(
-        XER::Engine::Audio::FX::CustomEffectAlgorithm algorithm);
-    static std::vector<XER::Engine::Audio::FX::CustomEffectAlgorithm> AvailableAlgorithms();
+        XER::Audio::FX::CustomEffectAlgorithm algorithm);
+    static std::vector<XER::Audio::FX::CustomEffectAlgorithm> AvailableAlgorithms();
     static FxNodeState MakeDefaultNode(
-        XER::Engine::Audio::FX::CustomEffectAlgorithm algorithm);
+        XER::Audio::FX::CustomEffectAlgorithm algorithm);
 };
 
 } // namespace XER::UI::Widgets

@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief Represents a directed edge connecting two graph nodes via tensor name
 struct EdgeInfo {
@@ -14,4 +14,4 @@ struct EdgeInfo {
   std::string tensor_name;
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

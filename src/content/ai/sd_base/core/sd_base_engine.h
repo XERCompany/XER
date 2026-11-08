@@ -5,7 +5,7 @@
 
 #include <memory>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdPipeline;
 
@@ -20,4 +20,4 @@ private:
     std::unique_ptr<SdPipeline> pipeline_;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

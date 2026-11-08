@@ -1,6 +1,6 @@
 #include "dataset_iterator.h"
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 DatasetIterator::DatasetIterator(const DatasetBase& dataset)
 		: dataset_(dataset) {
@@ -21,5 +21,5 @@ bool DatasetIterator::HasNext() const {
 	return cursor_ < dataset_.Size();
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

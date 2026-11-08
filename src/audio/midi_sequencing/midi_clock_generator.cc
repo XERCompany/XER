@@ -1,6 +1,6 @@
 #include "midi_clock_generator.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 void MidiClockGenerator::SetTempoBpm(double bpm) {
     if (bpm > 0.0) {
@@ -21,4 +21,4 @@ uint32_t MidiClockGenerator::AdvanceSamples(uint32_t samples, uint32_t sample_ra
     return pulses;
 }
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

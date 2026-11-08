@@ -8,7 +8,7 @@
 #pragma comment(lib, "iphlpapi.lib")
 #pragma comment(lib, "winhttp.lib")
 
-namespace Engine::Content::Platform::WinAPI::Network {
+namespace XER::Content::Platform::WinAPI::Network {
 
 // ---------------------------------------------------------------------------
 // Network Helper
@@ -267,4 +267,4 @@ bool WinSock2Helper::GetUDPStatistics(int* datagramsReceived, int* datagramsSent
     return false;
 }
 
-}  // namespace Engine::Content::Platform::WinAPI::Network
+}  // namespace XER::Content::Platform::WinAPI::Network

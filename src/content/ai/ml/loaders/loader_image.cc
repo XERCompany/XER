@@ -13,7 +13,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 Dataset LoaderImage::Load(const std::string& path) {
 #ifdef LOADER_IMAGE_HAS_OPENCV
@@ -43,4 +43,4 @@ Dataset LoaderImage::Load(const std::string& path) {
 #endif
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

@@ -1,7 +1,7 @@
 #pragma once
 #include "aug_base.h"
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 class AugHueShift : public AugBase {
 public:
@@ -14,4 +14,4 @@ private:
     static void HsvToRgb(float h, float s, float v, float& r, float& g, float& b);
 };
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

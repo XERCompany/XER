@@ -91,7 +91,7 @@ private:
     void ApplyIfNeeded();
     void RebuildNodeUi();
     void RewireNodeCallbacks();
-    void AddNode(XER::Engine::Audio::FX::CustomEffectAlgorithm algorithm);
+    void AddNode(XER::Audio::FX::CustomEffectAlgorithm algorithm);
     void RemoveNode(std::size_t index);
     void MoveNode(std::size_t index, int delta);
     void AttachAllChildren();

@@ -5,7 +5,7 @@
 #include <cstring>
 #include <string_view>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 namespace {
 
@@ -89,5 +89,5 @@ std::map<std::string, std::string> OnnxGraphParser::ExtractMetadata(const uint8_
 	return meta;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

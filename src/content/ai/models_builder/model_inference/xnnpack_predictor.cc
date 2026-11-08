@@ -17,7 +17,7 @@
 #define XER_AI_HAS_XNNPACK_HEADER 0
 #endif
 
-namespace Engine::ModelsBuilder::Inference {
+namespace XER::ModelsBuilder::Inference {
 
 namespace {
 
@@ -201,4 +201,4 @@ float QuantizedPredictor::GetCompressionRatio() const {
     return 4.0f;
 }
 
-} // namespace Engine::ModelsBuilder::Inference
+} // namespace XER::ModelsBuilder::Inference

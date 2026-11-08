@@ -186,13 +186,13 @@ void AudioPlayer::CleanupWASAPI() {
 }
 
 bool AudioPlayer::LoadFromFile(const std::string& file_path, std::string* error_out) {
-    XER::Engine::Audio::Core::AudioSourceLoadOptions options;
+    XER::Audio::Core::AudioSourceLoadOptions options;
     options.input_path = file_path;
     options.target_sample_rate = sample_rate_;
     options.target_channels = channel_count_;
 
-    XER::Engine::Audio::Core::AudioSourceBuffer buffer;
-    if (!XER::Engine::Audio::Core::AudioSourceLoader::Load(options, &buffer, error_out)) {
+    XER::Audio::Core::AudioSourceBuffer buffer;
+    if (!XER::Audio::Core::AudioSourceLoader::Load(options, &buffer, error_out)) {
         return false;
     }
 

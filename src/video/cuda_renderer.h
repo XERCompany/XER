@@ -4,7 +4,7 @@
 
 namespace video {
 
-/// CUDA-based rendering backend (uses engine::bridge::cuda).
+/// CUDA-based rendering backend (uses XER::Bridge::Cuda).
 class CudaRenderer : public RenderingEngine {
 public:
     CudaRenderer() = default;

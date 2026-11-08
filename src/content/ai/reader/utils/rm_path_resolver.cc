@@ -4,7 +4,7 @@
 
 namespace fs = std::filesystem;
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 std::string RmPathResolver::Resolve(const std::string& path,
                                      const std::vector<std::string>& search_dirs) {
@@ -43,4 +43,4 @@ bool RmPathResolver::Exists(const std::string& path) {
     return fs::exists(path) && fs::is_regular_file(path);
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils

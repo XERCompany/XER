@@ -9,7 +9,7 @@
 #include "synth_osc_analog.h"
 #include "synth_polyphony_controller.h"
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 struct VoiceState {
     uint8_t note = 0;
@@ -32,4 +32,4 @@ private:
     absl::flat_hash_map<uint8_t, VoiceState> voices_; 
 };
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

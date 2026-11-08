@@ -6,7 +6,7 @@
 #include <memory>
 #include <mutex>
 
-namespace Engine::V8Runtime {
+namespace XER::V8Runtime {
 namespace {
 
 std::mutex& V8Mutex() {
@@ -50,4 +50,4 @@ void Shutdown() {
 	V8Initialized() = false;
 }
 
-}  // namespace Engine::V8Runtime
+}  // namespace XER::V8Runtime

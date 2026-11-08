@@ -2,7 +2,7 @@
 
 #include "../graph_engine/graph_base.h"
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 /// @brief Folds constant sub-expressions at graph-compile time
 class OptConstantFolding {
@@ -10,4 +10,4 @@ class OptConstantFolding {
   static void Apply(GraphEngine::GraphBase& graph);
 };
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 // Synchronous one-shot HTTP request over libcurl.
 // Shared transport for callers that need a bounded, blocking
@@ -33,4 +33,4 @@ SyncResponse SyncRequest(const std::string& method,
                          long timeout_ms = 60000,
                          const std::string& user_agent = "XER-NodeGraph/1.0");
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

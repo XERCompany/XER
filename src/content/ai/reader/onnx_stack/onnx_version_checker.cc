@@ -1,6 +1,6 @@
 #include "onnx_version_checker.h"
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 bool OnnxVersionChecker::IsOpsetSupported(int opset_version) noexcept {
     return opset_version >= kMinSupportedOpset &&
@@ -16,4 +16,4 @@ std::string OnnxVersionChecker::Describe(int opset_version) {
          + std::to_string(kMaxSupportedOpset) + ").";
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx

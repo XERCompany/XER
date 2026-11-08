@@ -1,6 +1,6 @@
 #include "tensor_allocator.h"
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 std::shared_ptr<Tensor> TensorAllocator::Zeros(const std::vector<size_t>& shape) {
     auto t = std::make_shared<Tensor>(shape);
@@ -22,4 +22,4 @@ std::shared_ptr<Tensor> TensorAllocator::Clone(const Tensor& src) {
     return std::make_shared<Tensor>(src.Clone());
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <string_view>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 namespace {
 
@@ -52,5 +52,5 @@ uint32_t OnnxAttributeReader::ReadUnitsHint(const std::map<std::string, std::str
 	}
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

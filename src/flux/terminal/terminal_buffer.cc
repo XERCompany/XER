@@ -1,7 +1,7 @@
 #include "flux/terminal/terminal_buffer.h"
 #include "helper/string_utils.h"
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 namespace {
 
 }  // namespace
@@ -54,7 +54,7 @@ std::string TerminalBuffer::SnapshotPlainText(OutputStream stream) const {
 }
 
 std::vector<std::string> TerminalBuffer::Lines(OutputStream stream) const {
-	return XER::Engine::Helper::String::SplitLines(Storage(stream));
+	return XER::Helper::String::SplitLines(Storage(stream));
 }
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

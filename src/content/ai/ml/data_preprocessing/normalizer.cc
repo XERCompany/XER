@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace Engine::MLData::Preprocessing {
+namespace XER::MLData::Preprocessing {
 
 Normalizer::Normalizer() : mean_(0.0f), stddev_(1.0f) {
 }
@@ -28,4 +28,4 @@ std::shared_ptr<Types::Tensor> Normalizer::Process(const Types::Tensor& input) {
     return result;
 }
 
-} // namespace Engine::MLData::Preprocessing
+} // namespace XER::MLData::Preprocessing

@@ -6,11 +6,11 @@
 #include "flux/rendering/renderer.h"
 #include "flux/terminal/terminal_interface.h"
 
-namespace XER::flux::rendering {
+namespace XER::Flux::Rendering {
 
 class RenderPipeline {
 public:
-	bool Present(const RenderContext& context, XER::flux::terminal::OutputStream stream = XER::flux::terminal::OutputStream::kStdout);
+	bool Present(const RenderContext& context, XER::Flux::Terminal::OutputStream stream = XER::Flux::Terminal::OutputStream::kStdout);
 	void Reset();
 
 	const std::string& last_plain_frame() const;
@@ -24,4 +24,4 @@ private:
 	std::size_t frame_count_ = 0;
 };
 
-}  // namespace XER::flux::rendering
+}  // namespace XER::Flux::Rendering

@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 class OnnxExporter {
  public:
@@ -13,5 +13,5 @@ class OnnxExporter {
 	std::string BuildOnnxLikeText(const Core::Model& model) const;
 };
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

@@ -1,6 +1,6 @@
 #include "wrapper/cudnn/cudnn_engine_bridge.h"
 
-namespace XER::engine::bridge::cudnn {
+namespace XER::Bridge::CuDNN {
 
 bool IsAvailable() {
 #if ENGINE_HAS_CUDNN_BRIDGE
@@ -14,4 +14,4 @@ std::string Summary() {
     return IsAvailable() ? "cuDNN bridge enabled" : "cuDNN bridge unavailable";
 }
 
-}  // namespace XER::engine::bridge::cudnn
+}  // namespace XER::Bridge::CuDNN

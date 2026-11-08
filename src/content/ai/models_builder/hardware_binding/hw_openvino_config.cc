@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 void OpenVinoConfigurator::SetConfig(const OpenVinoConfig& config) {
 	config_ = config;
@@ -29,5 +29,5 @@ std::unordered_map<std::string, std::string> OpenVinoConfigurator::BuildProperti
 	return properties;
 }
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

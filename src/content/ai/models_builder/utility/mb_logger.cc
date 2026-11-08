@@ -4,7 +4,7 @@
 #include <iostream>
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 namespace {
 
@@ -108,4 +108,4 @@ void ModelBuilderLogger::Clear() {
 	entries_.clear();
 }
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility

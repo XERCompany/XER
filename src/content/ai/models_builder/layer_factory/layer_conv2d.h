@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief 2D Convolution layer (NCHW, CUDNN-backed)
 class LayerConv2D : public Core::Layer {
@@ -31,4 +31,4 @@ class LayerConv2D : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeConv2D(const std::string& name,
                                          LayerConv2D::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

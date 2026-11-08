@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 SpectrogramGenerator::SpectrogramGenerator(size_t fft_size, size_t hop_size)
 	: fft_size_(fft_size),
@@ -17,10 +17,10 @@ SpectrogramGenerator::SpectrogramGenerator(size_t fft_size, size_t hop_size)
 SpectrogramGenerator::~SpectrogramGenerator() = default;
 
 bool SpectrogramGenerator::GenerateFromFile(
-	const XER::Engine::Audio::Core::AudioSourceLoadOptions& load_options,
+	const XER::Audio::Core::AudioSourceLoadOptions& load_options,
 	std::string* error_out) {
-	XER::Engine::Audio::Core::AudioSourceBuffer source_buffer;
-	if (!XER::Engine::Audio::Core::AudioSourceLoader::Load(load_options, &source_buffer, error_out)) {
+	XER::Audio::Core::AudioSourceBuffer source_buffer;
+	if (!XER::Audio::Core::AudioSourceLoader::Load(load_options, &source_buffer, error_out)) {
 		return false;
 	}
 	return Generate(source_buffer.samples.data(), source_buffer.samples.size());
@@ -79,4 +79,4 @@ std::string SpectrogramGenerator::GetReport() const {
 		", bins=" + std::to_string(GetBinCount());
 }
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

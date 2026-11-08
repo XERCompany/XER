@@ -5,14 +5,14 @@
 #include "content/network/http/http_stream_factory.h"
 #include "content/network/socket/socket_stream.h"
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 namespace {
 
 class SocketBackedHttpStream : public HttpStream {
 public:
     explicit SocketBackedHttpStream(
-        std::unique_ptr<transport::TransportClientSocket> sock)
+        std::unique_ptr<Transport::TransportClientSocket> sock)
         : sock_(std::move(sock)) {}
 
     bool IsOpen() const override { return sock_ != nullptr; }
@@ -27,17 +27,17 @@ public:
     }
 
 private:
-    std::unique_ptr<transport::TransportClientSocket> sock_;
+    std::unique_ptr<Transport::TransportClientSocket> sock_;
 };
 
 }  // namespace
 
 std::unique_ptr<HttpStream>
 HttpStreamFactory::CreateFromSocket(
-    std::unique_ptr<transport::TransportClientSocket> socket,
+    std::unique_ptr<Transport::TransportClientSocket> socket,
     const std::string& /*host*/,
     std::string* /*error*/) {
     return std::make_unique<SocketBackedHttpStream>(std::move(socket));
 }
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

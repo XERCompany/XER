@@ -11,8 +11,8 @@
 #include "content/network/transport/transport_client_socket.h"
 #include "content/network/socket/socket_stream.h"
 
-namespace XER::network {
-namespace socket {
+namespace XER::Network {
+namespace Socket {
 
 class SocketServer;  // forward declaration
 
@@ -31,7 +31,7 @@ class SocketServer;  // forward declaration
 //   } else {
 //       // Handle connection error
 //   }
-class TcpClientSocket : public transport::TransportClientSocket {
+class TcpClientSocket : public Transport::TransportClientSocket {
 public:
     TcpClientSocket() = default;
     ~TcpClientSocket() override;
@@ -68,12 +68,12 @@ public:
     // Asynchronously read data from the socket.
     // Operation is dispatched to the thread pool.
     void ReadAsync(uint8_t* buf, size_t len,
-                   transport::CompletionCallback cb) override;
+                   Transport::CompletionCallback cb) override;
     
     // Asynchronously write data to the socket.
     // Operation is dispatched to the thread pool.
     void WriteAsync(const uint8_t* buf, size_t len,
-                    transport::CompletionCallback cb) override;
+                    Transport::CompletionCallback cb) override;
 
     // Get the underlying stream wrapper (for advanced usage).
     SocketStream* stream() { return stream_.get(); }
@@ -92,5 +92,5 @@ private:
     std::unique_ptr<SocketStream> stream_;
 };
 
-}  // namespace socket
-}  // namespace XER::network
+}  // namespace Socket
+}  // namespace XER::Network

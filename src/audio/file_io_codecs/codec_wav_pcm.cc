@@ -4,7 +4,7 @@
 #include <array>
 #include <cstring>
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 namespace {
 
@@ -153,4 +153,4 @@ bool WavPcmCodec::Decode16(
     return true;
 }
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

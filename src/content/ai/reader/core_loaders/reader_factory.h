@@ -1,11 +1,11 @@
 #pragma once
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 class ReaderFactory {
  public:
 	static void RegisterDefaults();
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

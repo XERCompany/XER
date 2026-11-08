@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <string>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 struct TensorRtConfig {
 	bool enable_tensorrt = true;
@@ -29,5 +29,5 @@ class TensorRtConverter {
 	TensorRtConfig config_;
 };
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

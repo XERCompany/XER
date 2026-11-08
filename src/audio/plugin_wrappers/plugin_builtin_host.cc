@@ -5,7 +5,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 namespace {
 
@@ -24,7 +24,7 @@ float DbToLinear(float db_value) {
 }
 
 std::string NormalizeDescriptor(std::string descriptor) {
-	descriptor = XER::Engine::Helper::String::ToLowerAscii(descriptor);
+	descriptor = XER::Helper::String::ToLowerAscii(descriptor);
 	constexpr const char* kBuiltinPrefix = "builtin://";
 	if (descriptor.rfind(kBuiltinPrefix, 0) == 0) {
 		descriptor.erase(0, std::strlen(kBuiltinPrefix));
@@ -199,7 +199,7 @@ bool BuiltinPluginHost::ApplyParameters() {
 			|| !parameter_bridge_.GetValue(kEqGainParameterId, gain_db)) {
 			return false;
 		}
-		return parametric_eq_.SetBand(0, XER::Engine::Audio::FX::ParametricBand{frequency, q, gain_db, true});
+		return parametric_eq_.SetBand(0, XER::Audio::FX::ParametricBand{frequency, q, gain_db, true});
 	}
 	case Kind::kNone:
 		return false;
@@ -230,4 +230,4 @@ void BuiltinPluginHost::RegisterParametricEqParameters() {
 	parameter_bridge_.RegisterParameter(kEqGainParameterId, "gain_db", 0.0f, -18.0f, 18.0f);
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

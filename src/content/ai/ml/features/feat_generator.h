@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 // Generates composite feature vectors by combining multiple extraction strategies.
 // Integrates with IO::AsyncIO::IOCacheManager via #if __has_include guard.
@@ -26,4 +26,4 @@ private:
     bool cache_enabled_ = true;
 };
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

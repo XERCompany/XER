@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::pair<std::shared_ptr<Core::Model>, std::shared_ptr<Core::Model>> ModelSplitter::Split(
     const Core::Model& model,
@@ -38,4 +38,4 @@ std::pair<std::shared_ptr<Core::Model>, std::shared_ptr<Core::Model>> ModelSplit
   return {front, back};
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations

@@ -6,12 +6,12 @@
 #include <iomanip>
 #include <sstream>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 namespace {
 
 std::string NormalizeText(std::string text) {
-	return XER::Engine::Helper::String::ToLowerAscii(text);
+	return XER::Helper::String::ToLowerAscii(text);
 }
 
 }  // namespace
@@ -193,4 +193,4 @@ std::string BuildCustomEffectReportText(const CustomEffectReport& report) {
 	return output.str();
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

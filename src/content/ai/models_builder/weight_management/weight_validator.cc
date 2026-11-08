@@ -9,7 +9,7 @@
 #include <numeric>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 WeightValidationResult WeightValidator::ValidateTensor(const WeightTensor& tensor) const {
 	WeightValidationResult result{false, tensor.values.size(), 0U, 0.0f, 0.0f, 0.0f};
@@ -67,4 +67,4 @@ bool WeightValidator::ValidatePack(const std::vector<WeightTensor>& tensors) con
 	return all_valid;
 }
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

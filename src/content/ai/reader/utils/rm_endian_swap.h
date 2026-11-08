@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 /// Byte-swapping helpers for cross-endian model file loading.
 class RmEndianSwap {
@@ -21,4 +21,4 @@ public:
     static bool IsBigEndian() noexcept;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils

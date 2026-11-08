@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 bool Mp3LameCodec::Encode(const float* input, size_t frames, std::vector<uint8_t>& out) const {
 	return EncodeInterleaved(input, frames, 44100, 1, out);
@@ -99,4 +99,4 @@ bool Mp3LameCodec::Decode(const uint8_t* data, size_t bytes, std::vector<float>&
     return true;
 }
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

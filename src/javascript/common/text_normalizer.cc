@@ -8,7 +8,7 @@
 #include <unicode/unistr.h>
 #endif
 
-namespace engine::javascript::common {
+namespace XER::JavaScript::Common {
 
 namespace {
 
@@ -55,4 +55,4 @@ std::string TextNormalizer::NormalizeText(const std::string& value) {
     return CollapseWhitespace(value);
 }
 
-}  // namespace engine::javascript::common
+}  // namespace XER::JavaScript::Common

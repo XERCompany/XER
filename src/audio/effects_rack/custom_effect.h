@@ -6,7 +6,7 @@
 
 #include "custom_effect_flow.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 CustomEffectPackage BuildSmokeCustomEffectPackage();
 CustomEffectPackage BuildExampleCustomEffectPackage(const std::string& clap_plugin_reference = "builtin://gain");
@@ -36,4 +36,4 @@ bool RunCustomEffectPackageInterleaved(
 	CustomEffectReport* report_out,
 	std::string* error_out = nullptr);
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

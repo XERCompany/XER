@@ -3,7 +3,7 @@
 #include "codec_ffmpeg_decode_helper.h"
 #include "codec_ffmpeg_encode_helper.h"
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 bool OggVorbisCodec::Encode(const float* input, size_t frames, std::vector<uint8_t>& out) const {
     if (input == nullptr || frames == 0) {
@@ -32,4 +32,4 @@ bool OggVorbisCodec::Decode(const uint8_t* data, size_t bytes, std::vector<float
 	return true;
 }
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

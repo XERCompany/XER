@@ -7,7 +7,7 @@
 
 #include "async_io/async_buffer_pool.h"
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 enum class ResampleQuality {
     FAST,
@@ -63,4 +63,4 @@ private:
     float InterpolateWindowedSinc(const float* buffer, size_t frame_count, double pos) const;
 };
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

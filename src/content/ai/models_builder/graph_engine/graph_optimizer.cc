@@ -2,7 +2,7 @@
 
 #include <unordered_set>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 void GraphOptimizer::PruneDeadNodes(GraphBase& graph) {
   // Build set of all consumed inputs across the graph
@@ -26,4 +26,4 @@ void GraphOptimizer::Optimize(GraphBase& graph) {
   PruneDeadNodes(graph);
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

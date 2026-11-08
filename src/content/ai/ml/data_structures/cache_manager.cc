@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 void CacheManager::SetMaxEntries(size_t max_entries) {
 	max_entries_ = std::max<size_t>(1U, max_entries);
@@ -54,5 +54,5 @@ void CacheManager::EvictIfNeeded() {
 	}
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

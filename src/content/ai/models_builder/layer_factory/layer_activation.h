@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Activation layer (Relu, Gelu, Sigmoid, Tanh, etc.)
 class LayerActivation : public Core::Layer {
@@ -25,4 +25,4 @@ std::shared_ptr<Core::Layer> MakeActivation(
     const std::string& name, LayerActivation::ActType act,
     float alpha = 0.01f);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

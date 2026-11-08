@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 class MlVersionManager {
  public:
@@ -11,5 +11,5 @@ class MlVersionManager {
 	static std::string GetBackendSummary();
 };
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

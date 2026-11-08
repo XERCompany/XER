@@ -7,7 +7,7 @@
 #include <memory>
 #include <string>
 
-namespace XER::Engine {
+namespace XER {
 namespace Audio {
 namespace Core {
 
@@ -56,4 +56,4 @@ private:
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace XER::Engine
+}  // namespace XER

@@ -8,7 +8,7 @@
 #include <mutex>
 #include <string>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 // Records server-advertised properties (HSTS, ALPN, alt-svc).
 class HttpServerProperties {
@@ -30,4 +30,4 @@ private:
     std::map<std::string, bool> https_required_;
 };
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

@@ -16,9 +16,9 @@
 
 #include <sstream>
 
-namespace platform = XER::network::socket::platform;
+namespace Platform = XER::Network::Socket::Platform;
 
-namespace XER::network::ftp {
+namespace XER::Network::Ftp {
 
 FtpStream::~FtpStream() {
     if (ctrl_fd_ >= 0) {
@@ -31,20 +31,20 @@ FtpStream::~FtpStream() {
 }
 
 bool FtpStream::Connect(const std::string& host, uint16_t port, std::string* error) {
-    logging::NetworkLogger::Instance().LogInfo("ftp",
+    Logging::NetworkLogger::Instance().LogInfo("ftp",
         "Connecting to " + host + ":" + std::to_string(port));
 
-    auto& platform = platform::SocketPlatform::GetInstance();
+    auto& platform = Platform::SocketPlatform::GetInstance();
 
     // Resolve address
-    std::vector<platform::AddressInfo> addresses;
+    std::vector<Platform::AddressInfo> addresses;
     if (!platform.ResolveAddress(host, port, &addresses, error)) {
         return false;
     }
 
     // Try each address
     for (const auto& addr : addresses) {
-        platform::SocketHandle socket;
+        Platform::SocketHandle socket;
         if (addr.is_ipv6) {
             socket = platform.CreateTcpSocket(true, error);
         } else {
@@ -73,7 +73,7 @@ bool FtpStream::Connect(const std::string& host, uint16_t port, std::string* err
 }
 
 bool FtpStream::Login(const std::string& user, const std::string& pass, std::string* error) {
-    logging::NetworkLogger::Instance().LogInfo("ftp", "Logging in as " + user);
+    Logging::NetworkLogger::Instance().LogInfo("ftp", "Logging in as " + user);
 
     int code; std::string text;
     if (!SendCommand("USER " + user, error)) return false;
@@ -120,19 +120,19 @@ bool FtpStream::EnterPassive(std::string* data_host, uint16_t* data_port, std::s
 bool FtpStream::Retrieve(const std::string& path,
                           std::vector<uint8_t>* out,
                           std::string* error) {
-    logging::NetworkLogger::Instance().LogInfo("ftp", "Retrieving " + path);
+    Logging::NetworkLogger::Instance().LogInfo("ftp", "Retrieving " + path);
 
     std::string dhost; uint16_t dport = 0;
     if (!SetBinaryMode(error) || !EnterPassive(&dhost, &dport, error)) return false;
 
     // Open data connection using platform abstraction
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle data_socket = platform.CreateTcpSocket(false, error);
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle data_socket = platform.CreateTcpSocket(false, error);
     if (!data_socket.IsValid()) {
         return false;
     }
 
-    platform::AddressInfo addr;
+    Platform::AddressInfo addr;
     addr.ip_address = dhost;
     addr.port = dport;
     addr.is_ipv6 = false;
@@ -166,7 +166,7 @@ bool FtpStream::Retrieve(const std::string& path,
 
     uint8_t buf[8192];
     int n;
-    platform::SocketHandle data_recv_handle(static_cast<uintptr_t>(dfd));
+    Platform::SocketHandle data_recv_handle(static_cast<uintptr_t>(dfd));
     while ((n = platform.Recv(data_recv_handle,
                              buf, sizeof(buf), error)) > 0) {
         out->insert(out->end(), buf, buf + n);
@@ -184,18 +184,18 @@ bool FtpStream::Retrieve(const std::string& path,
 bool FtpStream::List(const std::string& path,
                       std::vector<std::string>* out,
                       std::string* error) {
-    logging::NetworkLogger::Instance().LogInfo("ftp", "Listing " + path);
+    Logging::NetworkLogger::Instance().LogInfo("ftp", "Listing " + path);
 
     std::string dhost; uint16_t dport = 0;
     if (!EnterPassive(&dhost, &dport, error)) return false;
 
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle data_socket = platform.CreateTcpSocket(false, error);
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle data_socket = platform.CreateTcpSocket(false, error);
     if (!data_socket.IsValid()) {
         return false;
     }
 
-    platform::AddressInfo addr;
+    Platform::AddressInfo addr;
     addr.ip_address = dhost;
     addr.port = dport;
     addr.is_ipv6 = false;
@@ -221,7 +221,7 @@ bool FtpStream::List(const std::string& path,
     std::string raw;
     uint8_t buf[4096];
     int n;
-    platform::SocketHandle list_recv_handle(static_cast<uintptr_t>(dfd));
+    Platform::SocketHandle list_recv_handle(static_cast<uintptr_t>(dfd));
     while ((n = platform.Recv(list_recv_handle,
                              buf, sizeof(buf), error)) > 0) {
         raw.append(reinterpret_cast<char*>(buf), n);
@@ -244,7 +244,7 @@ bool FtpStream::List(const std::string& path,
 }
 
 void FtpStream::RetrieveAsync(const std::string& path, FtpTransferCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, path, cb = std::move(cb)]() {
             std::vector<uint8_t> data;
             std::string error;
@@ -254,7 +254,7 @@ void FtpStream::RetrieveAsync(const std::string& path, FtpTransferCallback cb) {
 }
 
 void FtpStream::ListAsync(const std::string& path, FtpListCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, path, cb = std::move(cb)]() {
             std::vector<std::string> items;
             std::string error;
@@ -279,8 +279,8 @@ bool FtpStream::Quit() {
 }
 
 bool FtpStream::SendCommand(const std::string& cmd, std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(ctrl_fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(ctrl_fd_));
 
     const std::string line = cmd + "\r\n";
     int n = platform.Send(socket,
@@ -292,8 +292,8 @@ bool FtpStream::SendCommand(const std::string& cmd, std::string* error) {
 }
 
 bool FtpStream::ReadReply(int* code, std::string* text, std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(ctrl_fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(ctrl_fd_));
 
     std::string line;
     uint8_t c;
@@ -319,4 +319,4 @@ FtpResponse ExecuteFtpRequest(const FtpRequest& req) {
     return resp;
 }
 
-}  // namespace XER::network::ftp
+}  // namespace XER::Network::Ftp

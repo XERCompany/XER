@@ -1,6 +1,6 @@
 #include "buffer_queue.h"
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 void BufferQueue::Push(std::vector<uint8_t> buffer) {
 	queue_.Push(std::move(buffer));
@@ -26,5 +26,5 @@ void BufferQueue::Clear() {
 	queue_.Clear();
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

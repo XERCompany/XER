@@ -1,18 +1,18 @@
 ﻿#include "model_builder.h"
 
-namespace Engine::ModelsBuilder::Builder {
+namespace XER::ModelsBuilder::Builder {
 
 SequentialModelBuilder::SequentialModelBuilder() 
-    : model_(std::make_shared<Engine::ModelsBuilder::Core::Model>()) {
+    : model_(std::make_shared<XER::ModelsBuilder::Core::Model>()) {
 }
 
 SequentialModelBuilder& SequentialModelBuilder::WithName(const std::string& name) {
-    model_ = std::make_shared<Engine::ModelsBuilder::Core::Model>(name);
+    model_ = std::make_shared<XER::ModelsBuilder::Core::Model>(name);
     return *this;
 }
 
 SequentialModelBuilder& SequentialModelBuilder::AddDenseLayer(uint32_t units) {
-    auto layer = std::make_shared<Engine::ModelsBuilder::Core::DenseLayer>(units);
+    auto layer = std::make_shared<XER::ModelsBuilder::Core::DenseLayer>(units);
     model_->AddLayer(layer);
     return *this;
 }
@@ -30,4 +30,4 @@ std::shared_ptr<Core::Model> SequentialModelBuilder::Build() {
     return model_;
 }
 
-} // namespace Engine::ModelsBuilder::Builder
+} // namespace XER::ModelsBuilder::Builder

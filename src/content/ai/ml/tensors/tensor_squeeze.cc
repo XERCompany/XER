@@ -1,7 +1,7 @@
 #include "tensor_squeeze.h"
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 Tensor TensorSqueeze(const Tensor& t, int axis) {
     auto shape = t.Shape();
@@ -17,4 +17,4 @@ Tensor TensorSqueeze(const Tensor& t, int axis) {
     return t.Reshape(shape);
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

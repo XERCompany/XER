@@ -1,6 +1,6 @@
 #include "trans_graph_cleaner.h"
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 std::shared_ptr<Core::Model> TransGraphCleaner::Apply(
     std::shared_ptr<Core::Model> model) {
@@ -12,4 +12,4 @@ std::shared_ptr<Core::Model> TransGraphCleaner::Apply(
   return clean;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

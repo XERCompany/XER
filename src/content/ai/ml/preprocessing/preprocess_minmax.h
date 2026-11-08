@@ -1,7 +1,7 @@
 #pragma once
 #include "preprocess_base.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Scale features to [min_val, max_val] (default [0,1])
 class PreprocessMinMax : public PreprocessBase {
@@ -21,4 +21,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

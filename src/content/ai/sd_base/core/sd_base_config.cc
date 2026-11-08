@@ -2,7 +2,7 @@
 
 #include <filesystem>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 bool SdBaseConfig::Validate(std::string* error) const {
     if (max_width < 64 || max_height < 64) {
@@ -79,4 +79,4 @@ SdBaseConfig SdBaseConfig::FromPreset(SdQualityPreset preset) {
     return cfg;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

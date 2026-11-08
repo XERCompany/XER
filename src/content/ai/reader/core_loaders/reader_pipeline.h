@@ -7,7 +7,7 @@
 
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 struct PipelineQualityResult {
 	LoadResult load_result;
@@ -24,5 +24,5 @@ class ReaderPipeline {
 	static PipelineQualityResult ProcessWithQuality(const std::string& filepath);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

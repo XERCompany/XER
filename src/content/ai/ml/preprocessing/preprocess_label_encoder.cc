@@ -1,7 +1,7 @@
 #include "preprocess_label_encoder.h"
 #include <stdexcept>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessLabelEncoder::Fit(const std::vector<std::string>& labels) {
     label_to_idx_.clear();
@@ -35,4 +35,4 @@ std::vector<std::string> PreprocessLabelEncoder::InverseTransform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

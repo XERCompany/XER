@@ -1,7 +1,7 @@
 #pragma once
 #include "preprocess_base.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Normalize each sample row to unit L2 norm
 class PreprocessNormalizer : public PreprocessBase {
@@ -15,4 +15,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

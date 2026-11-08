@@ -1,6 +1,6 @@
 #include "ml_logger.h"
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 MlLogger& MlLogger::GetInstance() {
 	static MlLogger instance;
@@ -51,5 +51,5 @@ void MlLogger::Clear() {
 	entries_.clear();
 }
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

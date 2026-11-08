@@ -9,7 +9,7 @@
 
 #include "async_io/io_thread_pool.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 void LoaderPrefetcher::Prefetch(const std::string& path) {
     auto prom = std::make_shared<std::promise<Dataset>>();
@@ -29,4 +29,4 @@ Dataset LoaderPrefetcher::Collect() {
     return future_.get();
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

@@ -6,7 +6,7 @@
 
 #include <string>
 
-namespace XER::network::core {
+namespace XER::Network::Core {
 
 // Observer interface for top-level NetworkService events.
 class NetworkServiceDelegate {
@@ -20,4 +20,4 @@ public:
 
 class DefaultNetworkServiceDelegate : public NetworkServiceDelegate {};
 
-}  // namespace XER::network::core
+}  // namespace XER::Network::Core

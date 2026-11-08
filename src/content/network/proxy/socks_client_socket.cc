@@ -19,9 +19,9 @@
 #include <arpa/inet.h>
 #endif
 
-namespace platform = XER::network::socket::platform;
+namespace Platform = XER::Network::Socket::Platform;
 
-namespace XER::network::proxy {
+namespace XER::Network::Proxy {
 
 SocksClientSocket::SocksClientSocket(int fd, const ProxyServer& proxy)
     : fd_(fd), proxy_(proxy) {}
@@ -29,7 +29,7 @@ SocksClientSocket::SocksClientSocket(int fd, const ProxyServer& proxy)
 bool SocksClientSocket::Handshake(const std::string& host,
                                   uint16_t port,
                                   std::string* error) {
-    logging::NetworkLogger::Instance().LogInfo("proxy",
+    Logging::NetworkLogger::Instance().LogInfo("proxy",
         "SOCKS handshake to " + proxy_.host + ":" + std::to_string(proxy_.port));
 
     if (proxy_.type == ProxyType::kSocks4)
@@ -40,7 +40,7 @@ bool SocksClientSocket::Handshake(const std::string& host,
 void SocksClientSocket::HandshakeAsync(const std::string& host,
                                       uint16_t port,
                                       ProxyCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, host, port, cb = std::move(cb)]() {
             std::string error;
             bool ok = Handshake(host, port, &error);
@@ -51,8 +51,8 @@ void SocksClientSocket::HandshakeAsync(const std::string& host,
 bool SocksClientSocket::Socks4Handshake(const std::string& host,
                                          uint16_t port,
                                          std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
 
     struct in_addr addr{};
     if (inet_pton(AF_INET, host.c_str(), &addr) != 1) {
@@ -81,8 +81,8 @@ bool SocksClientSocket::Socks4Handshake(const std::string& host,
 bool SocksClientSocket::Socks5Handshake(const std::string& host,
                                          uint16_t port,
                                          std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
 
     // Auth negotiation
     const bool has_auth = !proxy_.username.empty();
@@ -125,4 +125,4 @@ bool SocksClientSocket::Socks5Handshake(const std::string& host,
     return true;
 }
 
-}  // namespace XER::network::proxy
+}  // namespace XER::Network::Proxy

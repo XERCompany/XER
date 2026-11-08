@@ -1,6 +1,6 @@
 #include "shared_memory_segment.h"
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 bool SharedMemorySegment::Create(const std::string& name, size_t size) {
 	name_ = name;
@@ -29,5 +29,5 @@ const uint8_t* SharedMemorySegment::Data() const {
 	return buffer_.empty() ? nullptr : buffer_.data();
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

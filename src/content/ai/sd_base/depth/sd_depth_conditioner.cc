@@ -2,11 +2,11 @@
 
 #include <algorithm>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
-void SdDepthConditioner::ApplyDepthPrior(Engine::MLData::Types::Tensor& latent,
+void SdDepthConditioner::ApplyDepthPrior(XER::MLData::Types::Tensor& latent,
                                          float depth_weight) const {
-    if (latent.GetDataType() != Engine::MLData::Types::DataType::FLOAT32 || !latent.GetData()) {
+    if (latent.GetDataType() != XER::MLData::Types::DataType::FLOAT32 || !latent.GetData()) {
         return;
     }
 
@@ -18,4 +18,4 @@ void SdDepthConditioner::ApplyDepthPrior(Engine::MLData::Types::Tensor& latent,
     }
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

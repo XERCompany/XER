@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 
 class CacheEncryptionHandler {
 public:
@@ -16,4 +16,4 @@ public:
 				   std::string* error_out);
 };
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

@@ -7,11 +7,11 @@
 #include <unordered_map>
 #include <vector>
 
-namespace XER::flux::input {
+namespace XER::Flux::Input {
 namespace {
 
 bool StartsWith(std::string_view text, std::string_view prefix) {
-	return XER::Engine::Helper::String::StartsWith(text, prefix);
+	return XER::Helper::String::StartsWith(text, prefix);
 }
 
 std::string TrimDashPrefix(std::string_view text) {
@@ -120,4 +120,4 @@ ParsedCommand ParseCommandLine(std::string_view input) {
 	return parsed;
 }
 
-}  // namespace XER::flux::input
+}  // namespace XER::Flux::Input

@@ -8,7 +8,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 namespace {
 
@@ -110,5 +110,5 @@ std::string OnnxExporter::BuildOnnxLikeText(const Core::Model& model) const {
 	return stream.str();
 }
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

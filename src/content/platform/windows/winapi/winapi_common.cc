@@ -1,7 +1,7 @@
 #include "winapi_common.h"
 #include <comdef.h>
 
-namespace Engine::Content::Platform::WinAPI {
+namespace XER::Content::Platform::WinAPI {
 
 // ---------------------------------------------------------------------------
 // Error handling
@@ -127,4 +127,4 @@ std::string ResourceHelper::LoadString(int resourceId) {
     return "";
 }
 
-}  // namespace Engine::Content::Platform::WinAPI
+}  // namespace XER::Content::Platform::WinAPI

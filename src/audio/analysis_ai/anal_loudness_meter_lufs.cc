@@ -5,7 +5,7 @@
 #include <cstring>
 #include <numeric>
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 LoudnessMeterLUFS::LoudnessMeterLUFS()
 	: buffer_pool_(65536, 2),

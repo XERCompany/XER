@@ -8,7 +8,7 @@
 #include <vector>
 #include "content/network/quic/quic_protocol.h"
 
-namespace XER::network::quic {
+namespace XER::Network::Quic {
 
 struct QuicPacketHeader {
     bool              long_header = false;
@@ -27,4 +27,4 @@ std::vector<uint8_t> SerializePacketHeader(const QuicPacketHeader& hdr);
 bool ParsePacketHeader(const uint8_t* data, size_t len,
                         QuicPacketHeader* hdr, size_t* consumed);
 
-}  // namespace XER::network::quic
+}  // namespace XER::Network::Quic

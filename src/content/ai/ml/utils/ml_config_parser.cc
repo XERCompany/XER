@@ -4,7 +4,7 @@
 #include <cctype>
 #include <sstream>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 bool MlConfigParser::ParseText(const std::string& text) {
 	config_.clear();
@@ -93,5 +93,5 @@ std::string MlConfigParser::Trim(std::string value) {
 	return value;
 }
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

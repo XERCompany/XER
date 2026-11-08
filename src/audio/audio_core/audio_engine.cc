@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 AudioEngine::AudioEngine()
     : initialized_(false), is_running_(false), sample_rate_(44100),
@@ -106,4 +106,4 @@ void AudioEngine::UpdateMeters(float** inputs, float** outputs, size_t frame_cou
     }
 }
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

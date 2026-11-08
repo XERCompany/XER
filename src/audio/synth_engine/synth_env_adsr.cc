@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 void SynthEnvAdsr::Set(float attack_s, float decay_s, float sustain, float release_s) {
     attack_s_ = std::max(attack_s, 0.0001f);
@@ -41,4 +41,4 @@ float SynthEnvAdsr::Process(float sample_rate) {
     return value_;
 }
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

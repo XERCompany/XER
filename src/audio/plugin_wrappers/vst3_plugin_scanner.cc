@@ -12,7 +12,7 @@
 #include "pluginterfaces/base/ipluginbase.h"
 #include "pluginterfaces/vst/ivstaudioprocessor.h"
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 namespace {
 
 using namespace Steinberg;
@@ -73,14 +73,14 @@ void CollectCandidates(const std::wstring& dir, std::vector<std::wstring>& out) 
         if (is_dir) {
             // Recurse into bundle dirs and regular folders alike; only
             // *.vst3-named entries are collected as plugins.
-            if (XER::Engine::Helper::String::EndsWith(fd.cFileName, L".vst3") ||
-                XER::Engine::Helper::String::EndsWith(fd.cFileName, L".VST3")) {
+            if (XER::Helper::String::EndsWith(fd.cFileName, L".vst3") ||
+                XER::Helper::String::EndsWith(fd.cFileName, L".VST3")) {
                 out.push_back(full);
             } else {
                 CollectCandidates(full, out);
             }
-        } else if (XER::Engine::Helper::String::EndsWith(fd.cFileName, L".vst3") ||
-                   XER::Engine::Helper::String::EndsWith(fd.cFileName, L".VST3")) {
+        } else if (XER::Helper::String::EndsWith(fd.cFileName, L".vst3") ||
+                   XER::Helper::String::EndsWith(fd.cFileName, L".VST3")) {
             out.push_back(full);
         }
     } while (FindNextFileW(find, &fd));
@@ -184,7 +184,7 @@ std::vector<Vst3PluginInfo> ScanVst3Plugins(const std::vector<std::string>& root
     std::vector<std::wstring> candidates;
 
     for (const auto& root : roots) {
-        const std::wstring wide_root = XER::Engine::Helper::String::Utf8ToWide(root);
+        const std::wstring wide_root = XER::Helper::String::Utf8ToWide(root);
         if (wide_root.empty()) {
             continue;
         }
@@ -205,8 +205,8 @@ std::vector<Vst3PluginInfo> ScanVst3Plugins(const std::vector<std::string>& root
             continue;
         }
         Vst3PluginInfo info;
-        info.path = XER::Engine::Helper::String::WideToUtf8(candidate);
-        info.module_path = XER::Engine::Helper::String::WideToUtf8(binary);
+        info.path = XER::Helper::String::WideToUtf8(candidate);
+        info.module_path = XER::Helper::String::WideToUtf8(binary);
         if (ProbeModule(binary, &info)) {
             result.push_back(std::move(info));
         }
@@ -218,4 +218,4 @@ std::vector<Vst3PluginInfo> ScanVst3Plugins(const std::vector<std::string>& root
     return result;
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

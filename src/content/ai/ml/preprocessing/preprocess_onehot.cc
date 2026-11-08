@@ -1,7 +1,7 @@
 #include "preprocess_onehot.h"
 #include <algorithm>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessOnehot::Fit(const std::vector<int>& labels) {
     int mx = 0;
@@ -31,4 +31,4 @@ std::vector<int> PreprocessOnehot::InverseTransform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

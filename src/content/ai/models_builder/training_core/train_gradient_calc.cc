@@ -2,7 +2,7 @@
 
 #include <functional>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 std::vector<float> TrainGradientCalc::Compute(
     const std::vector<float>& params,
@@ -21,4 +21,4 @@ std::vector<float> TrainGradientCalc::Compute(
   return grads;
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

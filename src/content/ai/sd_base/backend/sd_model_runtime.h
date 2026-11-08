@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 struct SdLoadedModelSet {
     bool text_encoder_loaded = false;
@@ -43,4 +43,4 @@ private:
     SdLoadedModelSet loaded_;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

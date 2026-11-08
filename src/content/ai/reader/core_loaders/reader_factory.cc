@@ -9,7 +9,7 @@
 #include "../framework_adapters/tf_pb_reader.h"
 #include "../framework_adapters/tf_saved_model_parser.h"
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 void ReaderFactory::RegisterDefaults() {
 	auto& registry = ReaderRegistry::GetInstance();
@@ -39,5 +39,5 @@ void ReaderFactory::RegisterDefaults() {
 	});
 }
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

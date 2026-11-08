@@ -15,7 +15,7 @@
 #define ENGINE_CODEC_HAS_LAME_HEADERS 0
 #endif
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 class Mp3LameCodec {
 public:
@@ -24,4 +24,4 @@ public:
     bool Decode(const uint8_t* data, size_t bytes, std::vector<float>& out) const;
 };
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

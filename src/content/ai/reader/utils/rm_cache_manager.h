@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 class ReaderCacheManager {
  public:
@@ -35,5 +35,5 @@ class ReaderCacheManager {
 	std::unordered_map<std::string, std::vector<uint8_t>> cache_;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils
 

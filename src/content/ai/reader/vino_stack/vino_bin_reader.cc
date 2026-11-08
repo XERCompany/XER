@@ -3,7 +3,7 @@
 #include <cstring>
 #include <fstream>
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 bool VinoBinReader::LoadFile(const std::string& filepath) {
   std::ifstream file(filepath, std::ios::binary | std::ios::ate);
@@ -35,4 +35,4 @@ std::vector<int8_t> VinoBinReader::ReadInt8(size_t byte_offset,
       reinterpret_cast<const int8_t*>(data_.data() + byte_offset + count));
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

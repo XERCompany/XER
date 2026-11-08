@@ -4,7 +4,7 @@
 #include <chrono>
 #include <vector>
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 // Clock source types
 enum class ClockSource {
@@ -55,4 +55,4 @@ private:
     void UpdateDrift();
 };
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

@@ -7,7 +7,7 @@
 #include "audio/effects_rack/custom_effect_algorithms.h"
 #include "audio/effects_rack/custom_effect_fxdata.h"
 
-namespace XER::Engine::Audio::FX::Customs {
+namespace XER::Audio::FX::Customs {
 
 inline CustomEffectNode MakeFxNode(const std::string& algorithm_name, const std::string& label, uint32_t stage_index, float mix = 1.0f) {
 	CustomEffectNode node = CreateDefaultCustomEffectNode(algorithm_name);
@@ -30,4 +30,4 @@ inline CustomEffectPackage MakeFxPresetPackage(const std::string& label, std::ve
 	return package;
 }
 
-}  // namespace XER::Engine::Audio::FX::Customs
+}  // namespace XER::Audio::FX::Customs

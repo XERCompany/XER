@@ -10,7 +10,7 @@
 namespace flux::core { class Logger; }
 namespace IO::AsyncIO { class IOCacheManager; }
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// Result of a dataset load: rows × features
 struct Dataset {
@@ -62,4 +62,4 @@ protected:
     bool                         cache_enabled_ = true;
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

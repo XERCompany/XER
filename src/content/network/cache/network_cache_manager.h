@@ -12,12 +12,12 @@
 #include "cache/cache_manager.h"
 #include "content/network/http/http_response_headers.h"
 
-namespace XER::network::cache {
+namespace XER::Network::Cache {
 
 // HTTP response cache entry
 struct HttpResponseCacheEntry {
     int status_code;
-    http::HttpResponseHeaders headers;
+    Http::HttpResponseHeaders headers;
     std::vector<uint8_t> body;
     std::chrono::system_clock::time_point cached_at;
     std::chrono::seconds ttl;
@@ -37,7 +37,7 @@ struct SslSessionCacheEntry {
     std::chrono::seconds ttl;
 };
 
-// Network cache manager - integrates with XER::Engine::Cache
+// Network cache manager - integrates with XER::Cache
 class NetworkCacheManager {
 public:
     static NetworkCacheManager& Instance();
@@ -107,10 +107,10 @@ private:
                                  HttpResponseCacheEntry* out,
                                  std::string* error);
 
-    XER::Engine::Cache::CacheManager& cache_manager_;
+    XER::Cache::CacheManager& cache_manager_;
     std::chrono::seconds default_http_ttl_ = std::chrono::seconds(300);  // 5 minutes
     std::chrono::seconds default_dns_ttl_ = std::chrono::seconds(600);   // 10 minutes
     std::chrono::seconds default_ssl_ttl_ = std::chrono::seconds(3600);  // 1 hour
 };
 
-} // namespace XER::network::cache
+} // namespace XER::Network::Cache

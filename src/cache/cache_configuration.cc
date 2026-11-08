@@ -11,7 +11,7 @@
 
 #include "helper/string_utils.h"
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 namespace {
 
 std::filesystem::path DefaultCacheDirectory() {
@@ -31,7 +31,7 @@ bool EnvFlagEnabled(const char* key) {
 		return false;
 	}
 
-	const std::string normalized = XER::Engine::Helper::String::CanonicalizeToken(raw);
+	const std::string normalized = XER::Helper::String::CanonicalizeToken(raw);
 	return normalized != "0"
 		&& normalized != "false"
 		&& normalized != "off"
@@ -43,8 +43,8 @@ bool EnvFlagEnabled(const char* key) {
 CacheConfiguration CacheConfigurationFromEnvironment() {
 	CacheConfiguration config;
 	if (const char* raw_directory = std::getenv("ENGINE_CACHE_DIR");
-		raw_directory != nullptr && !XER::Engine::Helper::String::IsBlank(raw_directory)) {
-		config.directory = XER::Engine::Helper::String::NormalizeUtf8(raw_directory);
+		raw_directory != nullptr && !XER::Helper::String::IsBlank(raw_directory)) {
+		config.directory = XER::Helper::String::NormalizeUtf8(raw_directory);
 	} else {
 		config.directory = DefaultCacheDirectory();
 	}
@@ -88,4 +88,4 @@ bool PrepareCacheDirectory(const CacheConfiguration& config, std::string* error_
 	return true;
 }
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

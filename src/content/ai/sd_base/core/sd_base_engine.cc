@@ -2,7 +2,7 @@
 
 #include "content/ai/sd_base/generate/sd_pipeline.h"
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 SdBaseEngine::SdBaseEngine(SdBaseConfig config)
     : pipeline_(std::make_unique<SdPipeline>(std::move(config))) {
@@ -14,4 +14,4 @@ SdGenerationResult SdBaseEngine::Generate(const SdGenerationRequest& request) {
     return pipeline_->Generate(request);
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

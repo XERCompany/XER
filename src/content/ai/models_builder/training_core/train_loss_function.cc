@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 float TrainLossFunction::MseLoss(const std::vector<float>& pred,
                                    const std::vector<float>& target) {
@@ -47,4 +47,4 @@ float TrainLossFunction::CrossEntropyLoss(const std::vector<float>& logits,
   return sum / static_cast<float>(n);
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

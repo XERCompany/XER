@@ -1,6 +1,6 @@
 #include "layer_activation.h"
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 LayerActivation::LayerActivation(const std::string& name, ActType act,
                                    float alpha)
@@ -13,4 +13,4 @@ std::shared_ptr<Core::Layer> MakeActivation(
   return std::make_shared<LayerActivation>(name, act, alpha);
 }
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

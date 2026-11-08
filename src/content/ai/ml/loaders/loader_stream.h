@@ -3,7 +3,7 @@
 #include <functional>
 #include <string>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// Streaming loader interface: calls callback for each float row chunk
 class LoaderStream {
@@ -19,4 +19,4 @@ private:
     RowCallback callback_;
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

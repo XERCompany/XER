@@ -14,7 +14,7 @@
 #  define LOADER_HDF5_AVAILABLE 1
 #endif
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 Dataset LoaderHdf5::Load(const std::string& path) {
 #ifdef LOADER_HDF5_AVAILABLE
@@ -59,4 +59,4 @@ Dataset LoaderHdf5::Load(const std::string& path) {
 #endif
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

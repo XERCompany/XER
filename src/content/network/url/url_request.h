@@ -10,7 +10,7 @@
 #include <vector>
 #include <cstdint>
 
-namespace XER::network::url {
+namespace XER::Network::Url {
 
 // HTTP response received from a network request.
 struct URLResponse {
@@ -60,4 +60,4 @@ struct URLRequest {
     int      max_redirects    = 5;
 };
 
-}  // namespace XER::network::url
+}  // namespace XER::Network::Url

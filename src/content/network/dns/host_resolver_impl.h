@@ -12,7 +12,7 @@
 #include "content/network/dns/host_resolver.h"
 #include "async_io/io_thread_pool.h"
 
-namespace XER::network::dns {
+namespace XER::Network::Dns {
 
 // Default HostResolver implementation using getaddrinfo(3).
 class HostResolverImpl : public HostResolver {
@@ -47,4 +47,4 @@ private:
     XER::AsyncIO::IO::Async::IOThreadPool pool_{2};
 };
 
-}  // namespace XER::network::dns
+}  // namespace XER::Network::Dns

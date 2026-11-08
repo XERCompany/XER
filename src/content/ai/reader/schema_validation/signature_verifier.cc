@@ -13,7 +13,7 @@
 #define XER_HAS_OPENSSL_SHA 0
 #endif
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 std::string SignatureVerifier::ComputeSha256(const uint8_t* data, size_t size) {
 #if XER_HAS_OPENSSL_SHA
@@ -39,4 +39,4 @@ bool SignatureVerifier::VerifySha256(const uint8_t* data, size_t size,
     return ComputeSha256(data, size) == expected_hex;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

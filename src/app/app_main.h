@@ -27,8 +27,8 @@ private:
     bool SetupUI();
 
     // Systems
-    XER::flux::core::FluxCore flux_core_;
-    XER::flux::core::Logger* logger_;
+    XER::Flux::Core::FluxCore flux_core_;
+    XER::Flux::Core::Logger* logger_;
 
     // App components
     AudioController audio_controller_;

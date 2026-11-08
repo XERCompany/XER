@@ -8,7 +8,7 @@
 #include <vector>
 #include "content/network/quic/quic_stream.h"
 
-namespace XER::network::quic {
+namespace XER::Network::Quic {
 
 // Handles CRYPTO frames (TLS handshake messages).
 class QuicCryptoStream : public QuicStream {
@@ -23,4 +23,4 @@ private:
     bool handshake_complete_ = false;
 };
 
-}  // namespace XER::network::quic
+}  // namespace XER::Network::Quic

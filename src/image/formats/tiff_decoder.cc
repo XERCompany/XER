@@ -6,10 +6,10 @@
 namespace image {
 
 int TiffDecoder::PageCount(const std::string& path) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) return 0;
-    engine::bridge::ffmpeg::MediaInfo info;
+    if (!XER::Bridge::FFmpeg::IsAvailable()) return 0;
+    XER::Bridge::FFmpeg::MediaInfo info;
     std::string err;
-    if (!engine::bridge::ffmpeg::ProbeMedia(path, &info, &err)) return 0;
+    if (!XER::Bridge::FFmpeg::ProbeMedia(path, &info, &err)) return 0;
     for (auto& s : info.streams)
         if (s.media_type == "video") return s.frame_count > 0 ? static_cast<int>(s.frame_count) : 1;
     return 1;
@@ -17,10 +17,10 @@ int TiffDecoder::PageCount(const std::string& path) {
 
 std::shared_ptr<ImageBuffer>
 TiffDecoder::DecodePage(const std::string& path, int page, ImageDescriptor& desc) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) return nullptr;
+    if (!XER::Bridge::FFmpeg::IsAvailable()) return nullptr;
     std::string err;
-    std::vector<engine::bridge::ffmpeg::VideoFrameInfo> frames;
-    if (!engine::bridge::ffmpeg::DecodeVideoFrames(path, 0, page+1, &frames, &err) ||
+    std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
+    if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, page+1, &frames, &err) ||
         frames.empty()) {
         flux::core::Logger().Error("TiffDecoder", "Decode failed: " + err);
         return nullptr;

@@ -35,28 +35,28 @@ bool AuraAudioSink::Initialize(const Lc3Params& params, int target_rate) {
     if (!decoder_.Initialize(params)) return false;
 
     // FIFO: stores interleaved frames (channel_count_ samples per frame).
-    fifo_ = std::make_unique<Engine::Audio::Core::AudioFIFOQueue>(
+    fifo_ = std::make_unique<XER::Audio::Core::AudioFIFOQueue>(
         kFifoFrames * channel_count_);
 
     // Sample-rate converter: LC3 source rate → AudioEngine rate.
-    src_ = std::make_unique<Engine::Audio::Core::AudioSampleRateConverter>(
-        Engine::Audio::Core::ResampleQuality::HIGH);
+    src_ = std::make_unique<XER::Audio::Core::AudioSampleRateConverter>(
+        XER::Audio::Core::ResampleQuality::HIGH);
     if (static_cast<int>(params.sampling_freq_hz) != target_rate) {
         src_->Initialize(static_cast<int>(params.sampling_freq_hz), target_rate);
     }
 
     // Buffer manager for temporary conversion buffers.
-    buf_mgr_ = std::make_unique<Engine::Audio::Core::AudioBufferManager>(4);
+    buf_mgr_ = std::make_unique<XER::Audio::Core::AudioBufferManager>(4);
 
     return true;
 }
 
-bool AuraAudioSink::AttachEngine(Engine::Audio::Core::AudioEngine* engine) {
+bool AuraAudioSink::AttachEngine(XER::Audio::Core::AudioEngine* engine) {
     if (engine) {
         engine_      = engine;
         owns_engine_ = false;
     } else {
-        engine_      = new Engine::Audio::Core::AudioEngine();
+        engine_      = new XER::Audio::Core::AudioEngine();
         owns_engine_ = true;
     }
 
@@ -150,7 +150,7 @@ void AuraAudioSink::OnBisFrame(uint8_t bis_index,
             const size_t n = std::min(pending_left_.size(), pcm_frames);
             const float* planar[2] = { pending_left_.data(), src_ptr };
             std::vector<float> interleaved(n * 2);
-            Engine::Audio::Core::AudioInterleaveProcessor::Interleave(
+            XER::Audio::Core::AudioInterleaveProcessor::Interleave(
                 planar, 2, n, interleaved.data());
 
             const size_t written = fifo_->Write(interleaved.data(), n * 2);
@@ -185,7 +185,7 @@ void AuraAudioSink::AudioEngineCallback(float** /*inputs*/,
 
     float* planar[8] = {};
     for (int i = 0; i < ch; ++i) planar[i] = outputs[i];
-    Engine::Audio::Core::AudioInterleaveProcessor::Deinterleave(
+    XER::Audio::Core::AudioInterleaveProcessor::Deinterleave(
         interleaved.data(), ch,
         frames, planar);
 }

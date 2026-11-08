@@ -16,7 +16,7 @@
 #include <ws2tcpip.h>
 #include <windows.h>
 
-namespace XER::network::async::iocp {
+namespace XER::Network::Async::Iocp {
 
 // Completion key for IOCP operations
 struct IocpCompletionKey {
@@ -101,6 +101,6 @@ private:
 // Global IOCP instance
 IocpCompletionPort& GetGlobalIocp();
 
-} // namespace XER::network::async::iocp
+} // namespace XER::Network::Async::Iocp
 
 #endif // _WIN32

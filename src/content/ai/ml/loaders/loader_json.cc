@@ -15,7 +15,7 @@
 #  define LOADER_JSON_AVAILABLE 1
 #endif
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 Dataset LoaderJson::Load(const std::string& path) {
 #ifdef LOADER_JSON_AVAILABLE
@@ -70,4 +70,4 @@ Dataset LoaderJson::Load(const std::string& path) {
 #endif
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

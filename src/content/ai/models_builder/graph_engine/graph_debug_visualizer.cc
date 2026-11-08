@@ -3,7 +3,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 std::string GraphDebugVisualizer::ToDot(const GraphBase& graph,
                                          const std::string& graph_name) {
@@ -39,4 +39,4 @@ bool GraphDebugVisualizer::WriteDotFile(const GraphBase& graph,
   return f.good();
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

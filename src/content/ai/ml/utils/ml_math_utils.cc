@@ -11,7 +11,7 @@
 #define XER_AI_HAS_EIGEN_HEADER 0
 #endif
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 float MlMathUtils::Dot(const std::vector<float>& a, const std::vector<float>& b) {
 	const size_t size = std::min(a.size(), b.size());
@@ -115,5 +115,5 @@ std::vector<float> MlMathUtils::L2Normalize(const std::vector<float>& values, fl
 	return out;
 }
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

@@ -76,7 +76,7 @@ public:
 
     // Attach to (or create) an AudioEngine instance.
     // If |engine| is null, a new engine is created internally.
-    bool AttachEngine(Engine::Audio::Core::AudioEngine* engine = nullptr);
+    bool AttachEngine(XER::Audio::Core::AudioEngine* engine = nullptr);
 
     // ── Lifecycle ────────────────────────────────────────────────────────────
 
@@ -108,7 +108,7 @@ public:
     // Reads |frame_count| interleaved stereo frames from the output FIFO.
     size_t ReadPcm(float* out, size_t frame_count);
 
-    // Engine::Audio::Core::AudioProcessCallback compatible.
+    // XER::Audio::Core::AudioProcessCallback compatible.
     // Attach with engine->SetProcessCallback(...).
     void AudioEngineCallback(float** /*inputs*/, float** outputs,
                               int channels, size_t frames);
@@ -120,10 +120,10 @@ private:
 
     AuraLc3Decoder decoder_;
 
-    std::unique_ptr<Engine::Audio::Core::AudioFIFOQueue>          fifo_;
-    std::unique_ptr<Engine::Audio::Core::AudioSampleRateConverter> src_;
-    std::unique_ptr<Engine::Audio::Core::AudioBufferManager>       buf_mgr_;
-    Engine::Audio::Core::AudioEngine* engine_     = nullptr;
+    std::unique_ptr<XER::Audio::Core::AudioFIFOQueue>          fifo_;
+    std::unique_ptr<XER::Audio::Core::AudioSampleRateConverter> src_;
+    std::unique_ptr<XER::Audio::Core::AudioBufferManager>       buf_mgr_;
+    XER::Audio::Core::AudioEngine* engine_     = nullptr;
     bool                               owns_engine_ = false;
 
     std::atomic<bool>  running_{ false };

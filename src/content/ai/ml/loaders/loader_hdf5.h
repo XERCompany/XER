@@ -1,7 +1,7 @@
 #pragma once
 #include "loader_base.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// HDF5 dataset loader (requires libhdf5, link with -lhdf5_cpp -lhdf5).
 /// Expects datasets named "X" (float32, N×F) and optionally "y" (int32, N).
@@ -11,4 +11,4 @@ public:
     std::string Name() const override { return "Hdf5Loader"; }
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

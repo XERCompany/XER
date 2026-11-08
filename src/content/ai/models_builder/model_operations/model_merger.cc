@@ -2,7 +2,7 @@
 
 #include "model_cloner.h"
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::shared_ptr<Core::Model> ModelMerger::MergeSequential(const Core::Model& first,
     const Core::Model& second,
@@ -29,5 +29,5 @@ std::shared_ptr<Core::Model> ModelMerger::MergeSequential(const Core::Model& fir
 	return merged;
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

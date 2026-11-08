@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 AudioBitDepthConverter::AudioBitDepthConverter() {}
 
@@ -144,4 +144,4 @@ bool AudioBitDepthConverter::ConvertFloatTo16(const float* in, int16_t* out, siz
     return true;
 }
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

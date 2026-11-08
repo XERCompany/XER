@@ -20,7 +20,7 @@
 //   <row label="1">4.0 5.0 6.0</row>
 // </dataset>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 #ifdef LOADER_YAML_AVAILABLE
 static std::vector<float> ParseNodeFloats(xmlNodePtr node) {
@@ -74,4 +74,4 @@ Dataset LoaderYaml::Load(const std::string& path) {
 #endif
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

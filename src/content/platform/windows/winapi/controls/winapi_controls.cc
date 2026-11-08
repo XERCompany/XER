@@ -1,6 +1,6 @@
 #include "winapi_controls.h"
 
-namespace Engine::Content::Platform::WinAPI::Controls {
+namespace XER::Content::Platform::WinAPI::Controls {
 
 // ---------------------------------------------------------------------------
 // Window implementation
@@ -513,4 +513,4 @@ void ComboBox::SetEditText(const std::string& text) {
     }
 }
 
-}  // namespace Engine::Content::Platform::WinAPI::Controls
+}  // namespace XER::Content::Platform::WinAPI::Controls

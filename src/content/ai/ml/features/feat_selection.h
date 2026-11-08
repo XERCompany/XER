@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 class FeatSelection {
 public:
@@ -27,4 +27,4 @@ private:
     mutable std::vector<size_t> selected_indices_;
 };
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

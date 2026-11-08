@@ -23,7 +23,7 @@
 #include <sys/utsname.h>
 #endif
 
-namespace Engine::Content::Platform {
+namespace XER::Content::Platform {
 
 PlatformType GetCurrentPlatform() {
 #ifdef _WIN32
@@ -373,4 +373,4 @@ std::unique_ptr<IPlatform> CreatePlatform() {
 #endif
 }
 
-}  // namespace Engine::Content::Platform
+}  // namespace XER::Content::Platform

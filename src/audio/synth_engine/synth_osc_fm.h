@@ -1,6 +1,6 @@
 #pragma once
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 class SynthOscFm {
 public:
@@ -17,4 +17,4 @@ private:
     float mod_phase_ = 0.0f;
 };
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

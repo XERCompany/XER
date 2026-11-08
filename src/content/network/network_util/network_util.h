@@ -8,7 +8,7 @@
 #include <cstdint>
 #include <string>
 
-namespace XER::network {
+namespace XER::Network {
 
 // ── Error codes ─────────────────────────────────────────────────────────────
 // Negative = error, 0 = OK, -1 = async pending.
@@ -81,4 +81,4 @@ bool IsSecureScheme(const std::string& scheme);
 // @return         Default port number, or 0 if scheme is unknown
 uint16_t DefaultPortForScheme(const std::string& scheme);
 
-}  // namespace XER::network
+}  // namespace XER::Network

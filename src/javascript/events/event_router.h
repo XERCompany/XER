@@ -7,11 +7,11 @@
 #include <unordered_map>
 #include <vector>
 
-namespace engine::javascript::events {
+namespace XER::JavaScript::Events {
 
 class EventRouter {
 public:
-    explicit EventRouter(engine::javascript::bridge::FunctionBridge* bridge);
+    explicit EventRouter(XER::JavaScript::Bridge::FunctionBridge* bridge);
 
     std::uint64_t Subscribe(const std::string& topic, const std::string& handler_name);
     bool Unsubscribe(std::uint64_t token);
@@ -25,10 +25,10 @@ private:
 
     std::vector<Subscription>* FindTopicSubscriptions(const std::string& topic);
 
-    engine::javascript::bridge::FunctionBridge* bridge_;
+    XER::JavaScript::Bridge::FunctionBridge* bridge_;
     std::unordered_map<std::string, std::vector<Subscription>> subscriptions_;
     std::uint64_t next_token_ = 1;
     std::uint64_t sequence_ = 1;
 };
 
-}  // namespace engine::javascript::events
+}  // namespace XER::JavaScript::Events

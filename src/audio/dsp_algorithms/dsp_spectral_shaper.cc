@@ -6,7 +6,7 @@
 #include <immintrin.h>
 #endif
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 SpectralShaper::SpectralShaper(size_t fft_size, size_t hop_size)
 	: fft_size_(fft_size),
@@ -89,4 +89,4 @@ std::string SpectralShaper::GetReport() const {
 		", curve_size=" + std::to_string(shaping_curve_.size());
 }
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

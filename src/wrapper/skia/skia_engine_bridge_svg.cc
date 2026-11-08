@@ -13,7 +13,7 @@
 
 #endif
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
 
     bool RasterDrawSVG(std::vector<uint32_t>* pixels, int width, int height,
                        const std::string& svg_content, float x, float y, float scale) {

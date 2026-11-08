@@ -10,7 +10,7 @@
 #include <iomanip>
 #include <sstream>
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 namespace {
 
@@ -99,4 +99,4 @@ bool CertTransparency::PolicySatisfied(
     return static_cast<int>(scts.size()) >= min_scts;
 }
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

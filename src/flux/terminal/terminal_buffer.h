@@ -7,7 +7,7 @@
 #include "flux/terminal/terminal_emulator.h"
 #include "flux/terminal/terminal_interface.h"
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 class TerminalBuffer {
 public:
@@ -32,4 +32,4 @@ private:
 	TerminalEmulator stderr_emulator_;
 };
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

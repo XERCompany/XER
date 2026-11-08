@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
 // UDP callback type: (bytes_sent/received, error_message)
 using UdpCallback = std::function<void(int, const std::string&)>;
@@ -43,4 +43,4 @@ private:
     uint16_t connected_port_ = 0;
 };
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

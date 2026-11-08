@@ -1,6 +1,6 @@
 #include "err_recovery_policy.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 RecoveryPolicy& RecoveryPolicy::Instance() {
   static RecoveryPolicy inst;
@@ -31,4 +31,4 @@ void RecoveryPolicy::Reset() {
   component_overrides_.clear();
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

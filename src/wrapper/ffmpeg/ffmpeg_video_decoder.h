@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::engine::bridge::ffmpeg {
+namespace XER::Bridge::FFmpeg {
 
 struct AudioFrameInfo;  // defined in ffmpeg_engine_bridge.h
 
@@ -92,4 +92,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace XER::engine::bridge::ffmpeg
+}  // namespace XER::Bridge::FFmpeg

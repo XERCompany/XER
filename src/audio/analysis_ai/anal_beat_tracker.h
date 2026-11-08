@@ -9,7 +9,7 @@
 
 #include "audio_fft_analyzer.h"
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 struct BeatEvent {
 	size_t frame_index;

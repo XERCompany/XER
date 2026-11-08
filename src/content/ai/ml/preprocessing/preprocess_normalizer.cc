@@ -1,7 +1,7 @@
 #include "preprocess_normalizer.h"
 #include <cmath>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 std::vector<std::vector<float>> PreprocessNormalizer::Transform(
         const std::vector<std::vector<float>>& X) const {
@@ -15,4 +15,4 @@ std::vector<std::vector<float>> PreprocessNormalizer::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

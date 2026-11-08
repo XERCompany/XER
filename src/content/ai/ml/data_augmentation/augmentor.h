@@ -6,7 +6,7 @@
 #include <vector>
 #include <string>
 
-namespace Engine::ML::DataAugmentation {
+namespace XER::ML::DataAugmentation {
 
 /// @brief Base class for image augmentation
 /// 
@@ -20,7 +20,7 @@ public:
     /// Apply augmentation transformation to input tensor
     /// @param input Input tensor (image in HxWxC format, float values [0,1])
     /// @return Augmented tensor with same shape as input
-    virtual Engine::MLData::Types::Tensor Augment(const Engine::MLData::Types::Tensor& input) = 0;
+    virtual XER::MLData::Types::Tensor Augment(const XER::MLData::Types::Tensor& input) = 0;
     
     /// Get human-readable augmentation name
     /// @return Augmentor type identifier
@@ -46,7 +46,7 @@ public:
     explicit RotationAugmentor(float angle_range = 15.0f);
     
     /// Apply random rotation
-    Engine::MLData::Types::Tensor Augment(const Engine::MLData::Types::Tensor& input) override;
+    XER::MLData::Types::Tensor Augment(const XER::MLData::Types::Tensor& input) override;
     std::string GetAugmentationName() const override { return "Rotation"; }
     
     void SetAngleRange(float angle_range) { angle_range_ = angle_range; }
@@ -73,7 +73,7 @@ public:
     FlipAugmentor(FlipMode mode = FlipMode::Horizontal, float probability = 0.5f);
     
     /// Apply random flip
-    Engine::MLData::Types::Tensor Augment(const Engine::MLData::Types::Tensor& input) override;
+    XER::MLData::Types::Tensor Augment(const XER::MLData::Types::Tensor& input) override;
     std::string GetAugmentationName() const override { return "Flip"; }
 
 private:
@@ -94,7 +94,7 @@ public:
     CropAugmentor(float min_crop = 0.8f, float max_crop = 1.0f);
     
     /// Apply random crop
-    Engine::MLData::Types::Tensor Augment(const Engine::MLData::Types::Tensor& input) override;
+    XER::MLData::Types::Tensor Augment(const XER::MLData::Types::Tensor& input) override;
     std::string GetAugmentationName() const override { return "Crop"; }
 
 private:
@@ -118,7 +118,7 @@ public:
                          float saturation = 0.2f);
     
     /// Apply random color jitter
-    Engine::MLData::Types::Tensor Augment(const Engine::MLData::Types::Tensor& input) override;
+    XER::MLData::Types::Tensor Augment(const XER::MLData::Types::Tensor& input) override;
     std::string GetAugmentationName() const override { return "ColorJitter"; }
 
 private:
@@ -139,7 +139,7 @@ public:
     explicit NoiseAugmentor(float std_dev = 0.05f);
     
     /// Apply random Gaussian noise
-    Engine::MLData::Types::Tensor Augment(const Engine::MLData::Types::Tensor& input) override;
+    XER::MLData::Types::Tensor Augment(const XER::MLData::Types::Tensor& input) override;
     std::string GetAugmentationName() const override { return "GaussianNoise"; }
 
 private:
@@ -167,7 +167,7 @@ public:
     /// Apply all augmentations in sequence
     /// @param input Input tensor
     /// @return Result after applying all augmentors
-    Engine::MLData::Types::Tensor Apply(const Engine::MLData::Types::Tensor& input);
+    XER::MLData::Types::Tensor Apply(const XER::MLData::Types::Tensor& input);
     
     /// Enable/disable all augmentors (for train/eval modes)
     /// @param enabled true for training, false for inference
@@ -180,4 +180,4 @@ private:
     std::vector<std::shared_ptr<Augmentor>> augmentors_;
 };
 
-} // namespace Engine::ML::DataAugmentation
+} // namespace XER::ML::DataAugmentation

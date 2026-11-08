@@ -2,9 +2,9 @@
 
 #include <string>
 
-namespace XER::engine::bridge::opencv {
+namespace XER::Bridge::OpenCV {
 
 bool IsAvailable();
 std::string Summary();
 
-}  // namespace XER::engine::bridge::opencv
+}  // namespace XER::Bridge::OpenCV

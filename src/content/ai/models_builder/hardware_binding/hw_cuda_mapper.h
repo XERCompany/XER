@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 struct CudaMapperConfig {
 	bool enable_cuda = true;
@@ -35,5 +35,5 @@ class CudaMapper {
 	CudaMapperConfig config_;
 };
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

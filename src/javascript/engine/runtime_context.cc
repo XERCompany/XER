@@ -1,6 +1,6 @@
 #include "javascript/engine/runtime_context.h"
 
-namespace engine::javascript::runtime {
+namespace XER::JavaScript::Runtime {
 
 void RuntimeContext::Attach(v8::Isolate* isolate, v8::Local<v8::Context> context) {
     isolate_ = isolate;
@@ -75,4 +75,4 @@ v8::Local<v8::Object> RuntimeContext::MakeEventObject(
     return scope.Escape(event);
 }
 
-}  // namespace engine::javascript::runtime
+}  // namespace XER::JavaScript::Runtime

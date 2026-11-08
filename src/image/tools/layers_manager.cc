@@ -31,7 +31,7 @@ void LayersManager::SetBlendMode(const std::string& name, const std::string& m) 
 ImageBuffer LayersManager::Flatten(int width, int height) const {
     ImageBuffer result(width, height, PixelFormat::RGBA8, ColorSpace::sRGB);
     result.Clear(0, 0, 0, 0);
-    if (!engine::bridge::skia::IsAvailable()) {
+    if (!XER::Bridge::Skia::IsAvailable()) {
         flux::core::Logger().Warning("LayersManager", "Skia not available, returning blank");
         return result;
     }
@@ -44,9 +44,9 @@ ImageBuffer LayersManager::Flatten(int width, int height) const {
         for (int i=0;i<sw*sh;++i) {
             uint8_t r=d[i*4+0], g=d[i*4+1], b=d[i*4+2];
             uint8_t a=static_cast<uint8_t>(d[i*4+3]*l.opacity);
-            src_px[i]=engine::bridge::skia::MakeColorRGBA(r,g,b,a);
+            src_px[i]=XER::Bridge::Skia::MakeColorRGBA(r,g,b,a);
         }
-        engine::bridge::skia::RasterDrawImage(&dst_px, width, height,
+        XER::Bridge::Skia::RasterDrawImage(&dst_px, width, height,
                                                src_px, sw, sh,
                                                0, 0, l.blend_mode);
     }

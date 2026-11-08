@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace engine::javascript::common {
+namespace XER::JavaScript::Common {
 
 class CompressionCodec {
 public:
@@ -14,4 +14,4 @@ public:
     static std::optional<std::string> DecompressToString(const std::vector<std::uint8_t>& compressed);
 };
 
-}  // namespace engine::javascript::common
+}  // namespace XER::JavaScript::Common

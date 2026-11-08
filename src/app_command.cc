@@ -58,7 +58,7 @@ void AppendTrimmedCsvValues(const std::string& text, std::vector<std::string>* o
     }
     std::string token;
     auto flush_token = [&token, output]() {
-        token = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(token);
+        token = XER::Helper::String::TrimAsciiWhitespaceCopy(token);
         if (!token.empty()) {
             output->push_back(std::move(token));
         }

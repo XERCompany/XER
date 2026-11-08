@@ -2,9 +2,9 @@
 
 #include "javascript/common/text_normalizer.h"
 
-namespace engine::javascript::bridge {
+namespace XER::JavaScript::Bridge {
 
-FunctionBridge::FunctionBridge(engine::javascript::runtime::RuntimeContext* runtime)
+FunctionBridge::FunctionBridge(XER::JavaScript::Runtime::RuntimeContext* runtime)
     : runtime_(runtime) {}
 
 FunctionBridge::~FunctionBridge() {
@@ -18,7 +18,7 @@ bool FunctionBridge::Register(std::string_view handler_name, v8::Local<v8::Funct
         return false;
     }
 
-    const std::string key = engine::javascript::common::TextNormalizer::NormalizeTopic(std::string(handler_name));
+    const std::string key = XER::JavaScript::Common::TextNormalizer::NormalizeTopic(std::string(handler_name));
     auto it = handlers_.find(key);
     if (it != handlers_.end()) {
         it->second.Reset();
@@ -31,7 +31,7 @@ bool FunctionBridge::Register(std::string_view handler_name, v8::Local<v8::Funct
 }
 
 bool FunctionBridge::Unregister(std::string_view handler_name) {
-    const std::string key = engine::javascript::common::TextNormalizer::NormalizeTopic(std::string(handler_name));
+    const std::string key = XER::JavaScript::Common::TextNormalizer::NormalizeTopic(std::string(handler_name));
     auto it = handlers_.find(key);
     if (it == handlers_.end()) {
         return false;
@@ -51,7 +51,7 @@ bool FunctionBridge::Invoke(
         return false;
     }
 
-    const std::string key = engine::javascript::common::TextNormalizer::NormalizeTopic(std::string(handler_name));
+    const std::string key = XER::JavaScript::Common::TextNormalizer::NormalizeTopic(std::string(handler_name));
     auto it = handlers_.find(key);
     if (it == handlers_.end()) {
         return false;
@@ -77,4 +77,4 @@ bool FunctionBridge::Invoke(
     return !result.IsEmpty() && !try_catch.HasCaught();
 }
 
-}  // namespace engine::javascript::bridge
+}  // namespace XER::JavaScript::Bridge

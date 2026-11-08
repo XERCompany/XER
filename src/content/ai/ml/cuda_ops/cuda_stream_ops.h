@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 /// @brief CUDA stream management and synchronization utilities
 /// 
@@ -56,4 +56,4 @@ public:
                                     float* milliseconds);
 };
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

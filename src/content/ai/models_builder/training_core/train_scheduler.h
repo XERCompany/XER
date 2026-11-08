@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Learning rate scheduler
 class TrainScheduler {
@@ -30,4 +30,4 @@ class TrainScheduler {
   Config config_;
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

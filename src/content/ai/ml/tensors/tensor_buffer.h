@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 /// Raw byte buffer for tensor storage (CPU-side).
 /// Supports typed access to float32 data.
@@ -30,4 +30,4 @@ private:
     std::vector<uint8_t> buf_;
 };
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

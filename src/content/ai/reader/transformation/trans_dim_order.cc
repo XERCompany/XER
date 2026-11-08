@@ -1,7 +1,7 @@
 #include "trans_dim_order.h"
 #include "../../models_builder/layer_factory/layer_linear.h"
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 std::shared_ptr<Core::Model> TransDimOrder::Apply(
     std::shared_ptr<Core::Model> model,
@@ -27,4 +27,4 @@ std::shared_ptr<Core::Layer> TransDimOrder::MakeTransposeLayer(
   return LayerFactory::MakeLinear(name, {});
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

@@ -20,7 +20,7 @@
 #include <audioclient.h>
 #endif
 
-namespace XER::engine::bridge::ffmpeg {
+namespace XER::Bridge::FFmpeg {
 struct AudioFrameInfo;  // fwd — full type only needed in the .cc
 class VideoDecoder;
 }
@@ -31,7 +31,7 @@ namespace XER::Content::Video {
 //
 // Unlike XER::Content::Audio::AudioPlayer (the editor's file player), this class
 // owns the whole video-audio path inside src/content/video:
-//   - Attach() binds to the VideoSession's shared ffmpeg::VideoDecoder —
+//   - Attach() binds to the VideoSession's shared FFmpeg::VideoDecoder —
 //     the same demuxer/decoder instance the video path already uses, so
 //     the container is opened exactly once;
 //   - a worker thread drains decoder->ReadAudioFrames() into source-rate
@@ -64,7 +64,7 @@ public:
     // Binds to the session's shared decoder (must already be Open()ed with
     // EnableAudioTap). Returns false only for trivial rejections; stream
     // errors are reported through the ready callback / PollReady().
-    bool Attach(std::shared_ptr<XER::engine::bridge::ffmpeg::VideoDecoder> decoder,
+    bool Attach(std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder> decoder,
                 std::string* error_out = nullptr);
     void Close();
 
@@ -113,10 +113,10 @@ private:
     // Converts one decoded AudioFrameInfo into per-channel float samples
     // appended to `chunk`. Supports the formats avcodec emits for common
     // audio codecs (fltp/flt/s16/s16p/s32/s32p/u8/dbl).
-    bool AppendFrameSamples(const XER::engine::bridge::ffmpeg::AudioFrameInfo& frame,
+    bool AppendFrameSamples(const XER::Bridge::FFmpeg::AudioFrameInfo& frame,
                             SourceChunk* chunk);
 
-    std::shared_ptr<XER::engine::bridge::ffmpeg::VideoDecoder> av_decoder_;
+    std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder> av_decoder_;
     double audio_time_base_ = 0.0;  // pts * tb = media seconds
 
     std::thread worker_;

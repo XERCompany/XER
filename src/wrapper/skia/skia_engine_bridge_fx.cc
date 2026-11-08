@@ -1,6 +1,6 @@
 // skia_engine_bridge_fx.cc
 // FX-level image operations: transforms, adjustments, filters, drawing,
-// text, masks, histograms.  All in namespace engine::bridge::skia.
+// text, masks, histograms.  All in namespace XER::Bridge::Skia.
 
 #include "wrapper/skia/skia_engine_bridge.h"
 
@@ -46,7 +46,7 @@
 #define PS_HAS_SKIA 0
 #endif
 
-namespace engine::bridge::skia {
+namespace XER::Bridge::Skia {
 
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
@@ -1561,4 +1561,4 @@ bool EqualizeHistogram(std::vector<uint32_t>* pixels, int width, int height) {
     return true;
 }
 
-}  // namespace engine::bridge::skia
+}  // namespace XER::Bridge::Skia

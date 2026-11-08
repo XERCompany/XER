@@ -4,7 +4,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 class MlConfigParser {
  public:
@@ -23,5 +23,5 @@ class MlConfigParser {
 	std::unordered_map<std::string, std::string> config_;
 };
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

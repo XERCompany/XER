@@ -4,7 +4,7 @@
 #include <string>
 #include <functional>
 
-namespace Engine::MLData::Loading {
+namespace XER::MLData::Loading {
 
 using ProgressCallback = std::function<void(float)>;
 
@@ -22,4 +22,4 @@ protected:
     ProgressCallback progress_callback_;
 };
 
-} // namespace Engine::MLData::Loading
+} // namespace XER::MLData::Loading

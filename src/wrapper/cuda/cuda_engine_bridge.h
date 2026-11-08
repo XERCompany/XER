@@ -2,9 +2,9 @@
 
 #include <string>
 
-namespace XER::engine::bridge::cuda {
+namespace XER::Bridge::Cuda {
 
 bool IsAvailable();
 std::string Summary();
 
-}  // namespace XER::engine::bridge::cuda
+}  // namespace XER::Bridge::Cuda

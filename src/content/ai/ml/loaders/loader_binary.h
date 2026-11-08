@@ -2,7 +2,7 @@
 #include "loader_base.h"
 #include <cstddef>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// Raw binary float loader: reads flat array of float32 from file.
 ///
@@ -21,4 +21,4 @@ public:
     std::string Name() const override { return "BinaryLoader"; }
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

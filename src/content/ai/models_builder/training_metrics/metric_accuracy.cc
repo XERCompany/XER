@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 void AccuracyMetric::Reset() {
 	correct_count_ = 0U;
@@ -35,5 +35,5 @@ float AccuracyMetric::Value() const {
 	return static_cast<float>(correct_count_) / static_cast<float>(sample_count_);
 }
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

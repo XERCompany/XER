@@ -4,7 +4,7 @@
 #include <functional>
 #include <map>
 
-namespace Engine::Content::Platform::WinAPI::Controls {
+namespace XER::Content::Platform::WinAPI::Controls {
 
 // Window creation parameters
 struct WindowParams {
@@ -173,4 +173,4 @@ private:
     HWND hwnd_;
 };
 
-}  // namespace Engine::Content::Platform::WinAPI::Controls
+}  // namespace XER::Content::Platform::WinAPI::Controls

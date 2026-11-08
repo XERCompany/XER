@@ -4,7 +4,7 @@
 
 #include <sstream>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 std::string MlVersionManager::GetVersion() {
 	return "0.2.0";
@@ -15,7 +15,7 @@ std::string MlVersionManager::GetBuildTag() {
 }
 
 std::string MlVersionManager::GetBackendSummary() {
-	const auto libs = ::Engine::ModelsBuilder::Utility::DetectExternalLibraries();
+	const auto libs = ::XER::ModelsBuilder::Utility::DetectExternalLibraries();
 	std::ostringstream ss;
 	ss << "cuda=" << (libs.has_cuda ? "on" : "off")
 		 << ", cudnn=" << (libs.has_cudnn ? "on" : "off")
@@ -26,5 +26,5 @@ std::string MlVersionManager::GetBackendSummary() {
 	return ss.str();
 }
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

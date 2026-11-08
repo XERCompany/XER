@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 class AccuracyMetric {
  public:
@@ -23,5 +23,5 @@ class AccuracyMetric {
 	size_t sample_count_ = 0U;
 };
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

@@ -43,7 +43,7 @@ extern "C" {
 }
 #endif
 
-namespace XER::engine::bridge::ffmpeg {
+namespace XER::Bridge::FFmpeg {
 
 namespace {
 
@@ -107,7 +107,7 @@ std::string SampleFormatName(int format) {
 }
 
 AVSampleFormat ResolveSampleFormat(std::string sample_format, bool planar) {
-    sample_format = XER::Engine::Helper::String::ToLowerAscii(sample_format);
+    sample_format = XER::Helper::String::ToLowerAscii(sample_format);
     if (!sample_format.empty() && sample_format.back() == 'p') {
         planar = true;
         sample_format.pop_back();
@@ -1508,7 +1508,7 @@ bool EncodeVideoFrameStream(const EncodeVideoParams& params,
     }
 
     auto parse_input_pix_fmt = [](std::string text) -> AVPixelFormat {
-        text = XER::Engine::Helper::String::ToLowerAscii(text);
+        text = XER::Helper::String::ToLowerAscii(text);
         if (text == "rgba") return AV_PIX_FMT_RGBA;
         if (text == "bgra") return AV_PIX_FMT_BGRA;
         if (text == "rgb" || text == "rgb24") return AV_PIX_FMT_RGB24;
@@ -2476,4 +2476,4 @@ bool Transcode(const TranscodingParams& params,
 #endif
 }
 
-}  // namespace XER::engine::bridge::ffmpeg
+}  // namespace XER::Bridge::FFmpeg

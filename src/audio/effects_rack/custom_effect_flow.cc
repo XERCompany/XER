@@ -5,7 +5,7 @@
 
 #include "custom_effect_core.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 bool CustomEffectFlow::Initialize(const CustomEffectPackage& package, float sample_rate, size_t max_block_size, std::string* error_out) {
 	if (!ValidateCustomEffectPackage(package, error_out)) {
@@ -82,4 +82,4 @@ std::string CustomEffectFlow::GetReport() const {
 	return BuildCustomEffectReportText(last_report_);
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

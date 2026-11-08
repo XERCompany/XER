@@ -5,7 +5,7 @@
 #include <memory>
 #include <map>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 /// @brief ONNX graph node representation
 /// 
@@ -56,4 +56,4 @@ public:
                             std::map<std::string, std::vector<int>>& input_shapes);
 };
 
-} // namespace Engine::ModelsBuilder::Reader::Onnx
+} // namespace XER::ModelsBuilder::Reader::Onnx

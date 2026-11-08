@@ -4,7 +4,7 @@
 #include <cmath>
 #include <future>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 std::string ModFlanger::GetMemoryStats() const {
 	std::string stats;
@@ -95,4 +95,4 @@ std::future<bool> ModFlanger::ProcessBlockAsync(const float* input, size_t frame
 	});
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

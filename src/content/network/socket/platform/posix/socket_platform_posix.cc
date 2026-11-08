@@ -13,9 +13,9 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-namespace XER::network {
-namespace socket {
-namespace platform {
+namespace XER::Network {
+namespace Socket {
+namespace Platform {
 
 // SocketHandle implementation for POSIX
 SocketHandle::SocketHandle() : handle_(static_cast<uintptr_t>(-1)) {}
@@ -477,8 +477,8 @@ SocketPlatform& SocketPlatform::GetInstance() {
     return instance;
 }
 
-}  // namespace platform
-}  // namespace socket
-}  // namespace network
+}  // namespace Platform
+}  // namespace Socket
+}  // namespace Network
 
 #endif // !_WIN32

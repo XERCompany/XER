@@ -1,6 +1,6 @@
 #include "wrapper/opencv/opencv_engine_bridge.h"
 
-namespace XER::engine::bridge::opencv {
+namespace XER::Bridge::OpenCV {
 
 bool IsAvailable() {
 #if ENGINE_HAS_OPENCV_BRIDGE
@@ -14,4 +14,4 @@ std::string Summary() {
     return IsAvailable() ? "OpenCV bridge enabled" : "OpenCV bridge unavailable";
 }
 
-}  // namespace XER::engine::bridge::opencv
+}  // namespace XER::Bridge::OpenCV

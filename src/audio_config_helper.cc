@@ -18,7 +18,7 @@ std::vector<std::string> AudioConfigHelper::GetJsonConfigEffects(const Json::Val
     if (value->isArray()) {
         for (const Json::Value& item : *value) {
             if (item.isString()) {
-                const std::string effect = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(item.asString());
+                const std::string effect = XER::Helper::String::TrimAsciiWhitespaceCopy(item.asString());
                 if (!effect.empty()) {
                     effects.push_back(effect);
                 }
@@ -91,7 +91,7 @@ bool AudioConfigHelper::ApplyAudioConfigFile(
         parsed->audio_pipe_mp3);
 
     std::vector<std::string> effects = GetJsonConfigEffects(root);
-    const std::string single_effect = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(
+    const std::string single_effect = XER::Helper::String::TrimAsciiWhitespaceCopy(
         JsonConfigHelper::GetJsonConfigString(
             root,
             {"effect", "effectName", "effect_name", "audioEffect", "audio_effect"},

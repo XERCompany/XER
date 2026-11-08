@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 namespace {
 
@@ -170,4 +170,4 @@ bool PtModelParser::HasZipMagic(const std::vector<uint8_t>& data) {
            (data[2] == 0x03 || data[2] == 0x05 || data[2] == 0x07);
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

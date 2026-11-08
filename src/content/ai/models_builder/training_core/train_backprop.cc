@@ -2,7 +2,7 @@
 
 #include "train_loss_function.h"
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 TrainBackprop::BackpropResult TrainBackprop::Forward(
     const std::vector<float>& x, const std::vector<float>& y) {
@@ -19,4 +19,4 @@ TrainBackprop::BackpropResult TrainBackprop::Forward(
   return result;
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

@@ -2,7 +2,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessStandardizer::Fit(const std::vector<std::vector<float>>& X) {
     if (X.empty()) return;
@@ -29,4 +29,4 @@ std::vector<std::vector<float>> PreprocessStandardizer::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

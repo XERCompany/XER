@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace XER::Engine::Audio::Demo {
+namespace XER::Audio::Demo {
 
 struct AudioDSPDemoOptions {
 	std::filesystem::path output_dir;
@@ -25,4 +25,4 @@ bool RunAudioDSPDemo(
 	std::string* report_out,
 	std::string* error_out = nullptr);
 
-}  // namespace XER::Engine::Audio::Demo
+}  // namespace XER::Audio::Demo

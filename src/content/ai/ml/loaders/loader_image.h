@@ -1,7 +1,7 @@
 #pragma once
 #include "loader_base.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// Image loader using OpenCV (link with -lopencv_core -lopencv_imgcodecs).
 /// Returns a single-row Dataset with pixels flattened and normalized to [0,1].
@@ -12,4 +12,4 @@ public:
     std::string Name() const override { return "ImageLoader"; }
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

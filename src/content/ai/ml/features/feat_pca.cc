@@ -3,7 +3,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 std::vector<float> FeatPCA::PowerIteration(const std::vector<float>& A, size_t n, int iters) {
     std::vector<float> v(n, 1.0f / std::sqrt(static_cast<float>(n)));
@@ -91,4 +91,4 @@ std::vector<float> FeatPCA::FitTransform(const std::vector<float>& X,
     return Transform(X, n_samples, n_features);
 }
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

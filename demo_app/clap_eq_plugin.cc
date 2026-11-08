@@ -6,7 +6,7 @@
 
 namespace {
 
-using namespace Engine::Audio::Plugin::ClapAbi;
+using namespace XER::Audio::Plugin::ClapAbi;
 
 constexpr double kPi = 3.14159265358979323846;
 constexpr uint32_t kBandCount = 5u;
@@ -381,8 +381,8 @@ const void* ENGINE_CLAP_ABI EntryGetFactory(const char* factory_id) {
 
 }  // namespace
 
-extern "C" ENGINE_CLAP_EXPORT const Engine::Audio::Plugin::ClapAbi::clap_plugin_entry clap_entry = {
-	Engine::Audio::Plugin::ClapAbi::CLAP_VERSION,
+extern "C" ENGINE_CLAP_EXPORT const XER::Audio::Plugin::ClapAbi::clap_plugin_entry clap_entry = {
+	XER::Audio::Plugin::ClapAbi::CLAP_VERSION,
 	&EntryInit,
 	&EntryDeinit,
 	&EntryGetFactory,

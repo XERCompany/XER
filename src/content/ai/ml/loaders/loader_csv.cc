@@ -12,7 +12,7 @@
 #include <range/v3/view/transform.hpp>
 #include <range/v3/range/conversion.hpp>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 Dataset LoaderCsv::Load(const std::string& path) {
     Dataset cached;
@@ -63,4 +63,4 @@ Dataset LoaderCsv::Load(const std::string& path) {
     return ds;
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

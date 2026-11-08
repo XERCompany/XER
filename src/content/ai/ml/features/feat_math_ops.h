@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 // Low-level math primitives used throughout ml/features.
 // Optional Eigen acceleration via __has_include.
@@ -26,4 +26,4 @@ struct FeatMathOps {
                                                 size_t n_samples, size_t n_features);
 };
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

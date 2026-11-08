@@ -9,7 +9,7 @@
 #include <immintrin.h>
 #endif
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 namespace {
 
@@ -177,4 +177,4 @@ std::future<bool> FIRFilterBank::ProcessSampleAsync(float input, std::vector<flo
     });
 }
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

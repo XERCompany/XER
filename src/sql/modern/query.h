@@ -5,11 +5,11 @@
 
 #include "sql/content/value.h"
 
-namespace XER::Engine::SQL::Modern {
+namespace XER::SQL::Modern {
 
 struct Query {
 	std::string text;
-	std::vector<XER::Content::Value> parameters;
+	std::vector<XER::SQL::Content::Value> parameters;
 };
 
-}  // namespace XER::Engine::SQL::Modern
+}  // namespace XER::SQL::Modern

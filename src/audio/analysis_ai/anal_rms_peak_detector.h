@@ -8,7 +8,7 @@
 #include "async_io/log_and_debug/io_memory_tracker.h"
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 class RMSPeakDetector {
 public:
@@ -34,4 +34,4 @@ private:
 	float peak_;
 };
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

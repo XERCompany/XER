@@ -10,7 +10,7 @@
 
 #include "async_io/io_buffer_pool.h"
 
-namespace XER::network::transport {
+namespace XER::Network::Transport {
 
 // Reference-counted I/O buffer backed by IOBufferPool.
 class IOBuffer {
@@ -34,4 +34,4 @@ private:
     size_t   size_  = 0;
 };
 
-}  // namespace XER::network::transport
+}  // namespace XER::Network::Transport

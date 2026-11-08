@@ -1,6 +1,6 @@
 #include "vino_layer_mapper.h"
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 VinoLayerMapper& VinoLayerMapper::GetInstance() {
   static VinoLayerMapper instance;
@@ -35,4 +35,4 @@ std::vector<std::string> VinoLayerMapper::GetSupportedTypes() const {
   return out;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

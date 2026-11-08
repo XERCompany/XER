@@ -4,7 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace Engine::MLData::Loading {
+namespace XER::MLData::Loading {
 
 DataLoader::DataLoader() {
 }
@@ -60,4 +60,4 @@ bool DataLoader::SaveDataset(const std::string& path, const Types::Dataset& data
     return file.good();
 }
 
-} // namespace Engine::MLData::Loading
+} // namespace XER::MLData::Loading

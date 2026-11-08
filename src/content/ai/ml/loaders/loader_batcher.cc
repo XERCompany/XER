@@ -11,7 +11,7 @@
 #include <range/v3/view/transform.hpp>
 #include <range/v3/range/conversion.hpp>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 std::vector<Batch> LoaderBatcher::MakeBatches(const Dataset& ds) {
     const size_t n = ds.X.size();
@@ -40,4 +40,4 @@ std::vector<Batch> LoaderBatcher::MakeBatches(const Dataset& ds) {
     return batches;
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

@@ -5,7 +5,7 @@
 #include <vector>
 #include <filesystem>
 
-namespace Engine::Content::Platform::WinAPI::Storage {
+namespace XER::Content::Platform::WinAPI::Storage {
 
 // Drive information
 struct DriveInfo {
@@ -89,4 +89,4 @@ private:
     static void* storage_;  // IStorage*
 };
 
-}  // namespace Engine::Content::Platform::WinAPI::Storage
+}  // namespace XER::Content::Platform::WinAPI::Storage

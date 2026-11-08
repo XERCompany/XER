@@ -2,7 +2,7 @@
 
 #include "layer.h"
 
-namespace Engine::ModelsBuilder::Core {
+namespace XER::ModelsBuilder::Core {
 
 class DenseLayer : public Layer {
 public:
@@ -24,4 +24,4 @@ private:
     bool initialized_;
 };
 
-} // namespace Engine::ModelsBuilder::Core
+} // namespace XER::ModelsBuilder::Core

@@ -2,11 +2,11 @@
 
 #include "content/ai/ml/data_types/tensor.h"
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdDepthConditioner {
 public:
-    void ApplyDepthPrior(Engine::MLData::Types::Tensor& latent, float depth_weight) const;
+    void ApplyDepthPrior(XER::MLData::Types::Tensor& latent, float depth_weight) const;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

@@ -17,13 +17,13 @@ bool ProbeVideo(const std::string& path, VideoInfo* info,
     *info = VideoInfo{};
     info->path = path;
 
-    XER::engine::bridge::ffmpeg::MediaInfo media;
-    if (!XER::engine::bridge::ffmpeg::ProbeMedia(path, &media, error_out)) {
+    XER::Bridge::FFmpeg::MediaInfo media;
+    if (!XER::Bridge::FFmpeg::ProbeMedia(path, &media, error_out)) {
         return false;
     }
 
-    const XER::engine::bridge::ffmpeg::StreamInfo* video = nullptr;
-    const XER::engine::bridge::ffmpeg::StreamInfo* audio = nullptr;
+    const XER::Bridge::FFmpeg::StreamInfo* video = nullptr;
+    const XER::Bridge::FFmpeg::StreamInfo* audio = nullptr;
     for (const auto& stream : media.streams) {
         if (video == nullptr && stream.media_type == "video") {
             video = &stream;
@@ -59,7 +59,7 @@ bool ProbeVideo(const std::string& path, VideoInfo* info,
 
     std::error_code ec;
     const auto size = std::filesystem::file_size(
-        std::filesystem::path(XER::Engine::Helper::String::Utf8ToWide(path)), ec);
+        std::filesystem::path(XER::Helper::String::Utf8ToWide(path)), ec);
     if (!ec) {
         info->file_size_bytes = static_cast<std::int64_t>(size);
     }

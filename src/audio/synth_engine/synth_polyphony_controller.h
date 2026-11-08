@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 class SynthPolyphonyController {
 public:
@@ -19,4 +19,4 @@ private:
     std::vector<uint8_t> active_notes_;
 };
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

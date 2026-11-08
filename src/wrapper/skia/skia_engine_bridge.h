@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
 
 bool IsAvailable();
 bool HasNativeIncludes();
@@ -456,4 +456,4 @@ bool AutoLevels(std::vector<uint32_t>* pixels, int width, int height,
 
 bool EqualizeHistogram(std::vector<uint32_t>* pixels, int width, int height);
 
-}  // namespace XER::engine::bridge::skia
+}  // namespace XER::Bridge::Skia

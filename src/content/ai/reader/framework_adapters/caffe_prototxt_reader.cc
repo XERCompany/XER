@@ -7,7 +7,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 namespace {
 
@@ -153,4 +153,4 @@ bool CaffeProtoxtReader::LoadWeights(const std::string& caffemodel_path) {
     return size > 0;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

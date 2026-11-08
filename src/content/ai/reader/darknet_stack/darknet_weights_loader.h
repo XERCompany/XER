@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Darknet {
+namespace XER::ModelsBuilder::Reader::Darknet {
 
 /// @brief Loads binary weights from a Darknet .weights file
 ///
@@ -46,4 +46,4 @@ class DarknetWeightsLoader {
   size_t                cursor_{0}; ///< Current read position in data_
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Darknet
+}  // namespace XER::ModelsBuilder::Reader::Darknet

@@ -16,7 +16,7 @@
 #include "pluginterfaces/vst/vstspeaker.h"
 #include "pluginterfaces/gui/iplugview.h"
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 namespace {
 
 using namespace Steinberg;
@@ -27,7 +27,7 @@ using namespace Steinberg::Vst;
 // A single-file module is a PE binary with a .vst3 extension.
 std::wstring ResolveVst3ModulePath(const std::string& plugin_path,
                                    std::string* error_out) {
-    const std::wstring wide = XER::Engine::Helper::String::Utf8ToWide(plugin_path);
+    const std::wstring wide = XER::Helper::String::Utf8ToWide(plugin_path);
     if (wide.empty()) {
         if (error_out) *error_out = "invalid plugin path encoding";
         return {};
@@ -45,7 +45,7 @@ std::wstring ResolveVst3ModulePath(const std::string& plugin_path,
 
     // Bundle directory: prefer Contents/x86_64-win, then scan for *.vst3.
     std::wstring arch_dir = wide;
-    if (!XER::Engine::Helper::String::EndsWith(arch_dir, L"\\x86_64-win") && !XER::Engine::Helper::String::EndsWith(arch_dir, L"/x86_64-win")) {
+    if (!XER::Helper::String::EndsWith(arch_dir, L"\\x86_64-win") && !XER::Helper::String::EndsWith(arch_dir, L"/x86_64-win")) {
         arch_dir += L"\\Contents\\x86_64-win";
     }
     const DWORD arch_attrs = GetFileAttributesW(arch_dir.c_str());
@@ -495,4 +495,4 @@ void Vst3ExternalHost::RemoveEditorView() {
     }
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

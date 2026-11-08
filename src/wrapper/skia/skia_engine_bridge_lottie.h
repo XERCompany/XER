@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
     // Load a Lottie animation from JSON. Returns a handle.
     int LottieLoadAnimation(const std::string& json_content);
     // Get animation duration in seconds

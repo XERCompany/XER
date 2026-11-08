@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 /// @brief Element-wise CUDA operations on tensors
 /// 
@@ -82,4 +82,4 @@ public:
                                           cudaStream_t stream = 0);
 };
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

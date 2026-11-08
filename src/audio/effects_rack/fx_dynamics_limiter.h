@@ -5,7 +5,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class DynamicsLimiter {
 public:
@@ -25,4 +25,4 @@ private:
 	float gain_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

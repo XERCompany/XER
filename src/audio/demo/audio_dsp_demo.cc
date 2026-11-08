@@ -15,7 +15,7 @@
 #include <fstream>
 #include <vector>
 
-namespace XER::Engine::Audio::Demo {
+namespace XER::Audio::Demo {
 
 namespace {
 
@@ -143,7 +143,7 @@ bool EncodeWave(
 	const std::vector<float>& audio,
 	int sample_rate,
 	std::string* error_out) {
-	XER::Engine::Audio::CodecIO::WavPcmCodec codec;
+	XER::Audio::CodecIO::WavPcmCodec codec;
 	std::vector<std::uint8_t> encoded;
 	if (!codec.Encode16(audio.data(), audio.size(), encoded, sample_rate)) {
 		if (error_out != nullptr) {
@@ -165,7 +165,7 @@ bool ResolveProcessorKind(
 		return false;
 	}
 
-	const std::string normalized = XER::Engine::Helper::String::ToLowerAscii(processor_name);
+	const std::string normalized = XER::Helper::String::ToLowerAscii(processor_name);
 	if (normalized == "spectral_shaper") {
 		*processor_kind = DemoProcessorKind::kSpectralShaper;
 		return true;
@@ -193,7 +193,7 @@ bool BuildSpectralShaperCurve(
 		return false;
 	}
 
-	const std::string profile = XER::Engine::Helper::String::ToLowerAscii(profile_name.empty() ? std::string("tilt") : profile_name);
+	const std::string profile = XER::Helper::String::ToLowerAscii(profile_name.empty() ? std::string("tilt") : profile_name);
 	curve_out->assign(positive_bins, 1.0f);
 	const float denominator = positive_bins > 1 ? static_cast<float>(positive_bins - 1) : 1.0f;
 
@@ -223,7 +223,7 @@ bool BuildSpectralShaperCurve(
 
 bool RunSelectedProcessorDemo(
 	const AudioDSPDemoOptions& options,
-	const XER::Engine::Audio::Core::AudioSourceBuffer& input_audio,
+	const XER::Audio::Core::AudioSourceBuffer& input_audio,
 	const std::string& mode,
 	std::string* report_out,
 	std::string* error_out) {
@@ -264,7 +264,7 @@ bool RunSelectedProcessorDemo(
 		processor_label = "spectral_shaper";
 		processor_detail = options.spectral_shaper_profile.empty() ? "tilt" : options.spectral_shaper_profile;
 
-		XER::Engine::Audio::DSP::SpectralShaper shaper(kFFTSize, kHopSize);
+		XER::Audio::DSP::SpectralShaper shaper(kFFTSize, kHopSize);
 		std::vector<float> curve;
 		if (!BuildSpectralShaperCurve(processor_detail, (kFFTSize / 2u) + 1u, &curve, error_out)) {
 			return false;
@@ -280,7 +280,7 @@ bool RunSelectedProcessorDemo(
 		processor_label = "phase_vocoder";
 		processor_detail = absl::StrFormat("%0.3f", options.phase_vocoder_ratio);
 
-		XER::Engine::Audio::DSP::PhaseVocoder vocoder(kFFTSize, kHopSize);
+		XER::Audio::DSP::PhaseVocoder vocoder(kFFTSize, kHopSize);
 		if (!vocoder.Initialize(static_cast<float>(input_audio.sample_rate))) {
 			if (error_out != nullptr) {
 				*error_out = "failed to initialize phase vocoder";
@@ -382,7 +382,7 @@ bool RunSyntheticSmoke(
 
 	const std::vector<float> input = GenerateInputSignal(kSyntheticSignalSamples, kDefaultSampleRate);
 
-	XER::Engine::Audio::DSP::SpectralShaper shaper(kFFTSize, kHopSize);
+	XER::Audio::DSP::SpectralShaper shaper(kFFTSize, kHopSize);
 	if (!shaper.SetCurve(std::vector<float>((kFFTSize / 2u) + 1u, 1.0f))) {
 		if (error_out != nullptr) {
 			*error_out = "failed to set spectral shaper curve";
@@ -390,7 +390,7 @@ bool RunSyntheticSmoke(
 		return false;
 	}
 
-	XER::Engine::Audio::DSP::PhaseVocoder vocoder(kFFTSize, kHopSize);
+	XER::Audio::DSP::PhaseVocoder vocoder(kFFTSize, kHopSize);
 	if (!vocoder.Initialize(static_cast<float>(kDefaultSampleRate))) {
 		if (error_out != nullptr) {
 			*error_out = "failed to initialize phase vocoder";
@@ -493,14 +493,14 @@ bool RunAudioDSPDemo(
 	const AudioDSPDemoOptions& options,
 	std::string* report_out,
 	std::string* error_out) {
-	const std::string processor = XER::Engine::Helper::String::ToLowerAscii(options.processor);
+	const std::string processor = XER::Helper::String::ToLowerAscii(options.processor);
 	if (options.input_path.empty() && (processor.empty() || processor == "smoke")) {
 		return RunSyntheticSmoke(options.output_dir, report_out, error_out);
 	}
 
 	if (options.input_path.empty()) {
 		const int target_sample_rate = options.target_sample_rate > 0 ? options.target_sample_rate : kDefaultSampleRate;
-		XER::Engine::Audio::Core::AudioSourceBuffer synthetic_input;
+		XER::Audio::Core::AudioSourceBuffer synthetic_input;
 		synthetic_input.samples = GenerateInputSignal(kSyntheticSignalSamples, target_sample_rate);
 		synthetic_input.sample_rate = target_sample_rate;
 		synthetic_input.channels = 1;
@@ -519,12 +519,12 @@ bool RunAudioDSPDemo(
 			error_out);
 	}
 
-	XER::Engine::Audio::Core::AudioSourceLoadOptions load_options;
+	XER::Audio::Core::AudioSourceLoadOptions load_options;
 	load_options.input_path = options.input_path;
 	load_options.raw_sample_rate = options.raw_sample_rate;
 	load_options.target_sample_rate = options.target_sample_rate;
-	XER::Engine::Audio::Core::AudioSourceBuffer decoded_audio;
-	if (!XER::Engine::Audio::Core::AudioSourceLoader::Load(load_options, &decoded_audio, error_out)) {
+	XER::Audio::Core::AudioSourceBuffer decoded_audio;
+	if (!XER::Audio::Core::AudioSourceLoader::Load(load_options, &decoded_audio, error_out)) {
 		return false;
 	}
 
@@ -549,4 +549,4 @@ bool RunAudioDSPDemo(
 	return RunAudioDSPDemo(options, report_out, error_out);
 }
 
-}  // namespace XER::Engine::Audio::Demo
+}  // namespace XER::Audio::Demo

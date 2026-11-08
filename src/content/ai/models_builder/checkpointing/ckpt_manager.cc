@@ -10,7 +10,7 @@
 #include <fstream>
 #include <iterator>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 namespace {
 
@@ -160,5 +160,5 @@ void CheckpointManager::PruneOldCheckpoints(const std::string& directory) const 
 	}
 }
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

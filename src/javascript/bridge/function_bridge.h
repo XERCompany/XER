@@ -9,11 +9,11 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace engine::javascript::bridge {
+namespace XER::JavaScript::Bridge {
 
 class FunctionBridge {
 public:
-    explicit FunctionBridge(engine::javascript::runtime::RuntimeContext* runtime);
+    explicit FunctionBridge(XER::JavaScript::Runtime::RuntimeContext* runtime);
     ~FunctionBridge();
 
     FunctionBridge(const FunctionBridge&) = delete;
@@ -24,8 +24,8 @@ public:
     bool Invoke(std::string_view handler_name, const std::string& topic, const std::string& text, std::uint64_t sequence);
 
 private:
-    engine::javascript::runtime::RuntimeContext* runtime_;
+    XER::JavaScript::Runtime::RuntimeContext* runtime_;
     std::unordered_map<std::string, v8::Global<v8::Function>> handlers_;
 };
 
-}  // namespace engine::javascript::bridge
+}  // namespace XER::JavaScript::Bridge

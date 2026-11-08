@@ -4,7 +4,7 @@
 
 #include <absl/strings/str_cat.h>
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 
 SandboxSettings ResolveSandboxSettings(const EngineParams& params) {
 	SandboxSettings settings;
@@ -24,4 +24,4 @@ std::string BuildSandboxSummary(const SandboxSettings& settings) {
 		")");
 }
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

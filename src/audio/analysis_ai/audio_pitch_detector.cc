@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <map>
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 const float A4_FREQUENCY = 440.0f;
 
@@ -111,4 +111,4 @@ float AudioPitchDetector::AutocorrelationPeak(const float* audio, size_t frame_c
     return std::sqrt(norm / frame_count);
 }
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

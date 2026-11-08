@@ -1,7 +1,7 @@
 #include "tensor_slice.h"
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 Tensor TensorSlice(const Tensor& t, size_t start, size_t length) {
     if (t.NumDimensions() != 2)
@@ -15,4 +15,4 @@ Tensor TensorSlice(const Tensor& t, size_t start, size_t length) {
     return out;
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

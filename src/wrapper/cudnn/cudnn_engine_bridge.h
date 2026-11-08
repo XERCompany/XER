@@ -2,9 +2,9 @@
 
 #include <string>
 
-namespace XER::engine::bridge::cudnn {
+namespace XER::Bridge::CuDNN {
 
 bool IsAvailable();
 std::string Summary();
 
-}  // namespace XER::engine::bridge::cudnn
+}  // namespace XER::Bridge::CuDNN

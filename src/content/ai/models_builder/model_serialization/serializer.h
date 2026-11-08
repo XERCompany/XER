@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::Serialization {
+namespace XER::ModelsBuilder::Serialization {
 
 class ModelSerializer {
 public:
@@ -20,4 +20,4 @@ private:
     ModelSerializer() = default;
 };
 
-} // namespace Engine::ModelsBuilder::Serialization
+} // namespace XER::ModelsBuilder::Serialization

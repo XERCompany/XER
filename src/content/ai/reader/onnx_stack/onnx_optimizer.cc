@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <unordered_set>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 bool OnnxOptimizer::Optimize(std::vector<OnnxNode>& nodes) {
     // Apply optimization passes in sequence
@@ -159,4 +159,4 @@ bool OnnxOptimizer::InferShapes(const std::vector<OnnxNode>& nodes,
     return true;
 }
 
-} // namespace Engine::ModelsBuilder::Reader::Onnx
+} // namespace XER::ModelsBuilder::Reader::Onnx

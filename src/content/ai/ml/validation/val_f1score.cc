@@ -4,7 +4,7 @@
 #include <map>
 #include <set>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 float ValF1Score::Compute(const std::vector<int>& predictions,
                            const std::vector<int>& ground_truth,
@@ -35,4 +35,4 @@ float ValF1Score::WeightedAverage(const std::vector<int>& predictions,
     return sum / total;
 }
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

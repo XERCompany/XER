@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 namespace {
 
@@ -117,4 +117,4 @@ std::vector<uint8_t> MetadataId3::Build(const Id3Tag& tag) const {
     return out;
 }
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

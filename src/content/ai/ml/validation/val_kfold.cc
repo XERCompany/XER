@@ -3,7 +3,7 @@
 #include <numeric>
 #include <random>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 std::vector<ValKFold::FoldIndices> ValKFold::Split(size_t n_samples) const {
     std::vector<size_t> idx(n_samples);
@@ -22,4 +22,4 @@ std::vector<ValKFold::FoldIndices> ValKFold::Split(size_t n_samples) const {
     return folds;
 }
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

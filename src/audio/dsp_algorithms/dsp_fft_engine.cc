@@ -10,7 +10,7 @@
 #include <fftw3.h>
 #endif
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Tracks training epochs and per-epoch metrics
 class EpochManager {
@@ -20,4 +20,4 @@ class EpochManager {
   float last_loss_{0.0f};
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

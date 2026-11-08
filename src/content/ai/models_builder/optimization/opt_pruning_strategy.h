@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 /// @brief Magnitude-based unstructured weight pruning
 class OptPruningStrategy {
@@ -16,4 +16,4 @@ class OptPruningStrategy {
   static float Sparsity(const Eigen::MatrixXf& weights);
 };
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

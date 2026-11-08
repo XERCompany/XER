@@ -1,7 +1,7 @@
 #include "aug_saturation.h"
 #include <algorithm>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugSaturation::AugSaturation(float factor) : factor_(factor) {}
 
@@ -23,4 +23,4 @@ bool AugSaturation::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

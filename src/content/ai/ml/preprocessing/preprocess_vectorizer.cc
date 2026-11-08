@@ -1,6 +1,6 @@
 #include "preprocess_vectorizer.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessVectorizer::Fit(
         const std::vector<std::vector<std::string>>& token_seqs) {
@@ -26,4 +26,4 @@ std::vector<std::vector<float>> PreprocessVectorizer::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

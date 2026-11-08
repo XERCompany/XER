@@ -2,7 +2,7 @@
 
 #include <unordered_set>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 std::unordered_map<std::string, OptMemoryReuse::ReuseEntry>
 OptMemoryReuse::Plan(const GraphEngine::GraphBase& graph) {
@@ -24,4 +24,4 @@ OptMemoryReuse::Plan(const GraphEngine::GraphBase& graph) {
   return plan;
 }
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

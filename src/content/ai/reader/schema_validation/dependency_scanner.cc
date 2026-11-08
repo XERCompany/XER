@@ -3,7 +3,7 @@
 #include <unordered_set>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 DependencyScanner::ScanResult DependencyScanner::Scan(
     const Core::Model& model) const {
@@ -34,4 +34,4 @@ DependencyScanner::ScanResult DependencyScanner::Scan(
   return result;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

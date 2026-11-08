@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::shared_ptr<Core::Model> ModelPruner::KeepFirstLayers(const Core::Model& model,
         size_t layers_to_keep) const {
@@ -38,5 +38,5 @@ std::shared_ptr<Core::Model> ModelPruner::PruneLastLayers(const Core::Model& mod
 	return KeepFirstLayers(model, model.GetLayerCount() - layers_to_prune);
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

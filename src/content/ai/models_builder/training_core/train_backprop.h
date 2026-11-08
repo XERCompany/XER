@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Backpropagation orchestrator (forward/backward passes)
 class TrainBackprop {
@@ -17,4 +17,4 @@ class TrainBackprop {
                                   const std::vector<float>& y);
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

@@ -1,7 +1,7 @@
 #include "preprocess_outlier_remover.h"
 #include <algorithm>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessOutlierRemover::Fit(const std::vector<std::vector<float>>& X) {
     if (X.empty()) return;
@@ -30,4 +30,4 @@ std::vector<std::vector<float>> PreprocessOutlierRemover::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

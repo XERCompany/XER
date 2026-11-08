@@ -3,7 +3,7 @@
 #include "../core_loaders/reader_base.h"
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 /// @brief Reads Keras HDF5 (.h5) model files
 ///
@@ -17,4 +17,4 @@ class KerasH5Reader : public ReaderBase {
   std::string GetFileExtension() const override { return ".h5"; }
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

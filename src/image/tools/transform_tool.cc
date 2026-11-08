@@ -23,7 +23,7 @@ ImageBuffer TransformTool::ResizeNN(const ImageBuffer& img, int nw, int nh) {
 }
 
 ImageBuffer TransformTool::Resize(const ImageBuffer& img, int nw, int nh) {
-    if (!engine::bridge::skia::IsAvailable())
+    if (!XER::Bridge::Skia::IsAvailable())
         return ResizeNN(img, nw, nh);
     if (!img.IsValid() || nw<=0 || nh<=0) return {};
     int sw=img.Width(), sh=img.Height();
@@ -31,8 +31,8 @@ ImageBuffer TransformTool::Resize(const ImageBuffer& img, int nw, int nh) {
     std::vector<uint32_t> src_px(sw*sh), dst_px(nw*nh, 0);
     const uint8_t* d=img.Data();
     for (int i=0;i<sw*sh;++i)
-        src_px[i]=engine::bridge::skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
-    engine::bridge::skia::RasterDrawImage(&dst_px, nw, nh,
+        src_px[i]=XER::Bridge::Skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
+    XER::Bridge::Skia::RasterDrawImage(&dst_px, nw, nh,
                                            src_px, sw, sh,
                                            0, 0, "src");
     ImageBuffer out(nw, nh, img.Format(), img.GetColorSpace());

@@ -2,7 +2,7 @@
 #include "preprocess_base.h"
 #include <vector>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Standardize features: z = (x - mean) / std
 class PreprocessStandardizer : public PreprocessBase {
@@ -21,4 +21,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

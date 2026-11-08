@@ -2,11 +2,11 @@
 
 #include <algorithm>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
-void SdControlNetRouter::ApplyHintScale(Engine::MLData::Types::Tensor& latent,
+void SdControlNetRouter::ApplyHintScale(XER::MLData::Types::Tensor& latent,
                                         float hint_strength) const {
-    if (latent.GetDataType() != Engine::MLData::Types::DataType::FLOAT32 || !latent.GetData()) {
+    if (latent.GetDataType() != XER::MLData::Types::DataType::FLOAT32 || !latent.GetData()) {
         return;
     }
 
@@ -18,4 +18,4 @@ void SdControlNetRouter::ApplyHintScale(Engine::MLData::Types::Tensor& latent,
     }
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

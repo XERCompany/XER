@@ -5,7 +5,7 @@
 #include <vector>
 
 
-namespace XER::Engine::Helper::String {
+namespace XER::Helper::String {
 
 std::string NormalizeUtf8(std::string_view text);
 
@@ -87,4 +87,4 @@ std::wstring Utf8ToWide(std::string_view utf8);
 std::string WideToUtf8(std::wstring_view wide);
 #endif
 
-}  // namespace XER::Engine::Helper::String
+}  // namespace XER::Helper::String

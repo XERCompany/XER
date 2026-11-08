@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 class MlMathUtils {
  public:
@@ -15,5 +15,5 @@ class MlMathUtils {
 	static std::vector<float> L2Normalize(const std::vector<float>& values, float epsilon = 1e-8f);
 };
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

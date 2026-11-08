@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 struct WeightValidationResult {
 	bool valid;
@@ -22,4 +22,4 @@ public:
 	bool ValidatePack(const std::vector<WeightTensor>& tensors) const;
 };
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

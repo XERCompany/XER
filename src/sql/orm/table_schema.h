@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::SQL::ORM {
+namespace XER::SQL::ORM {
 
 enum class ColumnType {
 	Integer,
@@ -29,4 +29,4 @@ public:
 		std::string* error_out = nullptr) const;
 };
 
-}  // namespace XER::Engine::SQL::ORM
+}  // namespace XER::SQL::ORM

@@ -98,7 +98,7 @@ NormalizedClipOptions NormalizeOptions(const MusicBassEqClipOptions& options) {
 std::string BuildFrameCacheKey(
     const MusicBassEqClipOptions& options,
     const NormalizedClipOptions& normalized,
-    const Engine::Audio::Core::AudioSourceBuffer& audio_buffer) {
+    const XER::Audio::Core::AudioSourceBuffer& audio_buffer) {
     std::error_code fs_error;
     auto file_size = std::filesystem::file_size(options.input_path, fs_error);
     if (fs_error) {
@@ -118,7 +118,7 @@ std::string BuildFrameCacheKey(
     key << "height=" << normalized.height << "\n";
     key << "fps=" << normalized.fps << "\n";
     key << "duration=" << normalized.duration_seconds << "\n";
-    return Engine::Cache::HashKey(key.str());
+    return XER::Cache::HashKey(key.str());
 }
 
 void PutPixel(Frame& frame, int x, int y, RgbColor color, uint8_t alpha = 255) {
@@ -273,7 +273,7 @@ bool AnalyzeBassEqTimeline(
     std::string analysis_error;
 
     auto analyze_range = [&](size_t begin, size_t end) {
-        Engine::Audio::AnalysisAI::AudioFFTAnalyzer analyzer(kFftSize);
+        XER::Audio::AnalysisAI::AudioFFTAnalyzer analyzer(kFftSize);
         std::vector<float> window(kFftSize, 0.0f);
         for (size_t frame_index = begin; frame_index < end && !analysis_failed.load(); ++frame_index) {
             const double time_seconds = static_cast<double>(frame_index) / static_cast<double>(options.fps);
@@ -446,7 +446,7 @@ bool GenerateMusicBassEqClip(
         SetError(error_out, "music bass EQ clip requires an input music file");
         return false;
     }
-    if (!engine::bridge::ffmpeg::IsAvailable()) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
         SetError(error_out, "FFmpeg bridge is required for music bass EQ clip generation");
         return false;
     }
@@ -466,14 +466,14 @@ bool GenerateMusicBassEqClip(
         }
     }
 
-    Engine::Audio::Core::AudioSourceLoadOptions load_options;
+    XER::Audio::Core::AudioSourceLoadOptions load_options;
     load_options.input_path = options.input_path;
     load_options.raw_sample_rate = normalized.sample_rate;
     load_options.target_sample_rate = normalized.sample_rate;
     load_options.target_channels = 1;
 
-    Engine::Audio::Core::AudioSourceBuffer audio_buffer;
-    if (!Engine::Audio::Core::AudioSourceLoader::Load(load_options, &audio_buffer, error_out)) return false;
+    XER::Audio::Core::AudioSourceBuffer audio_buffer;
+    if (!XER::Audio::Core::AudioSourceLoader::Load(load_options, &audio_buffer, error_out)) return false;
     if (audio_buffer.samples.empty() || audio_buffer.sample_rate <= 0) {
         SetError(error_out, "music bass EQ clip normalized audio buffer is empty");
         return false;
@@ -567,7 +567,7 @@ bool GenerateMusicBassEqClip(
     };
 
     auto export_stream = [&](const std::string& codec_name) {
-        std::filesystem::path temp_output = Engine::Cache::TempPathForTarget(normalized.output_path, codec_name);
+        std::filesystem::path temp_output = XER::Cache::TempPathForTarget(normalized.output_path, codec_name);
         temp_output += normalized.output_path.extension().string();
         std::error_code remove_error;
         std::filesystem::remove(temp_output, remove_error);
@@ -583,7 +583,7 @@ bool GenerateMusicBassEqClip(
             return false;
         }
         std::string commit_error;
-        if (!Engine::Cache::CommitTempFile(temp_output, normalized.output_path, &commit_error)) {
+        if (!XER::Cache::CommitTempFile(temp_output, normalized.output_path, &commit_error)) {
             SetError(error_out, commit_error.empty() ? "failed to commit streamed music clip output" : commit_error);
             return false;
         }

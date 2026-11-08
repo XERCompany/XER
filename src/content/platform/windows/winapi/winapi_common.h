@@ -5,7 +5,7 @@
 #include <functional>
 #include <memory>
 
-namespace Engine::Content::Platform::WinAPI {
+namespace XER::Content::Platform::WinAPI {
 
 // Error handling
 class WinAPIError {
@@ -44,4 +44,4 @@ public:
     static std::string LoadString(int resourceId);
 };
 
-}  // namespace Engine::Content::Platform::WinAPI
+}  // namespace XER::Content::Platform::WinAPI

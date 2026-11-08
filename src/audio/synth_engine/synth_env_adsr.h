@@ -1,6 +1,6 @@
 #pragma once
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 class SynthEnvAdsr {
 public:
@@ -19,4 +19,4 @@ private:
     float value_ = 0.0f;
 };
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

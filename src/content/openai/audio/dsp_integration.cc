@@ -15,7 +15,7 @@ public:
 
     ~Impl() = default;
 
-    std::unique_ptr<Engine::Audio::DSP::FFTEngine> fft_engine_;
+    std::unique_ptr<XER::Audio::DSP::FFTEngine> fft_engine_;
     bool initialized_;
     int fft_size_;
 };
@@ -26,7 +26,7 @@ AudioFeatureExtractor::AudioFeatureExtractor()
 
 bool AudioFeatureExtractor::Initialize(int fft_size) {
     impl_->fft_size_ = fft_size;
-    impl_->fft_engine_ = std::make_unique<Engine::Audio::DSP::FFTEngine>(fft_size);
+    impl_->fft_engine_ = std::make_unique<XER::Audio::DSP::FFTEngine>(fft_size);
     impl_->initialized_ = true;
     return true;
 }
@@ -407,7 +407,7 @@ public:
 
     ~Impl() = default;
 
-    std::unique_ptr<Engine::Audio::DSP::FFTEngine> fft_engine_;
+    std::unique_ptr<XER::Audio::DSP::FFTEngine> fft_engine_;
     bool initialized_;
     int fft_size_;
 };
@@ -418,7 +418,7 @@ SpectralVisualizer::SpectralVisualizer()
 
 bool SpectralVisualizer::Initialize(int fft_size) {
     impl_->fft_size_ = fft_size;
-    impl_->fft_engine_ = std::make_unique<Engine::Audio::DSP::FFTEngine>(fft_size);
+    impl_->fft_engine_ = std::make_unique<XER::Audio::DSP::FFTEngine>(fft_size);
     impl_->initialized_ = true;
     return true;
 }

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 uint64_t SynthModulationMatrix::MakeRouteKey(uint32_t source, uint32_t destination) {
     return (static_cast<uint64_t>(source) << 32) | destination;
@@ -90,4 +90,4 @@ void SynthModulationMatrix::Reset() {
     destination_states_.clear();
 }
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

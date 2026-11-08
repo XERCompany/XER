@@ -6,7 +6,7 @@
 #include <optional>
 #include <vector>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class BufferQueue {
  public:
@@ -22,5 +22,5 @@ class BufferQueue {
 	ThreadSafeQueue<std::vector<uint8_t>> queue_;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

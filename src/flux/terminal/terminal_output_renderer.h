@@ -5,7 +5,7 @@
 
 #include "flux/terminal/terminal_interface.h"
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 void Write(TerminalInterface& terminal, OutputStream stream, std::string_view text);
 void Write(OutputStream stream, std::string_view text);
@@ -16,4 +16,4 @@ void ClearSnapshot(OutputStream stream);
 std::string Snapshot(OutputStream stream);
 std::string SnapshotPlainText(OutputStream stream);
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

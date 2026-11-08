@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Flatten layer: collapse spatial dims into 1D
 class LayerFlatten : public Core::Layer {
@@ -22,4 +22,4 @@ std::shared_ptr<Core::Layer> MakeFlatten(const std::string& name,
                                            int start_dim = 1,
                                            int end_dim   = -1);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

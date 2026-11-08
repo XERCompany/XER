@@ -29,11 +29,11 @@ std::uint64_t Fnv1a(const std::string& s) {
 }
 
 std::string Utf8Path(const std::filesystem::path& p) {
-    return XER::Engine::Helper::String::WideToUtf8(p.wstring());
+    return XER::Helper::String::WideToUtf8(p.wstring());
 }
 
 std::filesystem::path PosterDir() {
-    return XER::Engine::Cache::CacheManager::Instance().Persistent().root() /
+    return XER::Cache::CacheManager::Instance().Persistent().root() /
            "video_cache" / "posters";
 }
 
@@ -123,7 +123,7 @@ bool VideoFrameCache::StorePoster(const std::string& video_path,
     if (ec) return false;
 
     std::ofstream file(std::filesystem::path(
-                           XER::Engine::Helper::String::Utf8ToWide(
+                           XER::Helper::String::Utf8ToWide(
                                PosterPath(video_path))),
                        std::ios::binary | std::ios::trunc);
     if (!file) return false;
@@ -146,7 +146,7 @@ bool VideoFrameCache::LoadPoster(const std::string& video_path,
     if (out == nullptr) return false;
     const std::string path = PosterPath(video_path);
     std::ifstream file(std::filesystem::path(
-                           XER::Engine::Helper::String::Utf8ToWide(path)),
+                           XER::Helper::String::Utf8ToWide(path)),
                        std::ios::binary);
     if (!file) return false;
 
@@ -178,7 +178,7 @@ bool VideoFrameCache::HasPoster(const std::string& video_path) const {
     std::error_code ec;
     return std::filesystem::exists(
         std::filesystem::path(
-            XER::Engine::Helper::String::Utf8ToWide(PosterPath(video_path))), ec);
+            XER::Helper::String::Utf8ToWide(PosterPath(video_path))), ec);
 }
 
 }  // namespace XER::Content::Video

@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Dropout regularization layer
 class LayerDropout : public Core::Layer {
@@ -22,4 +22,4 @@ class LayerDropout : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeDropout(const std::string& name,
                                            float rate = 0.5f);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

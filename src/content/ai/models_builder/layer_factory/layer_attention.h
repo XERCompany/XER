@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Multi-Head Self-Attention layer (Transformer-style)
 class LayerAttention : public Core::Layer {
@@ -26,4 +26,4 @@ class LayerAttention : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeAttention(const std::string& name,
                                               LayerAttention::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

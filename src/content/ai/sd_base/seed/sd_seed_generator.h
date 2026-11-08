@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdSeedGenerator {
 public:
@@ -12,4 +12,4 @@ public:
                                uint64_t fallback_seed = 0);
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

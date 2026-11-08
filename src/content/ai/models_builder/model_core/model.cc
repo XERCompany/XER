@@ -6,7 +6,7 @@
 
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Core {
+namespace XER::ModelsBuilder::Core {
 
 Model::Model(const std::string& name)
     : model_name_(name), model_type_(ModelType::Sequential), is_compiled_(false) {
@@ -125,4 +125,4 @@ std::shared_ptr<Layer> Model::GetLayer(size_t index) const {
     return nullptr;
 }
 
-} // namespace Engine::ModelsBuilder::Core
+} // namespace XER::ModelsBuilder::Core

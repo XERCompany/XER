@@ -2,7 +2,7 @@
 
 #include <cstring>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 bool IntegrityCheck::CheckOnnxMagic(const uint8_t* data, size_t size) {
   // ONNX protobuf files start with field tag 0x0A (field 1, wire type 2)
@@ -39,4 +39,4 @@ bool IntegrityCheck::VerifyModel(const Core::Model& model,
   return true;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

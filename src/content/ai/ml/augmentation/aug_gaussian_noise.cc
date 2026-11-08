@@ -12,7 +12,7 @@
 #  define HAS_FFT_ANALYZER 0
 #endif
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugGaussianNoise::AugGaussianNoise(float std_dev, bool spectral_shape)
     : std_dev_(std_dev), spectral_shape_(spectral_shape) {}
@@ -26,7 +26,7 @@ bool AugGaussianNoise::Apply(ImageSample& sample) {
 #if HAS_FFT_ANALYZER
     if (spectral_shape_ && sample.pixels.size() >= 64) {
         // Use AudioFFTAnalyzer to compute per-frequency noise shaping weights.
-        Engine::Audio::AnalysisAI::AudioFFTAnalyzer fft_analyzer(
+        XER::Audio::AnalysisAI::AudioFFTAnalyzer fft_analyzer(
             static_cast<size_t>(std::min(static_cast<int>(sample.pixels.size()), 2048)));
         fft_analyzer.ComputeFFT(sample.pixels.data(), sample.pixels.size());
         const auto& mag = fft_analyzer.GetMagnitudeSpectrum();
@@ -46,4 +46,4 @@ bool AugGaussianNoise::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

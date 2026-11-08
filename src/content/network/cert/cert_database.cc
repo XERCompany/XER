@@ -6,7 +6,7 @@
 
 #include <mutex>
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 // static
 CertDatabase& CertDatabase::Instance() {
@@ -43,4 +43,4 @@ std::string CertDatabase::MakeKey(const std::string& hostname,
     return hostname + ':' + fingerprint;
 }
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

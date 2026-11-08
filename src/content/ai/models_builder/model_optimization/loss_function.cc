@@ -1,6 +1,6 @@
 ﻿#include "loss_function.h"
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 float MSELoss::Compute(const float* predictions, const float* targets, size_t size) {
     if (!predictions || !targets || size == 0) return 0.0f;
@@ -13,4 +13,4 @@ float MSELoss::Compute(const float* predictions, const float* targets, size_t si
     return sum / size;
 }
 
-} // namespace Engine::ModelsBuilder::Optimization
+} // namespace XER::ModelsBuilder::Optimization

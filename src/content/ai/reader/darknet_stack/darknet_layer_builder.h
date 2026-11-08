@@ -5,7 +5,7 @@
 #include <memory>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Darknet {
+namespace XER::ModelsBuilder::Reader::Darknet {
 
 /// @brief Converts Darknet CfgSection into XER Core::Layer objects
 class DarknetLayerBuilder {
@@ -32,4 +32,4 @@ class DarknetLayerBuilder {
                              const std::string& def = "");
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Darknet
+}  // namespace XER::ModelsBuilder::Reader::Darknet

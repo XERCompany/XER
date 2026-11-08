@@ -1,7 +1,7 @@
 #pragma once
 #include "preprocess_base.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Quantize features to `n_bins` uniformly spaced bins per feature
 class PreprocessQuantizer : public PreprocessBase {
@@ -18,4 +18,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

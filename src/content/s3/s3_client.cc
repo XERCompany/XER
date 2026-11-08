@@ -78,7 +78,7 @@ S3Client::HttpResponse S3Client::PerformRaw(
     const std::vector<std::string>& headers, const std::string& body,
     bool head_only) {
     (void)head_only;  // SyncRequest suppresses the body for HEAD itself.
-    const auto r = XER::network::http::SyncRequest(method, url, body, headers,
+    const auto r = XER::Network::Http::SyncRequest(method, url, body, headers,
                                               cfg_.timeout_ms, "XER-S3/1.0");
     HttpResponse out;
     out.status = r.status;

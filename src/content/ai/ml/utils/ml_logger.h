@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 enum class MlLogLevel : unsigned char {
 	Debug = 0,
@@ -43,5 +43,5 @@ class MlLogger {
 	std::vector<MlLogEntry> entries_;
 };
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

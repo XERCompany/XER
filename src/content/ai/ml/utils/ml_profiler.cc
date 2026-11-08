@@ -1,6 +1,6 @@
 #include "ml_profiler.h"
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 MlProfiler::ScopedProfile::ScopedProfile(MlProfiler& profiler, std::string_view key)
 		: profiler_(profiler), key_(key), start_(Clock::now()) {
@@ -40,5 +40,5 @@ std::unordered_map<std::string, double> MlProfiler::SnapshotMillis() const {
 	return last_millis_;
 }
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

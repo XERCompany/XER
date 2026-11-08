@@ -20,20 +20,20 @@ std::string LowerCopy(const std::string& text) {
 
 }  // namespace
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 SdRuntimeCapabilities SdGpuDispatch::Detect() {
     SdRuntimeCapabilities caps;
-    const auto libs = Engine::ModelsBuilder::Utility::DetectExternalLibraries();
+    const auto libs = XER::ModelsBuilder::Utility::DetectExternalLibraries();
 
-    caps.cuda_available = libs.has_cuda && engine::bridge::cuda::IsAvailable();
+    caps.cuda_available = libs.has_cuda && XER::Bridge::Cuda::IsAvailable();
     caps.cudnn_available = libs.has_cudnn;
     caps.cutlass_available = libs.has_cutlass;
     caps.openvino_available = libs.has_openvino;
     caps.onnx_available = libs.has_onnx;
     caps.tensorflow_available = libs.has_tensorflow;
-    caps.opencv_available = libs.has_opencv && engine::bridge::opencv::IsAvailable();
-    caps.ffmpeg_available = engine::bridge::ffmpeg::IsAvailable();
+    caps.opencv_available = libs.has_opencv && XER::Bridge::OpenCV::IsAvailable();
+    caps.ffmpeg_available = XER::Bridge::FFmpeg::IsAvailable();
     caps.eigen_available = libs.has_eigen;
     caps.xnnpack_available = libs.has_xnnpack;
     caps.selected_backend = "cpu/eigen";
@@ -106,4 +106,4 @@ SdBackendKind SdGpuDispatch::SelectBackend(const SdRuntimeCapabilities& caps,
     return SdBackendKind::CpuEigen;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

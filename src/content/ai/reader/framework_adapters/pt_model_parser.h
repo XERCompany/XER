@@ -3,7 +3,7 @@
 #include "../core_loaders/reader_base.h"
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 /// @brief Reads PyTorch TorchScript .pt / .pth model files
 ///
@@ -21,4 +21,4 @@ class PtModelParser : public ReaderBase {
   static bool HasZipMagic(const std::vector<uint8_t>& data);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

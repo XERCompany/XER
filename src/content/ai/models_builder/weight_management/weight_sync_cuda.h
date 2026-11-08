@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 using SyncCallback = std::function<void(bool /*success*/, const std::string& /*error*/)>;
 
@@ -50,4 +50,4 @@ private:
     uint64_t pending_tasks_ = 0;
 };
 
-}  // namespace Engine::ModelsBuilder::Weights
+}  // namespace XER::ModelsBuilder::Weights

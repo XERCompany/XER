@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 void MidiAutomationCurve::AddPoint(uint32_t tick, float value) {
     XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
@@ -36,4 +36,4 @@ float MidiAutomationCurve::Evaluate(uint32_t tick) const {
     return points_.back().value;
 }
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

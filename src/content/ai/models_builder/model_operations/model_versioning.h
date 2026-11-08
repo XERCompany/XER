@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 struct ModelVersion {
 	uint32_t major = 1U;
@@ -23,5 +23,5 @@ class ModelVersioning {
 	static std::string AttachVersionToModelName(const std::string& model_name, const ModelVersion& version);
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

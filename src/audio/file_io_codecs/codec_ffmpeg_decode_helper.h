@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::Audio::CodecIO::detail {
+namespace XER::Audio::CodecIO::detail {
 
 bool DecodeAudioBufferWithFfmpeg(
 	const uint8_t* data,
@@ -14,4 +14,4 @@ bool DecodeAudioBufferWithFfmpeg(
 	std::vector<float>* output,
 	std::string* error_out = nullptr);
 
-}  // namespace XER::Engine::Audio::CodecIO::detail
+}  // namespace XER::Audio::CodecIO::detail

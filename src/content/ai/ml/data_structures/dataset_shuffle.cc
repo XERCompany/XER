@@ -2,7 +2,7 @@
 
 #include "../utils/ml_random_generator.h"
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 DatasetBase DatasetShuffle::ShuffledCopy(const DatasetBase& dataset, uint64_t seed) {
 	DatasetBase copy(dataset.Name() + "_shuffled");
@@ -25,5 +25,5 @@ void DatasetShuffle::ShuffleInPlace(DatasetBase& dataset, uint64_t seed) {
 	dataset = std::move(shuffled);
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

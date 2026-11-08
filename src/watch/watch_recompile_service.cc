@@ -50,7 +50,7 @@ bool WatchRecompileService::Recompile(const std::string& script_path,
         return false;
     }
 
-	Engine::ErrorHandler::UpdateCrashContext(script_path, ".");
+	XER::ErrorHandler::UpdateCrashContext(script_path, ".");
 
     return const_cast<WatchRecompileService*>(this)->SpawnChild(script_path, error_message);
 }

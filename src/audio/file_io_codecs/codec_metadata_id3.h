@@ -6,7 +6,7 @@
 
 #include "async_io/log_and_debug/io_dump_helper.h"
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 struct Id3Tag {
     std::string title;
@@ -20,4 +20,4 @@ public:
     std::vector<uint8_t> Build(const Id3Tag& tag) const;
 };
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

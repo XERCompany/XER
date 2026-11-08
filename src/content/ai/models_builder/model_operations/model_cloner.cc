@@ -2,7 +2,7 @@
 
 #include "../model_core/dense_layer.h"
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 namespace {
 
@@ -43,5 +43,5 @@ std::shared_ptr<Core::Model> ModelCloner::Clone(const Core::Model& model, const 
 	return cloned;
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

@@ -8,7 +8,7 @@
 #include "custom_effect_core.h"
 #include "custom_effect_fxdata.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 namespace {
 
@@ -360,4 +360,4 @@ std::string CustomEffectNodeWrapper::GetReport() const {
 	return node_.label + ":unknown";
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

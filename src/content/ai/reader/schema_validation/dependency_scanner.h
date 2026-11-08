@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 /// @brief Checks model weight tensor dependencies (no dangling refs)
 class DependencyScanner {
@@ -18,4 +18,4 @@ class DependencyScanner {
   ScanResult Scan(const Core::Model& model) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

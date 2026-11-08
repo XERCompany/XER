@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 // Wraps a DER-encoded certificate with convenience helpers.
 class NssCertificate {
@@ -30,4 +30,4 @@ private:
     std::vector<uint8_t> der_;
 };
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

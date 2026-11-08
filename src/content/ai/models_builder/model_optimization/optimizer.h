@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 enum class OptimizerType : uint8_t {
     SGD = 0,
@@ -39,4 +39,4 @@ private:
     float beta2_;
 };
 
-} // namespace Engine::ModelsBuilder::Optimization
+} // namespace XER::ModelsBuilder::Optimization

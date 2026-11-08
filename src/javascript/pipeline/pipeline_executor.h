@@ -6,17 +6,17 @@
 #include <string>
 #include <vector>
 
-namespace engine::javascript::pipeline {
+namespace XER::JavaScript::Pipeline {
 
 class PipelineExecutor {
 public:
-    explicit PipelineExecutor(engine::javascript::events::EventRouter* router);
+    explicit PipelineExecutor(XER::JavaScript::Events::EventRouter* router);
 
     std::size_t PublishRaw(const std::string& topic, const std::string& text);
     std::size_t PublishCompressed(const std::string& topic, const std::vector<std::uint8_t>& compressed);
 
 private:
-    engine::javascript::events::EventRouter* router_;
+    XER::JavaScript::Events::EventRouter* router_;
 };
 
-}  // namespace engine::javascript::pipeline
+}  // namespace XER::JavaScript::Pipeline

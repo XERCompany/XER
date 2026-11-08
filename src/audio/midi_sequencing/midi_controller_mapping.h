@@ -7,7 +7,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include "midi_parser.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 struct MidiControllerBinding {
     uint32_t param_id = 0;
@@ -38,4 +38,4 @@ private:
     std::unordered_map<uint8_t, MidiControllerBinding> map_;
 };
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

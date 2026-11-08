@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 void LossTracker::Reset() {
 	losses_.clear();
@@ -51,5 +51,5 @@ float LossTracker::MovingAverage(size_t window) const {
 	return sum / static_cast<float>(count);
 }
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

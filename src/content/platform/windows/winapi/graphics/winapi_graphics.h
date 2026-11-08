@@ -3,7 +3,7 @@
 #include "../winapi_common.h"
 #include <memory>
 
-namespace Engine::Content::Platform::WinAPI::Graphics {
+namespace XER::Content::Platform::WinAPI::Graphics {
 
 // GDI helper functions
 class GDIHelper {
@@ -81,4 +81,4 @@ public:
     static DisplayInfo GetPrimaryDisplay();
 };
 
-}  // namespace Engine::Content::Platform::WinAPI::Graphics
+}  // namespace XER::Content::Platform::WinAPI::Graphics

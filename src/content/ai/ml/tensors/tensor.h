@@ -6,7 +6,7 @@
 #include <memory>
 #include <vector>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 /// @brief Dense tensor container with Eigen backend
 /// 
@@ -186,4 +186,4 @@ private:
     size_t FlatIndex(const std::vector<size_t>& indices) const;
 };
 
-} // namespace Engine::ML::Tensors
+} // namespace XER::ML::Tensors

@@ -4,7 +4,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 struct OpenVinoConfig {
 	bool enable_openvino = true;
@@ -25,5 +25,5 @@ class OpenVinoConfigurator {
 	OpenVinoConfig config_;
 };
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 MemoryPool::MemoryPool(size_t block_size, size_t initial_blocks)
 		: block_size_(std::max<size_t>(1U, block_size)) {
@@ -49,5 +49,5 @@ void MemoryPool::Grow(size_t blocks) {
 	}
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

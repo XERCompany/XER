@@ -4,7 +4,7 @@
  */
 #include "content/network/cert/cert_verify_result.h"
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 std::string CertStatusToString(CertStatus s) {
     switch (s) {
@@ -19,4 +19,4 @@ std::string CertStatusToString(CertStatus s) {
     return "UNKNOWN";
 }
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

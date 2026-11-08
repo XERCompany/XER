@@ -3,18 +3,18 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
-Engine::MLData::Types::Tensor SdLatentTensor::Make(uint32_t width, uint32_t height) {
+XER::MLData::Types::Tensor SdLatentTensor::Make(uint32_t width, uint32_t height) {
     const uint32_t lw = std::max<uint32_t>(1, width / 8);
     const uint32_t lh = std::max<uint32_t>(1, height / 8);
-    return Engine::MLData::Types::Tensor({1, 4, lh, lw}, Engine::MLData::Types::DataType::FLOAT32);
+    return XER::MLData::Types::Tensor({1, 4, lh, lw}, XER::MLData::Types::DataType::FLOAT32);
 }
 
-void SdLatentTensor::FillGaussian(Engine::MLData::Types::Tensor& latent,
-                                  Engine::ML::Utils::MlRandomGenerator& rng,
+void SdLatentTensor::FillGaussian(XER::MLData::Types::Tensor& latent,
+                                  XER::ML::Utils::MlRandomGenerator& rng,
                                   float sigma) {
-    if (latent.GetDataType() != Engine::MLData::Types::DataType::FLOAT32 || !latent.GetData()) {
+    if (latent.GetDataType() != XER::MLData::Types::DataType::FLOAT32 || !latent.GetData()) {
         return;
     }
 
@@ -32,4 +32,4 @@ void SdLatentTensor::FillGaussian(Engine::MLData::Types::Tensor& latent,
     }
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

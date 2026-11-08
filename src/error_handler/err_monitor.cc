@@ -18,7 +18,7 @@
 #include "flux/terminal/terminal_output_renderer.h"
 #include "helper/string.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 namespace {
 
 std::mutex& MonitorMutex() {
@@ -85,13 +85,13 @@ std::string PersistDiagnosticReport(const DiagnosticData& diagnostic) {
 	const std::string key = BuildDiagnosticCacheKey(diagnostic);
 	const std::string file_name = BuildDiagnosticFileName(diagnostic);
 	const std::string report = BuildDiagnosticReport(diagnostic);
-	auto& cache = Engine::Cache::CacheManager::Instance();
-	if (!cache.WritePersistentText(Engine::Cache::constants::kErrorReportScope, key, file_name, report, &error)) {
+	auto& cache = XER::Cache::CacheManager::Instance();
+	if (!cache.WritePersistentText(XER::Cache::constants::kErrorReportScope, key, file_name, report, &error)) {
 		flux::terminal::WriteLine(flux::terminal::OutputStream::kStderr,
 			FormatLine("error", "error_handler", absl::StrCat("failed to persist diagnostic report: ", error)));
 		return std::string();
 	}
-	return cache.PathFor(Engine::Cache::constants::kErrorReportScope, key, file_name).string();
+	return cache.PathFor(XER::Cache::constants::kErrorReportScope, key, file_name).string();
 }
 
 std::string FormatDiagnosticLine(const DiagnosticData& diagnostic) {
@@ -173,4 +173,4 @@ std::string LastReportPath() {
 	return MutableLastReportPath();
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

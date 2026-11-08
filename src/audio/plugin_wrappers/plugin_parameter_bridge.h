@@ -7,7 +7,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 struct PluginParameterInfo {
 	uint32_t id = 0;
@@ -41,4 +41,4 @@ private:
     std::unordered_map<uint32_t, PluginParameterInfo> values_;
 };
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

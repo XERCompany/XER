@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 namespace {
 
@@ -136,4 +136,4 @@ std::vector<WeightTensor> WeightInitializer::InitializeModel(const Core::Model& 
 	return tensors;
 }
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

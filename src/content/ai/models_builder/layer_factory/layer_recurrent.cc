@@ -1,6 +1,6 @@
 #include "layer_recurrent.h"
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 LayerRecurrent::LayerRecurrent(const std::string& name, Config config)
     : Core::Layer(Core::LayerType::LSTM), config_(config) {
@@ -12,4 +12,4 @@ std::shared_ptr<Core::Layer> MakeRecurrent(const std::string& name,
   return std::make_shared<LayerRecurrent>(name, config);
 }
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

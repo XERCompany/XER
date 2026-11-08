@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 void SynthOscAnalog::SetFrequency(float hz) {
     frequency_hz_ = std::max(hz, 1.0f);
@@ -20,4 +20,4 @@ float SynthOscAnalog::Process(float sample_rate) {
     return out;
 }
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

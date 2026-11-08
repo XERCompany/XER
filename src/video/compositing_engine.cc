@@ -15,7 +15,7 @@ void CompositingEngine::ClearLayers() { layers_.clear(); }
 // ── pixel helpers ───────────────────────────────────────────────────────────
 // BGRA8: d[0]=B, d[1]=G, d[2]=R, d[3]=A  ↔  skia uint32 MakeColorRGBA(R,G,B,A)
 static inline uint32_t bgra_to_skia(const uint8_t* p) {
-    return engine::bridge::skia::MakeColorRGBA(p[2], p[1], p[0], p[3]);
+    return XER::Bridge::Skia::MakeColorRGBA(p[2], p[1], p[0], p[3]);
 }
 static inline void skia_to_bgra(uint32_t c, uint8_t* p) {
     p[2] = (c >> 24) & 0xFF;  // R
@@ -29,7 +29,7 @@ bool CompositingEngine::Composite(Frame& output) {
     std::sort(layers_.begin(), layers_.end(),
               [](const Layer& a, const Layer& b){ return a.z_order < b.z_order; });
 
-    bool use_skia = engine::bridge::skia::IsAvailable();
+    bool use_skia = XER::Bridge::Skia::IsAvailable();
 
     // Convert output to Skia pixel buffer
     int ow = output.Width(), oh = output.Height();
@@ -50,10 +50,10 @@ bool CompositingEngine::Composite(Frame& output) {
             const uint8_t* s = src.Data();
             for (int i = 0; i < src.Width() * src.Height(); ++i) {
                 uint8_t scaled_a = static_cast<uint8_t>(s[i*4+3] * layer.opacity);
-                src_px[i] = engine::bridge::skia::MakeColorRGBA(
+                src_px[i] = XER::Bridge::Skia::MakeColorRGBA(
                                 s[i*4+2], s[i*4+1], s[i*4+0], scaled_a);
             }
-            engine::bridge::skia::RasterDrawImage(
+            XER::Bridge::Skia::RasterDrawImage(
                 &dst_px, ow, oh,
                 src_px,  src.Width(), src.Height(),
                 layer.x_offset, layer.y_offset, "src_over");

@@ -12,7 +12,7 @@
 #include "video_frame.h"
 #include "video_info.h"
 
-namespace XER::engine::bridge::ffmpeg {
+namespace XER::Bridge::FFmpeg {
 class VideoDecoder;
 }
 
@@ -98,7 +98,7 @@ public:
     // before). Consumers (e.g. the audio player) attach to this instance so
     // audio packets are tapped from the same already-open container — the
     // file is demuxed exactly once for both streams.
-    std::shared_ptr<XER::engine::bridge::ffmpeg::VideoDecoder> GetAvDecoder() const {
+    std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder> GetAvDecoder() const {
         return av_decoder_.load(std::memory_order_acquire);
     }
 
@@ -123,7 +123,7 @@ private:
     void Fail(const std::string& message);
     // Performs decoder.Seek + decode-discards until the frame PTS reaches
     // the target (keyframe seeks land early by design).
-    void ApplySeek(XER::engine::bridge::ffmpeg::VideoDecoder& decoder,
+    void ApplySeek(XER::Bridge::FFmpeg::VideoDecoder& decoder,
                    double target_seconds);
 
     VideoInfo info_;
@@ -147,7 +147,7 @@ private:
     std::condition_variable control_cv_;
 
     // Shared decoder handle published by DecodeLoop for audio consumers.
-    std::atomic<std::shared_ptr<XER::engine::bridge::ffmpeg::VideoDecoder>>
+    std::atomic<std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder>>
         av_decoder_{nullptr};
 
     // Single-slot frame mailbox.

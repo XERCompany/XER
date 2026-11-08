@@ -9,7 +9,7 @@
 
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
-namespace XER::Engine::Audio::CodecIO::detail {
+namespace XER::Audio::CodecIO::detail {
 
 namespace {
 
@@ -106,14 +106,14 @@ bool EncodeInterleavedAudioBufferWithFfmpeg(
 		}
 		return false;
 	}
-	if (!XER::engine::bridge::ffmpeg::IsAvailable()) {
+	if (!XER::Bridge::FFmpeg::IsAvailable()) {
 		if (error_out != nullptr) {
 			*error_out = "ffmpeg bridge is unavailable";
 		}
 		return false;
 	}
 
-	XER::engine::bridge::ffmpeg::AudioFrameInfo frame;
+	XER::Bridge::FFmpeg::AudioFrameInfo frame;
 	frame.stream_index = 0;
 	frame.sample_rate = sample_rate;
 	frame.channels = channels;
@@ -124,7 +124,7 @@ bool EncodeInterleavedAudioBufferWithFfmpeg(
 	std::memcpy(frame.data.data(), input, frame.data.size());
 
 	const TempFileGuard temp_path(CreateTempPath(extension));
-	XER::engine::bridge::ffmpeg::EncodeAudioParams params;
+	XER::Bridge::FFmpeg::EncodeAudioParams params;
 	params.output_path = temp_path.path().string();
 	params.codec_name = codec_name;
 	params.sample_rate = sample_rate;
@@ -133,7 +133,7 @@ bool EncodeInterleavedAudioBufferWithFfmpeg(
 	params.bit_rate = codec_name == "aac" ? 192000 : 192000;
 
 	std::string encode_error;
-	if (!XER::engine::bridge::ffmpeg::EncodeAudioFrames(params, std::vector<XER::engine::bridge::ffmpeg::AudioFrameInfo>{std::move(frame)}, &encode_error)) {
+	if (!XER::Bridge::FFmpeg::EncodeAudioFrames(params, std::vector<XER::Bridge::FFmpeg::AudioFrameInfo>{std::move(frame)}, &encode_error)) {
 		if (error_out != nullptr) {
 			*error_out = !encode_error.empty() ? encode_error : "ffmpeg audio encoding failed";
 		}
@@ -142,4 +142,4 @@ bool EncodeInterleavedAudioBufferWithFfmpeg(
 	return ReadBinaryFile(temp_path.path(), encoded_bytes, error_out);
 }
 
-}  // namespace XER::Engine::Audio::CodecIO::detail
+}  // namespace XER::Audio::CodecIO::detail

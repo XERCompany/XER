@@ -6,7 +6,7 @@
 #include <sstream>
 #include <algorithm>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 size_t WeightDistributor::Distribute(Core::Model& model,
                                      const std::vector<WeightTensor>& tensors) const {
@@ -30,8 +30,8 @@ size_t WeightDistributor::Distribute(Core::Model& model,
     }
 
     if (assigned == 0) {
-        Engine::ErrorHandler::ReportDiagnostic(
-            Engine::ErrorHandler::MakeDiagnosticData("warning",
+        XER::ErrorHandler::ReportDiagnostic(
+            XER::ErrorHandler::MakeDiagnosticData("warning",
                 "WeightDistributor", "No layers received weight tensors"));
     }
 
@@ -103,4 +103,4 @@ std::vector<WeightTensor> WeightDistributor::Collect(const Core::Model& model) c
     return result;
 }
 
-}  // namespace Engine::ModelsBuilder::Weights
+}  // namespace XER::ModelsBuilder::Weights

@@ -4,7 +4,7 @@
 #include <vector>
 #include <string>
 
-using namespace Engine::Native::Plugin::Pxer;
+using namespace XER::Native::Plugin::Pxer;
 
 void test_plugin_unload_and_conflict() {
     PluginHost& host = PluginHost::Shared();

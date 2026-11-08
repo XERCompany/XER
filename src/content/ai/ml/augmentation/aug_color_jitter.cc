@@ -3,7 +3,7 @@
 #include <cmath>
 #include <random>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugColorJitter::AugColorJitter(float b, float c, float s, float h)
     : brightness_(b), contrast_(c), saturation_(s), hue_(h) {}
@@ -50,4 +50,4 @@ bool AugColorJitter::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

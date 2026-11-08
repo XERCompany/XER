@@ -7,7 +7,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class ModPhaser {
 public:
@@ -38,4 +38,4 @@ private:
 	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

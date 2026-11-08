@@ -33,13 +33,13 @@ void VfxEngine::AddInvert() {
 
 void VfxEngine::AddEdgeDetect() {
     chain_.Add("edge", [](ImageBuffer& img) {
-        if (!engine::bridge::skia::IsAvailable()) return;
+        if (!XER::Bridge::Skia::IsAvailable()) return;
         int w=img.Width(), h=img.Height();
         std::vector<uint32_t> px(w*h);
         const uint8_t* d=img.Data();
         for (int i=0;i<w*h;++i)
-            px[i]=engine::bridge::skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
-        engine::bridge::skia::FilterEdgeDetect(&px, w, h);
+            px[i]=XER::Bridge::Skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
+        XER::Bridge::Skia::FilterEdgeDetect(&px, w, h);
         uint8_t* dst=img.Data();
         for (int i=0;i<w*h;++i) {
             uint32_t c=px[i];
@@ -51,13 +51,13 @@ void VfxEngine::AddEdgeDetect() {
 
 void VfxEngine::AddEmboss(double angle, double strength) {
     chain_.Add("emboss", [angle, strength](ImageBuffer& img) {
-        if (!engine::bridge::skia::IsAvailable()) return;
+        if (!XER::Bridge::Skia::IsAvailable()) return;
         int w=img.Width(), h=img.Height();
         std::vector<uint32_t> px(w*h);
         const uint8_t* d=img.Data();
         for (int i=0;i<w*h;++i)
-            px[i]=engine::bridge::skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
-        engine::bridge::skia::FilterEmboss(&px, w, h, angle, strength);
+            px[i]=XER::Bridge::Skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
+        XER::Bridge::Skia::FilterEmboss(&px, w, h, angle, strength);
         uint8_t* dst=img.Data();
         for (int i=0;i<w*h;++i) {
             uint32_t c=px[i];
@@ -69,13 +69,13 @@ void VfxEngine::AddEmboss(double angle, double strength) {
 
 void VfxEngine::AddVignette(double strength, double feather) {
     chain_.Add("vignette", [strength, feather](ImageBuffer& img) {
-        if (!engine::bridge::skia::IsAvailable()) return;
+        if (!XER::Bridge::Skia::IsAvailable()) return;
         int w=img.Width(), h=img.Height();
         std::vector<uint32_t> px(w*h);
         const uint8_t* d=img.Data();
         for (int i=0;i<w*h;++i)
-            px[i]=engine::bridge::skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
-        engine::bridge::skia::FilterVignette(&px, w, h, strength, feather);
+            px[i]=XER::Bridge::Skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
+        XER::Bridge::Skia::FilterVignette(&px, w, h, strength, feather);
         uint8_t* dst=img.Data();
         for (int i=0;i<w*h;++i) {
             uint32_t c=px[i];

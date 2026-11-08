@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 /// Checks ONNX opset / IR version compatibility.
 class OnnxVersionChecker {
@@ -17,4 +17,4 @@ public:
     static std::string Describe(int opset_version);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx

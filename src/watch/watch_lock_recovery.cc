@@ -4,5 +4,5 @@
 
 bool WatchLockRecovery::CleanupStaleLockForScript(const std::filesystem::path& script_path,
                                                   std::string* error_message) {
-	return Engine::Cache::CleanupScriptLock(script_path, error_message);
+	return XER::Cache::CleanupScriptLock(script_path, error_message);
 }

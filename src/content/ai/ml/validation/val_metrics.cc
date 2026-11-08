@@ -19,7 +19,7 @@
 #include "cache/cache_manager.h"
 #include "flux/core/logger.h"
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 namespace {
 
 constexpr std::uint32_t kMetricsCacheMagic = 0x3156434D;  // MCV1
@@ -158,8 +158,8 @@ void ValMetrics::InvalidateCache(const std::vector<int>& predictions,
         g_cache->RemoveByPrefix(key);
     }
     std::string error;
-    Engine::Cache::CacheManager::Instance().Persistent().Remove(
-        Engine::Cache::MakeEntry("ml.validation", key, "metrics.bin"), &error);
+    XER::Cache::CacheManager::Instance().Persistent().Remove(
+        XER::Cache::MakeEntry("ml.validation", key, "metrics.bin"), &error);
 }
 
 ValidationMetrics ValMetrics::Compute(const std::vector<int>& predictions,
@@ -172,7 +172,7 @@ ValidationMetrics ValMetrics::Compute(const std::vector<int>& predictions,
     }
     if (bytes.empty()) {
         std::string error;
-        Engine::Cache::CacheManager::Instance().ReadPersistentBinary(
+        XER::Cache::CacheManager::Instance().ReadPersistentBinary(
             "ml.validation", key, "metrics.bin", &bytes, &error);
     }
 
@@ -203,7 +203,7 @@ ValidationMetrics ValMetrics::Compute(const std::vector<int>& predictions,
         g_cache->Put(key, serialized);
     }
     std::string error;
-    if (!Engine::Cache::CacheManager::Instance().WritePersistentBinary(
+    if (!XER::Cache::CacheManager::Instance().WritePersistentBinary(
             "ml.validation", key, "metrics.bin", serialized, &error)) {
         LogError(absl::StrCat("Validation metrics cache write failed: ", error));
     }
@@ -211,4 +211,4 @@ ValidationMetrics ValMetrics::Compute(const std::vector<int>& predictions,
     return m;
 }
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

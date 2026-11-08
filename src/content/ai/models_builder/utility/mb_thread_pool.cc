@@ -2,7 +2,7 @@
 
 #include "../../../../async_io/io_thread_pool.h"
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 ModelThreadPool& ModelThreadPool::GetInstance() {
 	static ModelThreadPool instance;
@@ -47,5 +47,5 @@ void ModelThreadPool::ParallelFor(size_t iterations, const std::function<void(si
 	WaitForIdle();
 }
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility
 

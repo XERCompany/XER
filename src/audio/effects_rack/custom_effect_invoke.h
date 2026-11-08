@@ -4,7 +4,7 @@
 
 #include "custom_effect_package.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 bool InvokeCustomEffectParameter(
 	CustomEffectPackage* package,
@@ -12,4 +12,4 @@ bool InvokeCustomEffectParameter(
 	const std::string& parameter_name,
 	float value);
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

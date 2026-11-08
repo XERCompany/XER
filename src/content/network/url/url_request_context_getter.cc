@@ -4,7 +4,7 @@
  */
 #include "content/network/url/url_request_context_getter.h"
 
-namespace XER::network::url {
+namespace XER::Network::Url {
 
 URLRequestContextGetter::URLRequestContextGetter(URLRequestContext ctx)
     : ctx_(std::make_unique<URLRequestContext>(std::move(ctx))) {}
@@ -18,4 +18,4 @@ void URLRequestContextGetter::SetContext(URLRequestContext ctx) {
     ctx_ = std::make_unique<URLRequestContext>(std::move(ctx));
 }
 
-}  // namespace XER::network::url
+}  // namespace XER::Network::Url

@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <limits>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessMinMax::Fit(const std::vector<std::vector<float>>& X) {
     if (X.empty()) return;
@@ -31,4 +31,4 @@ std::vector<std::vector<float>> PreprocessMinMax::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

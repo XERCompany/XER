@@ -2,7 +2,7 @@
 
 #include "dataset_base.h"
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class DatasetIterator {
  public:
@@ -17,5 +17,5 @@ class DatasetIterator {
 	size_t cursor_ = 0U;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

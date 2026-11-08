@@ -7,7 +7,7 @@
 #include <immintrin.h>
 #endif
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 IIRFilterBank::IIRFilterBank()
 	: mutex_("iir_filter_bank") {}
@@ -83,4 +83,4 @@ std::string IIRFilterBank::GetReport() const {
 	return "IIRBank: filters=" + std::to_string(filters_.size());
 }
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

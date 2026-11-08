@@ -5,7 +5,7 @@
 
 #include "custom_effect_node_wrapper.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class CustomEffectProcessor {
 public:
@@ -21,4 +21,4 @@ private:
 	size_t frame_offset_ = 0;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

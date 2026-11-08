@@ -5,7 +5,7 @@
 #include <cmath>
 #include <future>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 std::string ReverbAlgorithmic::GetMemoryStats() const {
 	std::string stats;
@@ -129,4 +129,4 @@ std::future<bool> ReverbAlgorithmic::ProcessBlockAsync(const float* input, size_
 	});
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

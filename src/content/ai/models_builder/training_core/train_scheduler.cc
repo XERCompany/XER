@@ -5,7 +5,7 @@
 #endif
 #include <cmath>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 TrainScheduler::TrainScheduler(Config config) : config_(config) {}
 
@@ -35,4 +35,4 @@ float TrainScheduler::GetLr(int epoch) const {
   return config_.lr;
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

@@ -20,7 +20,7 @@ extern "C" {
 #include <climits>
 #include <mutex>
 
-namespace XER::engine::bridge::ffmpeg {
+namespace XER::Bridge::FFmpeg {
 
 namespace {
 
@@ -626,4 +626,4 @@ int VideoDecoder::GetHeight() const {
 #endif
 }
 
-}  // namespace XER::engine::bridge::ffmpeg
+}  // namespace XER::Bridge::FFmpeg

@@ -11,7 +11,7 @@
 #include <filesystem>
 #include <string>
 
-namespace XER::Engine::Audio::Demo {
+namespace XER::Audio::Demo {
 
 struct AudioModulesSmokeOptions {
 	std::filesystem::path input_path;
@@ -23,4 +23,4 @@ bool RunAudioModulesSmoke(
 	std::string* report,
 	std::string* error_out = nullptr);
 
-}  // namespace XER::Engine::Audio::Demo
+}  // namespace XER::Audio::Demo

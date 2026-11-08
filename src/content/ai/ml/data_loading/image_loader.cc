@@ -4,7 +4,7 @@
 #include <stdexcept>
 #include <cstring>
 
-namespace Engine::MLData::Loading {
+namespace XER::MLData::Loading {
 
 ImageLoader::ImageLoader() : image_width_(224), image_height_(224) {
 }
@@ -57,4 +57,4 @@ void ImageLoader::SetImageSize(uint32_t width, uint32_t height) {
     image_height_ = height;
 }
 
-} // namespace Engine::MLData::Loading
+} // namespace XER::MLData::Loading

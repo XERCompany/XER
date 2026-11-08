@@ -3,7 +3,7 @@
 #include <functional>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Computes gradients via finite difference (placeholder)
 ///
@@ -18,4 +18,4 @@ class TrainGradientCalc {
       float h = 1e-5f);
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

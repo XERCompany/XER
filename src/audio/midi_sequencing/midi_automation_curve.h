@@ -5,7 +5,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 struct AutomationPoint {
     uint32_t tick;
@@ -22,4 +22,4 @@ private:
     std::vector<AutomationPoint> points_;
 };
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

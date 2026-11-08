@@ -6,7 +6,7 @@
 
 #include "async_io/log_and_debug/io_dump_helper.h"
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 class WavPcmCodec {
 public:
@@ -24,4 +24,4 @@ public:
         int* channels_out = nullptr) const;
 };
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 enum class ModelBuilderErrorCode : uint16_t {
 	None = 0,
@@ -55,4 +55,4 @@ private:
 	std::vector<ModelBuilderIssue> issues_;
 };
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility

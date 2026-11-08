@@ -4,12 +4,12 @@
 
 #include <memory>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 class ModelFuser {
  public:
 	std::shared_ptr<Core::Model> Fuse(const Core::Model& model) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

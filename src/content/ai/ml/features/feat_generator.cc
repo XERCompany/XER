@@ -10,7 +10,7 @@
 
 #include <cstring>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 #if HAS_IO_CACHE
 static IO::AsyncIO::IOCacheManager g_cache(4 * 1024 * 1024);  // 4 MB feature cache
@@ -53,4 +53,4 @@ void FeatGenerator::ClearCache() {
 #endif
 }
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

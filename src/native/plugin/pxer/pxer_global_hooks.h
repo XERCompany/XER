@@ -8,7 +8,7 @@ namespace pxer_hooks {
 
 // Call this on any core event you want plugins to intercept
 inline void CallAll(const std::string& event, void* data = nullptr) {
-    auto& pxer = Engine::Native::Plugin::Pxer::PluginHost::Shared();
+    auto& pxer = XER::Native::Plugin::Pxer::PluginHost::Shared();
     for (const auto& entry : pxer.GetGlobalHooks()) {
         using HookFn = int(*)(const char*, void*);
         HookFn fn = reinterpret_cast<HookFn>(entry.second);

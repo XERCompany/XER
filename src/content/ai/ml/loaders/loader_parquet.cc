@@ -4,7 +4,7 @@
 #include <fstream>
 #include <algorithm>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 namespace {
 
@@ -355,4 +355,4 @@ Dataset LoaderParquet::Load(const std::string& path) {
     return ds;
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

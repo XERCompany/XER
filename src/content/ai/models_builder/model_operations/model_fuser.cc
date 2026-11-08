@@ -2,7 +2,7 @@
 
 #include "model_cloner.h"
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::shared_ptr<Core::Model> ModelFuser::Fuse(const Core::Model& model) const {
 	// Keep behavior conservative until additional layer-specific fuse rules are added.
@@ -10,5 +10,5 @@ std::shared_ptr<Core::Model> ModelFuser::Fuse(const Core::Model& model) const {
 	return cloner.Clone(model, "_fused");
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

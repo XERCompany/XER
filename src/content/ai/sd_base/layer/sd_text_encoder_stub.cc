@@ -2,13 +2,13 @@
 
 #include <functional>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
-Engine::MLData::Types::Tensor SdTextEncoderStub::Encode(const std::string& prompt,
+XER::MLData::Types::Tensor SdTextEncoderStub::Encode(const std::string& prompt,
                                                         uint32_t max_tokens,
                                                         uint32_t embedding_dim) const {
-    Engine::MLData::Types::Tensor out({1, max_tokens, embedding_dim},
-                                      Engine::MLData::Types::DataType::FLOAT32);
+    XER::MLData::Types::Tensor out({1, max_tokens, embedding_dim},
+                                      XER::MLData::Types::DataType::FLOAT32);
     if (!out.GetData()) return out;
 
     float* d = static_cast<float*>(out.GetData());
@@ -22,4 +22,4 @@ Engine::MLData::Types::Tensor SdTextEncoderStub::Encode(const std::string& promp
     return out;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

@@ -1,6 +1,6 @@
 #include "layer_embedding.h"
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 LayerEmbedding::LayerEmbedding(const std::string& name, Config config)
     : Core::Layer(Core::LayerType::Dense), config_(config) {
@@ -12,4 +12,4 @@ std::shared_ptr<Core::Layer> MakeEmbedding(const std::string& name,
   return std::make_shared<LayerEmbedding>(name, config);
 }
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

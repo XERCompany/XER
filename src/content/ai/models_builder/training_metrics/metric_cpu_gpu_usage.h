@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 struct ResourceUsageSample {
 	double cpu_percent = 0.0;
@@ -30,5 +30,5 @@ class CpuGpuUsageMetric {
 	std::vector<ResourceUsageSample> samples_;
 };
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

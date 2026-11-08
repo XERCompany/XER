@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 namespace {
 float DbToLinear(float db_value) {
@@ -63,4 +63,4 @@ std::string DynamicsLimiter::GetReport() const {
 		", release=" + std::to_string(release_);
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 struct CheckpointSnapshot {
 	CheckpointMetadata metadata;
@@ -19,5 +19,5 @@ struct CheckpointSnapshot {
 	size_t PayloadSize() const { return payload.size(); }
 };
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

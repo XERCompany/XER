@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 AudioBuffer::AudioBuffer(const AudioFrameInfo& info, size_t frame_count)
     : info_(info), frame_count_(frame_count) {
@@ -104,4 +104,4 @@ std::string AudioBufferManager::GetPoolStatus() const {
     return status;
 }
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

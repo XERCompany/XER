@@ -2,40 +2,40 @@
 
 #include <random>
 
-namespace Engine::ML::DataAugmentation {
+namespace XER::ML::DataAugmentation {
 
 RotationAugmentor::RotationAugmentor(float angle_range)
     : angle_range_(angle_range), rng_(std::random_device{}()) {}
 
-Engine::MLData::Types::Tensor RotationAugmentor::Augment(const Engine::MLData::Types::Tensor& input) {
+XER::MLData::Types::Tensor RotationAugmentor::Augment(const XER::MLData::Types::Tensor& input) {
     return input;
 }
 
 FlipAugmentor::FlipAugmentor(FlipMode mode, float probability)
     : mode_(mode), probability_(probability), rng_(std::random_device{}()) {}
 
-Engine::MLData::Types::Tensor FlipAugmentor::Augment(const Engine::MLData::Types::Tensor& input) {
+XER::MLData::Types::Tensor FlipAugmentor::Augment(const XER::MLData::Types::Tensor& input) {
     return input;
 }
 
 CropAugmentor::CropAugmentor(float min_crop, float max_crop)
     : min_crop_(min_crop), max_crop_(max_crop), rng_(std::random_device{}()) {}
 
-Engine::MLData::Types::Tensor CropAugmentor::Augment(const Engine::MLData::Types::Tensor& input) {
+XER::MLData::Types::Tensor CropAugmentor::Augment(const XER::MLData::Types::Tensor& input) {
     return input;
 }
 
 ColorJitterAugmentor::ColorJitterAugmentor(float brightness, float contrast, float saturation)
     : brightness_(brightness), contrast_(contrast), saturation_(saturation), rng_(std::random_device{}()) {}
 
-Engine::MLData::Types::Tensor ColorJitterAugmentor::Augment(const Engine::MLData::Types::Tensor& input) {
+XER::MLData::Types::Tensor ColorJitterAugmentor::Augment(const XER::MLData::Types::Tensor& input) {
     return input;
 }
 
 NoiseAugmentor::NoiseAugmentor(float std_dev)
     : std_dev_(std_dev), rng_(std::random_device{}()) {}
 
-Engine::MLData::Types::Tensor NoiseAugmentor::Augment(const Engine::MLData::Types::Tensor& input) {
+XER::MLData::Types::Tensor NoiseAugmentor::Augment(const XER::MLData::Types::Tensor& input) {
     return input;
 }
 
@@ -45,8 +45,8 @@ void AugmentationPipeline::AddAugmentor(std::shared_ptr<Augmentor> augmentor) {
     }
 }
 
-Engine::MLData::Types::Tensor AugmentationPipeline::Apply(const Engine::MLData::Types::Tensor& input) {
-    Engine::MLData::Types::Tensor result = input;
+XER::MLData::Types::Tensor AugmentationPipeline::Apply(const XER::MLData::Types::Tensor& input) {
+    XER::MLData::Types::Tensor result = input;
     for (const auto& augmentor : augmentors_) {
         if (!augmentor || !augmentor->IsEnabled()) {
             continue;
@@ -64,4 +64,4 @@ void AugmentationPipeline::SetEnabled(bool enabled) {
     }
 }
 
-}  // namespace Engine::ML::DataAugmentation
+}  // namespace XER::ML::DataAugmentation

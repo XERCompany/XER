@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 uint16_t SdFp16Utils::Float32ToFp16Bits(float value) {
     if (std::isnan(value)) return 0x7E00;
@@ -44,4 +44,4 @@ float SdFp16Utils::Fp16BitsToFloat32(uint16_t bits) {
     return sign ? -v : v;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

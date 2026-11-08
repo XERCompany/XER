@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <set>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 float ValPrecision::Compute(const std::vector<int>& predictions,
                              const std::vector<int>& ground_truth,
@@ -26,4 +26,4 @@ float ValPrecision::MacroAverage(const std::vector<int>& predictions,
     return sum / static_cast<float>(classes.size());
 }
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

@@ -7,7 +7,7 @@
 
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 struct LatencyInfo {
     double input_latency_ms;
@@ -53,4 +53,4 @@ private:
     void UpdateHistory(double latency_ms);
 };
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

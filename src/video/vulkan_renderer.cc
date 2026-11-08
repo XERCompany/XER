@@ -58,8 +58,8 @@ bool VulkanRenderer::Initialize(const std::string& /*device_hint*/) {
     Log().Info("VulkanRenderer",
                std::string("Initializing Vulkan renderer. Vulkan runtime: ") +
                (vulkan_available ? "available" : "not available") +
-               " | Skia: " + (engine::bridge::skia::IsAvailable() ? "available" : "not available") +
-               " | " + engine::bridge::skia::Summary());
+               " | Skia: " + (XER::Bridge::Skia::IsAvailable() ? "available" : "not available") +
+               " | " + XER::Bridge::Skia::Summary());
     ready_ = vulkan_available;
     return ready_;
 }

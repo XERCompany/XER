@@ -1,6 +1,6 @@
 #include "content/ai/sd_base/xl/sd_xl_prompt_expander.h"
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 std::string SdXlPromptExpander::Expand(const std::string& prompt) const {
     if (prompt.empty()) {
@@ -9,4 +9,4 @@ std::string SdXlPromptExpander::Expand(const std::string& prompt) const {
     return prompt + ", ultra detailed, sharp focus, volumetric lighting";
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

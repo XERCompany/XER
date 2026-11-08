@@ -4,7 +4,7 @@
 
 #include "engine_params.h"
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 
 struct SandboxSettings {
 	bool enabled = false;
@@ -16,4 +16,4 @@ struct SandboxSettings {
 SandboxSettings ResolveSandboxSettings(const EngineParams& params);
 std::string BuildSandboxSummary(const SandboxSettings& settings);
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

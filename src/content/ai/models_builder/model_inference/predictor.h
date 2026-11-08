@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Inference {
+namespace XER::ModelsBuilder::Inference {
 
 class Predictor {
 public:
@@ -19,4 +19,4 @@ private:
     std::shared_ptr<Core::Model> model_;
 };
 
-} // namespace Engine::ModelsBuilder::Inference
+} // namespace XER::ModelsBuilder::Inference

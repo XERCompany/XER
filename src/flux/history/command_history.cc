@@ -7,13 +7,13 @@
 #include <string_view>
 #include <vector>
 
-namespace XER::flux::history {
+namespace XER::Flux::History {
 CommandHistory::CommandHistory(std::size_t max_entries)
 	: max_entries_(max_entries == 0 ? 1 : max_entries),
 	  cursor_(0) {}
 
 void CommandHistory::Push(std::string command) {
-	command = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(command);
+	command = XER::Helper::String::TrimAsciiWhitespaceCopy(command);
 	if (command.empty()) {
 		ResetCursor();
 		return;
@@ -79,7 +79,7 @@ std::vector<std::string> CommandHistory::Entries() const {
 std::vector<std::string> CommandHistory::MatchingPrefix(std::string_view prefix, std::size_t limit) const {
 	std::vector<std::string> matches;
 	for (auto iterator = entries_.rbegin(); iterator != entries_.rend(); ++iterator) {
-		if (XER::Engine::Helper::String::StartsWith(*iterator, prefix)) {
+		if (XER::Helper::String::StartsWith(*iterator, prefix)) {
 			matches.push_back(*iterator);
 			if (limit > 0 && matches.size() >= limit) {
 				break;
@@ -89,4 +89,4 @@ std::vector<std::string> CommandHistory::MatchingPrefix(std::string_view prefix,
 	return matches;
 }
 
-}  // namespace XER::flux::history
+}  // namespace XER::Flux::History

@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 namespace {
 
@@ -74,5 +74,5 @@ CudaKernelPlan CudaMapper::BuildPlan(const Core::Model& model) const {
 	return plan;
 }
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

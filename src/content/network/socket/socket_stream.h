@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
 // Buffered stream over a raw socket fd.
 class SocketStream {
@@ -33,4 +33,4 @@ private:
     std::vector<uint8_t> rbuf_;   // read-ahead buffer
 };
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

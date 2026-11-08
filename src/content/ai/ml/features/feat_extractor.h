@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 struct FeatureResult {
     std::string name;
@@ -31,4 +31,4 @@ public:
     static std::vector<float> Flatten(const std::vector<FeatureResult>& results);
 };
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

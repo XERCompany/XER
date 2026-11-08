@@ -49,7 +49,7 @@ public:
     void SetVolume(float volume);
 
     // Live effect processing
-    bool ApplyEffectLive(const XER::Engine::Audio::FX::CustomEffectPackage& package, std::string* error_out = nullptr);
+    bool ApplyEffectLive(const XER::Audio::FX::CustomEffectPackage& package, std::string* error_out = nullptr);
     bool IsEffectLiveActive() const {
         std::lock_guard<std::mutex> lock(effect_mutex_);
         return effect_flow_ != nullptr;
@@ -74,7 +74,7 @@ private:
     float saved_volume_; // Volume before mute
 
     // Live effect processing
-    std::unique_ptr<XER::Engine::Audio::FX::CustomEffectFlow> effect_flow_;
+    std::unique_ptr<XER::Audio::FX::CustomEffectFlow> effect_flow_;
     bool effect_enabled_;
     // Optional plugin block processor (VST3 etc.), same audio-thread path.
     BlockProcessor block_processor_;

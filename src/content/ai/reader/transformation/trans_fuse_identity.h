@@ -3,7 +3,7 @@
 #include "../../models_builder/model_core/model.h"
 #include <memory>
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 /// @brief Removes Identity and no-op layers (pass-through nodes)
 class TransFuseIdentity {
@@ -15,4 +15,4 @@ class TransFuseIdentity {
   static bool IsIdentityLayer(const Core::Layer& layer);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

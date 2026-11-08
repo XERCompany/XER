@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 class HttpRequestHeaders {
 public:
@@ -25,4 +25,4 @@ private:
     std::map<std::string, std::string> headers_;
 };
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

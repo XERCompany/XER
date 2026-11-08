@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 /// Thrown when parsed model data violates the expected schema
 /// (e.g. missing required field, wrong tensor rank, unsupported attribute type).
@@ -16,4 +16,4 @@ public:
         : std::runtime_error("[SchemaViolation] field='" + field + "': " + detail) {}
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader

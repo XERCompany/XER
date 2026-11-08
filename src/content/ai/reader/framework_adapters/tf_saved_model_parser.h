@@ -3,7 +3,7 @@
 #include "../core_loaders/reader_base.h"
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 /// @brief Reads TensorFlow SavedModel directory format (saved_model.pb)
 class TfSavedModelParser : public ReaderBase {
@@ -14,4 +14,4 @@ class TfSavedModelParser : public ReaderBase {
   std::string GetFileExtension() const override { return ""; }  // directory
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

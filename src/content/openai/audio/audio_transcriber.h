@@ -158,7 +158,7 @@ public:
     AudioBuffer ConvertFormat(const AudioBuffer& buffer, AudioFormat target_format) override;
 
 private:
-    std::shared_ptr<Engine::Audio::Core::AudioEngine> audio_engine_;
+    std::shared_ptr<XER::Audio::Core::AudioEngine> audio_engine_;
     bool real_time_active_;
     RealTimeCallback real_time_callback_;
 };

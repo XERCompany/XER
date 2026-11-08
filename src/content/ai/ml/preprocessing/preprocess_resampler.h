@@ -2,7 +2,7 @@
 #include "preprocess_base.h"
 #include <cstddef>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Resample (upsample or downsample) feature sequences to target_length
 class PreprocessResampler : public PreprocessBase {
@@ -19,4 +19,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

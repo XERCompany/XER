@@ -5,7 +5,7 @@
 
 #include <v8.h>
 
-namespace Engine::V8Runtime {
+namespace XER::V8Runtime {
 
 std::string BuildExceptionReport(v8::Isolate* isolate,
 				 v8::Local<v8::Context> context,
@@ -13,4 +13,4 @@ std::string BuildExceptionReport(v8::Isolate* isolate,
 				 std::string_view phase,
 				 std::string_view source_text);
 
-}  // namespace Engine::V8Runtime
+}  // namespace XER::V8Runtime

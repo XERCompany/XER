@@ -4,7 +4,7 @@
  */
 #include "content/network/quic/quic_server_id.h"
 
-namespace XER::network::quic {
+namespace XER::Network::Quic {
 
 std::string QuicServerId::ToString() const {
     return host + ":" + std::to_string(port);
@@ -17,4 +17,4 @@ bool QuicServerId::operator<(const QuicServerId& o) const {
     return host < o.host || (host == o.host && port < o.port);
 }
 
-}  // namespace XER::network::quic
+}  // namespace XER::Network::Quic

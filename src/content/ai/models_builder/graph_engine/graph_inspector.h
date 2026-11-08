@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief Introspection queries for GraphBase
 class GraphInspector {
@@ -25,4 +25,4 @@ class GraphInspector {
   static std::vector<std::string> GraphOutputs(const GraphBase& graph);
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

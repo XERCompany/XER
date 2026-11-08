@@ -8,14 +8,14 @@
 #include <string>
 #include "content/network/transport/transport_client_socket.h"
 
-namespace XER::network::websocket {
+namespace XER::Network::WebSocket {
 
 // Performs the WebSocket HTTP Upgrade handshake (RFC 6455 §4).
 class WebSocketHandshakeStream {
 public:
     // Sends the upgrade request and validates the server response.
     // Returns true on success; |error| set otherwise.
-    static bool DoHandshake(transport::TransportClientSocket* sock,
+    static bool DoHandshake(Transport::TransportClientSocket* sock,
                              const std::string& host,
                              const std::string& path,
                              const std::string& origin,
@@ -26,4 +26,4 @@ private:
     static std::string ExpectedAcceptKey(const std::string& sec_key);
 };
 
-}  // namespace XER::network::websocket
+}  // namespace XER::Network::WebSocket

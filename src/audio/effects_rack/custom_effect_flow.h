@@ -8,7 +8,7 @@
 #include "custom_effect_apply_multi.h"
 #include "custom_effect_package.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class CustomEffectFlow {
 public:
@@ -32,4 +32,4 @@ private:
 	bool streaming_ = false;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

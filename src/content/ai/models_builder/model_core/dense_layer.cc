@@ -2,7 +2,7 @@
 
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Core {
+namespace XER::ModelsBuilder::Core {
 
 DenseLayer::DenseLayer(uint32_t units) 
     : Layer(LayerType::Dense), units_(units), activation_(ActivationType::ReLU), input_units_(0U), initialized_(false) {
@@ -40,4 +40,4 @@ std::string DenseLayer::Describe() const {
     return stream.str();
 }
 
-} // namespace Engine::ModelsBuilder::Core
+} // namespace XER::ModelsBuilder::Core

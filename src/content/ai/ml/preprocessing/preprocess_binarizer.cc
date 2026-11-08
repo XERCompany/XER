@@ -1,6 +1,6 @@
 #include "preprocess_binarizer.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 std::vector<std::vector<float>> PreprocessBinarizer::Transform(
         const std::vector<std::vector<float>>& X) const {
@@ -10,4 +10,4 @@ std::vector<std::vector<float>> PreprocessBinarizer::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

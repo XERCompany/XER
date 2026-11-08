@@ -2,7 +2,7 @@
 
 #include <zlib.h>
 
-namespace XER::Engine::Common {
+namespace XER::Common {
 
 std::optional<std::vector<std::uint8_t>> CompressionCodec::Compress(const std::string& text) {
     if (text.empty()) {
@@ -66,4 +66,4 @@ std::optional<std::string> CompressionCodec::DecompressToString(const std::vecto
     return output;
 }
 
-}  // namespace XER::engine::javascript::common
+}  // namespace XER::JavaScript::Common

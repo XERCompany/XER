@@ -13,10 +13,10 @@
 #include "content/network/ssl/ssl_context.h"
 #include "content/network/ssl/ssl_session_cache.h"
 
-namespace XER::network {
-namespace socket {
+namespace XER::Network {
+namespace Socket {
 
-class SslClientSocket : public transport::TransportClientSocket {
+class SslClientSocket : public Transport::TransportClientSocket {
 public:
     SslClientSocket();
     ~SslClientSocket() override;
@@ -39,9 +39,9 @@ public:
 
     // Asynchronous I/O
     void ReadAsync(uint8_t* buf, size_t len,
-                   transport::CompletionCallback cb) override;
+                   Transport::CompletionCallback cb) override;
     void WriteAsync(const uint8_t* buf, size_t len,
-                    transport::CompletionCallback cb) override;
+                    Transport::CompletionCallback cb) override;
 
     // SSL-specific operations
     bool DoHandshake(std::string* error);
@@ -75,8 +75,8 @@ private:
     bool handshake_complete_ = false;
     bool session_resumption_enabled_ = true;
 
-    ssl::ScopedSsl ssl_;
+    Ssl::ScopedSsl ssl_;
 };
 
-}  // namespace socket
-}  // namespace XER::network
+}  // namespace Socket
+}  // namespace XER::Network

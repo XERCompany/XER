@@ -4,9 +4,9 @@
 
 #include <algorithm>
 
-namespace engine::javascript::events {
+namespace XER::JavaScript::Events {
 
-EventRouter::EventRouter(engine::javascript::bridge::FunctionBridge* bridge)
+EventRouter::EventRouter(XER::JavaScript::Bridge::FunctionBridge* bridge)
     : bridge_(bridge) {}
 
 std::uint64_t EventRouter::Subscribe(const std::string& topic, const std::string& handler_name) {
@@ -14,7 +14,7 @@ std::uint64_t EventRouter::Subscribe(const std::string& topic, const std::string
         return 0;
     }
 
-    const std::string normalized_topic = engine::javascript::common::TextNormalizer::NormalizeTopic(topic);
+    const std::string normalized_topic = XER::JavaScript::Common::TextNormalizer::NormalizeTopic(topic);
     auto& list = subscriptions_[normalized_topic];
     list.push_back(Subscription{.token = next_token_, .handler_name = handler_name});
     return next_token_++;
@@ -39,7 +39,7 @@ std::size_t EventRouter::Publish(const std::string& topic, const std::string& te
         return 0;
     }
 
-    const std::string normalized_topic = engine::javascript::common::TextNormalizer::NormalizeTopic(topic);
+    const std::string normalized_topic = XER::JavaScript::Common::TextNormalizer::NormalizeTopic(topic);
     std::size_t delivered = 0;
 
     auto publish_from = [&](const std::string& key) {
@@ -72,4 +72,4 @@ std::vector<EventRouter::Subscription>* EventRouter::FindTopicSubscriptions(cons
     return &it->second;
 }
 
-}  // namespace engine::javascript::events
+}  // namespace XER::JavaScript::Events

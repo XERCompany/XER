@@ -2,7 +2,7 @@
 
 #include "audio/fx_customs/fx_customs_effect_utils.h"
 
-namespace XER::Engine::Audio::FX::Customs {
+namespace XER::Audio::FX::Customs {
 
 bool BuildFxCustomVintageEffectPackage(const std::string& normalized_name, CustomEffectPackage* package_out) {
 	if (package_out == nullptr) {
@@ -78,4 +78,4 @@ bool BuildFxCustomVintageEffectPackage(const std::string& normalized_name, Custo
 	return false;
 }
 
-}  // namespace XER::Engine::Audio::FX::Customs
+}  // namespace XER::Audio::FX::Customs

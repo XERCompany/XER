@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 LatencyMonitor::LatencyMonitor()
     : is_monitoring_(false) {}
@@ -87,4 +87,4 @@ void LatencyMonitor::UpdateHistory(double latency_ms) {
     }
 }
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

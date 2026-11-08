@@ -21,7 +21,7 @@
 #include <dlfcn.h>
 #include <ffi.h> 
 
-namespace Engine::Native::Plugin::Pxer {
+namespace XER::Native::Plugin::Pxer {
 namespace {
 
 std::string SafeString(const char* text) {
@@ -230,14 +230,14 @@ bool CallAsync(PxerPluginAsyncFn function,
 } 
 
 }  // namespace
-}  // namespace Engine::Native::Plugin::Pxer
+}  // namespace XER::Native::Plugin::Pxer
 
 struct PxerPluginHandle {
-	Engine::Native::Plugin::Pxer::PluginHost* host = nullptr;
+	XER::Native::Plugin::Pxer::PluginHost* host = nullptr;
 	uint64_t instance_id = 0;
 };
 
-namespace Engine::Native::Plugin::Pxer {
+namespace XER::Native::Plugin::Pxer {
 
 struct PluginHost::PluginRecord {
 	uint64_t instance_id = 0;
@@ -1189,4 +1189,4 @@ void PluginHost::RemoveGlobalHook(const std::string& name) {
 }
 
 
-}  // namespace Engine::Native::Plugin::Pxer
+}  // namespace XER::Native::Plugin::Pxer

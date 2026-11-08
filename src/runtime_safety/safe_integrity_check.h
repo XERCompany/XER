@@ -3,7 +3,7 @@
 #include <filesystem>
 #include <string>
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 
 struct StartupOptions {
 	std::filesystem::path script_path;
@@ -22,4 +22,4 @@ struct StartupState {
 
 bool BootstrapStartup(const StartupOptions& options, StartupState* state, std::string* error_out);
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

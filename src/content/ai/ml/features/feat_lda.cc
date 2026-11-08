@@ -3,7 +3,7 @@
 #include <cmath>
 #include <stdexcept>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 bool FeatLDA::Fit(const std::vector<float>& X, size_t n_samples, size_t n_features,
                    const std::vector<int>& labels) {
@@ -68,4 +68,4 @@ std::vector<float> FeatLDA::Transform(const std::vector<float>& X,
     return out;
 }
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

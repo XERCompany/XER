@@ -9,9 +9,9 @@
 #include <string>
 #include <vector>
 
-namespace XER::network {
+namespace XER::Network {
 
-namespace transport {
+namespace Transport {
 
 // Completion callback: (bytes_transferred_or_error_code, error_message)
 using CompletionCallback = std::function<void(int, const std::string&)>;
@@ -41,6 +41,6 @@ public:
     virtual int GetFd() const = 0;
 };
 
-}  // namespace transport
+}  // namespace Transport
 
-}  // namespace XER::network
+}  // namespace XER::Network

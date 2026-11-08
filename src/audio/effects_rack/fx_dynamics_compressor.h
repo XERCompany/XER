@@ -5,7 +5,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class DynamicsCompressor {
 public:
@@ -32,4 +32,4 @@ private:
 	float gain_db_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

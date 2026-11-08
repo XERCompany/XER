@@ -464,7 +464,7 @@ void AuraCastSession::Detach() {
 bool AuraCastSession::SyncWithAudio(
     const AuraCastDevice& source,
     SinkCallback          state_cb,
-    Engine::Audio::Core::AudioEngine* engine) {
+    XER::Audio::Core::AudioEngine* engine) {
 
     // Build Lc3Params from the discovered source (or use sane defaults).
     Lc3Params lc3;

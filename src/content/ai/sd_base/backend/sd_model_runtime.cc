@@ -6,7 +6,7 @@
 #include <filesystem>
 #include <functional>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 bool SdModelRuntime::Exists(const std::string& path) {
     return !path.empty() && std::filesystem::exists(std::filesystem::path(path));
@@ -105,4 +105,4 @@ void SdModelRuntime::PredictNoise(const std::vector<float>& text_embedding,
     }
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

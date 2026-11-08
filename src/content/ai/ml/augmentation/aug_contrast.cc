@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugContrast::AugContrast(float factor) : factor_(factor) {}
 
@@ -16,4 +16,4 @@ bool AugContrast::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

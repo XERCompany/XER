@@ -4,7 +4,7 @@
 #include <functional>
 #include <vector>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief BFS and DFS traversal utilities for GraphBase
 class GraphTraversal {
@@ -22,4 +22,4 @@ class GraphTraversal {
                    std::vector<int64_t> start_ids = {});
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

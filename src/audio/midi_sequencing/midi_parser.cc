@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 namespace {
 
@@ -221,4 +221,4 @@ std::string MidiParser::DescribeEventType(MidiMessageType type) {
     }
 }
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

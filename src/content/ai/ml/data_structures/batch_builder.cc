@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <cstring>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 std::vector<std::shared_ptr<MLData::Types::Batch>> BatchBuilder::BuildBatches(
 		const DatasetBase& dataset,
@@ -37,5 +37,5 @@ std::vector<std::shared_ptr<MLData::Types::Batch>> BatchBuilder::BuildBatches(
 	return batches;
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

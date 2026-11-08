@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <thread>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 ThreadPool::ThreadPool(size_t num_threads) {
     // Auto-detect if num_threads = 0
@@ -170,4 +170,4 @@ void ThreadPool::ParallelFor2DTile(std::function<void(size_t, size_t, size_t, si
 #endif
 }
 
-} // namespace Engine::ML::Utils
+} // namespace XER::ML::Utils

@@ -4,15 +4,15 @@
 
 #include <algorithm>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
-Engine::MLData::Types::Tensor SdVaeDecoder::Decode(const Engine::MLData::Types::Tensor& latent,
+XER::MLData::Types::Tensor SdVaeDecoder::Decode(const XER::MLData::Types::Tensor& latent,
                                                     uint32_t width,
                                                     uint32_t height,
                                                     bool high_quality) const {
     SdImageDecoder decoder;
     auto image = decoder.DecodeLatentToImage(latent, width, height);
-    if (!high_quality || !image.GetData() || image.GetDataType() != Engine::MLData::Types::DataType::FLOAT32) {
+    if (!high_quality || !image.GetData() || image.GetDataType() != XER::MLData::Types::DataType::FLOAT32) {
         return image;
     }
 
@@ -25,4 +25,4 @@ Engine::MLData::Types::Tensor SdVaeDecoder::Decode(const Engine::MLData::Types::
     return image;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

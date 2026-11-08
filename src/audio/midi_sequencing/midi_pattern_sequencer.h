@@ -5,7 +5,7 @@
 #include "async_io/async_task_queue.h"
 #include "midi_parser.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 class MidiPatternSequencer {
 public:
@@ -18,4 +18,4 @@ private:
     uint32_t loop_length_ticks_ = 0;
 };
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

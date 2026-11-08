@@ -2,7 +2,7 @@
 
 #include "../utility/ai_runtime_features.h"
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 void CudnnConfigurator::SetConfig(const CudnnConfig& config) {
 	config_ = config;
@@ -23,5 +23,5 @@ std::string CudnnConfigurator::BuildDescriptor() const {
 				 "}";
 }
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

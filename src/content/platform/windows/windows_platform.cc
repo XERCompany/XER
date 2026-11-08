@@ -3,7 +3,7 @@
 #include <memory>
 #include <chrono>
 
-namespace Engine::Content::Platform {
+namespace XER::Content::Platform {
 
 WindowsPlatform::WindowsPlatform() {
 }
@@ -117,4 +117,4 @@ std::string WindowsPlatform::GetWindowsFolderPath(int csidl) const {
     return "";
 }
 
-}  // namespace Engine::Content::Platform
+}  // namespace XER::Content::Platform

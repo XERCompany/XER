@@ -5,7 +5,7 @@
 
 #include "v8/v8_exception_handler.h"
 
-namespace Engine::V8Runtime {
+namespace XER::V8Runtime {
 
 bool CompileAndRun(v8::Isolate* isolate,
 		   v8::Local<v8::Context> context,
@@ -60,4 +60,4 @@ bool CompileAndRun(v8::Isolate* isolate,
 	return true;
 }
 
-}  // namespace Engine::V8Runtime
+}  // namespace XER::V8Runtime

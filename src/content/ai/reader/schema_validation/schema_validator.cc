@@ -1,6 +1,6 @@
 #include "schema_validator.h"
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 SchemaValidator::ValidationResult SchemaValidator::Validate(
     const Core::Model& model) const {
@@ -33,4 +33,4 @@ bool SchemaValidator::CheckNonEmpty(const Core::Model& model,
   return true;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

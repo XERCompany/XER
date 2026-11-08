@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 /// @brief Validates an XER Core::Model for correctness
 ///
@@ -30,4 +30,4 @@ class SchemaValidator {
                      std::vector<std::string>& errors) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

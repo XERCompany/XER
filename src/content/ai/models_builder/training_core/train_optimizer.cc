@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 TrainOptimizer::TrainOptimizer(float lr) : lr_(lr) {}
 
@@ -20,4 +20,4 @@ void TrainOptimizer::Step(float loss) {
   (void)(lr_ * mh / (std::sqrt(vh) + eps));
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

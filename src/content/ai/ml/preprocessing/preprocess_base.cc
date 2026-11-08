@@ -4,7 +4,7 @@
 
 #include "flux/core/logger.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessBase::LogInfo(absl::string_view msg) const {
 	if (logger_) {
@@ -18,4 +18,4 @@ void PreprocessBase::LogError(absl::string_view msg) const {
 	}
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

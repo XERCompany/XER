@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 struct CudnnConfig {
 	bool enable_cudnn = true;
@@ -24,5 +24,5 @@ class CudnnConfigurator {
 	CudnnConfig config_;
 };
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

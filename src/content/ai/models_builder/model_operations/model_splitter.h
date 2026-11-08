@@ -5,7 +5,7 @@
 #include <memory>
 #include <utility>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 class ModelSplitter {
  public:
@@ -14,5 +14,5 @@ class ModelSplitter {
 	  size_t split_layer_index) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

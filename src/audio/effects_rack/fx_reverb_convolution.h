@@ -6,7 +6,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include "audio/dsp_algorithms/dsp_convolution_engine.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class ReverbConvolution {
 public:
@@ -22,7 +22,7 @@ public:
 private:
 	float mix_;
 	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
-	XER::Engine::Audio::DSP::ConvolutionEngine convolution_;
+	XER::Audio::DSP::ConvolutionEngine convolution_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

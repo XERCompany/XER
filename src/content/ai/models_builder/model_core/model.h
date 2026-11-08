@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Core {
+namespace XER::ModelsBuilder::Core {
 
 /// @brief Model architecture type enumeration
 /// 
@@ -124,4 +124,4 @@ protected:
     std::vector<uint32_t> output_shape_;          ///< Output shape computed in Build()
 };
 
-} // namespace Engine::ModelsBuilder::Core
+} // namespace XER::ModelsBuilder::Core

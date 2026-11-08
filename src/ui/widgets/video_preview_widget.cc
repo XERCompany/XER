@@ -141,7 +141,7 @@ void VideoPreviewWidget::OnBrowse() {
     const std::wstring picked = PickVideoFile(
         static_cast<HWND>(parent_hwnd_));
     if (!picked.empty()) {
-        path_input_->SetValue(XER::Engine::Helper::String::WideToUtf8(picked));
+        path_input_->SetValue(XER::Helper::String::WideToUtf8(picked));
     }
 #endif
 }

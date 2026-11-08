@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 /// @brief Captures and demangles a C++ stack trace at the call site
 ///
@@ -22,4 +22,4 @@ class StackTrace {
   static std::string Summary(int frames = 5);
 };
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

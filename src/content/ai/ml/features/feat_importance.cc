@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 std::vector<ImportanceScore> FeatImportance::ByVariance(
     const std::vector<float>& X, size_t n_samples, size_t n_features) const {
@@ -57,4 +57,4 @@ std::vector<size_t> FeatImportance::TopK(const std::vector<ImportanceScore>& sco
     return idx;
 }
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

@@ -4,7 +4,7 @@
 #include <numeric>
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 bool TensorBroadcast::IsCompatible(const std::vector<size_t>& shape1,
                                     const std::vector<size_t>& shape2) {
@@ -231,4 +231,4 @@ Tensor TensorConcat::Stack(const std::vector<Tensor>& tensors, int /*axis*/) {
     return result;
 }
 
-} // namespace Engine::ML::Tensors
+} // namespace XER::ML::Tensors

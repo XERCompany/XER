@@ -5,7 +5,7 @@
 
 #include <v8.h>
 
-namespace Engine::V8Runtime {
+namespace XER::V8Runtime {
 
 bool CompileAndRun(v8::Isolate* isolate,
 		   v8::Local<v8::Context> context,
@@ -14,4 +14,4 @@ bool CompileAndRun(v8::Isolate* isolate,
 		   v8::Local<v8::Value>* result_out,
 		   std::string* error_out);
 
-}  // namespace Engine::V8Runtime
+}  // namespace XER::V8Runtime

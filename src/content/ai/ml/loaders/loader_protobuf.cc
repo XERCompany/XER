@@ -9,7 +9,7 @@
 #include <absl/strings/str_format.h>
 #include <absl/strings/string_view.h>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 // ---------------------------------------------------------------------------
 // TFRecord + minimal protobuf wire-format parser (no libprotobuf required).
@@ -224,4 +224,4 @@ Dataset LoaderProtobuf::Load(const std::string& path) {
     return ds;
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

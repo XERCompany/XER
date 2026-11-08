@@ -1,6 +1,6 @@
 #include "anal_pitch_estimator.h"
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 PitchEstimator::PitchEstimator(int sample_rate)
 	: sample_rate_(sample_rate),
@@ -43,4 +43,4 @@ std::string PitchEstimator::GetReport() const {
 		", note=" + GetLastNote();
 }
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

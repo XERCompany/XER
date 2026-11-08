@@ -2,7 +2,7 @@
 
 #include "custom_effect_eq_lite.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 std::vector<std::string> ListCustomEffectAlgorithms() {
 	return {
@@ -196,4 +196,4 @@ std::vector<std::string> ListCustomEffectPresets() {
 	};
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

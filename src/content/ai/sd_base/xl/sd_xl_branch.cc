@@ -2,7 +2,7 @@
 
 #include "content/ai/sd_base/xl/sd_xl_prompt_expander.h"
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 std::string SdXlBranch::BuildPrompt(const SdGenerationRequest& request,
                                     SdBackendKind backend,
@@ -44,4 +44,4 @@ float SdXlBranch::RefinerGain(SdBackendKind backend, bool model_loaded) const {
     return gain;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

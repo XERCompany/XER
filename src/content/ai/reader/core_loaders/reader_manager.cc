@@ -5,7 +5,7 @@
 
 #include "../framework_adapters/tf_saved_model_parser.h"
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 ReaderManager::ReaderManager() {
 	ReaderFactory::RegisterDefaults();
@@ -44,5 +44,5 @@ std::string ReaderManager::ExtractExtension(const std::string& filepath) {
 	return filepath.substr(dot);
 }
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

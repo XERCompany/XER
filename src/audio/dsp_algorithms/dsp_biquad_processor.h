@@ -4,7 +4,7 @@
 
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 enum class BiquadType {
 	LowPass,
@@ -48,4 +48,4 @@ private:
 	bool ComputeCoefficients();
 };
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

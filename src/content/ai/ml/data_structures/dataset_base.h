@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 struct DataSample {
 	std::vector<float> features;
@@ -31,5 +31,5 @@ class DatasetBase {
 	std::vector<DataSample> samples_;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

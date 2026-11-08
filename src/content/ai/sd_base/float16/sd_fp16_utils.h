@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdFp16Utils {
 public:
@@ -10,4 +10,4 @@ public:
     static float Fp16BitsToFloat32(uint16_t bits);
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

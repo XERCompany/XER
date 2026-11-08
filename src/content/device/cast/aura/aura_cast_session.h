@@ -45,7 +45,7 @@
 #include "content/device/cast/aura/aura_audio_sink.h"
 #include "async_io/io_thread_pool.h"
 
-namespace Engine::Audio::Core { class AudioEngine; }
+namespace XER::Audio::Core { class AudioEngine; }
 
 namespace device::cast::aura {
 
@@ -99,7 +99,7 @@ public:
     // Use GetAudioSink() to control volume, read stats, etc.
     bool SyncWithAudio(const AuraCastDevice& source,
                        SinkCallback          state_cb,
-                       Engine::Audio::Core::AudioEngine* engine = nullptr);
+                       XER::Audio::Core::AudioEngine* engine = nullptr);
 
     // Detach from the current BIG (sends BIG Terminate Sync to the kernel).
     void Detach();

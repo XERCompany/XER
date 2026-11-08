@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <string>
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 // Audio buffer layout
 enum class AudioLayout {
@@ -75,4 +75,4 @@ private:
     std::vector<std::shared_ptr<AudioBuffer>> available_buffers_;
 };
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

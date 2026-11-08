@@ -2,7 +2,7 @@
 
 #include "preprocessor.h"
 
-namespace Engine::MLData::Preprocessing {
+namespace XER::MLData::Preprocessing {
 
 class Scaler : public Preprocessor {
 public:
@@ -21,4 +21,4 @@ private:
     ScalingMode mode_;
 };
 
-} // namespace Engine::MLData::Preprocessing
+} // namespace XER::MLData::Preprocessing

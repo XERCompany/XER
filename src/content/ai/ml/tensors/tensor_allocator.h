@@ -4,7 +4,7 @@
 #include <memory>
 #include <vector>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 /// Factory for allocating Tensors (CPU or GPU)
 struct TensorAllocator {
@@ -21,4 +21,4 @@ struct TensorAllocator {
     static std::shared_ptr<Tensor> Clone(const Tensor& src);
 };
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Full Transformer encoder block (Self-Attn + FFN + LayerNorm)
 class LayerTransformer : public Core::Layer {
@@ -26,4 +26,4 @@ class LayerTransformer : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeTransformer(const std::string& name,
                                                LayerTransformer::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

@@ -8,7 +8,7 @@
 #include "../../../../error_handler/err_monitor.h"
 #include "../../../../error_handler/err_diagnostic_data.h"
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 TrainEngine::TrainEngine(std::shared_ptr<Core::Model> model,
                            TrainConfig config)
@@ -20,7 +20,7 @@ void TrainEngine::SetDataCallback(DataCallback cb) {
 
 float TrainEngine::Run() {
   if (!data_cb_) {
-    Engine::ErrorHandler::ReportException("TrainEngine",
+    XER::ErrorHandler::ReportException("TrainEngine",
         "No data callback registered");
     return -1.0f;
   }
@@ -51,4 +51,4 @@ float TrainEngine::Run() {
   return total_steps > 0 ? total_loss / total_steps : 0.0f;
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

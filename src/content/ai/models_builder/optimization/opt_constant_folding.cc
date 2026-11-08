@@ -1,6 +1,6 @@
 #include "opt_constant_folding.h"
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 void OptConstantFolding::Apply(GraphEngine::GraphBase& graph) {
   // Collect nodes whose all inputs are produced by Const-type nodes
@@ -16,4 +16,4 @@ void OptConstantFolding::Apply(GraphEngine::GraphBase& graph) {
   }
 }
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

@@ -9,7 +9,7 @@
 #include "fx_dynamics_limiter.h"
 #include "fx_eq_parametric.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class AutoTuneCorrectPitch {
 public:
@@ -63,4 +63,4 @@ private:
 	std::vector<float> dynamics_buffer_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

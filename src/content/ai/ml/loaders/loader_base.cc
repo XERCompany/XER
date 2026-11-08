@@ -18,7 +18,7 @@
 #include "cache/cache_storage.h"
 #include "flux/core/logger.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 namespace {
 
 constexpr std::uint32_t kDatasetCacheMagic = 0x31444358;  // XCD1
@@ -183,7 +183,7 @@ bool LoaderBase::TryLoadCachedDataset(absl::string_view loader_name,
 	}
 	if (bytes.empty()) {
 		std::string error;
-		Engine::Cache::CacheManager::Instance().ReadPersistentBinary(
+		XER::Cache::CacheManager::Instance().ReadPersistentBinary(
 			"ml.loaders", key, "dataset.bin", &bytes, &error);
 	}
 	if (bytes.empty()) {
@@ -223,7 +223,7 @@ void LoaderBase::StoreCachedDataset(absl::string_view loader_name,
 	}
 
 	std::string error;
-	if (!Engine::Cache::CacheManager::Instance().WritePersistentBinary(
+	if (!XER::Cache::CacheManager::Instance().WritePersistentBinary(
 			"ml.loaders", key, "dataset.bin", bytes, &error)) {
 		LogError(absl::StrCat("Persistent cache write failed: ", error));
 	}
@@ -237,8 +237,8 @@ void LoaderBase::InvalidateCachedDataset(absl::string_view loader_name,
 	}
 
 	std::string error;
-	Engine::Cache::CacheManager::Instance().Persistent().Remove(
-		Engine::Cache::MakeEntry("ml.loaders", key, "dataset.bin"), &error);
+	XER::Cache::CacheManager::Instance().Persistent().Remove(
+		XER::Cache::MakeEntry("ml.loaders", key, "dataset.bin"), &error);
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

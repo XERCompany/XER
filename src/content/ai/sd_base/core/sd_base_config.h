@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 struct SdBaseConfig {
     uint32_t max_width = 1024;
@@ -48,4 +48,4 @@ struct SdBaseConfig {
     static SdBaseConfig FromPreset(SdQualityPreset preset);
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

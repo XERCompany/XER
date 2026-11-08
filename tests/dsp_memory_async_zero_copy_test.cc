@@ -10,7 +10,7 @@
 #include <iostream>
 #include <vector>
 
-using namespace Engine::Audio;
+using namespace XER::Audio;
 
 void TestMemoryStats() {
     DSP::ConvolutionEngine conv;

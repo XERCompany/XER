@@ -28,7 +28,7 @@ bool VideoManager::InitRenderer(RendererType type, const std::string& device_hin
     // Auto-select best available renderer if not forced
     if (type == RendererType::CUDA
 #if ENGINE_HAS_CUDA_BRIDGE
-        && !engine::bridge::cuda::IsAvailable()
+        && !XER::Bridge::Cuda::IsAvailable()
 #else
         && true
 #endif
@@ -48,8 +48,8 @@ bool VideoManager::InitRenderer(RendererType type, const std::string& device_hin
     bool ok = renderer_->Initialize(device_hint);
     Log().Info("VideoManager",
                std::string("Renderer ") + (ok ? "ready" : "FAILED") +
-               " | FFmpeg: " + (engine::bridge::ffmpeg::IsAvailable() ? "yes" : "no") +
-               " | Skia: " + (engine::bridge::skia::IsAvailable() ? "yes" : "no"));
+               " | FFmpeg: " + (XER::Bridge::FFmpeg::IsAvailable() ? "yes" : "no") +
+               " | Skia: " + (XER::Bridge::Skia::IsAvailable() ? "yes" : "no"));
     return ok;
 }
 

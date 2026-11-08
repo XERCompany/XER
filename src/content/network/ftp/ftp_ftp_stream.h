@@ -11,7 +11,7 @@
 #include "content/network/ftp/ftp_ftp_request.h"
 #include "content/network/socket/socket_stream.h"
 
-namespace XER::network::ftp {
+namespace XER::Network::Ftp {
 
 // FTP callback types
 using FtpTransferCallback = std::function<void(bool, const std::vector<uint8_t>&, const std::string&)>;
@@ -46,4 +46,4 @@ private:
 // Execute a full FTP download using FtpStream.
 FtpResponse ExecuteFtpRequest(const FtpRequest& req);
 
-}  // namespace XER::network::ftp
+}  // namespace XER::Network::Ftp

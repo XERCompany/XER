@@ -5,7 +5,7 @@
 
 #include <absl/strings/string_view.h>
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 // ErrMinidumpGenerator produces a structured plain-text process snapshot on
 // demand (i.e. from ordinary code, not from a signal handler).
@@ -30,4 +30,4 @@ private:
 	std::string message_;
 };
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

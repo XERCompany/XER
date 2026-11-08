@@ -1,7 +1,7 @@
 #include "rm_endian_swap.h"
 #include <cstring>
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 uint16_t RmEndianSwap::Swap16(uint16_t v) noexcept {
     return static_cast<uint16_t>((v << 8) | (v >> 8));
@@ -43,4 +43,4 @@ bool RmEndianSwap::IsBigEndian() noexcept {
     return first == 0x01;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils

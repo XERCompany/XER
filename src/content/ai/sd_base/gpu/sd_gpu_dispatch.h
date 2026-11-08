@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <string>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 enum class SdBackendKind : uint8_t {
     CpuEigen = 0,
@@ -28,4 +28,4 @@ public:
     static std::string BackendName(SdBackendKind backend);
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

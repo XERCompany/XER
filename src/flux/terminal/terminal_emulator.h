@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 class TerminalEmulator {
 public:
@@ -22,4 +22,4 @@ private:
 
 std::string EmulatePlainText(std::string_view text);
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

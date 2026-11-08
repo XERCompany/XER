@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Gradient-based parameter optimizer (SGD + Adam)
 class TrainOptimizer {
@@ -20,4 +20,4 @@ class TrainOptimizer {
   float m_{0.0f}, v_{0.0f};
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training
