@@ -1,5 +1,11 @@
 # XER Content Subsystem CMake Configuration
 
+# Optional 3D/render backends (vcpkg ports: assimp, dawn).
+# When absent, the corresponding content/<module>/ dirs are excluded
+# from the glob below so the rest of XER_Content still builds.
+find_package(assimp QUIET)
+find_package(Dawn QUIET)
+
 # Collect content sources
 file(GLOB_RECURSE CONTENT_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
@@ -39,6 +45,17 @@ else()
     list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/platform/(apple|windows)/")
 endif()
 
+# Optional backends: exclude their sources when the vcpkg targets
+# are not available on this machine.
+if(NOT TARGET assimp::assimp)
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/(model3d|formatconv)/")
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/(model3d|formatconv)/")
+endif()
+if(NOT TARGET dawn::webgpu_dawn)
+    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/dawn/")
+    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/dawn/")
+endif()
+
 # Create content library
 add_library(XER_Content STATIC ${CONTENT_SOURCES} ${CONTENT_HEADERS})
 
@@ -70,6 +87,26 @@ endif()
 
 # Link with zstd
 target_link_libraries(XER_Content PUBLIC zstd::libzstd)
+
+# Compression + ranges used across content modules
+target_link_libraries(XER_Content PUBLIC ZLIB::ZLIB range-v3::range-v3)
+
+# Async I/O (libuv) for net-facing modules
+target_link_libraries(XER_Content PUBLIC
+    $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>)
+if(TARGET XER_AsyncIO)
+    target_link_libraries(XER_Content PUBLIC XER_AsyncIO)
+endif()
+
+# Optional 3D/render backends
+if(TARGET assimp::assimp)
+    target_link_libraries(XER_Content PUBLIC assimp::assimp)
+endif()
+if(TARGET dawn::webgpu_dawn)
+    target_link_libraries(XER_Content PUBLIC
+        dawn::webgpu_dawn
+        dawn::webgpu_upstream_cpp_headers)
+endif()
 
 # AI/ML library backends (gated by ENABLE_AI in root CMakeLists.txt)
 if(ENABLE_AI)

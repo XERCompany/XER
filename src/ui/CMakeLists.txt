@@ -60,8 +60,14 @@ target_link_libraries(XER_UI_Core
         XER_ContentVideo
         XER_NodeGraph
         XER_AsyncIO
+        XER_SecurityFlash
         unofficial::skia::skia
 )
+
+# Application::Initialize calls InitCommonControlsEx (comctl32).
+if(WIN32)
+    target_link_libraries(XER_UI_Core PUBLIC comctl32)
+endif()
 
 # MKL is optional: link and enable the XER_HAVE_MKL fast paths only when the
 # package was found (absent on macOS and minimal Linux installs).
