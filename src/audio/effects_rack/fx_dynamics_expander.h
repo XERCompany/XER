@@ -5,7 +5,7 @@
 
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class DynamicsExpander {
 public:
@@ -26,4 +26,4 @@ private:
 	float range_db_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

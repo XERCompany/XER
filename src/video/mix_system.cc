@@ -18,7 +18,7 @@ static const char* SkiaBlendName(MixMode mode) {
 
 // BGRA8 pixel i → Skia uint32 (MakeColorRGBA packs R,G,B,A → 0xRRGGBBAA)
 static inline uint32_t bgra_to_skia(const uint8_t* d) {
-    return engine::bridge::skia::MakeColorRGBA(d[2], d[1], d[0], d[3]);
+    return XER::Bridge::Skia::MakeColorRGBA(d[2], d[1], d[0], d[3]);
 }
 static inline void skia_to_bgra(uint32_t c, uint8_t* d) {
     d[2] = (c >> 24) & 0xFF;  // R
@@ -32,7 +32,7 @@ bool MixSystem::Mix(Frame& dst, const Frame& src, MixMode mode, float weight) {
     if (dst.Width() != src.Width() || dst.Height() != src.Height()) return false;
     int n = dst.Width() * dst.Height();
 
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         // Scale source alpha by weight, then blend via Skia
         std::vector<uint32_t> dst_px(n), src_px(n);
         const uint8_t* sp = src.Data();
@@ -40,13 +40,13 @@ bool MixSystem::Mix(Frame& dst, const Frame& src, MixMode mode, float weight) {
         for (int i = 0; i < n; ++i) {
             dst_px[i] = bgra_to_skia(dp + i * 4);
             uint8_t scaled_a = static_cast<uint8_t>(sp[i*4+3] * weight);
-            src_px[i] = engine::bridge::skia::MakeColorRGBA(
+            src_px[i] = XER::Bridge::Skia::MakeColorRGBA(
                             sp[i*4+2], sp[i*4+1], sp[i*4+0], scaled_a);
         }
         // Apply blend per-pixel using BlendModeApply
         const char* blend = SkiaBlendName(mode);
         for (int i = 0; i < n; ++i)
-            dst_px[i] = engine::bridge::skia::BlendModeApply(blend, dst_px[i], src_px[i]);
+            dst_px[i] = XER::Bridge::Skia::BlendModeApply(blend, dst_px[i], src_px[i]);
         uint8_t* out = dst.Data();
         for (int i = 0; i < n; ++i) skia_to_bgra(dst_px[i], out + i * 4);
     } else {

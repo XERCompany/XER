@@ -8,7 +8,7 @@
 #include <unistd.h>
 #endif
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 namespace {
 
 std::size_t ParsePositiveEnv(const char* key, std::size_t fallback) {
@@ -60,4 +60,4 @@ TerminalSize ClampTerminalSize(const TerminalSize& size, std::size_t min_columns
 	return clamped;
 }
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

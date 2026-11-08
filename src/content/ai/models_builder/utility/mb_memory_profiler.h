@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 struct MemorySample {
 	double resident_mb = 0.0;
@@ -27,5 +27,5 @@ class ModelMemoryProfiler {
 	std::vector<MemorySample> samples_;
 };
 
-}  // namespace Engine::ModelsBuilder::Utility
+}  // namespace XER::ModelsBuilder::Utility
 

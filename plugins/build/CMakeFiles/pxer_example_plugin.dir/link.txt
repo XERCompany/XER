@@ -1,1 +1,0 @@
-/usr/bin/cc -fPIC -shared -Wl,-soname,libpxer_example_plugin.so -o libpxer_example_plugin.so CMakeFiles/pxer_example_plugin.dir/pxer_example_plugin.c.o 

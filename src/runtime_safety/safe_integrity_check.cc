@@ -18,7 +18,7 @@
 #include "runtime_safety/safe_sandbox.h"
 #include "runtime_safety/safe_thread_monitor.h"
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 namespace {
 
 std::size_t ResolveQueueDepth(const StartupOptions& options, std::size_t worker_count) {
@@ -56,17 +56,17 @@ bool BootstrapStartup(const StartupOptions& options, StartupState* state, std::s
 		return false;
 	}
 
-	const Engine::Cache::CacheConfiguration cache_config = Engine::Cache::CacheConfigurationFromEnvironment();
+	const XER::Cache::CacheConfiguration cache_config = XER::Cache::CacheConfigurationFromEnvironment();
 	const EngineParams params = EngineParamsFromEnv();
 	const MemoryGuardSnapshot memory_guard = CaptureMemoryGuardSnapshot(params);
 	if (!ValidateMemoryGuardSnapshot(memory_guard, error_out)) {
-		Engine::ErrorHandler::ReportStartupError("runtime_safety",
+		XER::ErrorHandler::ReportStartupError("runtime_safety",
 			error_out != nullptr ? *error_out : std::string("Invalid memory guard configuration"));
 		return false;
 	}
 	const SandboxSettings sandbox_settings = ResolveSandboxSettings(params);
-	if (!Engine::Cache::PrepareCacheDirectory(cache_config, error_out)) {
-		Engine::ErrorHandler::ReportStartupError("runtime_safety",
+	if (!XER::Cache::PrepareCacheDirectory(cache_config, error_out)) {
+		XER::ErrorHandler::ReportStartupError("runtime_safety",
 			error_out != nullptr ? *error_out : std::string("Failed to prepare cache directory"));
 		return false;
 	}
@@ -91,9 +91,9 @@ bool BootstrapStartup(const StartupOptions& options, StartupState* state, std::s
 			BuildSandboxSummary(sandbox_settings),
 			BuildThreadMonitorSummary(thread_monitor)
 		};
-		Engine::ErrorHandler::ReportStartupEvent("runtime_safety", absl::StrJoin(details, ", "));
+		XER::ErrorHandler::ReportStartupEvent("runtime_safety", absl::StrJoin(details, ", "));
 	}
 	return true;
 }
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

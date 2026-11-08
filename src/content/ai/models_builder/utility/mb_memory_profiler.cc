@@ -7,7 +7,7 @@
 #include <unistd.h>
 #endif
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 namespace {
 
@@ -70,5 +70,5 @@ double ModelMemoryProfiler::PeakVirtualMb() const {
 	return peak;
 }
 
-}  // namespace Engine::ModelsBuilder::Utility
+}  // namespace XER::ModelsBuilder::Utility
 

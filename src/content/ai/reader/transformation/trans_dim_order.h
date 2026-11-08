@@ -3,7 +3,7 @@
 #include "../../models_builder/model_core/model.h"
 #include <memory>
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 /// @brief Reorders tensor dimensions between NCHW ↔ NHWC layout
 ///
@@ -24,4 +24,4 @@ class TransDimOrder {
       Layout from, Layout to);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

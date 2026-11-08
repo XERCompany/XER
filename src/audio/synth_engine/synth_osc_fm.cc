@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 void SynthOscFm::SetCarrier(float hz) { carrier_hz_ = std::max(hz, 1.0f); }
 void SynthOscFm::SetModulator(float hz) { mod_hz_ = std::max(hz, 1.0f); }
@@ -24,4 +24,4 @@ float SynthOscFm::Process(float sample_rate) {
     return out;
 }
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

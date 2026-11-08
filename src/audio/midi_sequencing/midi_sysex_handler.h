@@ -5,7 +5,7 @@
 
 #include "async_io/log_and_debug/io_dump_helper.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 struct MidiSysexMessage {
     uint32_t manufacturer_id = 0;
@@ -30,4 +30,4 @@ public:
         uint32_t version) const;
 };
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

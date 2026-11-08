@@ -16,7 +16,7 @@
 #include <cmath>
 #include <vector>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 SdPipeline::SdPipeline(SdBaseConfig config)
     : config_(std::move(config)) {
@@ -37,7 +37,7 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
     flow.request = request;
     flow.caps = caps;
 
-    auto& log = Engine::ModelsBuilder::Utility::ModelBuilderLogger::GetInstance();
+    auto& log = XER::ModelsBuilder::Utility::ModelBuilderLogger::GetInstance();
     log.Info("SDBase: generation started");
 
     SdGenerationRequest req = request;
@@ -60,7 +60,7 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
         sdxl_branch.BuildPrompt(req, backend, runtime.loaded().sdxl_branch_loaded);
 
     const uint64_t seed = SdSeedGenerator::FromPrompt(expanded_prompt, req.negative_prompt, req.seed);
-    Engine::ML::Utils::MlRandomGenerator rng(seed);
+    XER::ML::Utils::MlRandomGenerator rng(seed);
 
     scheduler_.BuildSchedule(req.scheduler, req.steps);
 
@@ -138,4 +138,4 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
     return result;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

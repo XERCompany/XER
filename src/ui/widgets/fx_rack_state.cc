@@ -14,10 +14,10 @@
 namespace XER::UI::Widgets {
 namespace {
 
-using A = XER::Engine::Audio::FX::CustomEffectAlgorithm;
+using A = XER::Audio::FX::CustomEffectAlgorithm;
 
-XER::Engine::Audio::FX::CustomEffectNode MakeEqNode(float freq, float q, float gain) {
-    return XER::Engine::Audio::FX::CreateCustomEffectParametricEqNode(freq, q, gain, 1.0f);
+XER::Audio::FX::CustomEffectNode MakeEqNode(float freq, float q, float gain) {
+    return XER::Audio::FX::CreateCustomEffectParametricEqNode(freq, q, gain, 1.0f);
 }
 
 } // namespace
@@ -31,8 +31,8 @@ FxRackState::FxRackState() {
     }
 }
 
-XER::Engine::Audio::FX::CustomEffectPackage FxRackState::BuildPackage() const {
-    XER::Engine::Audio::FX::CustomEffectPackage package;
+XER::Audio::FX::CustomEffectPackage FxRackState::BuildPackage() const {
+    XER::Audio::FX::CustomEffectPackage package;
     package.label = "fx_rack";
     // Live playback: keep processing single-threaded and glitch-free.
     package.render_config.enable_multicore_render = false;
@@ -43,7 +43,7 @@ XER::Engine::Audio::FX::CustomEffectPackage FxRackState::BuildPackage() const {
     // Nodes sharing a stage_index are processed as parallel branches and
     // summed — for a serial FX chain every node needs its own stage.
     uint32_t stage = 0;
-    auto push_node = [&package, &stage](XER::Engine::Audio::FX::CustomEffectNode node) {
+    auto push_node = [&package, &stage](XER::Audio::FX::CustomEffectNode node) {
         node.stage_index = stage++;
         package.nodes.push_back(std::move(node));
     };
@@ -57,26 +57,26 @@ XER::Engine::Audio::FX::CustomEffectPackage FxRackState::BuildPackage() const {
         push_node(MakeEqNode(110.0f, 0.7f, bass_boost_db));
     }
     if (reverb_mix > 0.01f) {
-        XER::Engine::Audio::FX::CustomEffectNode reverb;
+        XER::Audio::FX::CustomEffectNode reverb;
         reverb.label = "reverb";
-        reverb.backend = XER::Engine::Audio::FX::CustomEffectBackend::kBuiltinAlgorithm;
+        reverb.backend = XER::Audio::FX::CustomEffectBackend::kBuiltinAlgorithm;
         reverb.algorithm = A::kReverbAlgorithmic;
-        XER::Engine::Audio::FX::SetCustomEffectParameterValue(&reverb.parameters, "room_size", reverb_room_size);
-        XER::Engine::Audio::FX::SetCustomEffectParameterValue(&reverb.parameters, "damping", reverb_damping);
-        reverb.mix_curve.push_back(XER::Engine::Audio::FX::CustomEffectCurvePoint{0u, reverb_mix});
+        XER::Audio::FX::SetCustomEffectParameterValue(&reverb.parameters, "room_size", reverb_room_size);
+        XER::Audio::FX::SetCustomEffectParameterValue(&reverb.parameters, "damping", reverb_damping);
+        reverb.mix_curve.push_back(XER::Audio::FX::CustomEffectCurvePoint{0u, reverb_mix});
         push_node(std::move(reverb));
     }
     for (const auto& node : nodes) {
         if (!node.enabled) {
             continue;
         }
-        XER::Engine::Audio::FX::CustomEffectNode built;
+        XER::Audio::FX::CustomEffectNode built;
         built.label = AlgorithmDisplayName(node.algorithm);
-        built.backend = XER::Engine::Audio::FX::CustomEffectBackend::kBuiltinAlgorithm;
+        built.backend = XER::Audio::FX::CustomEffectBackend::kBuiltinAlgorithm;
         built.algorithm = node.algorithm;
         built.parameters = node.params;
         if (SupportsWetMix(node.algorithm)) {
-            built.mix_curve.push_back(XER::Engine::Audio::FX::CustomEffectCurvePoint{0u, node.wet_mix});
+            built.mix_curve.push_back(XER::Audio::FX::CustomEffectCurvePoint{0u, node.wet_mix});
         }
         push_node(std::move(built));
     }
@@ -84,7 +84,7 @@ XER::Engine::Audio::FX::CustomEffectPackage FxRackState::BuildPackage() const {
 }
 
 std::vector<FxParamSpec> FxRackState::ParamSpecsFor(A algorithm) {
-    using namespace XER::Engine::Audio::FX;
+    using namespace XER::Audio::FX;
     switch (algorithm) {
         case A::kCompressor:
             return {
@@ -205,7 +205,7 @@ std::string FxRackState::AlgorithmDisplayName(A algorithm) {
         case A::kTremolo: return "Tremolo";
         case A::kVibrato: return "Vibrato";
         case A::kRingMod: return "Ring Mod";
-        default: return XER::Engine::Audio::FX::CustomEffectAlgorithmToString(algorithm);
+        default: return XER::Audio::FX::CustomEffectAlgorithmToString(algorithm);
     }
 }
 
@@ -228,7 +228,7 @@ FxNodeState FxRackState::MakeDefaultNode(A algorithm) {
     node.enabled = true;
     node.wet_mix = 1.0f;
     for (const auto& spec : ParamSpecsFor(algorithm)) {
-        node.params.push_back(XER::Engine::Audio::FX::CustomEffectParameter{spec.name, spec.default_value});
+        node.params.push_back(XER::Audio::FX::CustomEffectParameter{spec.name, spec.default_value});
     }
     return node;
 }
@@ -373,14 +373,14 @@ bool FxRackState::Deserialize(const std::string& text) {
 }
 
 bool FxRackState::SaveToCache() const {
-    auto& cache = XER::Engine::Cache::CacheManager::Instance();
+    auto& cache = XER::Cache::CacheManager::Instance();
     std::string error;
     return cache.WritePersistentText(kCacheScope, kCacheKey, kCacheName,
                                      Serialize(), &error);
 }
 
 bool FxRackState::LoadFromCache() {
-    auto& cache = XER::Engine::Cache::CacheManager::Instance();
+    auto& cache = XER::Cache::CacheManager::Instance();
     std::string text;
     std::string error;
     if (!cache.ReadPersistentText(kCacheScope, kCacheKey, kCacheName, &text, &error) ||

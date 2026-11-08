@@ -9,8 +9,8 @@ void MotionBlurVfx::Apply(ImageBuffer& img) const {
     std::vector<uint32_t> px(w*h);
     const uint8_t* d=img.Data();
     for (int i=0;i<w*h;++i)
-        px[i]=engine::bridge::skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
-    engine::bridge::skia::FilterMotionBlur(&px, w, h, angle_, distance_);
+        px[i]=XER::Bridge::Skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
+    XER::Bridge::Skia::FilterMotionBlur(&px, w, h, angle_, distance_);
     uint8_t* dst=img.Data();
     for (int i=0;i<w*h;++i) {
         uint32_t c=px[i];

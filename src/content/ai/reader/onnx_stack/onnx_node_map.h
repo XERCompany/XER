@@ -8,7 +8,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 struct NodeMapping {
 	Core::LayerType layer_type;
@@ -29,5 +29,5 @@ class OnnxNodeMap {
 	std::unordered_map<std::string, NodeMapping> mapping_;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

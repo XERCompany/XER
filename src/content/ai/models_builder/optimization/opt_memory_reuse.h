@@ -4,7 +4,7 @@
 #include <unordered_map>
 #include <string>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 /// @brief Plans in-place tensor memory reuse across graph nodes
 class OptMemoryReuse {
@@ -19,4 +19,4 @@ class OptMemoryReuse {
   Plan(const GraphEngine::GraphBase& graph);
 };
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

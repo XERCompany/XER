@@ -8,7 +8,7 @@
 #include "content/network/proxy/proxy_config.h"
 #include "content/network/proxy/proxy_resolver.h"
 
-namespace XER::network::proxy {
+namespace XER::Network::Proxy {
 
 // Creates a ProxyResolver appropriate for the given config.
 class ProxyResolverFactory {
@@ -16,4 +16,4 @@ public:
     static std::unique_ptr<ProxyResolver> Create(const ProxyConfig& config);
 };
 
-}  // namespace XER::network::proxy
+}  // namespace XER::Network::Proxy

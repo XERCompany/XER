@@ -9,7 +9,7 @@
 #include "crash/crash_handler.h"
 #include "helper/string.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 namespace {
 
 std::mutex& CaptureMutex() {
@@ -58,4 +58,4 @@ std::string LastCrashDumpPath() {
 	return CrashHandler::LastDumpPath();
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

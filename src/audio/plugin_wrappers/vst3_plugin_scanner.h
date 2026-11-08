@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 // One discovered VST3 module (bundle directory or single-file module).
 struct Vst3PluginInfo {
@@ -25,4 +25,4 @@ std::vector<Vst3PluginInfo> ScanVst3Plugins(
 // Default scan roots: %CommonProgramFiles%\VST3 and common vendor dirs.
 std::vector<std::string> DefaultVst3SearchRoots();
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

@@ -1,7 +1,7 @@
 #include "tensor_split.h"
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 std::vector<Tensor> TensorSplit(const Tensor& t, int num_splits) {
     if (t.Shape().size() != 2) throw std::invalid_argument("TensorSplit: only 2D");
@@ -33,4 +33,4 @@ std::vector<Tensor> TensorSplitSizes(const Tensor& t, const std::vector<size_t>&
     return out;
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

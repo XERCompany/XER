@@ -5,7 +5,7 @@
 #include "content/network/http/http_request_headers.h"
 #include <sstream>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 void HttpRequestHeaders::Set(const std::string& name, const std::string& value) {
     headers_[name] = value;
@@ -26,4 +26,4 @@ std::string HttpRequestHeaders::Serialize() const {
     return out;
 }
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

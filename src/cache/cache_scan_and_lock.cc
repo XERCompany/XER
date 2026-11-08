@@ -7,7 +7,7 @@
 #include <absl/strings/str_cat.h>
 #include <range/v3/algorithm/any_of.hpp>
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 
 std::filesystem::path ScriptLockPath(const std::filesystem::path& script_path) {
 	return script_path.parent_path()
@@ -65,4 +65,4 @@ bool CleanupScriptLock(const std::filesystem::path& script_path,
 	return CleanupDirectoryLock(ScriptLockPath(script_path), error_out);
 }
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

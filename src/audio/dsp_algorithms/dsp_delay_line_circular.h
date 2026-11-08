@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 class CircularDelayLine {
 public:
@@ -31,4 +31,4 @@ private:
 	std::vector<float> buffer_;
 };
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

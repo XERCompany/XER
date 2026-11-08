@@ -20,7 +20,7 @@ bool FrameExporter::ToCache(const std::string& key, std::shared_ptr<Frame> frame
 }
 
 bool FrameExporter::ToFile(const std::string& path, const Frame& frame) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
         Log().Error("FrameExporter", "FFmpeg bridge not available");
         return false;
     }
@@ -30,7 +30,7 @@ bool FrameExporter::ToFile(const std::string& path, const Frame& frame) {
     }
 
     // Build a VideoFrameInfo and encode as a single-frame video / image
-    engine::bridge::ffmpeg::VideoFrameInfo vf;
+    XER::Bridge::FFmpeg::VideoFrameInfo vf;
     vf.stream_index = 0;
     vf.width  = frame.Width();
     vf.height = frame.Height();
@@ -40,7 +40,7 @@ bool FrameExporter::ToFile(const std::string& path, const Frame& frame) {
     vf.line_sizes.push_back(frame.Width() * 4);
     vf.data.assign(frame.Data(), frame.Data() + frame.DataSize());
 
-    engine::bridge::ffmpeg::EncodeVideoParams params;
+    XER::Bridge::FFmpeg::EncodeVideoParams params;
     params.output_path  = path;
     params.codec_name   = "png";    // lossless single-frame
     params.width        = frame.Width();
@@ -50,7 +50,7 @@ bool FrameExporter::ToFile(const std::string& path, const Frame& frame) {
     params.fps_den      = 1;
 
     std::string err;
-    bool ok = engine::bridge::ffmpeg::EncodeVideoFrames(params, {vf}, &err);
+    bool ok = XER::Bridge::FFmpeg::EncodeVideoFrames(params, {vf}, &err);
     if (!ok) Log().Error("FrameExporter", "EncodeVideoFrames failed: " + err);
     else     Log().Info("FrameExporter", "Saved frame to " + path);
     return ok;
@@ -59,14 +59,14 @@ bool FrameExporter::ToFile(const std::string& path, const Frame& frame) {
 bool FrameExporter::ExportFrames(const std::string& path,
                                    const std::vector<std::shared_ptr<Frame>>& frames,
                                    const std::string& codec, int fps) {
-    if (!engine::bridge::ffmpeg::IsAvailable() || frames.empty()) return false;
+    if (!XER::Bridge::FFmpeg::IsAvailable() || frames.empty()) return false;
 
-    std::vector<engine::bridge::ffmpeg::VideoFrameInfo> vframes;
+    std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> vframes;
     vframes.reserve(frames.size());
     for (size_t i = 0; i < frames.size(); ++i) {
         const auto& f = frames[i];
         if (!f || !f->IsValid()) continue;
-        engine::bridge::ffmpeg::VideoFrameInfo vf;
+        XER::Bridge::FFmpeg::VideoFrameInfo vf;
         vf.stream_index = 0;
         vf.width  = f->Width();
         vf.height = f->Height();
@@ -78,7 +78,7 @@ bool FrameExporter::ExportFrames(const std::string& path,
         vframes.push_back(std::move(vf));
     }
 
-    engine::bridge::ffmpeg::EncodeVideoParams params;
+    XER::Bridge::FFmpeg::EncodeVideoParams params;
     params.output_path  = path;
     params.codec_name   = codec;
     params.width        = frames[0]->Width();
@@ -88,7 +88,7 @@ bool FrameExporter::ExportFrames(const std::string& path,
     params.fps_den      = 1;
 
     std::string err;
-    bool ok = engine::bridge::ffmpeg::EncodeVideoFrames(params, vframes, &err);
+    bool ok = XER::Bridge::FFmpeg::EncodeVideoFrames(params, vframes, &err);
     if (!ok) Log().Error("FrameExporter", "ExportFrames failed: " + err);
     else     Log().Info("FrameExporter",
                         "Exported " + std::to_string(vframes.size()) + " frames to " + path);
@@ -102,10 +102,10 @@ bool FrameExporter::ExportFrameStream(const std::string& path,
                                       const std::string& codec,
                                       int fps,
                                       const FrameStreamProvider& provider) {
-    if (!engine::bridge::ffmpeg::IsAvailable() || frame_count == 0u || !provider) return false;
+    if (!XER::Bridge::FFmpeg::IsAvailable() || frame_count == 0u || !provider) return false;
     if (width <= 0 || height <= 0) return false;
 
-    engine::bridge::ffmpeg::EncodeVideoParams params;
+    XER::Bridge::FFmpeg::EncodeVideoParams params;
     params.output_path = path;
     params.codec_name = codec;
     params.width = width;
@@ -115,10 +115,10 @@ bool FrameExporter::ExportFrameStream(const std::string& path,
     params.fps_den = 1;
 
     std::string err;
-    bool ok = engine::bridge::ffmpeg::EncodeVideoFrameStream(
+    bool ok = XER::Bridge::FFmpeg::EncodeVideoFrameStream(
         params,
         frame_count,
-        [&provider](size_t frame_index, engine::bridge::ffmpeg::VideoFrameInfo* out_frame, std::string* error_out) {
+        [&provider](size_t frame_index, XER::Bridge::FFmpeg::VideoFrameInfo* out_frame, std::string* error_out) {
             if (out_frame == nullptr) {
                 if (error_out != nullptr) *error_out = "stream frame target is null";
                 return false;

@@ -11,9 +11,9 @@
 
 #include <chrono>
 
-namespace platform = XER::network::socket::platform;
+namespace Platform = XER::Network::Socket::Platform;
 
-namespace XER::network::dns {
+namespace XER::Network::Dns {
 
 namespace {
 uint64_t NowMs() {
@@ -24,7 +24,7 @@ uint64_t NowMs() {
 }  // namespace
 
 HostResolverImpl::HostResolverImpl(const DnsConfig& config) : config_(config) {
-    async::AsyncOperationManager::Instance().Start();
+    Async::AsyncOperationManager::Instance().Start();
 }
 
 bool HostResolverImpl::Resolve(const std::string& host,
@@ -32,7 +32,7 @@ bool HostResolverImpl::Resolve(const std::string& host,
                                 std::vector<ResolvedAddress>* out,
                                 std::string* error) {
     auto start_time = NowMs();
-    logging::NetworkLogger::Instance().LogDnsQuery(host);
+    Logging::NetworkLogger::Instance().LogDnsQuery(host);
 
     // Check cache first
     if (LookupCache(host, out)) {
@@ -41,16 +41,16 @@ bool HostResolverImpl::Resolve(const std::string& host,
         for (const auto& addr : *out) {
             ips.push_back(addr.address);
         }
-        logging::NetworkLogger::Instance().LogDnsResponse(host, ips, true, duration);
+        Logging::NetworkLogger::Instance().LogDnsResponse(host, ips, true, duration);
         return true;
     }
 
     // Use platform abstraction for DNS resolution
-    auto& platform = platform::SocketPlatform::GetInstance();
-    std::vector<platform::AddressInfo> addresses;
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    std::vector<Platform::AddressInfo> addresses;
 
     if (!platform.ResolveAddress(host, 0, &addresses, error)) {
-        logging::NetworkLogger::Instance().LogDnsError(host, *error);
+        Logging::NetworkLogger::Instance().LogDnsError(host, *error);
         return false;
     }
 
@@ -70,7 +70,7 @@ bool HostResolverImpl::Resolve(const std::string& host,
     for (const auto& addr : *out) {
         ips.push_back(addr.address);
     }
-    logging::NetworkLogger::Instance().LogDnsResponse(host, ips, false, duration);
+    Logging::NetworkLogger::Instance().LogDnsResponse(host, ips, false, duration);
 
     return true;
 }
@@ -78,7 +78,7 @@ bool HostResolverImpl::Resolve(const std::string& host,
 void HostResolverImpl::ResolveAsync(const std::string& host,
                                     uint16_t port,
                                     ResolveCallback callback) {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, host, port, cb = std::move(callback)]() mutable {
             std::vector<ResolvedAddress> addrs;
             std::string error;
@@ -90,7 +90,7 @@ void HostResolverImpl::ResolveAsync(const std::string& host,
 bool HostResolverImpl::LookupCache(const std::string& host,
                                     std::vector<ResolvedAddress>* out) const {
     // Try new NetworkCacheManager first
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
     std::string error;
     auto cached_entry = cache_mgr.GetCachedDnsEntry(host, &error);
 
@@ -99,11 +99,11 @@ bool HostResolverImpl::LookupCache(const std::string& host,
         for (const auto& ip : cached_entry->ip_addresses) {
             out->push_back({ip, static_cast<uint32_t>(cached_entry->ttl.count())});
         }
-        logging::NetworkLogger::Instance().LogCacheHit("dns", host);
+        Logging::NetworkLogger::Instance().LogCacheHit("dns", host);
         return true;
     }
 
-    logging::NetworkLogger::Instance().LogCacheMiss("dns", host);
+    Logging::NetworkLogger::Instance().LogCacheMiss("dns", host);
 
     // Fallback to in-memory cache
     std::lock_guard<std::mutex> lock(cache_mu_);
@@ -121,8 +121,8 @@ void HostResolverImpl::StoreCache(const std::string& host,
     const uint32_t ttl = addrs[0].ttl_sec ? addrs[0].ttl_sec : 60;
 
     // Store in NetworkCacheManager
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
-    cache::DnsCacheEntry entry;
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
+    Cache::DnsCacheEntry entry;
     for (const auto& addr : addrs) {
         entry.ip_addresses.push_back(addr.address);
     }
@@ -130,7 +130,7 @@ void HostResolverImpl::StoreCache(const std::string& host,
 
     std::string error;
     if (cache_mgr.CacheDnsEntry(host, entry, &error)) {
-        logging::NetworkLogger::Instance().LogCacheStore("dns", host, entry.ip_addresses.size());
+        Logging::NetworkLogger::Instance().LogCacheStore("dns", host, entry.ip_addresses.size());
     }
 
     // Also store in in-memory cache as backup
@@ -144,8 +144,8 @@ void HostResolverImpl::ClearCache() {
     cache_.clear();
 
     // Clear NetworkCacheManager DNS cache
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
     cache_mgr.ClearDnsCache();
 }
 
-}  // namespace XER::network::dns
+}  // namespace XER::Network::Dns

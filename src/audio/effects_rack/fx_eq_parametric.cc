@@ -5,12 +5,12 @@
 #include <future>
 #include <vector>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 std::string ParametricEQ::GetMemoryStats() const {
 	std::string stats;
 	stats += "Bands: " + std::to_string(bands_.size() * sizeof(ParametricBand)) + " bytes\n";
-	stats += "Filters: " + std::to_string(filters_.size() * sizeof(XER::Engine::Audio::DSP::BiquadProcessor)) + " bytes\n";
+	stats += "Filters: " + std::to_string(filters_.size() * sizeof(XER::Audio::DSP::BiquadProcessor)) + " bytes\n";
 	return stats;
 }
 
@@ -34,10 +34,10 @@ bool ParametricEQ::Initialize(float sample_rate, size_t band_count) {
 	XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
 	sample_rate_ = sample_rate;
 	bands_.assign(band_count, ParametricBand{1000.0f, 1.0f, 0.0f, true});
-	filters_.assign(band_count, XER::Engine::Audio::DSP::BiquadProcessor());
+	filters_.assign(band_count, XER::Audio::DSP::BiquadProcessor());
 
 	for (size_t i = 0; i < band_count; ++i) {
-		filters_[i].Configure(XER::Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, bands_[i].frequency, bands_[i].q);
+		filters_[i].Configure(XER::Audio::DSP::BiquadType::BandPass, sample_rate_, bands_[i].frequency, bands_[i].q);
 	}
 	return true;
 }
@@ -49,7 +49,7 @@ bool ParametricEQ::SetBand(size_t index, const ParametricBand& band) {
 	}
 
 	bands_[index] = band;
-	return filters_[index].Configure(XER::Engine::Audio::DSP::BiquadType::BandPass, sample_rate_, band.frequency, band.q);
+	return filters_[index].Configure(XER::Audio::DSP::BiquadType::BandPass, sample_rate_, band.frequency, band.q);
 }
 
 ParametricBand ParametricEQ::GetBand(size_t index) const {
@@ -96,4 +96,4 @@ std::future<bool> ParametricEQ::ProcessBlockAsync(const float* input, size_t fra
 	});
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

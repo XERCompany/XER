@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 struct DistributionPlan {
     size_t layer_index = 0;
@@ -33,4 +33,4 @@ public:
     std::vector<WeightTensor> Collect(const Core::Model& model) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Weights
+}  // namespace XER::ModelsBuilder::Weights

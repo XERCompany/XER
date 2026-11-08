@@ -9,10 +9,10 @@
 
 #include <vector>
 
-namespace XER::network::websocket {
+namespace XER::Network::WebSocket {
 
 WebSocketStream::WebSocketStream(
-    std::unique_ptr<transport::TransportClientSocket> socket)
+    std::unique_ptr<Transport::TransportClientSocket> socket)
     : sock_(std::move(socket)), open_(true) {}
 
 WebSocketStream::~WebSocketStream() {
@@ -20,7 +20,7 @@ WebSocketStream::~WebSocketStream() {
 }
 
 bool WebSocketStream::SendText(const std::string& text, std::string* error) {
-    logging::NetworkLogger::Instance().LogDebug("websocket", "Sending text frame");
+    Logging::NetworkLogger::Instance().LogDebug("websocket", "Sending text frame");
     WebSocketFrame f;
     f.opcode  = WebSocketOpcode::kText;
     f.masked  = true;
@@ -31,7 +31,7 @@ bool WebSocketStream::SendText(const std::string& text, std::string* error) {
 
 bool WebSocketStream::SendBinary(const uint8_t* data, size_t len,
                                   std::string* error) {
-    logging::NetworkLogger::Instance().LogDebug("websocket", "Sending binary frame");
+    Logging::NetworkLogger::Instance().LogDebug("websocket", "Sending binary frame");
     WebSocketFrame f;
     f.opcode = WebSocketOpcode::kBinary;
     f.masked = true;
@@ -41,7 +41,7 @@ bool WebSocketStream::SendBinary(const uint8_t* data, size_t len,
 }
 
 bool WebSocketStream::SendPing(std::string* error) {
-    logging::NetworkLogger::Instance().LogDebug("websocket", "Sending ping");
+    Logging::NetworkLogger::Instance().LogDebug("websocket", "Sending ping");
     WebSocketFrame f;
     f.opcode = WebSocketOpcode::kPing;
     f.masked = true;
@@ -50,7 +50,7 @@ bool WebSocketStream::SendPing(std::string* error) {
 }
 
 void WebSocketStream::SendTextAsync(const std::string& text, WebSocketCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, text, cb = std::move(cb)]() {
             std::string error;
             bool ok = SendText(text, &error);
@@ -60,7 +60,7 @@ void WebSocketStream::SendTextAsync(const std::string& text, WebSocketCallback c
 
 void WebSocketStream::SendBinaryAsync(const uint8_t* data, size_t len, WebSocketCallback cb) {
     std::vector<uint8_t> vec(data, data + len);
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, vec = std::move(vec), cb = std::move(cb)]() mutable {
             std::string error;
             bool ok = SendBinary(vec.data(), vec.size(), &error);
@@ -70,7 +70,7 @@ void WebSocketStream::SendBinaryAsync(const uint8_t* data, size_t len, WebSocket
 
 void WebSocketStream::Close(uint16_t code, const std::string& reason) {
     if (!open_) return;
-    logging::NetworkLogger::Instance().LogInfo("websocket",
+    Logging::NetworkLogger::Instance().LogInfo("websocket",
         "Closing with code " + std::to_string(code));
     open_ = false;
     auto close_frame = MakeCloseFrame(code, reason);
@@ -82,7 +82,7 @@ void WebSocketStream::Close(uint16_t code, const std::string& reason) {
 }
 
 void WebSocketStream::ReadLoop() {
-    logging::NetworkLogger::Instance().LogDebug("websocket", "Starting read loop");
+    Logging::NetworkLogger::Instance().LogDebug("websocket", "Starting read loop");
     std::vector<uint8_t> buf;
     buf.reserve(65536);
     while (open_) {
@@ -92,7 +92,7 @@ void WebSocketStream::ReadLoop() {
         if (n <= 0) {
             open_ = false;
             if (on_error_ && n < 0) {
-                logging::NetworkLogger::Instance().LogError("websocket", err);
+                Logging::NetworkLogger::Instance().LogError("websocket", err);
                 on_error_(err);
             }
             break;
@@ -130,10 +130,10 @@ void WebSocketStream::ReadLoop() {
 }
 
 void WebSocketStream::ReadLoopAsync() {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this]() {
             ReadLoop();
         });
 }
 
-}  // namespace XER::network::websocket
+}  // namespace XER::Network::WebSocket

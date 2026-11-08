@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class CacheManager {
  public:
@@ -27,5 +27,5 @@ class CacheManager {
 	std::unordered_map<std::string, std::vector<float>> cache_;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

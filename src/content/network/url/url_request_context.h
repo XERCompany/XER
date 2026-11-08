@@ -11,16 +11,16 @@
 #include "content/network/cert/cert_storage.h"
 #include "content/network/dns/dns_config_service.h"
 
-namespace XER::network::url {
+namespace XER::Network::Url {
 
 struct URLRequestContext {
     std::string              user_agent   = "XER/1.0";
-    proxy::ProxyConfig       proxy_config;
-    dns::DnsConfig           dns_config;
+    Proxy::ProxyConfig       proxy_config;
+    Dns::DnsConfig           dns_config;
     uint32_t                 socket_timeout_ms = 30000;
     bool                     skip_ssl_verify   = false;
     // Note: CertStorage will be default-initialized
-    cert::CertStorage        cert_storage;
+    Cert::CertStorage        cert_storage;
 };
 
-}  // namespace XER::network::url
+}  // namespace XER::Network::Url

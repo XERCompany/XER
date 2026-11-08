@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
 SocketServer::~SocketServer() {
     Close();
@@ -22,7 +22,7 @@ SocketServer::~SocketServer() {
 
 bool SocketServer::Listen(const std::string& address, uint16_t port,
                           int backlog, std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
+    auto& platform = Platform::SocketPlatform::GetInstance();
 
     // Create TCP socket
     auto socket = platform.CreateTcpSocket(false, error);
@@ -51,15 +51,15 @@ bool SocketServer::Listen(const std::string& address, uint16_t port,
     listen_address_ = bind_addr;
     listen_port_ = port;
 
-    logging::NetworkLogger::Instance().LogInfo("socket_server",
+    Logging::NetworkLogger::Instance().LogInfo("socket_server",
         "Listening on " + bind_addr + ":" + std::to_string(port));
 
     return true;
 }
 
 std::unique_ptr<TcpClientSocket> SocketServer::Accept(std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle server_socket(static_cast<uintptr_t>(fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle server_socket(static_cast<uintptr_t>(fd_));
 
     if (!server_socket.IsValid()) {
         if (error) *error = "Server socket not listening";
@@ -74,7 +74,7 @@ std::unique_ptr<TcpClientSocket> SocketServer::Accept(std::string* error) {
         return nullptr;
     }
 
-    logging::NetworkLogger::Instance().LogInfo("socket_server",
+    Logging::NetworkLogger::Instance().LogInfo("socket_server",
         "Accepted connection from " + client_ip + ":" + std::to_string(client_port));
 
     // Create TcpClientSocket with the accepted fd
@@ -85,7 +85,7 @@ std::unique_ptr<TcpClientSocket> SocketServer::Accept(std::string* error) {
 }
 
 void SocketServer::AcceptAsync(AcceptCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, cb = std::move(cb)]() {
             std::string error;
             auto client_socket = Accept(&error);
@@ -118,4 +118,4 @@ uint16_t SocketServer::GetListenPort() const {
     return listen_port_;
 }
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

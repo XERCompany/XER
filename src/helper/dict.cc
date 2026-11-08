@@ -7,7 +7,7 @@
 #include "helper/async_bridge.h"
 #endif
 
-namespace XER::Engine::Helper {
+namespace XER::Helper {
 
 // ---------------------------------------------------------------------------
 // Type-safe value retrieval
@@ -533,4 +533,4 @@ std::unique_ptr<Dict> V8ObjectToDict(v8::Isolate* isolate, v8::Local<v8::Object>
 }
 #endif
 
-}  // namespace XER::Engine::Helper
+}  // namespace XER::Helper

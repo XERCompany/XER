@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Darknet {
+namespace XER::ModelsBuilder::Reader::Darknet {
 
 /// Represents one [section] from a Darknet .cfg file.
 struct CfgSection {
@@ -39,4 +39,4 @@ private:
     static std::string Trim(const std::string& s);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Darknet
+}  // namespace XER::ModelsBuilder::Reader::Darknet

@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 struct LoadResult {
 	std::shared_ptr<Core::Model> model;
@@ -28,5 +28,5 @@ class ReaderBase {
 	static bool ReadFile(const std::string& filepath, std::vector<uint8_t>& out_bytes);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

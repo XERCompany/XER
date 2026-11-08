@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 class FeatPCA {
 public:
@@ -38,4 +38,4 @@ private:
     static std::vector<float> PowerIteration(const std::vector<float>& A, size_t n, int iters = 200);
 };
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

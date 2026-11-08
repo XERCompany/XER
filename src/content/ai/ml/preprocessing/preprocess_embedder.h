@@ -3,7 +3,7 @@
 #include <unordered_map>
 #include <cstddef>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Look up fixed-size float embeddings for integer token IDs
 class PreprocessEmbedder {
@@ -22,4 +22,4 @@ private:
     size_t embed_dim_ = 0;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

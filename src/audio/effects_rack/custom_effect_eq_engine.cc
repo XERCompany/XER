@@ -2,7 +2,7 @@
 
 #include "custom_effect_fxdata.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 CustomEffectNode CreateCustomEffectParametricEqNode(float frequency_hz, float q, float gain_db, float mix) {
 	CustomEffectNode node;
@@ -16,4 +16,4 @@ CustomEffectNode CreateCustomEffectParametricEqNode(float frequency_hz, float q,
 	return node;
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

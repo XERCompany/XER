@@ -5,7 +5,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief Plans tensor memory allocation across nodes (arena planning)
 class GraphMemoryAllocator {
@@ -28,4 +28,4 @@ class GraphMemoryAllocator {
       const std::unordered_map<std::string, TensorAllocation>& plan);
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

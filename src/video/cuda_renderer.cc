@@ -17,14 +17,14 @@ CudaRenderer::~CudaRenderer() { Shutdown(); }
 
 bool CudaRenderer::Initialize(const std::string& device_hint) {
 #if ENGINE_HAS_CUDA_BRIDGE
-    if (!engine::bridge::cuda::IsAvailable()) {
+    if (!XER::Bridge::Cuda::IsAvailable()) {
         Log().Warning("CudaRenderer", "CUDA not available: " +
-                      engine::bridge::cuda::Summary());
+                      XER::Bridge::Cuda::Summary());
         return false;
     }
     device_hint_ = device_hint;
     ready_ = true;
-    Log().Info("CudaRenderer", "Initialized. " + engine::bridge::cuda::Summary());
+    Log().Info("CudaRenderer", "Initialized. " + XER::Bridge::Cuda::Summary());
     return true;
 #else
     Log().Warning("CudaRenderer", "CUDA bridge disabled by ENABLE_CUDA=OFF");

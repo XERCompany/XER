@@ -8,7 +8,7 @@
 
 #include "helper/compression_codec.h"
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 
 bool CacheEncryptionHandler::CompressText(const std::string& text,
 					 std::vector<std::uint8_t>* bytes,
@@ -20,7 +20,7 @@ bool CacheEncryptionHandler::CompressText(const std::string& text,
 		return false;
 	}
 
-	auto compressed = XER::Engine::Common::CompressionCodec::Compress(text);
+	auto compressed = XER::Common::CompressionCodec::Compress(text);
 	if (!compressed.has_value()) {
 		if (error_out != nullptr) {
 			*error_out = "Failed to compress cache payload";
@@ -41,7 +41,7 @@ bool CacheEncryptionHandler::DecompressText(const std::vector<std::uint8_t>& byt
 		return false;
 	}
 
-	auto decompressed = XER::Engine::Common::CompressionCodec::DecompressToString(bytes);
+	auto decompressed = XER::Common::CompressionCodec::DecompressToString(bytes);
 	if (!decompressed.has_value()) {
 		if (error_out != nullptr) {
 			*error_out = absl::StrCat("Failed to decompress cache payload, bytes=", bytes.size());
@@ -52,4 +52,4 @@ bool CacheEncryptionHandler::DecompressText(const std::vector<std::uint8_t>& byt
 	return true;
 }
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

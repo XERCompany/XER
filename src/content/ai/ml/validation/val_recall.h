@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// Recall = TP / (TP + FN), per-class and macro-averaged
 struct ValRecall {
@@ -14,4 +14,4 @@ struct ValRecall {
                                const std::vector<int>& ground_truth);
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

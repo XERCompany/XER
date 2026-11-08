@@ -10,7 +10,7 @@
 #define XER_AI_HAS_FP16_HEADER 0
 #endif
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 std::vector<float> MlTypeConverter::IntToFloat(const std::vector<int32_t>& input) {
 	std::vector<float> out(input.size(), 0.0f);
@@ -57,5 +57,5 @@ std::vector<float> MlTypeConverter::Fp16RoundTrip(const std::vector<float>& inpu
 #endif
 }
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

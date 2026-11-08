@@ -3,7 +3,7 @@
 #include <chrono>
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 namespace {
 
@@ -63,5 +63,5 @@ uint64_t CurrentTimestampMs() {
 	return static_cast<uint64_t>(ms.count());
 }
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

@@ -2,7 +2,7 @@
 
 #include "../core_loaders/reader_base.h"
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 class OnnxModelReader : public ReaderBase {
  public:
@@ -12,4 +12,4 @@ class OnnxModelReader : public ReaderBase {
   std::string GetFileExtension() const override { return ".onnx"; }
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

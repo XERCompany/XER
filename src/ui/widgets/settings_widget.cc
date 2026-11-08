@@ -89,13 +89,13 @@ SettingsWidget::~SettingsWidget() = default;
 
 void SettingsWidget::Persist(const std::string& key, const std::string& value) {
     std::string err;
-    XER::Engine::Cache::CacheManager::Instance().WritePersistentText(
+    XER::Cache::CacheManager::Instance().WritePersistentText(
         "settings", "app", key, value, &err);
 }
 
 std::string SettingsWidget::LoadSetting(const std::string& key) const {
     std::string value, err;
-    if (XER::Engine::Cache::CacheManager::Instance().ReadPersistentText(
+    if (XER::Cache::CacheManager::Instance().ReadPersistentText(
             "settings", "app", key, &value, &err)) {
         return value;
     }
@@ -442,7 +442,7 @@ void SettingsWidget::RefreshDynamic() {
 
 void SettingsWidget::RefreshCacheInfo() {
     namespace fs = std::filesystem;
-    auto& cache = XER::Engine::Cache::CacheManager::Instance();
+    auto& cache = XER::Cache::CacheManager::Instance();
     const auto root = cache.Persistent().root();
     if (cache_path_label_) {
         cache_path_label_->SetText("Location: " + root.string());
@@ -575,7 +575,7 @@ void SettingsWidget::ApplySystemSnapshot() {
 
 void SettingsWidget::OpenCacheFolder() {
 #ifdef _WIN32
-    auto& cache = XER::Engine::Cache::CacheManager::Instance();
+    auto& cache = XER::Cache::CacheManager::Instance();
     std::string err;
     cache.Persistent().EnsureRootDirectory(&err);
     const auto root = cache.Persistent().root().wstring();
@@ -586,7 +586,7 @@ void SettingsWidget::OpenCacheFolder() {
 
 void SettingsWidget::ClearCache() {
     namespace fs = std::filesystem;
-    auto& cache = XER::Engine::Cache::CacheManager::Instance();
+    auto& cache = XER::Cache::CacheManager::Instance();
     const auto root = cache.Persistent().root();
     std::uint64_t removed = 0;
     std::error_code ec;

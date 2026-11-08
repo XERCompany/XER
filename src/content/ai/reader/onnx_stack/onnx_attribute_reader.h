@@ -5,7 +5,7 @@
 #include <map>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 class OnnxAttributeReader {
  public:
@@ -15,5 +15,5 @@ class OnnxAttributeReader {
 								uint32_t fallback);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

@@ -3,7 +3,7 @@
 #include <limits>
 #include <random>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugCutout::AugCutout(int pw, int ph, float fill) : patch_w_(pw), patch_h_(ph), fill_(fill) {}
 
@@ -46,4 +46,4 @@ bool AugCutout::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

@@ -14,7 +14,7 @@
 #include "cache/cache_entry.h"
 #include "flux/core/logger.h"
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 namespace {
 
 constexpr std::uint32_t kTensorRegistryMagic = 0x31524754;  // TGR1
@@ -121,7 +121,7 @@ bool TensorManager::SaveToCache(const std::string& key) const {
     }
 
     std::string error;
-    if (!Engine::Cache::CacheManager::Instance().WritePersistentBinary(
+    if (!XER::Cache::CacheManager::Instance().WritePersistentBinary(
             "ml.tensors", cache_key, "registry.bin", bytes, &error)) {
         LogError(absl::StrCat("Tensor cache write failed: ", error));
         return false;
@@ -140,7 +140,7 @@ bool TensorManager::RestoreFromCache(const std::string& key) {
     }
     if (bytes.empty()) {
         std::string error;
-        Engine::Cache::CacheManager::Instance().ReadPersistentBinary(
+        XER::Cache::CacheManager::Instance().ReadPersistentBinary(
             "ml.tensors", cache_key, "registry.bin", &bytes, &error);
     }
     if (bytes.empty()) {
@@ -212,8 +212,8 @@ void TensorManager::InvalidateCache(const std::string& key) const {
     }
 
     std::string error;
-    Engine::Cache::CacheManager::Instance().Persistent().Remove(
-        Engine::Cache::MakeEntry("ml.tensors", cache_key, "registry.bin"), &error);
+    XER::Cache::CacheManager::Instance().Persistent().Remove(
+        XER::Cache::MakeEntry("ml.tensors", cache_key, "registry.bin"), &error);
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

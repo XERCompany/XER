@@ -1,6 +1,6 @@
 #include "opt_sparsification.h"
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 Eigen::SparseMatrix<float> OptSparsification::ToDense(
     const Eigen::MatrixXf& dense, float threshold) {
@@ -20,4 +20,4 @@ float OptSparsification::Density(const Eigen::SparseMatrix<float>& sparse) {
          static_cast<float>(sparse.size());
 }
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

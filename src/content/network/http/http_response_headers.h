@@ -7,7 +7,7 @@
 #include <map>
 #include <string>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 class HttpResponseHeaders {
 public:
@@ -26,4 +26,4 @@ private:
     std::map<std::string, std::string> headers_;
 };
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

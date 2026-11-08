@@ -6,7 +6,7 @@
 #include <map>
 #include <string>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 enum class SdQualityPreset : uint8_t {
     Draft = 0,
@@ -68,9 +68,9 @@ struct SdGenerationRequest {
 struct SdGenerationResult {
     bool ok = false;
     std::string error;
-    Engine::MLData::Types::Tensor latent = Engine::MLData::Types::Tensor({1, 4, 64, 64});
-    Engine::MLData::Types::Tensor image = Engine::MLData::Types::Tensor({1, 3, 512, 512});
+    XER::MLData::Types::Tensor latent = XER::MLData::Types::Tensor({1, 4, 64, 64});
+    XER::MLData::Types::Tensor image = XER::MLData::Types::Tensor({1, 3, 512, 512});
     std::map<std::string, std::string> metadata;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

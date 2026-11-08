@@ -9,7 +9,7 @@
 #include "custom_effect_processor.h"
 #include "custom_effect_struct.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 bool ApplyCustomEffectProcessors(
 	std::deque<CustomEffectProcessor>* processors,
@@ -20,4 +20,4 @@ bool ApplyCustomEffectProcessors(
 	std::string* error_out = nullptr,
 	bool reset_frame_offsets = true);
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

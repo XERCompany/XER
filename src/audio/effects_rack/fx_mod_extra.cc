@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
 }
@@ -185,4 +185,4 @@ std::string ModRingMod::GetReport() const {
 		", mix=" + std::to_string(mix_);
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

@@ -6,7 +6,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class DatasetMap {
  public:
@@ -21,5 +21,5 @@ class DatasetMap {
 	std::unordered_map<std::string, std::shared_ptr<DatasetBase>> datasets_;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

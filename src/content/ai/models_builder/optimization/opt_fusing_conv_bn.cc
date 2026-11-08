@@ -3,7 +3,7 @@
 #include <vector>
 #include <unordered_map>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 void OptFusingConvBn::Apply(GraphEngine::GraphBase& graph) {
   // Find Conv → BN pairs and merge BN into Conv
@@ -26,4 +26,4 @@ void OptFusingConvBn::Apply(GraphEngine::GraphBase& graph) {
   for (int64_t id : bn_to_remove) graph.RemoveNode(id);
 }
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

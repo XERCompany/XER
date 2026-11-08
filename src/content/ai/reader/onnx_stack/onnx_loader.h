@@ -6,7 +6,7 @@
 #include <string>
 #include <memory>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 /// @brief ONNX model loader and parser
 /// 
@@ -44,4 +44,4 @@ private:
     OnnxLoader() = default;
 };
 
-} // namespace Engine::ModelsBuilder::Reader::Onnx
+} // namespace XER::ModelsBuilder::Reader::Onnx

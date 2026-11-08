@@ -16,7 +16,7 @@
 #include <memory>
 #endif
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
 
 #if ENGINE_HAS_SKIA_BRIDGE && defined(ENGINE_SKIA_HAS_SKOTTIE)
 

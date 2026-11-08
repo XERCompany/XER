@@ -8,7 +8,7 @@
 #include <openssl/x509.h>
 #include <memory>
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 struct X509Deleter    { void operator()(X509* p)    const { X509_free(p); } };
 struct X509StoreDeleter { void operator()(X509_STORE* p) const { X509_STORE_free(p); } };
@@ -22,4 +22,4 @@ using ScopedSSL       = std::unique_ptr<SSL, SSLDeleter>;
 using ScopedSSLCtx    = std::unique_ptr<SSL_CTX, SSLCtxDeleter>;
 using ScopedBIO       = std::unique_ptr<BIO, BIODeleter>;
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

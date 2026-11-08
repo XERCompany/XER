@@ -1,6 +1,6 @@
 #include "dataset_base.h"
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 DatasetBase::DatasetBase(std::string name)
 		: name_(std::move(name)) {
@@ -17,5 +17,5 @@ const DataSample* DatasetBase::GetSample(size_t index) const {
 	return &samples_[index];
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

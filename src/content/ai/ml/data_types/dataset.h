@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::MLData::Types {
+namespace XER::MLData::Types {
 
 class Dataset {
 public:
@@ -25,4 +25,4 @@ private:
     std::string name_;
 };
 
-} // namespace Engine::MLData::Types
+} // namespace XER::MLData::Types

@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 class FeatLDA {
 public:
@@ -26,4 +26,4 @@ private:
     size_t n_features_ = 0;
 };
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

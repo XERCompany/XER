@@ -3,7 +3,7 @@
 #include "graph_base.h"
 #include <string>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief Renders a graph as Graphviz DOT format for debugging
 class GraphDebugVisualizer {
@@ -19,4 +19,4 @@ class GraphDebugVisualizer {
                              const std::string& graph_name = "xer_graph");
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

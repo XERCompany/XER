@@ -11,19 +11,19 @@
 #include "sql/content/value.h"
 #include "sql/modern/query.h"
 
-namespace XER::Engine::SQL::Storage {
+namespace XER::SQL::Storage {
 
 class SQLiteDatabase;
 
 // One result row: column values in SELECT order.
 struct Row {
-	std::vector<XER::Content::Value> columns;
+	std::vector<XER::SQL::Content::Value> columns;
 };
 
 // Prepared statement with positional parameter binding and row iteration.
 // Typical use:
 //   auto stmt = SQLiteStatement::Prepare(db, "SELECT * FROM t WHERE id = ?");
-//   stmt->Bind(1, XER::Content::Value{int64_t{42}});
+//   stmt->Bind(1, XER::SQL::Content::Value{int64_t{42}});
 //   while (stmt->Step()) { auto v = stmt->ColumnValue(0); }
 class SQLiteStatement {
 public:
@@ -36,9 +36,9 @@ public:
 	SQLiteStatement(const SQLiteStatement&) = delete;
 	SQLiteStatement& operator=(const SQLiteStatement&) = delete;
 
-	bool Bind(std::size_t index_one_based, const XER::Content::Value& value,
+	bool Bind(std::size_t index_one_based, const XER::SQL::Content::Value& value,
 		  std::string* error_out = nullptr);
-	bool BindAll(const std::vector<XER::Content::Value>& values,
+	bool BindAll(const std::vector<XER::SQL::Content::Value>& values,
 		     std::string* error_out = nullptr);
 	void Reset();
 
@@ -48,7 +48,7 @@ public:
 
 	std::size_t ColumnCount() const noexcept;
 	std::string ColumnName(std::size_t index_zero_based) const;
-	XER::Content::Value ColumnValue(std::size_t index_zero_based) const;
+	XER::SQL::Content::Value ColumnValue(std::size_t index_zero_based) const;
 
 	int NativeStatus() const noexcept { return status_; }
 
@@ -80,12 +80,12 @@ public:
 
 	// Convenience: same as Query but takes raw SQL + parameters.
 	bool Query(std::string_view sql,
-		   const std::vector<XER::Content::Value>& parameters,
+		   const std::vector<XER::SQL::Content::Value>& parameters,
 		   std::vector<Row>& rows_out,
 		   std::string* error_out = nullptr) const;
 
 	bool Execute(std::string_view sql,
-		     const std::vector<XER::Content::Value>& parameters = {},
+		     const std::vector<XER::SQL::Content::Value>& parameters = {},
 		     std::string* error_out = nullptr) const;
 
 	std::int64_t LastInsertRowId() const noexcept;
@@ -99,4 +99,4 @@ private:
 	sqlite3* handle_;
 };
 
-}  // namespace XER::Engine::SQL::Storage
+}  // namespace XER::SQL::Storage

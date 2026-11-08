@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::dns {
+namespace XER::Network::Dns {
 
 struct DnsConfig {
     std::vector<std::string> nameservers;  // e.g. {"8.8.8.8", "8.8.4.4"}
@@ -33,4 +33,4 @@ public:
     static DnsConfig DefaultConfig();
 };
 
-}  // namespace XER::network::dns
+}  // namespace XER::Network::Dns

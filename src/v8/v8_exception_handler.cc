@@ -4,7 +4,7 @@
 
 #include "helper/stack_error.h"
 
-namespace Engine::V8Runtime {
+namespace XER::V8Runtime {
 
 std::string BuildExceptionReport(v8::Isolate* isolate,
 				 v8::Local<v8::Context> context,
@@ -14,4 +14,4 @@ std::string BuildExceptionReport(v8::Isolate* isolate,
 	return StackError::BuildV8Report(isolate, context, try_catch, phase, source_text);
 }
 
-}  // namespace Engine::V8Runtime
+}  // namespace XER::V8Runtime

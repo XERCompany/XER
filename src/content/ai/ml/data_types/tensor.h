@@ -5,7 +5,7 @@
 #include <memory>
 #include <cstdint>
 
-namespace Engine::MLData::Types {
+namespace XER::MLData::Types {
 
 enum class DataType : uint8_t {
     FLOAT32 = 0,
@@ -47,4 +47,4 @@ private:
     size_t memory_size_;
 };
 
-} // namespace Engine::MLData::Types
+} // namespace XER::MLData::Types

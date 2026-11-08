@@ -7,18 +7,18 @@
 #include "content/network/cache/network_cache_manager.h"
 #include "content/network/logging/network_logger.h"
 
-namespace XER::network::url {
+namespace XER::Network::Url {
 
 URLResponse SyncGet(const std::string& url,
                     const URLRequestContext& ctx,
                     std::string* error) {
-    logging::NetworkLogger::Instance().LogHttpRequest("GET", url, "XER");
+    Logging::NetworkLogger::Instance().LogHttpRequest("GET", url, "XER");
 
     // Check cache first
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
     auto cached = cache_mgr.GetCachedHttpResponse(url, error);
     if (cached) {
-        logging::NetworkLogger::Instance().LogCacheHit("http_response", url);
+        Logging::NetworkLogger::Instance().LogCacheHit("http_response", url);
         URLResponse resp;
         resp.status_code = cached->status_code;
         resp.body = cached->body;
@@ -26,7 +26,7 @@ URLResponse SyncGet(const std::string& url,
         return resp;
     }
 
-    logging::NetworkLogger::Instance().LogCacheMiss("http_response", url);
+    Logging::NetworkLogger::Instance().LogCacheMiss("http_response", url);
 
     URLRequest req;
     req.method = "GET";
@@ -38,11 +38,11 @@ URLResponse SyncGet(const std::string& url,
 
     // Cache response if successful
     if (resp.status_code >= 200 && resp.status_code < 300) {
-        cache::HttpResponseCacheEntry entry;
+        Cache::HttpResponseCacheEntry entry;
         entry.status_code = resp.status_code;
         entry.body = resp.body;
         // Convert headers back to HttpResponseHeaders format
-        http::HttpResponseHeaders hdr;
+        Http::HttpResponseHeaders hdr;
         for (const auto& [key, value] : resp.headers) {
             // TODO: Need to set headers properly via HttpResponseHeaders API
         }
@@ -50,7 +50,7 @@ URLResponse SyncGet(const std::string& url,
         cache_mgr.CacheHttpResponse(url, entry, error);
     }
 
-    logging::NetworkLogger::Instance().LogHttpResponse("GET", url, resp.status_code, 0, resp.body.size());
+    Logging::NetworkLogger::Instance().LogHttpResponse("GET", url, resp.status_code, 0, resp.body.size());
     return resp;
 }
 
@@ -59,7 +59,7 @@ URLResponse SyncPost(const std::string& url,
                      const std::string& content_type,
                      const URLRequestContext& ctx,
                      std::string* error) {
-    logging::NetworkLogger::Instance().LogHttpRequest("POST", url, "XER");
+    Logging::NetworkLogger::Instance().LogHttpRequest("POST", url, "XER");
 
     URLRequest req;
     req.method = "POST";
@@ -71,8 +71,8 @@ URLResponse SyncPost(const std::string& url,
     URLRequestJob job(ctx);
     job.Run(req, &resp, error ? error : &local_err);
 
-    logging::NetworkLogger::Instance().LogHttpResponse("POST", url, resp.status_code, 0, resp.body.size());
+    Logging::NetworkLogger::Instance().LogHttpResponse("POST", url, resp.status_code, 0, resp.body.size());
     return resp;
 }
 
-}  // namespace XER::network::url
+}  // namespace XER::Network::Url

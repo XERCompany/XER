@@ -1,7 +1,7 @@
 #include "trans_type_cast.h"
 #include "../../models_builder/layer_factory/layer_linear.h"
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 std::shared_ptr<Core::Model> TransTypeCast::Apply(
     std::shared_ptr<Core::Model> model, DType target_dtype) {
@@ -20,4 +20,4 @@ std::shared_ptr<Core::Model> TransTypeCast::Apply(
   return new_model;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

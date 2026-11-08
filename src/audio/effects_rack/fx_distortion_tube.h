@@ -5,7 +5,7 @@
 
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class DistortionTube {
 public:
@@ -24,4 +24,4 @@ private:
 	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

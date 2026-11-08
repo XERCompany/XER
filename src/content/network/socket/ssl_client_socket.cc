@@ -17,7 +17,7 @@
 #include <unistd.h>
 #endif
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
 SslClientSocket::SslClientSocket() {
 }
@@ -28,17 +28,17 @@ SslClientSocket::~SslClientSocket() {
 
 bool SslClientSocket::TcpConnect(const std::string& host, uint16_t port, std::string* error) {
     // Use platform abstraction for TCP connection
-    auto& platform = platform::SocketPlatform::GetInstance();
+    auto& platform = Platform::SocketPlatform::GetInstance();
 
     // Resolve address
-    std::vector<platform::AddressInfo> addresses;
+    std::vector<Platform::AddressInfo> addresses;
     if (!platform.ResolveAddress(host, port, &addresses, error)) {
         return false;
     }
 
     // Try each address
     for (const auto& addr : addresses) {
-        platform::SocketHandle socket;
+        Platform::SocketHandle socket;
         if (addr.is_ipv6) {
             socket = platform.CreateTcpSocket(true, error);
         } else {
@@ -77,14 +77,14 @@ void SslClientSocket::TcpDisconnect() {
 bool SslClientSocket::Connect(const std::string& host,
                                uint16_t port,
                                std::string* error) {
-    logging::NetworkLogger::Instance().LogConnectionAttempt(host, port);
+    Logging::NetworkLogger::Instance().LogConnectionAttempt(host, port);
 
     // Initialize SSL context if not already
-    auto& ssl_ctx = ssl::SslContext::Instance();
+    auto& ssl_ctx = Ssl::SslContext::Instance();
     if (!ssl_ctx.IsInitialized()) {
         std::string ca_path = ca_bundle_path_.empty() ? "" : ca_bundle_path_;
         if (!ssl_ctx.Initialize(ca_path, error)) {
-            logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
+            Logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
             return false;
         }
     }
@@ -96,7 +96,7 @@ bool SslClientSocket::Connect(const std::string& host,
 
     // TCP connection
     if (!TcpConnect(host, port, error)) {
-        logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
+        Logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
         return false;
     }
 
@@ -107,8 +107,8 @@ bool SslClientSocket::Connect(const std::string& host,
     SSL* raw_ssl = ssl_ctx.CreateSsl();
     if (raw_ssl == nullptr) {
         TcpDisconnect();
-        if (error) *error = ssl::GetLastSslError();
-        logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
+        if (error) *error = Ssl::GetLastSslError();
+        Logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
         return false;
     }
     ssl_.reset(raw_ssl);
@@ -124,7 +124,7 @@ bool SslClientSocket::Connect(const std::string& host,
     }
 
     if (!skip_verify_ && SSL_set1_host(ssl_.get(), host.c_str()) != 1) {
-        if (error) *error = ssl::GetLastSslError();
+        if (error) *error = Ssl::GetLastSslError();
         Disconnect();
         return false;
     }
@@ -135,11 +135,11 @@ bool SslClientSocket::Connect(const std::string& host,
     }
 
     // Perform SSL handshake
-    logging::NetworkLogger::Instance().LogSslHandshakeStart(host);
+    Logging::NetworkLogger::Instance().LogSslHandshakeStart(host);
     if (!DoHandshake(error)) {
         TcpDisconnect();
         ssl_.reset();
-        logging::NetworkLogger::Instance().LogSslHandshakeFailure(host, *error);
+        Logging::NetworkLogger::Instance().LogSslHandshakeFailure(host, *error);
         return false;
     }
 
@@ -154,8 +154,8 @@ bool SslClientSocket::Connect(const std::string& host,
     // Log success
     std::string cipher = GetCipherSuite();
     std::string protocol = GetProtocolVersion();
-    logging::NetworkLogger::Instance().LogSslHandshakeSuccess(host, cipher, protocol);
-    logging::NetworkLogger::Instance().LogConnectionSuccess(host, port, 0);
+    Logging::NetworkLogger::Instance().LogSslHandshakeSuccess(host, cipher, protocol);
+    Logging::NetworkLogger::Instance().LogConnectionSuccess(host, port, 0);
 
     return true;
 }
@@ -184,7 +184,7 @@ bool SslClientSocket::DoHandshake(std::string* error) {
                 const long verify_result = SSL_get_verify_result(ssl_.get());
                 *error = verify_result != X509_V_OK
                     ? X509_verify_cert_error_string(verify_result)
-                    : ssl::GetLastSslError();
+                    : Ssl::GetLastSslError();
             } else {
                 *error = "SSL_connect failed; SSL_get_error=" +
                         std::to_string(ssl_error);
@@ -202,7 +202,7 @@ bool SslClientSocket::DoHandshake(std::string* error) {
 
         long verify_result = SSL_get_verify_result(ssl_.get());
         if (verify_result != X509_V_OK) {
-            if (error) *error = ssl::GetSslErrorString(verify_result);
+            if (error) *error = Ssl::GetSslErrorString(verify_result);
             X509_free(cert);
             return false;
         }
@@ -223,7 +223,7 @@ int SslClientSocket::Read(uint8_t* buf, size_t len, std::string* error) {
     if (result <= 0) {
         int ssl_error = SSL_get_error(ssl_.get(), result);
         if (error) {
-            *error = ssl::GetSslErrorString(ssl_error);
+            *error = Ssl::GetSslErrorString(ssl_error);
         }
         return -1;
     }
@@ -241,7 +241,7 @@ int SslClientSocket::Write(const uint8_t* buf, size_t len, std::string* error) {
     if (result <= 0) {
         int ssl_error = SSL_get_error(ssl_.get(), result);
         if (error) {
-            *error = ssl::GetSslErrorString(ssl_error);
+            *error = Ssl::GetSslErrorString(ssl_error);
         }
         return -1;
     }
@@ -250,8 +250,8 @@ int SslClientSocket::Write(const uint8_t* buf, size_t len, std::string* error) {
 }
 
 void SslClientSocket::ReadAsync(uint8_t* buf, size_t len,
-                               transport::CompletionCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+                               Transport::CompletionCallback cb) {
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, buf, len, cb = std::move(cb)]() {
             std::string error;
             int result = Read(buf, len, &error);
@@ -260,9 +260,9 @@ void SslClientSocket::ReadAsync(uint8_t* buf, size_t len,
 }
 
 void SslClientSocket::WriteAsync(const uint8_t* buf, size_t len,
-                                transport::CompletionCallback cb) {
+                                Transport::CompletionCallback cb) {
     std::vector<uint8_t> data(buf, buf + len);
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, data = std::move(data), cb = std::move(cb)]() mutable {
             std::string error;
             int result = Write(data.data(), data.size(), &error);
@@ -317,7 +317,7 @@ bool SslClientSocket::LoadCachedSession() {
     }
 
     // Use SslSessionCache
-    auto& session_cache = ssl::SslSessionCache::Instance();
+    auto& session_cache = Ssl::SslSessionCache::Instance();
     SSL_SESSION* session = session_cache.GetSession(connected_host_);
 
     if (session) {
@@ -340,10 +340,10 @@ bool SslClientSocket::SaveSession() {
     }
 
     // Store in SslSessionCache
-    auto& session_cache = ssl::SslSessionCache::Instance();
+    auto& session_cache = Ssl::SslSessionCache::Instance();
     session_cache.StoreSession(connected_host_, session);
 
     return true;
 }
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

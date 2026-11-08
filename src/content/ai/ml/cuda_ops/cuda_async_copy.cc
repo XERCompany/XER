@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <stdexcept>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 cudaError_t CudaAsyncCopy::HostToDevice(const void* host_src,
                                          void* device_dst,
@@ -62,4 +62,4 @@ void CudaAsyncCopy::FreePinned(void* ptr) {
     }
 }
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

@@ -12,7 +12,7 @@
 
 #include "async_io/io_thread_pool.h"
 
-namespace XER::network::async {
+namespace XER::Network::Async {
 
 // Callback type for async operations
 // Parameters: (error_code, bytes_transferred)
@@ -74,4 +74,4 @@ public:
                         AsyncCallback callback);
 };
 
-} // namespace XER::network::async
+} // namespace XER::Network::Async

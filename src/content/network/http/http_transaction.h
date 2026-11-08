@@ -8,14 +8,14 @@
 #include <string>
 #include "content/network/url/url_request.h"
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 struct HttpTransactionResult {
     bool        ok = false;
     int         status_code = 0;
     std::string status_text;
     std::string error;
-    url::URLResponse response;
+    Url::URLResponse response;
 };
 
 using HttpTransactionCallback = std::function<void(HttpTransactionResult)>;
@@ -24,11 +24,11 @@ using HttpTransactionCallback = std::function<void(HttpTransactionResult)>;
 class HttpTransaction {
 public:
     // Synchronous execute.
-    HttpTransactionResult Execute(const url::URLRequest& request);
+    HttpTransactionResult Execute(const Url::URLRequest& request);
 
     // Asynchronous execute via IOThreadPool.
-    void ExecuteAsync(const url::URLRequest& request,
+    void ExecuteAsync(const Url::URLRequest& request,
                       HttpTransactionCallback callback);
 };
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

@@ -4,7 +4,7 @@
 #include <memory>
 #include <functional>
 
-namespace Engine::Content::Platform {
+namespace XER::Content::Platform {
 
 // Platform detection
 enum class PlatformType {
@@ -48,4 +48,4 @@ public:
 // Platform factory
 std::unique_ptr<IPlatform> CreatePlatform();
 
-}  // namespace Engine::Content::Platform
+}  // namespace XER::Content::Platform

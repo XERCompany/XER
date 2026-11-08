@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 void SdBaseScheduler::BuildSchedule(SdSchedulerType scheduler,
                                     uint32_t steps,
@@ -81,4 +81,4 @@ void SdBaseScheduler::ApplyStep(float* latent,
     }
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

@@ -10,10 +10,10 @@
 namespace XER::NodeGraph {
 namespace {
 
-using XER::Engine::SQL::Content::Value;
-using XER::Engine::SQL::Modern::Query;
-using XER::Engine::SQL::Storage::Row;
-using XER::Engine::SQL::Storage::SQLiteDatabase;
+using XER::SQL::Content::Value;
+using XER::SQL::Modern::Query;
+using XER::SQL::Storage::Row;
+using XER::SQL::Storage::SQLiteDatabase;
 
 Value VStr(const std::string& s) { return Value{s}; }
 Value VInt(std::int64_t v) { return Value{v}; }

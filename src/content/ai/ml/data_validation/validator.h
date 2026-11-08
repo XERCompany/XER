@@ -3,7 +3,7 @@
 #include "../data_types/dataset.h"
 #include <string>
 
-namespace Engine::MLData::Validation {
+namespace XER::MLData::Validation {
 
 struct ValidationResult {
     bool is_valid;
@@ -23,4 +23,4 @@ private:
     DataValidator() = default;
 };
 
-} // namespace Engine::MLData::Validation
+} // namespace XER::MLData::Validation

@@ -10,7 +10,7 @@
 #define XER_AI_HAS_FP16_HEADER 0
 #endif
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 std::vector<float> OnnxTensorConverter::ToFloatVector(const uint8_t* data, size_t bytes) {
 	if (data == nullptr || bytes < sizeof(float)) {
@@ -40,5 +40,5 @@ std::vector<float> OnnxTensorConverter::FloatToFp16Aware(const std::vector<float
 #endif
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

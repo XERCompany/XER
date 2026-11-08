@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 bool WeightSaver::Save(const std::string& filepath, const std::vector<WeightTensor>& tensors) const {
 	std::ofstream output(filepath, std::ios::binary | std::ios::trunc);
@@ -40,4 +40,4 @@ bool WeightSaver::Save(const std::string& filepath, const std::vector<WeightTens
 	return true;
 }
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

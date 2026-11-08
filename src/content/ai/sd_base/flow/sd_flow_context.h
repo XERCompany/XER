@@ -4,7 +4,7 @@
 
 #include <chrono>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 struct SdFlowContext {
     SdGenerationRequest request;
@@ -17,4 +17,4 @@ struct SdFlowContext {
     }
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

@@ -1,6 +1,6 @@
 #pragma once
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Patience-based early stopping
 class EarlyStopping {
@@ -21,4 +21,4 @@ class EarlyStopping {
   int   counter_{0};
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

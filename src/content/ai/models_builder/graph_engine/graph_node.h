@@ -5,7 +5,7 @@
 #include <variant>
 #include <vector>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 using AttrValue = std::variant<float, int64_t, std::string,
                                 std::vector<float>, std::vector<int64_t>>;
@@ -26,4 +26,4 @@ struct GraphNode {
   bool IsValid() const { return id >= 0 && !op_type.empty(); }
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

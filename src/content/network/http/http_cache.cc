@@ -9,7 +9,7 @@
 
 #include <chrono>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 HttpCache& HttpCache::Instance() {
     static HttpCache inst;
@@ -18,12 +18,12 @@ HttpCache& HttpCache::Instance() {
 
 bool HttpCache::Lookup(const std::string& key, CachedResponse* out) const {
     // Try NetworkCacheManager first
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
     std::string error;
     auto cached_entry = cache_mgr.GetCachedHttpResponse(key, &error);
 
     if (cached_entry) {
-        logging::NetworkLogger::Instance().LogCacheHit("http_response", key);
+        Logging::NetworkLogger::Instance().LogCacheHit("http_response", key);
 
         if (out) {
             out->status_code = cached_entry->status_code;
@@ -36,7 +36,7 @@ bool HttpCache::Lookup(const std::string& key, CachedResponse* out) const {
         return true;
     }
 
-    logging::NetworkLogger::Instance().LogCacheMiss("http_response", key);
+    Logging::NetworkLogger::Instance().LogCacheMiss("http_response", key);
 
     // Fallback to in-memory cache
     std::lock_guard<std::mutex> lk(mu_);
@@ -49,8 +49,8 @@ bool HttpCache::Lookup(const std::string& key, CachedResponse* out) const {
 
 void HttpCache::Store(const std::string& key, CachedResponse entry) {
     // Store in NetworkCacheManager
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
-    cache::HttpResponseCacheEntry cache_entry;
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
+    Cache::HttpResponseCacheEntry cache_entry;
     cache_entry.status_code = entry.status_code;
     for (const auto& kv : entry.headers) {
         cache_entry.headers.Set(kv.first, kv.second);
@@ -65,7 +65,7 @@ void HttpCache::Store(const std::string& key, CachedResponse entry) {
 
     std::string error;
     if (cache_mgr.CacheHttpResponse(key, cache_entry, &error)) {
-        logging::NetworkLogger::Instance().LogCacheStore("http_response", key, entry.body.size());
+        Logging::NetworkLogger::Instance().LogCacheStore("http_response", key, entry.body.size());
     }
 
     // Also store in in-memory cache as backup
@@ -75,9 +75,9 @@ void HttpCache::Store(const std::string& key, CachedResponse entry) {
 
 void HttpCache::Invalidate(const std::string& key) {
     // Invalidate in NetworkCacheManager
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
     cache_mgr.InvalidateHttpResponse(key);
-    logging::NetworkLogger::Instance().LogCacheInvalidate("http_response", key);
+    Logging::NetworkLogger::Instance().LogCacheInvalidate("http_response", key);
 
     // Invalidate in in-memory cache
     std::lock_guard<std::mutex> lk(mu_);
@@ -86,7 +86,7 @@ void HttpCache::Invalidate(const std::string& key) {
 
 void HttpCache::Clear() {
     // Clear NetworkCacheManager HTTP responses
-    auto& cache_mgr = cache::NetworkCacheManager::Instance();
+    auto& cache_mgr = Cache::NetworkCacheManager::Instance();
     cache_mgr.ClearHttpResponses();
 
     // Clear in-memory cache
@@ -94,4 +94,4 @@ void HttpCache::Clear() {
     store_.clear();
 }
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

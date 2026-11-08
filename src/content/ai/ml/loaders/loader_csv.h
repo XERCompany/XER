@@ -1,7 +1,7 @@
 #pragma once
 #include "loader_base.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// CSV file loader: each row is a sample, last column used as label if has_labels=true
 class LoaderCsv : public LoaderBase {
@@ -17,4 +17,4 @@ private:
     char delimiter_;
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

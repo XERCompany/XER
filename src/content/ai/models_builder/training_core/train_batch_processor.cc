@@ -1,6 +1,6 @@
 #include "train_batch_processor.h"
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 TrainBatchProcessor::TrainBatchProcessor(int batch_size)
     : batch_size_(batch_size) {}
@@ -21,4 +21,4 @@ void TrainBatchProcessor::Process(
   }
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

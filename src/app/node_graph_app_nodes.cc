@@ -143,7 +143,7 @@ NG::Value::Array MonoDownmix(const std::vector<NG::Value::Array>& chans) {
 // ── VST3 host registry ─────────────────────────────────────────────────────
 
 struct Vst3NodeState {
-    std::unique_ptr<XER::Engine::Audio::Plugin::Vst3ExternalHost> host;
+    std::unique_ptr<XER::Audio::Plugin::Vst3ExternalHost> host;
     std::string loaded_path;
     double sample_rate = 44100.0;
     uint32_t max_block = 8192;
@@ -163,7 +163,7 @@ Vst3NodeState& Vst3StateFor(NG::NodeId id) {
 // ── Built-in FX rack effects ───────────────────────────────────────────────
 
 struct FxNodeState {
-    std::unique_ptr<XER::Engine::Audio::FX::CustomEffectProcessor> proc;
+    std::unique_ptr<XER::Audio::FX::CustomEffectProcessor> proc;
     std::string signature;
 };
 
@@ -369,7 +369,7 @@ bool EvalLua(NG::EvalContext& c, const std::string& source_text,
 // re-initializes only when the parameter signature changes.
 void RegisterFxNode(const std::string& algo) {
     const auto proto =
-        XER::Engine::Audio::FX::CreateDefaultCustomEffectNode(algo);
+        XER::Audio::FX::CreateDefaultCustomEffectNode(algo);
     std::vector<NG::ParamSpec> params;
     params.push_back({"sampleRate", NG::Value(44100.0), {}});
     for (const auto& p : proto.parameters) {
@@ -392,7 +392,7 @@ void RegisterFxNode(const std::string& algo) {
                 c.Param("sampleRate").AsNumber(), 8000.0, 384000.0));
 
             // Rebuild the effect definition with inspector param overrides.
-            auto ce = XER::Engine::Audio::FX::CreateDefaultCustomEffectNode(algo);
+            auto ce = XER::Audio::FX::CreateDefaultCustomEffectNode(algo);
             std::string sig = algo + "|" + std::to_string(sr);
             for (auto& p : ce.parameters) {
                 if (c.node) {
@@ -406,7 +406,7 @@ void RegisterFxNode(const std::string& algo) {
             FxNodeState& st = FxStateFor(id);
             if (st.proc == nullptr) {
                 st.proc =
-                    std::make_unique<XER::Engine::Audio::FX::CustomEffectProcessor>();
+                    std::make_unique<XER::Audio::FX::CustomEffectProcessor>();
             }
             if (st.signature != sig) {
                 std::string err;
@@ -443,7 +443,7 @@ bool EvalVst3Plugin(NG::EvalContext& c) {
     const double sr = std::max(8000.0, c.Param("sampleRate").AsNumber());
     auto& st = Vst3StateFor(id);
     if (st.host == nullptr) {
-        st.host = std::make_unique<XER::Engine::Audio::Plugin::Vst3ExternalHost>();
+        st.host = std::make_unique<XER::Audio::Plugin::Vst3ExternalHost>();
     }
     if (st.loaded_path != path || !st.host->IsLoaded()) {
         std::string err;
@@ -484,7 +484,7 @@ bool EvalVst3Plugin(NG::EvalContext& c) {
 // ── Networking (src/content/network + libcurl + OpenSSL) ───────────────────
 
 std::vector<std::string> SplitLines(const std::string& s) {
-    auto lines = XER::Engine::Helper::String::SplitLines(s);
+    auto lines = XER::Helper::String::SplitLines(s);
     lines.erase(std::remove_if(lines.begin(), lines.end(),
         [](const std::string& line) { return line.empty(); }), lines.end());
     return lines;
@@ -498,12 +498,12 @@ struct HttpResult {
 };
 
 // Thin adapter over the shared transport in content/network — all curl
-// usage lives there (XER::network::http::SyncRequest).
+// usage lives there (XER::Network::Http::SyncRequest).
 HttpResult HttpRequest(const std::string& method, const std::string& url,
                        const std::string& body,
                        const std::vector<std::string>& headers,
                        long timeout_ms) {
-    const auto r = XER::network::http::SyncRequest(method, url, body, headers,
+    const auto r = XER::Network::Http::SyncRequest(method, url, body, headers,
                                               timeout_ms);
     HttpResult out;
     out.status = r.status;
@@ -579,7 +579,7 @@ void RegisterAppNodes() {
                 c.error = "audio.import: cannot read " + path;
                 return false;
             }
-            XER::Engine::Audio::CodecIO::WavPcmCodec codec;
+            XER::Audio::CodecIO::WavPcmCodec codec;
             std::vector<float> pcm;
             int sr = 0, ch = 0;
             if (!codec.Decode16(bytes.data(), bytes.size(), pcm, &sr, &ch) || pcm.empty()) {
@@ -622,7 +622,7 @@ void RegisterAppNodes() {
             const int sr = static_cast<int>(std::clamp(
                 c.Param("sampleRate").AsNumber(), 1000.0, 768000.0));
             std::vector<float> pcm(sig.begin(), sig.end());
-            XER::Engine::Audio::CodecIO::WavPcmCodec codec;
+            XER::Audio::CodecIO::WavPcmCodec codec;
             std::vector<std::uint8_t> wav;
             if (!codec.Encode16(pcm.data(), pcm.size(), wav, sr, 1)) {
                 c.error = "audio.export: encode failed";
@@ -660,7 +660,7 @@ void RegisterAppNodes() {
             }
             const int sr = static_cast<int>(std::clamp(
                 c.Param("sampleRate").AsNumber(), 1000.0, 768000.0));
-            XER::Engine::Audio::CodecIO::WavPcmCodec codec;
+            XER::Audio::CodecIO::WavPcmCodec codec;
             std::vector<std::uint8_t> wav;
             if (!codec.Encode16(pcm.data(), n, wav, sr, 2)) {
                 c.error = "audio.export_stereo: encode failed";
@@ -842,11 +842,11 @@ void RegisterAppNodes() {
                     res->finished = true;
                     return;
                 }
-                std::unique_ptr<XER::network::transport::TransportClientSocket> sock;
+                std::unique_ptr<XER::Network::Transport::TransportClientSocket> sock;
                 if (tls) {
-                    sock = std::make_unique<XER::network::socket::SslClientSocket>();
+                    sock = std::make_unique<XER::Network::Socket::SslClientSocket>();
                 } else {
-                    sock = std::make_unique<XER::network::socket::TcpClientSocket>();
+                    sock = std::make_unique<XER::Network::Socket::TcpClientSocket>();
                 }
                 std::string err;
                 const std::string hostport =
@@ -858,13 +858,13 @@ void RegisterAppNodes() {
                 }
                 const std::string origin =
                     std::string(tls ? "https://" : "http://") + hostport;
-                if (!XER::network::websocket::WebSocketHandshakeStream::DoHandshake(
+                if (!XER::Network::WebSocket::WebSocketHandshakeStream::DoHandshake(
                         sock.get(), hostport, path, origin, &err)) {
                     res->error = "handshake: " + err;
                     res->finished = true;
                     return;
                 }
-                XER::network::websocket::WebSocketStream ws(std::move(sock));
+                XER::Network::WebSocket::WebSocketStream ws(std::move(sock));
                 if (!ws.SendText(message, &err)) {
                     res->error = "send: " + err;
                 } else {
@@ -1088,7 +1088,7 @@ void RegisterAppNodes() {
     // ── Built-in FX rack effects as graph nodes ──────────────────────────
     // One fx.<algorithm> node type per built-in effect; "clap_plugin" is
     // covered by plugin.vst3 / plugin.clap paths instead.
-    for (const auto& algo : XER::Engine::Audio::FX::ListCustomEffectAlgorithms()) {
+    for (const auto& algo : XER::Audio::FX::ListCustomEffectAlgorithms()) {
         if (algo == "clap_plugin") continue;
         RegisterFxNode(algo);
     }

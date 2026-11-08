@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Encode string or integer class labels to integer indices [0, n_classes)
 class PreprocessLabelEncoder {
@@ -25,4 +25,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

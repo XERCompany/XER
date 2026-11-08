@@ -3,7 +3,7 @@
 #include <cmath>
 #include <random>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugHueShift::AugHueShift(float max_shift) : max_shift_(max_shift) {}
 
@@ -56,4 +56,4 @@ bool AugHueShift::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

@@ -1,6 +1,6 @@
 ﻿#include "cache.h"
 
-namespace Engine::MLData::Caching {
+namespace XER::MLData::Caching {
 
 DataCache& DataCache::GetInstance() {
     static DataCache instance;
@@ -30,4 +30,4 @@ void DataCache::RemoveEntry(const std::string& key) {
     cache_.erase(key);
 }
 
-} // namespace Engine::MLData::Caching
+} // namespace XER::MLData::Caching

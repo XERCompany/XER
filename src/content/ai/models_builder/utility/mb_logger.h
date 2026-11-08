@@ -7,7 +7,7 @@
 #include <string_view>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 enum class ModelBuilderLogLevel : uint8_t {
 	Debug = 0,
@@ -50,4 +50,4 @@ private:
 	bool console_output_enabled_;
 };
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility

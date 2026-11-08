@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 std::vector<float> FeatSelection::SelectTopK(const std::vector<float>& X,
                                                size_t n_samples, size_t n_features,
@@ -41,4 +41,4 @@ std::vector<float> FeatSelection::FilterByVariance(const std::vector<float>& X,
     return out;
 }
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

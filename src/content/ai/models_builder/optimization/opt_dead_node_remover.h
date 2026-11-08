@@ -2,7 +2,7 @@
 
 #include "../graph_engine/graph_base.h"
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 /// @brief Removes dead/unreachable nodes from the computation graph
 class OptDeadNodeRemover {
@@ -10,4 +10,4 @@ class OptDeadNodeRemover {
   static void Apply(GraphEngine::GraphBase& graph);
 };
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

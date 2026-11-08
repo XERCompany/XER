@@ -8,7 +8,7 @@
 #include <string>
  
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 using Complex = std::complex<float>;
 
@@ -41,7 +41,7 @@ private:
     std::vector<float> magnitude_spectrum_;
     std::vector<float> phase_spectrum_;
     std::vector<float> window_;
-    XER::Engine::Audio::DSP::FFTEngine fft_engine_;
+    XER::Audio::DSP::FFTEngine fft_engine_;
     
     float total_power_;
     float rms_energy_;
@@ -50,4 +50,4 @@ private:
     void ComputeMagnitudePhase();
 };
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

@@ -8,7 +8,7 @@
 #include <immintrin.h>
 #endif
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 std::string ConvolutionEngine::GetMemoryStats() const {
 	std::string stats;
@@ -135,4 +135,4 @@ std::future<bool> ConvolutionEngine::ProcessBlockAsync(const float* input, size_
 	});
 }
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

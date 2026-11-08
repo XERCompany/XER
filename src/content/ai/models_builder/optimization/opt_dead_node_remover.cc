@@ -2,10 +2,10 @@
 
 #include "../graph_engine/graph_optimizer.h"
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 void OptDeadNodeRemover::Apply(GraphEngine::GraphBase& graph) {
   GraphEngine::GraphOptimizer::PruneDeadNodes(graph);
 }
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

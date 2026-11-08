@@ -1,7 +1,7 @@
 #include "tensor_permute.h"
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 Tensor TensorPermute(const Tensor& t, const std::vector<int>& axes) {
     if (t.NumDimensions() == 2 && axes.size() == 2 &&
@@ -16,4 +16,4 @@ Tensor TensorPermute(const Tensor& t, const std::vector<int>& axes) {
     throw std::invalid_argument("TensorPermute: unsupported axis permutation");
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

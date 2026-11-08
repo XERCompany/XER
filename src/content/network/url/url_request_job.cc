@@ -10,7 +10,7 @@
 #include "content/network/http/http_request_headers.h"
 #include "content/network/http/http_response_headers.h"
 
-namespace XER::network::url {
+namespace XER::Network::Url {
 
 URLRequestJob::URLRequestJob(const URLRequestContext& context)
     : ctx_(context) {}
@@ -22,7 +22,7 @@ bool URLRequestJob::ParseURL(const std::string& url,
                               std::string* path) const {
     const auto sep = url.find("://");
     if (sep == std::string::npos) return false;
-    *scheme = XER::network::CanonicalizeScheme(url.substr(0, sep));
+    *scheme = XER::Network::CanonicalizeScheme(url.substr(0, sep));
     std::string rest = url.substr(sep + 3);
     const auto slash = rest.find('/');
     std::string host_port;
@@ -33,9 +33,9 @@ bool URLRequestJob::ParseURL(const std::string& url,
         *path = rest.substr(slash);
     }
     std::string h; uint16_t p = 0;
-    XER::network::SplitHostPort(host_port, &h, &p);
+    XER::Network::SplitHostPort(host_port, &h, &p);
     *host = h;
-    *port = p ? p : XER::network::DefaultPortForScheme(*scheme);
+    *port = p ? p : XER::Network::DefaultPortForScheme(*scheme);
     return true;
 }
 
@@ -49,12 +49,12 @@ bool URLRequestJob::Run(const URLRequest& request,
         return false;
     }
 
-    XER::network::socket::NetworkSelector selector(ctx_.proxy_config);
+    XER::Network::Socket::NetworkSelector selector(ctx_.proxy_config);
     auto sock = selector.CreateSocket(scheme, host, port, error);
     if (!sock || !sock->Connect(host, port, error)) return false;
 
     // Build HTTP request
-    http::HttpRequestHeaders hdrs;
+    Http::HttpRequestHeaders hdrs;
     hdrs.Set("Host", host);
     hdrs.Set("User-Agent", ctx_.user_agent);
     hdrs.Set("Connection", "close");
@@ -89,7 +89,7 @@ bool URLRequestJob::Run(const URLRequest& request,
         return false;
     }
     const std::string header_block = raw_str.substr(0, header_end);
-    http::HttpResponseHeaders resp_hdrs;
+    Http::HttpResponseHeaders resp_hdrs;
     resp_hdrs.Parse(header_block, &response->status_code, &response->status_text);
     for (const auto& [k, v] : resp_hdrs.All()) response->headers[k] = v;
     response->body.assign(raw.begin() + static_cast<ptrdiff_t>(header_end + 4),
@@ -97,4 +97,4 @@ bool URLRequestJob::Run(const URLRequest& request,
     return true;
 }
 
-}  // namespace XER::network::url
+}  // namespace XER::Network::Url

@@ -6,14 +6,14 @@
 #include <utility>
 #include <vector>
 
-namespace XER::Engine::SQL::Storage {
+namespace XER::SQL::Storage {
 class SQLiteDatabase;
 }
 
 namespace XER::NodeGraph {
 
 // SQLite-backed project storage for node graphs (projects -> named graphs,
-// plus reusable node presets). Built on src/sql (XER::Engine::SQL::Storage).
+// plus reusable node presets). Built on src/sql (XER::SQL::Storage).
 // The database file path is supplied by the owner — typically inside the
 // cache root, e.g. CacheManager::Persistent().root() / "node_graph" /
 // "projects.db".
@@ -91,7 +91,7 @@ private:
     static double NowSeconds();
 
     std::string db_path_;
-    std::unique_ptr<XER::Engine::SQL::Storage::SQLiteDatabase> db_;
+    std::unique_ptr<XER::SQL::Storage::SQLiteDatabase> db_;
 };
 
 }  // namespace XER::NodeGraph

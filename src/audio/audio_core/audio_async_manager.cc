@@ -6,7 +6,7 @@
 
 #include "async_io/io_thread_pool.h"
 
-namespace XER::Engine {
+namespace XER {
 namespace Audio {
 namespace Core {
 
@@ -116,4 +116,4 @@ size_t AudioAsyncManager::GetPendingOperationCount() const {
 
 }  // namespace Core
 }  // namespace Audio
-}  // namespace XER::Engine
+}  // namespace XER

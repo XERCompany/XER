@@ -1,6 +1,6 @@
 #include "wrapper/cuda/cuda_engine_bridge.h"
 
-namespace XER::engine::bridge::cuda {
+namespace XER::Bridge::Cuda {
 
 bool IsAvailable() {
 #if ENGINE_HAS_CUDA_BRIDGE
@@ -14,4 +14,4 @@ std::string Summary() {
     return IsAvailable() ? "CUDA bridge enabled" : "CUDA bridge unavailable";
 }
 
-}  // namespace XER::engine::bridge::cuda
+}  // namespace XER::Bridge::Cuda

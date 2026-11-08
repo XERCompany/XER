@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 /// Thrown when a model byte stream is structurally corrupted (truncated magic,
 /// invalid header checksum, broken length prefix, etc.)
@@ -16,4 +16,4 @@ public:
         : std::runtime_error("[CorruptedStream] " + source + ": " + detail) {}
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader

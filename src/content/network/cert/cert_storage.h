@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 // Persistent store for trusted CA certificates (PEM bundles).
 class CertStorage {
@@ -30,4 +30,4 @@ private:
     std::vector<std::string> certs_;
 };
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

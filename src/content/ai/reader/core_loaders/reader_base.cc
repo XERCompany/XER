@@ -2,7 +2,7 @@
 
 #include <fstream>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 bool ReaderBase::ReadFile(const std::string& filepath, std::vector<uint8_t>& out_bytes) {
 	out_bytes.clear();
@@ -28,5 +28,5 @@ bool ReaderBase::ReadFile(const std::string& filepath, std::vector<uint8_t>& out
 	return file.read(reinterpret_cast<char*>(out_bytes.data()), static_cast<std::streamsize>(size)).good();
 }
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

@@ -20,7 +20,7 @@
  * Fallback (no liblc3): raw LC3 bytes are stored verbatim in the output
  * buffer so the caller can pass them on to an external decoder.
  *
- * Output feeds into Engine::Audio::Core::AudioFIFOQueue and the project
+ * Output feeds into XER::Audio::Core::AudioFIFOQueue and the project
  * AudioEngine pipeline (audio_engine.h, audio_buffer_manager.h).
  */
 #pragma once
@@ -31,7 +31,7 @@
 #include <vector>
 #include "content/device/cast/aura/aura_cast_device.h"
 
-namespace Engine::Audio::Core { class AudioBuffer; struct AudioFrameInfo; }
+namespace XER::Audio::Core { class AudioBuffer; struct AudioFrameInfo; }
 
 namespace device::cast::aura {
 

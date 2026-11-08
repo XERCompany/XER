@@ -3,7 +3,7 @@
 #include "../vino_stack/vino_bin_reader.h"
 #include "../vino_stack/vino_xml_reader.h"
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 namespace {
 
@@ -47,4 +47,4 @@ bool OpenVinoIrReader::CanLoad(const std::string& filepath) const {
   return filepath.size() >= 4 && filepath.substr(filepath.size() - 4) == ".xml";
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

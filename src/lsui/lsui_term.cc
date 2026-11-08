@@ -33,9 +33,9 @@ extern "C" {
 namespace XER::Lsui {
 namespace {
 
-using XER::flux::terminal::OutputStream;
-using XER::flux::terminal::TerminalColor;
-using XER::flux::terminal::TerminalStyle;
+using XER::Flux::Terminal::OutputStream;
+using XER::Flux::Terminal::TerminalColor;
+using XER::Flux::Terminal::TerminalStyle;
 
 std::string_view ArgStr(lua_State* L, int i) {
     size_t n = 0;
@@ -44,12 +44,12 @@ std::string_view ArgStr(lua_State* L, int i) {
 }
 
 int TermWrite(lua_State* L) {
-    XER::flux::terminal::Write(OutputStream::kStdout, ArgStr(L, 1));
+    XER::Flux::Terminal::Write(OutputStream::kStdout, ArgStr(L, 1));
     return 0;
 }
 
 int TermWriteErr(lua_State* L) {
-    XER::flux::terminal::Write(OutputStream::kStderr, ArgStr(L, 1));
+    XER::Flux::Terminal::Write(OutputStream::kStderr, ArgStr(L, 1));
     return 0;
 }
 
@@ -65,30 +65,30 @@ int TermPrint(lua_State* L) {
         lua_pop(L, 1);
     }
     out += '\n';
-    XER::flux::terminal::WriteLine(OutputStream::kStdout, out);
+    XER::Flux::Terminal::WriteLine(OutputStream::kStdout, out);
     return 0;
 }
 
 int TermClear(lua_State*) {
-    XER::flux::terminal::ClearSnapshot();
+    XER::Flux::Terminal::ClearSnapshot();
     return 0;
 }
 
 int TermSnapshot(lua_State* L) {
-    const std::string s = XER::flux::terminal::Snapshot(OutputStream::kStdout);
+    const std::string s = XER::Flux::Terminal::Snapshot(OutputStream::kStdout);
     lua_pushlstring(L, s.data(), s.size());
     return 1;
 }
 
 int TermText(lua_State* L) {
     const std::string s =
-        XER::flux::terminal::SnapshotPlainText(OutputStream::kStdout);
+        XER::Flux::Terminal::SnapshotPlainText(OutputStream::kStdout);
     lua_pushlstring(L, s.data(), s.size());
     return 1;
 }
 
 int TermSize(lua_State* L) {
-    const auto sz = XER::flux::terminal::DetectTerminalSize();
+    const auto sz = XER::Flux::Terminal::DetectTerminalSize();
     lua_createtable(L, 0, 3);
     lua_pushinteger(L, static_cast<lua_Integer>(sz.columns));
     lua_setfield(L, -2, "columns");
@@ -99,8 +99,8 @@ int TermSize(lua_State* L) {
     return 1;
 }
 
-XER::flux::terminal::TerminalWindow& TermWindow() {
-    static XER::flux::terminal::TerminalWindow w(XER::flux::terminal::DetectTerminalSize());
+XER::Flux::Terminal::TerminalWindow& TermWindow() {
+    static XER::Flux::Terminal::TerminalWindow w(XER::Flux::Terminal::DetectTerminalSize());
     return w;
 }
 
@@ -170,8 +170,8 @@ int TermFg(lua_State* L) {
     if (!ParseColor(L, 1, c)) {
         return luaL_error(L, "term.fg: unknown color");
     }
-    const std::string s = XER::flux::terminal::ForegroundSequence(c);
-    XER::flux::terminal::Write(OutputStream::kStdout, s);
+    const std::string s = XER::Flux::Terminal::ForegroundSequence(c);
+    XER::Flux::Terminal::Write(OutputStream::kStdout, s);
     return 0;
 }
 
@@ -180,14 +180,14 @@ int TermBg(lua_State* L) {
     if (!ParseColor(L, 1, c)) {
         return luaL_error(L, "term.bg: unknown color");
     }
-    const std::string s = XER::flux::terminal::BackgroundSequence(c);
-    XER::flux::terminal::Write(OutputStream::kStdout, s);
+    const std::string s = XER::Flux::Terminal::BackgroundSequence(c);
+    XER::Flux::Terminal::Write(OutputStream::kStdout, s);
     return 0;
 }
 
 int TermReset(lua_State*) {
-    XER::flux::terminal::Write(OutputStream::kStdout,
-                         XER::flux::terminal::ResetStyleSequence());
+    XER::Flux::Terminal::Write(OutputStream::kStdout,
+                         XER::Flux::Terminal::ResetStyleSequence());
     return 0;
 }
 
@@ -218,8 +218,8 @@ int TermStyle(lua_State* L) {
                                       ? std::string_view{}
                                       : ArgStr(L, -1);
     lua_pop(L, 1);
-    std::string out = XER::flux::terminal::ApplyStyle(text, st);
-    XER::flux::terminal::Write(OutputStream::kStdout, out);
+    std::string out = XER::Flux::Terminal::ApplyStyle(text, st);
+    XER::Flux::Terminal::Write(OutputStream::kStdout, out);
     return 0;
 }
 

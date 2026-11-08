@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 enum class InputEventKind {
 	kUnknown,
@@ -37,4 +37,4 @@ InputEvent ParseInputSequence(std::string_view sequence);
 std::vector<InputEvent> ParseInputBuffer(std::string_view buffer);
 bool IsCommandSubmission(const InputEvent& event);
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

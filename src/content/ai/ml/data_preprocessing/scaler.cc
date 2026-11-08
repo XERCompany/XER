@@ -5,7 +5,7 @@
 #include <cmath>
 #include <vector>
 
-namespace Engine::MLData::Preprocessing {
+namespace XER::MLData::Preprocessing {
 
 Scaler::Scaler(ScalingMode mode) : mode_(mode) {
 }
@@ -67,4 +67,4 @@ std::shared_ptr<Types::Tensor> Scaler::Process(const Types::Tensor& input) {
     return result;
 }
 
-} // namespace Engine::MLData::Preprocessing
+} // namespace XER::MLData::Preprocessing

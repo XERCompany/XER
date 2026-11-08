@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 class OnnxTensorConverter {
  public:
@@ -12,5 +12,5 @@ class OnnxTensorConverter {
 	static std::vector<float> FloatToFp16Aware(const std::vector<float>& input);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

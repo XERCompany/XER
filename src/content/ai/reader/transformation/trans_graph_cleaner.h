@@ -3,7 +3,7 @@
 #include "../../models_builder/model_core/model.h"
 #include <memory>
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 /// @brief Removes unreachable/dead layers from the model graph
 class TransGraphCleaner {
@@ -12,4 +12,4 @@ class TransGraphCleaner {
   std::shared_ptr<Core::Model> Apply(std::shared_ptr<Core::Model> model);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

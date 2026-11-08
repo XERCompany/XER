@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace engine::javascript::common {
+namespace XER::JavaScript::Common {
 
 class TextNormalizer {
 public:
@@ -10,4 +10,4 @@ public:
     static std::string NormalizeText(const std::string& value);
 };
 
-}  // namespace engine::javascript::common
+}  // namespace XER::JavaScript::Common

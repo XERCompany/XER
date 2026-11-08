@@ -5,7 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class DatasetSampler {
  public:
@@ -13,5 +13,5 @@ class DatasetSampler {
 	static DatasetBase SampleCount(const DatasetBase& dataset, size_t count, uint64_t seed);
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

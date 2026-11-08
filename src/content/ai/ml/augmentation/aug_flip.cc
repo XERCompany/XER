@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <random>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugFlip::AugFlip(Direction dir, float prob) : dir_(dir), prob_(prob) {}
 
@@ -35,4 +35,4 @@ bool AugFlip::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

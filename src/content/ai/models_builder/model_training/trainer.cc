@@ -35,7 +35,7 @@
 #define XER_AI_HAS_OPENCV_HEADER 0
 #endif
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 namespace {
 
@@ -228,4 +228,4 @@ bool Trainer::Train(const std::vector<float>& x_train, const std::vector<float>&
     return true;
 }
 
-} // namespace Engine::ModelsBuilder::Training
+} // namespace XER::ModelsBuilder::Training

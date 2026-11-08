@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief 3D Convolution layer (NCDHW)
 class LayerConv3D : public Core::Layer {
@@ -27,4 +27,4 @@ class LayerConv3D : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeConv3D(const std::string& name,
                                          LayerConv3D::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

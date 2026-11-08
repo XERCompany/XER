@@ -1,7 +1,7 @@
 #pragma once
 #include "preprocess_base.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Z-score normalisation: same as Standardizer (alias)
 class PreprocessZscore : public PreprocessBase {
@@ -16,4 +16,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

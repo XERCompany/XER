@@ -8,7 +8,7 @@
 #include <absl/strings/string_view.h>
 #include <range/v3/view.hpp>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 void LoaderStream::Stream(const std::string& path) {
     std::ifstream f(path);
@@ -26,4 +26,4 @@ void LoaderStream::Stream(const std::string& path) {
     }
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

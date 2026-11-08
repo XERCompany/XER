@@ -11,7 +11,7 @@
 #  define HAS_EIGEN 0
 #endif
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 float FeatMathOps::DotProduct(const std::vector<float>& a, const std::vector<float>& b) {
     float s = 0.0f;
@@ -100,4 +100,4 @@ std::vector<float> FeatMathOps::CovarianceMatrix(const std::vector<float>& X,
     return cov;
 }
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

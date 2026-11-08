@@ -8,7 +8,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "async_io/sync_primitives/mutex_wrapper.h"
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 class LoudnessMeterLUFS {
 public:
@@ -40,4 +40,4 @@ private:
 	static double MeanSquareToLUFS(double mean_square);
 };
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief Serializes/deserializes a GraphBase to/from FlatBuffers binary
 class GraphSerializer {
@@ -18,4 +18,4 @@ class GraphSerializer {
                            GraphBase& out_graph);
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

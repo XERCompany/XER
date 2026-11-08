@@ -5,7 +5,7 @@
 
 #include "flux/terminal/terminal_colors.h"
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 struct TerminalStyle {
 	TerminalColor foreground = TerminalColor::kDefault;
@@ -58,4 +58,4 @@ inline std::string ApplyStyle(std::string_view text, const TerminalStyle& style)
 	return out;
 }
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

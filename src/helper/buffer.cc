@@ -17,7 +17,7 @@
 #include <unicode/normalizer2.h>
 #include <unicode/unistr.h> 
 
-namespace XER::Engine::Helper {
+namespace XER::Helper {
 Buffer::Bytes Buffer::FromString(std::string_view text, bool normalize_utf8) {
 	Bytes out;
 	AppendString(&out, text, normalize_utf8);
@@ -228,4 +228,4 @@ bool Buffer::Swap64(MutableSpan bytes, std::string* error_out) {
 	return SwapChunks(bytes, 8u, error_out);
 }
 
-}  // namespace XER::Engine::Helper
+}  // namespace XER::Helper

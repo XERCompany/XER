@@ -32,7 +32,7 @@
 #define XER_AI_HAS_CUDA_CUDNN_HEADERS 0
 #endif
 
-namespace Engine::ModelsBuilder::Inference {
+namespace XER::ModelsBuilder::Inference {
 
 namespace {
 
@@ -84,9 +84,9 @@ std::vector<float> RunDenseLayer(const Core::DenseLayer& layer, const std::vecto
 
 #if XER_AI_HAS_CUDA_CUDNN_HEADERS
     if (layer.GetActivation() == Core::ActivationType::ReLU && !output.empty()) {
-        if (::Engine::ML::CudaOps::CudaTensorKernel::Initialize() == cudaSuccess) {
-            ::Engine::ML::CudaOps::CudaTensorKernel::ReLUForward(output.data(), output.data(), output.size());
-            ::Engine::ML::CudaOps::CudaTensorKernel::Cleanup();
+        if (::XER::ML::CudaOps::CudaTensorKernel::Initialize() == cudaSuccess) {
+            ::XER::ML::CudaOps::CudaTensorKernel::ReLUForward(output.data(), output.data(), output.size());
+            ::XER::ML::CudaOps::CudaTensorKernel::Cleanup();
         }
     }
 #endif
@@ -156,4 +156,4 @@ std::vector<std::vector<float>> Predictor::PredictBatch(const std::vector<std::v
     return outputs;
 }
 
-} // namespace Engine::ModelsBuilder::Inference
+} // namespace XER::ModelsBuilder::Inference

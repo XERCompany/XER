@@ -5,7 +5,7 @@
 #include <vector>
 #include <functional>
 
-namespace Engine::Content::Platform::WinAPI::Network {
+namespace XER::Content::Platform::WinAPI::Network {
 
 // Network interface information
 struct NetworkInterface {
@@ -95,4 +95,4 @@ public:
     static bool GetUDPStatistics(int* datagramsReceived, int* datagramsSent);
 };
 
-}  // namespace Engine::Content::Platform::WinAPI::Network
+}  // namespace XER::Content::Platform::WinAPI::Network

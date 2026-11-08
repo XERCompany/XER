@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 void OptPruningStrategy::Prune(Eigen::MatrixXf& weights, float sparsity) {
   // Collect magnitudes, find threshold via percentile
@@ -28,4 +28,4 @@ float OptPruningStrategy::Sparsity(const Eigen::MatrixXf& weights) {
   return zeros / static_cast<float>(weights.size());
 }
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

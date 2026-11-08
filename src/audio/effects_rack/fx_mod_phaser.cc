@@ -4,7 +4,7 @@
 #include <cmath>
 #include <future>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 std::string ModPhaser::GetMemoryStats() const {
 	std::string stats;
@@ -146,4 +146,4 @@ std::future<bool> ModPhaser::ProcessBlockAsync(const float* input, size_t frame_
 	});
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

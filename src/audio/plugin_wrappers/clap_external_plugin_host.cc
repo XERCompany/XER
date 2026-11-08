@@ -11,7 +11,7 @@
 #include <dlfcn.h>
 #endif
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 namespace {
 
@@ -444,4 +444,4 @@ bool ClapExternalPluginHost::OutputEventsTryPush(const ClapAbi::clap_output_even
 	return true;
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

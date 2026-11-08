@@ -3,7 +3,7 @@
 #include <string>
 #include <string_view>
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 struct DiagnosticData {
 	std::string level;
@@ -19,4 +19,4 @@ DiagnosticData MakeDiagnosticData(std::string_view level,
 				 std::string_view component,
 				 std::string_view message);
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

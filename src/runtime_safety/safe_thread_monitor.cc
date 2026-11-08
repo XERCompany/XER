@@ -12,7 +12,7 @@
 #  include <sched.h>
 #endif
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 
 ThreadMonitorSnapshot CaptureThreadMonitorSnapshot(const EngineParams& params,
 						   std::size_t resolved_async_workers,
@@ -120,4 +120,4 @@ bool ApplyCpuAffinityString(const std::string& affinity,
 	return ApplyCpuAffinity(cpus, error_out);
 }
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

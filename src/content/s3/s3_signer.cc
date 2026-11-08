@@ -32,11 +32,11 @@ std::string HmacSha256Raw(std::string_view key, std::string_view data) {
 }
 
 std::string ToLower(std::string s) {
-    return XER::Engine::Helper::String::ToLowerAscii(s);
+    return XER::Helper::String::ToLowerAscii(s);
 }
 
 std::string Trim(std::string_view s) {
-    return XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(s);
+    return XER::Helper::String::TrimAsciiWhitespaceCopy(s);
 }
 
 } // namespace

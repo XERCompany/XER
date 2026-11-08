@@ -10,7 +10,7 @@
 namespace flux::core { class Logger; }
 namespace IO::AsyncIO { class IOCacheManager; }
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Abstract base for all preprocessors (operates on float vectors)
 class PreprocessBase {
@@ -47,4 +47,4 @@ protected:
     std::uint64_t cache_ttl_seconds_ = 600;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

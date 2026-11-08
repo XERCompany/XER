@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 enum class TerminalColor {
 	kDefault = -1,
@@ -48,4 +48,4 @@ inline std::string ResetColorSequence() {
 	return "\x1b[39;49m";
 }
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

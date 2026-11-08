@@ -3,7 +3,7 @@
 #include <functional>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 /// @brief Assembles mini-batches from a flat data vector
 class TrainBatchProcessor {
@@ -20,4 +20,4 @@ class TrainBatchProcessor {
   int batch_size_;
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

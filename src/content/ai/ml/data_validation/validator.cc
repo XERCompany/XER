@@ -1,6 +1,6 @@
 ﻿#include "validator.h"
 
-namespace Engine::MLData::Validation {
+namespace XER::MLData::Validation {
 
 DataValidator& DataValidator::GetInstance() {
     static DataValidator instance;
@@ -60,4 +60,4 @@ ValidationResult DataValidator::ValidateTensor(const Types::Tensor& tensor) {
     return {true, "", 1.0f};
 }
 
-} // namespace Engine::MLData::Validation
+} // namespace XER::MLData::Validation

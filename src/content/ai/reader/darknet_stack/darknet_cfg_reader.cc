@@ -4,7 +4,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Reader::Darknet {
+namespace XER::ModelsBuilder::Reader::Darknet {
 
 // --- CfgSection helpers ---
 
@@ -79,4 +79,4 @@ const CfgSection* DarknetCfgReader::NetSection() const {
     return nullptr;
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Darknet
+}  // namespace XER::ModelsBuilder::Reader::Darknet

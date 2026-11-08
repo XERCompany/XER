@@ -2,7 +2,7 @@
 
 #include "preprocessor.h"
 
-namespace Engine::MLData::Preprocessing {
+namespace XER::MLData::Preprocessing {
 
 class Normalizer : public Preprocessor {
 public:
@@ -19,4 +19,4 @@ private:
     float stddev_;
 };
 
-} // namespace Engine::MLData::Preprocessing
+} // namespace XER::MLData::Preprocessing

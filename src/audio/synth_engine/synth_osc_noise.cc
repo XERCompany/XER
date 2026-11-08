@@ -1,6 +1,6 @@
 #include "synth_osc_noise.h"
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 void SynthOscNoise::SetSeed(unsigned int seed) {
     state_ = seed == 0 ? 0x12345678u : seed;
@@ -12,4 +12,4 @@ float SynthOscNoise::Process() {
     return normalized;
 }
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

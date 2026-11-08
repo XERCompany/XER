@@ -5,7 +5,7 @@
 
 #include <string>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdXlBranch {
 public:
@@ -16,4 +16,4 @@ public:
     float RefinerGain(SdBackendKind backend, bool model_loaded) const;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

@@ -8,7 +8,7 @@
 namespace flux::core { class Logger; }
 namespace IO::AsyncIO { class IOCacheManager; }
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// Aggregate metric report (accuracy, precision, recall, F1)
 struct ValidationMetrics {
@@ -37,4 +37,4 @@ struct ValMetrics {
                                       int positive_class = 1);
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

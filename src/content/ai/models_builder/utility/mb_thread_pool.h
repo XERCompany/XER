@@ -6,7 +6,7 @@
 #include <functional>
 #include <mutex>
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 class ModelThreadPool {
 public:
@@ -26,5 +26,5 @@ private:
 	std::atomic<size_t> pending_tasks_{0};
 };
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility
 

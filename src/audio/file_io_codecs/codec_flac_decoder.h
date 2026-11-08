@@ -15,11 +15,11 @@
 #define ENGINE_CODEC_HAS_FLAC_HEADERS 0
 #endif
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 class FlacDecoder {
 public:
     bool Decode(const uint8_t* data, size_t bytes, std::vector<float>& out) const;
 };
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

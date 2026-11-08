@@ -3,7 +3,7 @@
 #include "graph_base.h"
 #include <memory>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief Performs constant folding and dead node pruning on the graph
 class GraphOptimizer {
@@ -15,4 +15,4 @@ class GraphOptimizer {
   static void Optimize(GraphBase& graph);
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

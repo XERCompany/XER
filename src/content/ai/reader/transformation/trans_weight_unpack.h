@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 /// @brief Unpacks and dequantizes weight tensors stored in compressed formats
 ///
@@ -31,4 +31,4 @@ class TransWeightUnpack {
   UnpackAll(const std::unordered_map<std::string, WeightBlob>& blobs);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

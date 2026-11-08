@@ -2,7 +2,7 @@
 
 #include "custom_effect_eq_engine.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 CustomEffectNode CreateCustomEffectLiteEqNode(float gain_db) {
 	CustomEffectNode node = CreateCustomEffectParametricEqNode(2200.0f, 0.8f, gain_db, 0.65f);
@@ -10,4 +10,4 @@ CustomEffectNode CreateCustomEffectLiteEqNode(float gain_db) {
 	return node;
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

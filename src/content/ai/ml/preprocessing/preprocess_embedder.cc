@@ -1,6 +1,6 @@
 #include "preprocess_embedder.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessEmbedder::LoadTable(const std::vector<std::vector<float>>& table) {
     table_ = table;
@@ -20,4 +20,4 @@ std::vector<std::vector<float>> PreprocessEmbedder::Embed(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

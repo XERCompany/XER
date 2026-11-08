@@ -1,6 +1,6 @@
 #include "trans_fuse_identity.h"
 
-namespace Engine::ModelsBuilder::Reader::Transform {
+namespace XER::ModelsBuilder::Reader::Transform {
 
 std::shared_ptr<Core::Model> TransFuseIdentity::Apply(
     std::shared_ptr<Core::Model> model) {
@@ -18,4 +18,4 @@ bool TransFuseIdentity::IsIdentityLayer(const Core::Layer& layer) {
   return name == "Identity" || name == "Pass" || name == "NoOp";
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Transform
+}  // namespace XER::ModelsBuilder::Reader::Transform

@@ -6,7 +6,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include "midi_parser.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 class MidiEventDispatcher {
 public:
@@ -21,4 +21,4 @@ private:
     std::vector<Callback> listeners_;
 };
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

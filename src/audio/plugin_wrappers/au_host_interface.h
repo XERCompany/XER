@@ -6,7 +6,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include "plugin_builtin_host.h"
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 class AuHostInterface {
 public:
@@ -34,4 +34,4 @@ private:
 	BackendMode backend_mode_ = BackendMode::kNone;
 };
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

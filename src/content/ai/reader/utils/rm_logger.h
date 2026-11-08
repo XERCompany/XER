@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 enum class ReaderLogLevel {
 	kDebug = 0,
@@ -41,5 +41,5 @@ class ReaderLogger {
 	std::vector<ReaderLogEntry> entries_;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils
 

@@ -1,7 +1,7 @@
 #pragma once
 #include "aug_base.h"
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 class AugColorJitter : public AugBase {
 public:
@@ -13,4 +13,4 @@ private:
     float brightness_, contrast_, saturation_, hue_;
 };
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

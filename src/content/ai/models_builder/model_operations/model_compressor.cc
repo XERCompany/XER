@@ -7,7 +7,7 @@
 #include <fstream>
 #include <iterator>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::string ModelCompressor::CompressModelToString(const Core::Model& model) const {
 	namespace fs = std::filesystem;
@@ -40,5 +40,5 @@ bool ModelCompressor::CompressModelToFile(const Core::Model& model, const std::s
 	return out.good();
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

@@ -7,7 +7,7 @@
 // Format: [4-byte node count] followed by records:
 //   [4-byte id][4-byte op_type len][op_type bytes][4-byte name len][name bytes]
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 namespace {
 void WriteU32(std::vector<uint8_t>& buf, uint32_t v) {
@@ -64,4 +64,4 @@ bool GraphSerializer::Deserialize(const uint8_t* data, size_t size,
   return true;
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

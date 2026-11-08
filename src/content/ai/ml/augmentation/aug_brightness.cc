@@ -1,7 +1,7 @@
 #include "aug_brightness.h"
 #include <algorithm>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugBrightness::AugBrightness(float delta) : delta_(delta) {}
 
@@ -12,4 +12,4 @@ bool AugBrightness::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

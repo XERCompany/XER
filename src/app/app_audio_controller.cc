@@ -110,7 +110,7 @@ void AudioController::SetVolume(float volume) {
     }
 }
 
-bool AudioController::ApplyEffectLive(const XER::Engine::Audio::FX::CustomEffectPackage& package, std::string* error_out) {
+bool AudioController::ApplyEffectLive(const XER::Audio::FX::CustomEffectPackage& package, std::string* error_out) {
     if (!initialized_) {
         if (error_out) *error_out = "AudioController not initialized";
         return false;
@@ -120,7 +120,7 @@ bool AudioController::ApplyEffectLive(const XER::Engine::Audio::FX::CustomEffect
     // (reverb buffers, clap hosts, ...) can take tens of ms, and the audio
     // thread must keep processing the old flow meanwhile — otherwise every
     // parameter change causes a buffer underrun and audible crackling.
-    auto flow = std::make_unique<XER::Engine::Audio::FX::CustomEffectFlow>();
+    auto flow = std::make_unique<XER::Audio::FX::CustomEffectFlow>();
     flow->SetStreamingMode(true);
     const float sample_rate = static_cast<float>(audio_player_.GetSampleRate());
     if (!flow->Initialize(package, sample_rate, 1024, error_out)) {

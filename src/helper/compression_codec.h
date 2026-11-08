@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::Common {
+namespace XER::Common {
 
 class CompressionCodec {
 public:
@@ -14,4 +14,4 @@ public:
     static std::optional<std::string> DecompressToString(const std::vector<std::uint8_t>& compressed);
 };
 
-}  // namespace XER::Engine::Common
+}  // namespace XER::Common

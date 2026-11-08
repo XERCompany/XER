@@ -7,7 +7,7 @@
 namespace {
 
 std::string NormalizeBuiltinReference(std::string reference) {
-    reference = XER::Engine::Helper::String::ToLowerAscii(reference);
+    reference = XER::Helper::String::ToLowerAscii(reference);
     constexpr const char* kBuiltinPrefix = "builtin://";
     if (reference.rfind(kBuiltinPrefix, 0) == 0) {
         reference.erase(0, std::char_traits<char>::length(kBuiltinPrefix));
@@ -31,7 +31,7 @@ bool IsBuiltinComponentReference(const std::string& reference) {
 
 }  // namespace
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 bool AuHostInterface::Initialize(double sample_rate, uint32_t max_block_size) {
     if (sample_rate <= 0.0 || max_block_size == 0) {
@@ -112,4 +112,4 @@ std::string AuHostInterface::GetBackendMode() const {
     return "none";
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

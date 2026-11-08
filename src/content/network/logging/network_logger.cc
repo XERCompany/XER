@@ -7,12 +7,12 @@
 #include <absl/strings/str_cat.h>
 #include <absl/strings/str_join.h>
 
-namespace XER::network::logging {
+namespace XER::Network::Logging {
 
 NetworkLogger::NetworkLogger()
     : flux_logger_(nullptr),
       enabled_(true),
-      log_level_(XER::flux::core::LogLevel::kInfo) {
+      log_level_(XER::Flux::Core::LogLevel::kInfo) {
 }
 
 NetworkLogger& NetworkLogger::Instance() {
@@ -20,7 +20,7 @@ NetworkLogger& NetworkLogger::Instance() {
     return instance;
 }
 
-void NetworkLogger::Initialize(XER::flux::core::Logger* flux_logger) {
+void NetworkLogger::Initialize(XER::Flux::Core::Logger* flux_logger) {
     flux_logger_ = flux_logger;
 }
 
@@ -204,4 +204,4 @@ void NetworkLogger::LogDebug(const std::string& component, const std::string& me
     flux_logger_->Debug(component, message);
 }
 
-} // namespace XER::network::logging
+} // namespace XER::Network::Logging

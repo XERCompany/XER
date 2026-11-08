@@ -1,7 +1,7 @@
 #pragma once
 #include "loader_base.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// XML-structured dataset loader via libxml2 (link with -lxml2).
 /// Expected format:
@@ -15,4 +15,4 @@ public:
     std::string Name() const override { return "YamlLoader"; }
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

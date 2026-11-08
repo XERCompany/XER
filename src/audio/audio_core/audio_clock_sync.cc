@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace XER::Engine::Audio::Core {
+namespace XER::Audio::Core {
 
 AudioClockSync::AudioClockSync()
     : initialized_(false), drift_percentage_(0.0) {
@@ -85,4 +85,4 @@ void AudioClockSync::UpdateDrift() {
     drift_percentage_ = (avg_diff - expected_diff) / expected_diff * 100.0;
 }
 
-}  // namespace XER::Engine::Audio::Core
+}  // namespace XER::Audio::Core

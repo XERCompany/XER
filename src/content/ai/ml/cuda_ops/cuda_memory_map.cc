@@ -5,7 +5,7 @@
 #include <mutex>
 #include <stdexcept>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 // Global memory tracker (for GetTotalAllocated)
 static std::unordered_map<uintptr_t, size_t> g_memory_map;
@@ -108,4 +108,4 @@ void* CudaMemoryHandle::Release() {
     return tmp;
 }
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

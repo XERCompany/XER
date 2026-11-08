@@ -4,7 +4,7 @@
 #include <cmath>
 #include <numeric>
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 void GradientNormMetric::Reset() {
 	norms_.clear();
@@ -44,5 +44,5 @@ float GradientNormMetric::Mean() const {
 	return sum / static_cast<float>(norms_.size());
 }
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

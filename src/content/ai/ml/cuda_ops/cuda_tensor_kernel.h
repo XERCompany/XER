@@ -4,7 +4,7 @@
 #include <cudnn.h>
 #include <cstddef>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 /// @brief CUDA tensor kernel operations with CuDNN acceleration
 /// 
@@ -83,4 +83,4 @@ public:
                                      cudaStream_t stream = 0);
 };
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

@@ -1,7 +1,7 @@
 #pragma once
 #include "aug_base.h"
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 // Adds Gaussian noise to pixel values.
 // Optionally uses spectral noise shaping via AudioFFTAnalyzer when available.
@@ -16,4 +16,4 @@ private:
     bool spectral_shape_;
 };
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

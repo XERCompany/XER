@@ -17,7 +17,7 @@ void ParticleSystem::Emit(float x, float y, int count) {
         Particle p;
         p.x=x; p.y=y; p.vx=std::cos(a)*s; p.vy=std::sin(a)*s;
         p.life=1.0f; p.size=sz(rng_);
-        p.color=engine::bridge::skia::MakeColorRGBA(255,200,50,200);
+        p.color=XER::Bridge::Skia::MakeColorRGBA(255,200,50,200);
         particles_.push_back(p);
     }
 }
@@ -36,12 +36,12 @@ void ParticleSystem::Update(float dt) {
 
 void ParticleSystem::Render(ImageBuffer& img) const {
     if (!img.IsValid() || particles_.empty()) return;
-    if (!engine::bridge::skia::IsAvailable()) return;
+    if (!XER::Bridge::Skia::IsAvailable()) return;
     int w=img.Width(), h=img.Height();
     std::vector<uint32_t> px(w*h);
     const uint8_t* d=img.Data();
     for (int i=0;i<w*h;++i)
-        px[i]=engine::bridge::skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
+        px[i]=XER::Bridge::Skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
     for (auto& p : particles_) {
         int r=std::max(1,static_cast<int>(p.size*p.life));
         std::vector<std::pair<int,int>> pts;
@@ -52,7 +52,7 @@ void ParticleSystem::Render(ImageBuffer& img) const {
         }
         uint32_t c=p.color;
         uint8_t alpha=static_cast<uint8_t>((c&0xFF)*p.life);
-        engine::bridge::skia::RasterFillPolygon(&px,w,h,pts,(c&0xFFFFFF00u)|alpha,"src_over");
+        XER::Bridge::Skia::RasterFillPolygon(&px,w,h,pts,(c&0xFFFFFF00u)|alpha,"src_over");
     }
     uint8_t* dst=img.Data();
     for (int i=0;i<w*h;++i) {

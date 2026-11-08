@@ -80,7 +80,7 @@ static void Nv12ToBgra(const uint8_t* y_plane, const uint8_t* uv_plane,
 // ─── FFmpegFrameSource ───────────────────────────────────────────────────────
 
 bool FFmpegFrameSource::Open(const std::string& uri) {
-    using namespace engine::bridge::ffmpeg;
+    using namespace XER::Bridge::FFmpeg;
 
     if (!IsAvailable()) {
         Log().Error("FFmpegFrameSource", "FFmpeg bridge not available");
@@ -139,7 +139,7 @@ void FFmpegFrameSource::Close() {
 }
 
 bool FFmpegFrameSource::DecodeAll() {
-    using namespace engine::bridge::ffmpeg;
+    using namespace XER::Bridge::FFmpeg;
     std::vector<VideoFrameInfo> raw;
     std::string err;
     int max_frames = (total_frames_ > 0) ? static_cast<int>(total_frames_) : 4096;
@@ -158,7 +158,7 @@ bool FFmpegFrameSource::DecodeAll() {
 }
 
 std::shared_ptr<Frame> FFmpegFrameSource::MakeFrameFromInfo(
-        const engine::bridge::ffmpeg::VideoFrameInfo& info) {
+        const XER::Bridge::FFmpeg::VideoFrameInfo& info) {
     if (info.width <= 0 || info.height <= 0 || info.data.empty()) return nullptr;
 
     auto frame = std::make_shared<Frame>();

@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 struct SignedCertTimestamp {
     std::string log_id;       // base64 log ID
@@ -28,4 +28,4 @@ public:
                                 int min_scts = 2);
 };
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

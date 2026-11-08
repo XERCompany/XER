@@ -2,7 +2,7 @@
 
 #include <string>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 /// @brief Selects ISA-level code paths (AVX2, AVX-512, NEON, etc.)
 class OptInstructionSet {
@@ -13,4 +13,4 @@ class OptInstructionSet {
   static std::string ToName(ISA isa);
 };
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

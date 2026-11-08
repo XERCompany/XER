@@ -3,7 +3,7 @@
 #include "../platform_common.h"
 #include <windows.h>
 
-namespace Engine::Content::Platform {
+namespace XER::Content::Platform {
 
 class WindowsPlatform : public IPlatform {
 public:
@@ -36,4 +36,4 @@ private:
     std::string GetWindowsFolderPath(int csidl) const;
 };
 
-}  // namespace Engine::Content::Platform
+}  // namespace XER::Content::Platform

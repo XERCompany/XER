@@ -9,7 +9,7 @@
 namespace flux::core { class Logger; }
 namespace IO::AsyncIO { class IOCacheManager; }
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 /// Registry for named tensors (activations, weights, etc.)
 class TensorManager {
@@ -41,4 +41,4 @@ private:
     std::uint64_t cache_ttl_seconds_ = 600;
 };
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

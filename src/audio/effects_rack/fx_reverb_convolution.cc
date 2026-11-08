@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <vector>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 ReverbConvolution::ReverbConvolution()
 	: mix_(0.3f),
@@ -43,4 +43,4 @@ std::string ReverbConvolution::GetReport() const {
 		", ir_size=" + std::to_string(convolution_.GetImpulseSize());
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

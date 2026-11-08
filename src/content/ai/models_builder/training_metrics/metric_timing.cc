@@ -2,7 +2,7 @@
 
 #include <numeric>
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 TimingMetric::ScopedTimer::ScopedTimer(TimingMetric* metric, std::string bucket_name)
 		: metric_(metric),
@@ -62,5 +62,5 @@ std::vector<std::string> TimingMetric::Buckets() const {
 	return names;
 }
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

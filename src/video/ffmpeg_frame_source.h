@@ -28,7 +28,7 @@ public:
 
 private:
     bool DecodeAll();
-    std::shared_ptr<Frame> MakeFrameFromInfo(const engine::bridge::ffmpeg::VideoFrameInfo& info);
+    std::shared_ptr<Frame> MakeFrameFromInfo(const XER::Bridge::FFmpeg::VideoFrameInfo& info);
 
     std::string uri_;
     int         stream_idx_{-1};

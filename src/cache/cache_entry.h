@@ -5,7 +5,7 @@
 
 #include <absl/strings/string_view.h>
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 
 struct CacheEntry {
 	std::string scope;
@@ -25,4 +25,4 @@ CacheEntry MakeEntryWithTtl(absl::string_view scope,
 			    std::uint32_t ttl_seconds);
 bool IsValid(const CacheEntry& entry);
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

@@ -2,13 +2,13 @@
 
 #include <algorithm>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
-Engine::MLData::Types::Tensor SdImageDecoder::DecodeLatentToImage(
-    const Engine::MLData::Types::Tensor& latent,
+XER::MLData::Types::Tensor SdImageDecoder::DecodeLatentToImage(
+    const XER::MLData::Types::Tensor& latent,
     uint32_t width,
     uint32_t height) const {
-    Engine::MLData::Types::Tensor image({1, 3, height, width}, Engine::MLData::Types::DataType::FLOAT32);
+    XER::MLData::Types::Tensor image({1, 3, height, width}, XER::MLData::Types::DataType::FLOAT32);
     if (!latent.GetData() || !image.GetData()) return image;
 
     const auto lshape = latent.GetShape();
@@ -37,4 +37,4 @@ Engine::MLData::Types::Tensor SdImageDecoder::DecodeLatentToImage(
     return image;
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

@@ -4,7 +4,7 @@
 
 #include <string>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 class ModelCompressor {
  public:
@@ -12,5 +12,5 @@ class ModelCompressor {
 	std::string CompressModelToString(const Core::Model& model) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

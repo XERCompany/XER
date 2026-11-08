@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class SharedMemorySegment {
  public:
@@ -25,5 +25,5 @@ class SharedMemorySegment {
 	std::vector<uint8_t> buffer_;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

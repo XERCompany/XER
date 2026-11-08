@@ -4,7 +4,7 @@
  */
 #include "content/network/spdy/spdy_protocol.h"
 
-namespace XER::network::spdy {
+namespace XER::Network::Spdy {
 
 std::string SpdyFrameTypeToString(SpdyFrameType t) {
     switch (t) {
@@ -21,4 +21,4 @@ std::string SpdyFrameTypeToString(SpdyFrameType t) {
     }
 }
 
-}  // namespace XER::network::spdy
+}  // namespace XER::Network::Spdy

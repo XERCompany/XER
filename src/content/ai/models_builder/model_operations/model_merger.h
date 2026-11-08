@@ -4,7 +4,7 @@
 
 #include <memory>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 class ModelMerger {
  public:
@@ -13,5 +13,5 @@ class ModelMerger {
 											   const std::string& merged_name = "merged_model") const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

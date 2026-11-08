@@ -8,7 +8,7 @@
 #include <memory>
 #include <vector>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class BatchBuilder {
  public:
@@ -18,5 +18,5 @@ class BatchBuilder {
 	  const std::vector<uint32_t>& sample_shape);
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

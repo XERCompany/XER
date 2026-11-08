@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Pooling layer (MaxPool2D, AvgPool2D, GlobalAvgPool2D)
 class LayerPooling : public Core::Layer {
@@ -28,4 +28,4 @@ class LayerPooling : public Core::Layer {
 std::shared_ptr<Core::Layer> MakePooling(const std::string& name,
                                           LayerPooling::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

@@ -7,7 +7,7 @@
 #include "content/network/proxy/proxy_config.h"
 #include "content/network/proxy/proxy_resolver.h"
 
-namespace XER::network::proxy {
+namespace XER::Network::Proxy {
 
 // Concrete resolver that uses a static ProxyConfig.
 class ProxyService : public ProxyResolver {
@@ -24,4 +24,4 @@ private:
     ProxyConfig config_;
 };
 
-}  // namespace XER::network::proxy
+}  // namespace XER::Network::Proxy

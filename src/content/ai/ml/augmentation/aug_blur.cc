@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugBlur::AugBlur(int kernel_size) : kernel_size_(kernel_size | 1) {}
 
@@ -37,4 +37,4 @@ bool AugBlur::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

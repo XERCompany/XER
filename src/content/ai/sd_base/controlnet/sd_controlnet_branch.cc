@@ -5,9 +5,9 @@
 
 #include <algorithm>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
-void SdControlNetBranch::Apply(Engine::MLData::Types::Tensor& latent,
+void SdControlNetBranch::Apply(XER::MLData::Types::Tensor& latent,
                                const SdGenerationRequest& request,
                                SdBackendKind backend,
                                bool model_loaded) const {
@@ -46,4 +46,4 @@ void SdControlNetBranch::Apply(Engine::MLData::Types::Tensor& latent,
     depth.ApplyDepthPrior(latent, std::clamp(depth_strength, 0.0f, 1.0f));
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

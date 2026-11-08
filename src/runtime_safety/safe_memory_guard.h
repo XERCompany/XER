@@ -4,7 +4,7 @@
 
 #include "engine_params.h"
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 
 struct MemoryGuardSnapshot {
 	int hard_limit_mib = -1;
@@ -17,4 +17,4 @@ MemoryGuardSnapshot CaptureMemoryGuardSnapshot(const EngineParams& params);
 bool ValidateMemoryGuardSnapshot(const MemoryGuardSnapshot& snapshot, std::string* error_out);
 std::string BuildMemoryGuardSummary(const MemoryGuardSnapshot& snapshot);
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 /// @brief Base class for the computational graph — stores nodes + edges
 class GraphBase {
@@ -33,4 +33,4 @@ class GraphBase {
   int64_t next_id_{0};
 };
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

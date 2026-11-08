@@ -2,7 +2,7 @@
 #include "loader_base.h"
 #include <cstddef>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 struct Batch {
     std::vector<std::vector<float>> X;
@@ -24,4 +24,4 @@ private:
     unsigned seed_;
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

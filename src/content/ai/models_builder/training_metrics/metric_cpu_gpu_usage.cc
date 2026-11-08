@@ -10,7 +10,7 @@
 #include <dlfcn.h>
 #endif
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 namespace {
 
@@ -152,5 +152,5 @@ double CpuGpuUsageMetric::QueryProcessMemoryMb() const {
 #endif
 }
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

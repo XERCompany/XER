@@ -7,7 +7,7 @@
 
 #include "err_diagnostic_data.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 /// @brief Wraps a callable in a try/catch and routes exceptions to the
 ///        ErrorHandler monitor — keeps JS/C++ boundary clean.
@@ -45,4 +45,4 @@ class ExceptionWrapper {
                                      std::string_view what) noexcept;
 };
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

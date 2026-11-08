@@ -33,7 +33,7 @@ float BandResponseDb(float frequency_hz, float center_hz, float q, float gain_db
     return gain_db * std::exp(-0.5f * x * x);
 }
 
-float ParamValue(const std::vector<XER::Engine::Audio::FX::CustomEffectParameter>& params,
+float ParamValue(const std::vector<XER::Audio::FX::CustomEffectParameter>& params,
                  const char* name, float fallback) {
     for (const auto& p : params) {
         if (p.name == name) {
@@ -433,7 +433,7 @@ void FxRackWidget::RewireNodeCallbacks() {
     }
 }
 
-void FxRackWidget::AddNode(XER::Engine::Audio::FX::CustomEffectAlgorithm algorithm) {
+void FxRackWidget::AddNode(XER::Audio::FX::CustomEffectAlgorithm algorithm) {
     state_->nodes.push_back(FxRackState::MakeDefaultNode(algorithm));
     RebuildNodeUi();
     RequestLayout();
@@ -510,7 +510,7 @@ float FxRackWidget::EqResponseDb(float frequency_hz) const {
     }
     for (const auto& node : state_->nodes) {
         if (!node.enabled ||
-            node.algorithm != XER::Engine::Audio::FX::CustomEffectAlgorithm::kParametricEq) {
+            node.algorithm != XER::Audio::FX::CustomEffectAlgorithm::kParametricEq) {
             continue;
         }
         const float freq = ParamValue(node.params, "frequency_hz", 1000.0f);

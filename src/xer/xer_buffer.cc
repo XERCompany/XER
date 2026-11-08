@@ -6,12 +6,12 @@
 
 namespace {
 
-Engine::Helper::JsBuffer::ConstSpan MakeConstSpan(const std::vector<std::uint8_t>& bytes) {
-    return Engine::Helper::JsBuffer::ConstSpan(bytes.data(), bytes.size());
+XER::Helper::JsBuffer::ConstSpan MakeConstSpan(const std::vector<std::uint8_t>& bytes) {
+    return XER::Helper::JsBuffer::ConstSpan(bytes.data(), bytes.size());
 }
 
-Engine::Helper::JsBuffer::ConstSpan MakeConstSpan(const std::uint8_t* data, std::size_t size) {
-    return Engine::Helper::JsBuffer::ConstSpan(data, size);
+XER::Helper::JsBuffer::ConstSpan MakeConstSpan(const std::uint8_t* data, std::size_t size) {
+    return XER::Helper::JsBuffer::ConstSpan(data, size);
 }
 
 }  // namespace
@@ -21,7 +21,7 @@ namespace Xer {
 XerBuffer::XerBuffer(std::vector<std::uint8_t> bytes) : bytes_(std::move(bytes)) {}
 
 XerBuffer XerBuffer::FromString(std::string_view text) {
-    return XerBuffer(Engine::Helper::JsBuffer::FromString(text));
+    return XerBuffer(XER::Helper::JsBuffer::FromString(text));
 }
 
 XerBuffer XerBuffer::FromFile(const std::filesystem::path& path, std::string* error_out) {
@@ -64,18 +64,18 @@ XerBuffer XerBuffer::FromFile(const std::filesystem::path& path, std::string* er
 }
 
 void XerBuffer::Append(std::string_view text) {
-    Engine::Helper::JsBuffer::AppendString(&bytes_, text);
+    XER::Helper::JsBuffer::AppendString(&bytes_, text);
 }
 
 void XerBuffer::Append(const std::uint8_t* data, std::size_t size) {
     if (data == nullptr || size == 0) {
         return;
     }
-    Engine::Helper::JsBuffer::AppendBytes(&bytes_, MakeConstSpan(data, size));
+    XER::Helper::JsBuffer::AppendBytes(&bytes_, MakeConstSpan(data, size));
 }
 
 std::string XerBuffer::ToString() const {
-    return Engine::Helper::JsBuffer::ToString(MakeConstSpan(bytes_));
+    return XER::Helper::JsBuffer::ToString(MakeConstSpan(bytes_));
 }
 
 }  // namespace Xer

@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 class ReaderManager {
  public:
@@ -18,5 +18,5 @@ class ReaderManager {
 	static std::string ExtractExtension(const std::string& filepath);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

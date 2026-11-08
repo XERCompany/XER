@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::flux::history {
+namespace XER::Flux::History {
 
 struct ActionRecord {
 	std::size_t sequence = 0;
@@ -33,4 +33,4 @@ private:
 	std::deque<ActionRecord> entries_;
 };
 
-}  // namespace XER::flux::history
+}  // namespace XER::Flux::History

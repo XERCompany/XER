@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 enum class QuantizeMode : uint8_t {
     None     = 0,
@@ -40,4 +40,4 @@ public:
     static std::string ModeName(QuantizeMode mode);
 };
 
-}  // namespace Engine::ModelsBuilder::Weights
+}  // namespace XER::ModelsBuilder::Weights

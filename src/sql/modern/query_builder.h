@@ -8,7 +8,7 @@
 
 #include "sql/modern/query.h"
 
-namespace XER::Engine::SQL::Modern {
+namespace XER::SQL::Modern {
 
 class QueryBuilder {
 public:
@@ -18,9 +18,9 @@ public:
 	static QueryBuilder DeleteFrom(std::string table);
 
 	QueryBuilder& Columns(std::vector<std::string> columns);
-	QueryBuilder& Set(std::string column, XER::Content::Value value);
+	QueryBuilder& Set(std::string column, XER::SQL::Content::Value value);
 	QueryBuilder& Where(std::string column, std::string operation,
-			    XER::Content::Value value);
+			    XER::SQL::Content::Value value);
 	QueryBuilder& OrderBy(std::string column, bool descending = false);
 	QueryBuilder& Limit(std::size_t count);
 
@@ -40,10 +40,10 @@ private:
 	Kind kind_;
 	std::string table_;
 	std::vector<std::string> columns_;
-	std::vector<std::pair<std::string, XER::Content::Value>> assignments_;
-	std::vector<std::pair<std::string, std::pair<std::string, XER::Content::Value>>> predicates_;
+	std::vector<std::pair<std::string, XER::SQL::Content::Value>> assignments_;
+	std::vector<std::pair<std::string, std::pair<std::string, XER::SQL::Content::Value>>> predicates_;
 	std::optional<std::pair<std::string, bool>> order_;
 	std::optional<std::size_t> limit_;
 };
 
-}  // namespace XER::Engine::SQL::Modern
+}  // namespace XER::SQL::Modern

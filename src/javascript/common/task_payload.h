@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace engine::javascript::common {
+namespace XER::JavaScript::Common {
 
 struct TaskPayload {
     std::string topic;
@@ -13,4 +13,4 @@ struct TaskPayload {
     std::uint64_t sequence = 0;
 };
 
-}  // namespace engine::javascript::common
+}  // namespace XER::JavaScript::Common

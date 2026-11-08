@@ -4,7 +4,7 @@
 
 #include <cstdint>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class DatasetShuffle {
  public:
@@ -12,5 +12,5 @@ class DatasetShuffle {
 	static void ShuffleInPlace(DatasetBase& dataset, uint64_t seed);
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

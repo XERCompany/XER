@@ -3,7 +3,7 @@
 #include <string>
 #include <map>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Bag-of-words float vectorizer: Fit builds vocabulary, Transform counts
 class PreprocessVectorizer {
@@ -20,4 +20,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

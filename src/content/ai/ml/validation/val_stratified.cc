@@ -3,7 +3,7 @@
 #include <numeric>
 #include <random>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 std::vector<ValStratified::FoldIndices> ValStratified::Split(
         const std::vector<int>& labels) const {
@@ -35,4 +35,4 @@ std::vector<ValStratified::FoldIndices> ValStratified::Split(
     return folds;
 }
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

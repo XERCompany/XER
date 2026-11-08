@@ -4,7 +4,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 struct CheckpointMetadata {
 	std::string model_name;
@@ -20,5 +20,5 @@ struct CheckpointMetadata {
 
 uint64_t CurrentTimestampMs();
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

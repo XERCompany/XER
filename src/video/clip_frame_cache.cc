@@ -41,8 +41,8 @@ bool CheckedUint32(int value, std::uint32_t* out) {
 ClipFrameCache::ClipFrameCache(std::filesystem::path root, std::string key, std::uint32_t ttl_seconds)
     : storage_(std::move(root)), key_(std::move(key)), ttl_seconds_(ttl_seconds) {}
 
-Engine::Cache::CacheEntry ClipFrameCache::EntryFor(std::size_t frame_index) const {
-    return Engine::Cache::MakeEntryWithTtl(
+XER::Cache::CacheEntry ClipFrameCache::EntryFor(std::size_t frame_index) const {
+    return XER::Cache::MakeEntryWithTtl(
         "video_music_bass_eq_frames",
         key_,
         absl::StrCat("frame_", frame_index, ".dxcfz"),

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 std::vector<DatasetBase> DatasetWindow::BuildWindows(const DatasetBase& dataset,
         size_t window_size,
@@ -37,5 +37,5 @@ std::vector<DatasetBase> DatasetWindow::BuildWindows(const DatasetBase& dataset,
 	return windows;
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

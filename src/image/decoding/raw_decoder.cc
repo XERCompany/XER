@@ -14,15 +14,15 @@ bool RawDecoder::Probe(const uint8_t* h, std::size_t len) const {
 
 std::shared_ptr<ImageBuffer> RawDecoder::Decode(const std::string& path,
                                                   ImageDescriptor& desc) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) return nullptr;
-    engine::bridge::ffmpeg::MediaInfo info;
+    if (!XER::Bridge::FFmpeg::IsAvailable()) return nullptr;
+    XER::Bridge::FFmpeg::MediaInfo info;
     std::string err;
-    if (!engine::bridge::ffmpeg::ProbeMedia(path, &info, &err)) {
+    if (!XER::Bridge::FFmpeg::ProbeMedia(path, &info, &err)) {
         flux::core::Logger().Error("RawDecoder", "Probe failed: " + err);
         return nullptr;
     }
-    std::vector<engine::bridge::ffmpeg::VideoFrameInfo> frames;
-    if (!engine::bridge::ffmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
+    std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
+    if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
         frames.empty()) {
         flux::core::Logger().Error("RawDecoder", "Decode failed: " + err);
         return nullptr;

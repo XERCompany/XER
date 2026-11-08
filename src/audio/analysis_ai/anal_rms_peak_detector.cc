@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstring>
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 RMSPeakDetector::RMSPeakDetector()
 	: buffer_pool_(65536, 2),

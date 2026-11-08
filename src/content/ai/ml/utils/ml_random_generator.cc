@@ -1,6 +1,6 @@
 #include "ml_random_generator.h"
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 MlRandomGenerator::MlRandomGenerator(uint64_t seed)
 		: seed_(seed), engine_(seed) {
@@ -30,5 +30,5 @@ bool MlRandomGenerator::Bernoulli(float probability) {
 	return dist(engine_);
 }
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

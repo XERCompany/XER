@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 /// @brief Maps OpenVINO layer type strings → XER layer factories
 ///
@@ -28,4 +28,4 @@ class VinoLayerMapper {
   std::unordered_map<std::string, std::string> type_map_; ///< OV→XER name
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

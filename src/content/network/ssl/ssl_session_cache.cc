@@ -8,7 +8,7 @@
 
 #include <chrono>
 
-namespace XER::network::ssl {
+namespace XER::Network::Ssl {
 
 SslSessionCache::SslSessionCache()
     : max_sessions_(100),
@@ -32,20 +32,20 @@ SSL_SESSION* SslSessionCache::GetSession(const std::string& hostname) {
 
     auto it = cache_.find(hostname);
     if (it == cache_.end()) {
-        logging::NetworkLogger::Instance().LogCacheMiss("ssl_session", hostname);
+        Logging::NetworkLogger::Instance().LogCacheMiss("ssl_session", hostname);
         return nullptr;
     }
 
     if (IsExpired(it->second)) {
         SSL_SESSION_free(it->second.session);
         cache_.erase(it);
-        logging::NetworkLogger::Instance().LogCacheMiss("ssl_session", hostname);
+        Logging::NetworkLogger::Instance().LogCacheMiss("ssl_session", hostname);
         return nullptr;
     }
 
     // Increment reference count before returning
     SSL_SESSION_up_ref(it->second.session);
-    logging::NetworkLogger::Instance().LogCacheHit("ssl_session", hostname);
+    Logging::NetworkLogger::Instance().LogCacheHit("ssl_session", hostname);
 
     return it->second.session;
 }
@@ -93,7 +93,7 @@ void SslSessionCache::StoreSession(const std::string& hostname, SSL_SESSION* ses
 
     cache_[hostname] = entry;
 
-    logging::NetworkLogger::Instance().LogCacheStore("ssl_session", hostname, 0);
+    Logging::NetworkLogger::Instance().LogCacheStore("ssl_session", hostname, 0);
 }
 
 void SslSessionCache::RemoveSession(const std::string& hostname) {
@@ -103,7 +103,7 @@ void SslSessionCache::RemoveSession(const std::string& hostname) {
     if (it != cache_.end()) {
         SSL_SESSION_free(it->second.session);
         cache_.erase(it);
-        logging::NetworkLogger::Instance().LogCacheInvalidate("ssl_session", hostname);
+        Logging::NetworkLogger::Instance().LogCacheInvalidate("ssl_session", hostname);
     }
 }
 
@@ -187,4 +187,4 @@ void ScopedSslSession::reset(SSL_SESSION* session) {
     session_ = session;
 }
 
-} // namespace XER::network::ssl
+} // namespace XER::Network::Ssl

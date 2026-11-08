@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string>
 
-namespace engine::javascript::runtime {
+namespace XER::JavaScript::Runtime {
 
 class RuntimeContext {
 public:
@@ -33,4 +33,4 @@ private:
     v8::Global<v8::Context> context_;
 };
 
-}  // namespace engine::javascript::runtime
+}  // namespace XER::JavaScript::Runtime

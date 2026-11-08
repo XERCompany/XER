@@ -18,7 +18,7 @@ std::shared_ptr<Frame> FrameImporter::FromCache(const std::string& key) {
 }
 
 std::shared_ptr<Frame> FrameImporter::FromFile(const std::string& path) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
         Log().Error("FrameImporter", "FFmpeg bridge not available");
         return nullptr;
     }
@@ -35,7 +35,7 @@ std::shared_ptr<Frame> FrameImporter::FromFile(const std::string& path) {
 
 std::vector<std::shared_ptr<Frame>> FrameImporter::AllFramesFromFile(const std::string& path) {
     std::vector<std::shared_ptr<Frame>> result;
-    if (!engine::bridge::ffmpeg::IsAvailable()) return result;
+    if (!XER::Bridge::FFmpeg::IsAvailable()) return result;
 
     FFmpegFrameSource src;
     if (!src.Open(path)) return result;

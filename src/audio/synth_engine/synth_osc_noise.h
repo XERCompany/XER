@@ -1,6 +1,6 @@
 #pragma once
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 class SynthOscNoise {
 public:
@@ -11,4 +11,4 @@ private:
     unsigned int state_ = 0x12345678u;
 };
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

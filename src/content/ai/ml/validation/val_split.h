@@ -4,7 +4,7 @@
 #include <utility>
 #include <vector>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// Train/test split utilities
 struct ValSplit {
@@ -28,4 +28,4 @@ struct ValSplit {
             unsigned int seed = 42);
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

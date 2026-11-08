@@ -14,7 +14,7 @@
 
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
-namespace XER::Engine::Audio::CodecIO::detail {
+namespace XER::Audio::CodecIO::detail {
 
 namespace {
 
@@ -28,7 +28,7 @@ struct DecodedAudioData {
 };
 
 std::string CanonicalSampleFormat(std::string sample_format) {
-	sample_format = XER::Engine::Helper::String::ToLowerAscii(std::move(sample_format));
+	sample_format = XER::Helper::String::ToLowerAscii(std::move(sample_format));
 	if (!sample_format.empty() && sample_format.back() == 'p') {
 		sample_format.pop_back();
 	}
@@ -93,7 +93,7 @@ bool DecodeSample(const std::string& sample_format, const std::uint8_t* data, fl
 }
 
 bool AppendFrameChannels(
-	const XER::engine::bridge::ffmpeg::AudioFrameInfo& frame,
+	const XER::Bridge::FFmpeg::AudioFrameInfo& frame,
 	DecodedAudioData* decoded_audio,
 	std::string* error_out) {
 	if (decoded_audio == nullptr || frame.channels <= 0 || frame.sample_count <= 0) {
@@ -256,7 +256,7 @@ bool DecodeAudioBufferWithFfmpeg(
 		}
 		return false;
 	}
-	if (!XER::engine::bridge::ffmpeg::IsAvailable()) {
+	if (!XER::Bridge::FFmpeg::IsAvailable()) {
 		if (error_out != nullptr) {
 			*error_out = "ffmpeg bridge is unavailable";
 		}
@@ -281,8 +281,8 @@ bool DecodeAudioBufferWithFfmpeg(
 		}
 	}
 
-	std::vector<XER::engine::bridge::ffmpeg::AudioFrameInfo> frames;
-	if (!XER::engine::bridge::ffmpeg::DecodeAudioFrames(temp_path.path().string(), -1, 0, &frames, error_out)) {
+	std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> frames;
+	if (!XER::Bridge::FFmpeg::DecodeAudioFrames(temp_path.path().string(), -1, 0, &frames, error_out)) {
 		return false;
 	}
 	if (frames.empty()) {
@@ -319,4 +319,4 @@ bool DecodeAudioBufferWithFfmpeg(
 	return !output->empty();
 }
 
-}  // namespace XER::Engine::Audio::CodecIO::detail
+}  // namespace XER::Audio::CodecIO::detail

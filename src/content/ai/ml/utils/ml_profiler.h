@@ -5,7 +5,7 @@
 #include <string_view>
 #include <unordered_map>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 class MlProfiler {
  public:
@@ -33,5 +33,5 @@ class MlProfiler {
 	std::unordered_map<std::string, double> last_millis_;
 };
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

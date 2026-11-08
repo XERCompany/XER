@@ -1,6 +1,6 @@
 ﻿#include "batch.h"
 
-namespace Engine::MLData::Types {
+namespace XER::MLData::Types {
 
 Batch::Batch() : expected_size_(32) {
 }
@@ -21,4 +21,4 @@ std::shared_ptr<Tensor> Batch::GetSample(size_t index) const {
     return nullptr;
 }
 
-} // namespace Engine::MLData::Types
+} // namespace XER::MLData::Types

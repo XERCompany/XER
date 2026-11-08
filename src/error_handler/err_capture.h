@@ -5,7 +5,7 @@
 
 #include <v8.h>
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 struct CaptureConfiguration {
 	std::string script_path;
@@ -18,4 +18,4 @@ void BindIsolate(v8::Isolate* isolate);
 CaptureConfiguration CurrentCaptureConfiguration();
 std::string LastCrashDumpPath();
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

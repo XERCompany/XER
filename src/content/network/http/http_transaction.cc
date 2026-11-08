@@ -8,9 +8,9 @@
 #include "content/network/url/url_request_job.h"
 #include "async_io/io_thread_pool.h"
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
-HttpTransactionResult HttpTransaction::Execute(const url::URLRequest& request) {
+HttpTransactionResult HttpTransaction::Execute(const Url::URLRequest& request) {
     // Attempt cache for GET
     if (request.method == "GET") {
         CachedResponse cached;
@@ -24,8 +24,8 @@ HttpTransactionResult HttpTransaction::Execute(const url::URLRequest& request) {
             return res;
         }
     }
-    url::URLRequestContext ctx;
-    url::URLRequestJob job(ctx);
+    Url::URLRequestContext ctx;
+    Url::URLRequestJob job(ctx);
     HttpTransactionResult res;
     res.ok = job.Run(request, &res.response, &res.error);
     res.status_code = res.response.status_code;
@@ -33,7 +33,7 @@ HttpTransactionResult HttpTransaction::Execute(const url::URLRequest& request) {
     return res;
 }
 
-void HttpTransaction::ExecuteAsync(const url::URLRequest& request,
+void HttpTransaction::ExecuteAsync(const Url::URLRequest& request,
                                     HttpTransactionCallback callback) {
     XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
         [this, request, cb = std::move(callback)]() mutable {
@@ -41,4 +41,4 @@ void HttpTransaction::ExecuteAsync(const url::URLRequest& request,
         });
 }
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

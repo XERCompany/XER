@@ -6,7 +6,7 @@
 #include <random>
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 Tensor::Tensor(const std::vector<size_t>& shape, Device device)
     : shape_(shape), device_(device) {
@@ -288,4 +288,4 @@ float Tensor::Norm() const {
     return data_.norm();
 }
 
-} // namespace Engine::ML::Tensors
+} // namespace XER::ML::Tensors

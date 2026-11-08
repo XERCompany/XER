@@ -10,7 +10,7 @@
 #include <regex>
 #include <sstream>
 
-namespace XER::network {
+namespace XER::Network {
 
 std::string NetErrorToString(NetError error) {
     switch (error) {
@@ -61,7 +61,7 @@ std::string UnwrapIPv6(const std::string& host) {
 }
 
 std::string CanonicaliseHost(const std::string& host) {
-    std::string out = XER::Engine::Helper::String::ToLowerAscii(host);
+    std::string out = XER::Helper::String::ToLowerAscii(host);
     // Strip trailing dot.
     if (!out.empty() && out.back() == '.')
         out.pop_back();
@@ -131,7 +131,7 @@ bool SplitHostPort(const std::string& host_port_str,
 }
 
 std::string CanonicalizeScheme(const std::string& scheme) {
-    std::string out = XER::Engine::Helper::String::ToLowerAscii(scheme);
+    std::string out = XER::Helper::String::ToLowerAscii(scheme);
     return out;
 }
 
@@ -153,4 +153,4 @@ uint16_t DefaultPortForScheme(const std::string& scheme) {
     return 0;  // Unknown scheme
 }
 
-}  // namespace XER::network
+}  // namespace XER::Network

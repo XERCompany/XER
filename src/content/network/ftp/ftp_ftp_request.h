@@ -9,7 +9,7 @@
 #include <functional>
 #include <cstdint>
 
-namespace XER::network::ftp {
+namespace XER::Network::Ftp {
 
 enum class FtpTransferMode { kActive, kPassive };
 
@@ -32,4 +32,4 @@ struct FtpResponse {
 
 using FtpRequestCallback = std::function<void(FtpResponse)>;
 
-}  // namespace XER::network::ftp
+}  // namespace XER::Network::Ftp

@@ -1,7 +1,7 @@
 #pragma once
 #include "aug_base.h"
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 class AugBrightness : public AugBase {
 public:
@@ -13,4 +13,4 @@ private:
     float delta_ = 0.2f;
 };
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

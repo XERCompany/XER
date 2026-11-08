@@ -9,7 +9,7 @@
 typedef struct xnn_subgraph* xnn_subgraph_t;
 typedef struct xnn_runtime* xnn_runtime_t;
 
-namespace Engine::ModelsBuilder::Inference {
+namespace XER::ModelsBuilder::Inference {
 
 /// @brief XNNPACK-accelerated model inference engine
 /// 
@@ -94,4 +94,4 @@ private:
     std::vector<uint8_t> zero_points_;
 };
 
-} // namespace Engine::ModelsBuilder::Inference
+} // namespace XER::ModelsBuilder::Inference

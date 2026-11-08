@@ -11,7 +11,7 @@
 #include "cache/persistent_storage.h"
 #include "cache/temporary_storage.h"
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 
 class CacheManager {
 public:
@@ -60,4 +60,4 @@ private:
 	TemporaryStorage temporary_;
 };
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

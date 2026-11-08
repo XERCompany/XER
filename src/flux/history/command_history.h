@@ -5,7 +5,7 @@
 #include <string_view>
 #include <vector>
 
-namespace XER::flux::history {
+namespace XER::Flux::History {
 
 class CommandHistory {
 public:
@@ -30,4 +30,4 @@ private:
 	std::size_t cursor_ = 0;
 };
 
-}  // namespace XER::flux::history
+}  // namespace XER::Flux::History

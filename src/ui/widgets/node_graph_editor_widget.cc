@@ -80,7 +80,7 @@ Canvas::Canvas::Color MixC(Canvas::Canvas::Color a, Canvas::Canvas::Color b,
 Canvas::Canvas::Color CategoryColor(const std::string& category,
                                     const std::string& type) {
     const std::string key =
-        XER::Engine::Helper::String::ToLowerAscii(category + " " + type);
+        XER::Helper::String::ToLowerAscii(category + " " + type);
     auto has = [&key](std::string_view needle) {
         return key.find(needle) != std::string::npos;
     };
@@ -176,7 +176,7 @@ private:
 
 #ifdef _WIN32
 std::string Utf8FromWide(const std::wstring& w) {
-    return XER::Engine::Helper::String::WideToUtf8(w);
+    return XER::Helper::String::WideToUtf8(w);
 }
 
 std::wstring OpenFileDialog(HWND owner, const wchar_t* filter, const wchar_t* default_ext,
@@ -309,7 +309,7 @@ NodeGraphEditorWidget::NodeGraphEditorWidget(
     // Autosave preference (persisted by the settings panel).
     {
         std::string v, err;
-        if (XER::Engine::Cache::CacheManager::Instance().ReadPersistentText(
+        if (XER::Cache::CacheManager::Instance().ReadPersistentText(
                 "settings", "app", "autosave", &v, &err)) {
             autosave_enabled_ = !(v == "0" || v == "false");
         }
@@ -339,7 +339,7 @@ NodeGraphEditorWidget::NodeGraphEditorWidget(
     hooks.autosave_set = [this](bool v) {
         autosave_enabled_ = v;
         std::string err;
-        XER::Engine::Cache::CacheManager::Instance().WritePersistentText(
+        XER::Cache::CacheManager::Instance().WritePersistentText(
             "settings", "app", "autosave", v ? "1" : "0", &err);
         if (!v) {
             autosave_dirty_ = false;
@@ -383,7 +383,7 @@ NodeGraphEditorWidget::NodeGraphEditorWidget(
         }
     }
     if (saved.empty() &&
-        XER::Engine::Cache::CacheManager::Instance().ReadPersistentText(
+        XER::Cache::CacheManager::Instance().ReadPersistentText(
             "ui", "node_graph_editor", "autosave", &saved, &err) && !saved.empty()) {
         NG::Graph tmp;
         if (NG::DeserializeGraph(saved, &tmp, nullptr)) {
@@ -1647,12 +1647,12 @@ void NodeGraphEditorWidget::RebuildPaletteItems() {
     palette_titles_.clear();
     palette_cats_.clear();
     palette_types_.clear();
-    const std::string f = XER::Engine::Helper::String::ToLowerAscii(palette_filter_);
+    const std::string f = XER::Helper::String::ToLowerAscii(palette_filter_);
     auto& reg = NG::NodeTypeRegistry::Shared();
     for (const auto& type : reg.Types()) {
         const auto* d = reg.Find(type);
         if (d == nullptr) continue;
-        std::string hay = XER::Engine::Helper::String::ToLowerAscii(type + " " + d->title + " " + d->category);
+        std::string hay = XER::Helper::String::ToLowerAscii(type + " " + d->title + " " + d->category);
         if (!f.empty() && hay.find(f) == std::string::npos) continue;
         palette_types_.push_back(type);
         palette_titles_.push_back(d->title);
@@ -3582,8 +3582,8 @@ int NodeGraphEditorWidget::Autoconnect() {
         if (s.name == t.name) {
             v += 4.0;
         } else {
-            const std::string ls = XER::Engine::Helper::String::ToLowerAscii(s.name);
-            const std::string lt = XER::Engine::Helper::String::ToLowerAscii(t.name);
+            const std::string ls = XER::Helper::String::ToLowerAscii(s.name);
+            const std::string lt = XER::Helper::String::ToLowerAscii(t.name);
             if (!ls.empty() && !lt.empty() &&
                 (ls.find(lt) != std::string::npos ||
                  lt.find(ls) != std::string::npos)) {
@@ -3966,7 +3966,7 @@ NodeGraph::ProjectStore* NodeGraphEditorWidget::EnsureProjectStore() {
         return project_store_->IsOpen() ? project_store_.get() : nullptr;
     }
     namespace fs = std::filesystem;
-    auto& cache = XER::Engine::Cache::CacheManager::Instance();
+    auto& cache = XER::Cache::CacheManager::Instance();
     const auto dir = cache.Persistent().root() / "node_graph";
     std::error_code ec;
     fs::create_directories(dir, ec);
@@ -4013,7 +4013,7 @@ void NodeGraphEditorWidget::FlushAutosave() {
     }
     // Fallback mirror: cache-text blob (also feeds older recovery paths).
     std::string err;
-    if (XER::Engine::Cache::CacheManager::Instance().WritePersistentText(
+    if (XER::Cache::CacheManager::Instance().WritePersistentText(
             "ui", "node_graph_editor", "autosave", json, &err)) {
         last_autosave_ = std::chrono::steady_clock::now();
         autosave_dirty_ = false;

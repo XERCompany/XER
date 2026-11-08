@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 std::vector<WeightTensor> WeightLoader::Load(const std::string& filepath) const {
 	std::ifstream input(filepath, std::ios::binary);
@@ -52,4 +52,4 @@ std::vector<WeightTensor> WeightLoader::Load(const std::string& filepath) const 
 	return tensors;
 }
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

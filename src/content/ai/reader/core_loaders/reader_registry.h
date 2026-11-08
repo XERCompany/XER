@@ -7,7 +7,7 @@
 #include <string>
 #include <unordered_map>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 class ReaderRegistry {
  public:
@@ -25,5 +25,5 @@ class ReaderRegistry {
 	std::unordered_map<std::string, ReaderFactory> factories_;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

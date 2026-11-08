@@ -1,6 +1,6 @@
 #include "dataset_map.h"
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 void DatasetMap::Put(const std::string& key, std::shared_ptr<DatasetBase> dataset) {
 	if (!key.empty() && dataset != nullptr) {
@@ -24,5 +24,5 @@ void DatasetMap::Clear() {
 	datasets_.clear();
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

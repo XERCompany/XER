@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 /// Thrown when the model file's format version is not compatible with the
 /// reader (e.g. ONNX opset 20+ when only opsets ≤17 are supported).
@@ -17,4 +17,4 @@ public:
                              + " exceeds max supported " + std::to_string(max_supported)) {}
 };
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader

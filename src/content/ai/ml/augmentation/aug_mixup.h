@@ -1,7 +1,7 @@
 #pragma once
 #include "aug_base.h"
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 class AugMixup : public AugBase {
 public:
@@ -15,4 +15,4 @@ private:
     float SampleLambda() const;
 };
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

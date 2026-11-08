@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 float ValAccuracy::Compute(const std::vector<int>& predictions,
                             const std::vector<int>& ground_truth) {
@@ -31,4 +31,4 @@ float ValAccuracy::TopK(const std::vector<float>& probs, size_t n_classes,
     return static_cast<float>(correct) / static_cast<float>(n);
 }
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

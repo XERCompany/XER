@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 namespace {
 constexpr float kPi = 3.14159265358979323846f;
@@ -79,4 +79,4 @@ std::string WindowingFunctions::DescribeWindow(const std::vector<float>& window)
 		", span_bits=" + XER::AsyncIO::IO::LogDebug::DumpHelper::BitDump(encoded_span);
 }
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

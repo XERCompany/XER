@@ -8,7 +8,7 @@
 #include "content/network/url/url_request.h"
 #include "content/network/url/url_request_context.h"
 
-namespace XER::network::url {
+namespace XER::Network::Url {
 
 // Convenience wrappers around URLRequestJob.
 URLResponse SyncGet(const std::string& url,
@@ -21,4 +21,4 @@ URLResponse SyncPost(const std::string& url,
                      const URLRequestContext& ctx = {},
                      std::string* error = nullptr);
 
-}  // namespace XER::network::url
+}  // namespace XER::Network::Url

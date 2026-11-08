@@ -104,11 +104,11 @@ SvgDecoder::Rasterize(const std::string& path, int target_w, int target_h,
     auto buf = std::make_shared<ImageBuffer>(w, h, PixelFormat::RGBA8);
     buf->Clear(255, 255, 255, 255);
 
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         std::vector<uint32_t> px(w * h,
-            engine::bridge::skia::MakeColorRGBA(240, 240, 240, 255));
-        engine::bridge::skia::RasterClear(&px, w, h,
-            engine::bridge::skia::MakeColorRGBA(240, 240, 240, 255));
+            XER::Bridge::Skia::MakeColorRGBA(240, 240, 240, 255));
+        XER::Bridge::Skia::RasterClear(&px, w, h,
+            XER::Bridge::Skia::MakeColorRGBA(240, 240, 240, 255));
         uint8_t* dst = buf->Data();
         for (int i = 0, n = w * h; i < n; ++i) {
             const uint32_t c = px[i];

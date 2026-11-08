@@ -7,14 +7,14 @@
 #include <string>
 #include "content/network/url/url_request.h"
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 // Observer interface for HTTP network events.
 class HttpNetworkDelegate {
 public:
     virtual ~HttpNetworkDelegate() = default;
 
-    virtual void OnBeforeRequest(const url::URLRequest& req) {}
+    virtual void OnBeforeRequest(const Url::URLRequest& req) {}
     virtual void OnResponseStarted(int status_code) {}
     virtual void OnCompleted(bool ok, const std::string& error) {}
     virtual void OnRedirect(const std::string& new_url) {}
@@ -22,4 +22,4 @@ public:
 
 class DefaultHttpNetworkDelegate : public HttpNetworkDelegate {};
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

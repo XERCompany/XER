@@ -6,7 +6,7 @@
 
 #include "err_diagnostic_data.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 /// @brief Controls which diagnostic messages are forwarded to monitors
 ///
@@ -39,4 +39,4 @@ class LogFilter {
   static int LevelToRank(std::string_view level);
 };
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

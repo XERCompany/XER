@@ -72,11 +72,11 @@ std::wstring PickImageFile(HWND owner) {
 // column only stores the "icon.jpg" marker — the file path is always
 // derived from the project id.
 std::string ProjectIconDir(std::int64_t project_id) {
-    const auto dir = XER::Engine::Cache::CacheManager::Instance()
+    const auto dir = XER::Cache::CacheManager::Instance()
                          .Persistent()
                          .root() /
                      "node_graph" / "icons" / std::to_string(project_id);
-    return XER::Engine::Helper::String::WideToUtf8(dir.wstring());
+    return XER::Helper::String::WideToUtf8(dir.wstring());
 }
 
 std::string ProjectIconJpgPath(std::int64_t project_id) {
@@ -94,10 +94,10 @@ bool ConvertProjectAvatar(const std::string& src_utf8,
     const std::string dir = ProjectIconDir(project_id);
     std::error_code ec;
     std::filesystem::create_directories(
-        std::filesystem::path(XER::Engine::Helper::String::Utf8ToWide(dir)), ec);
+        std::filesystem::path(XER::Helper::String::Utf8ToWide(dir)), ec);
     if (ec) return false;
     std::string err;
-    return XER::engine::bridge::ffmpeg::ImageToJpeg(
+    return XER::Bridge::FFmpeg::ImageToJpeg(
         src_utf8, ProjectIconJpgPath(project_id), 256, &err);
 }
 
@@ -105,7 +105,7 @@ void RemoveProjectAvatar(std::int64_t project_id) {
     std::error_code ec;
     std::filesystem::remove(
         std::filesystem::path(
-            XER::Engine::Helper::String::Utf8ToWide(ProjectIconJpgPath(project_id))),
+            XER::Helper::String::Utf8ToWide(ProjectIconJpgPath(project_id))),
         ec);
 }
 
@@ -225,7 +225,7 @@ private:
         const std::wstring src = PickImageFile(
             static_cast<HWND>(owner_hwnd_));
         if (src.empty()) return;
-        picked_src_ = XER::Engine::Helper::String::WideToUtf8(src);
+        picked_src_ = XER::Helper::String::WideToUtf8(src);
         preview_path_ = picked_src_;
         has_icon_ = true;
 #endif
@@ -508,7 +508,7 @@ private:
         // Find the row to read the edited value.
         for (auto& g : graph_rows_) {
             if (g.name != old_name || !g.rename_input) continue;
-            std::string renamed = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(
+            std::string renamed = XER::Helper::String::TrimAsciiWhitespaceCopy(
                 g.rename_input->GetValue());
             if (!renamed.empty() && renamed != old_name && store_ != nullptr) {
                 std::string err;
@@ -713,7 +713,7 @@ std::string AvatarLetter(const std::string& name) {
 
 // Trim ASCII whitespace from both ends of a project/graph name.
 std::string TrimName(std::string s) {
-    return XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(s);
+    return XER::Helper::String::TrimAsciiWhitespaceCopy(s);
 }
 
 // "autosave" is the editor's internal autosave bucket — users must not
@@ -872,7 +872,7 @@ NodeGraph::ProjectStore* ProjectsWidget::ActiveStore() {
     if (mode_ != Mode::kBrowser) return nullptr;
     if (owned_store_ == nullptr || !owned_store_->IsOpen()) {
         const auto db_path =
-            XER::Engine::Cache::CacheManager::Instance().Persistent().root() /
+            XER::Cache::CacheManager::Instance().Persistent().root() /
             "node_graph" / "projects.db";
         owned_store_ = std::make_unique<NodeGraph::ProjectStore>(db_path.string());
         std::string err;
@@ -888,9 +888,9 @@ NodeGraph::ProjectStore* ProjectsWidget::ActiveStore() {
 
 bool ProjectsWidget::PassesFilter(const std::string& name) const {
     if (mode_ != Mode::kBrowser || search_input_ == nullptr) return true;
-    const std::string needle = XER::Engine::Helper::String::ToLowerAscii(search_input_->GetValue());
+    const std::string needle = XER::Helper::String::ToLowerAscii(search_input_->GetValue());
     if (needle.empty()) return true;
-    return XER::Engine::Helper::String::ToLowerAscii(name).find(needle) != std::string::npos;
+    return XER::Helper::String::ToLowerAscii(name).find(needle) != std::string::npos;
 }
 
 void ProjectsWidget::Notify(const std::string& text, bool is_error) {
@@ -1120,7 +1120,7 @@ void ProjectsWidget::PromptCreateProject() {
         // Persist the extra config fields chosen in the dialog.
         store->SaveProjectConfig(
             id, name, content->TakeVersion(),
-            XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(
+            XER::Helper::String::TrimAsciiWhitespaceCopy(
                 content->TakeCachePath()),
             content->TakeNodesData(), icon_value, nullptr);
         Notify("Created project '" + name + "'");
@@ -1251,7 +1251,7 @@ void ProjectsWidget::PromptProjectConfig(std::int64_t id,
         }
         std::string err;
         if (store->SaveProjectConfig(id, trimmed, content->TakeVersion(),
-                                     XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(content->TakeCachePath()),
+                                     XER::Helper::String::TrimAsciiWhitespaceCopy(content->TakeCachePath()),
                                      content->TakeNodesData(), icon_value,
                                      &err)) {
             if (trimmed != name) Notify("Saved project '" + trimmed + "'");

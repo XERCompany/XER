@@ -4,7 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 
-namespace Engine::MLData::Loading {
+namespace XER::MLData::Loading {
 
 CSVLoader::CSVLoader() : delimiter_(',') {
 }
@@ -69,4 +69,4 @@ bool CSVLoader::SaveDataset(const std::string& path, const Types::Dataset& datas
     return file.good();
 }
 
-} // namespace Engine::MLData::Loading
+} // namespace XER::MLData::Loading

@@ -8,7 +8,7 @@
 #include <absl/strings/string_view.h>
 #include <range/v3/view.hpp>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 Dataset LoaderBinary::Load(const std::string& path) {
     Dataset cached;
@@ -71,4 +71,4 @@ Dataset LoaderBinary::Load(const std::string& path) {
     return ds;
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

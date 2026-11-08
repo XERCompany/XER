@@ -1,6 +1,6 @@
 #include "onnx_node_map.h"
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 OnnxNodeMap& OnnxNodeMap::GetInstance() {
 	static OnnxNodeMap instance;
@@ -33,5 +33,5 @@ NodeMapping OnnxNodeMap::Resolve(const OnnxNode& node) const {
 	return NodeMapping{Core::LayerType::Dense, 32U, Core::ActivationType::Linear};
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Onnx
+}  // namespace XER::ModelsBuilder::Reader::Onnx
 

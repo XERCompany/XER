@@ -8,7 +8,7 @@
 
 #include "content/network/dns/host_resolver_impl.h"
 
-namespace XER::network::dns {
+namespace XER::Network::Dns {
 
 DnsResolver::DnsResolver(const DnsConfig& config)
     : config_(config),
@@ -33,4 +33,4 @@ void DnsResolver::ClearCache() {
     }
 }
 
-}  // namespace XER::network::dns
+}  // namespace XER::Network::Dns

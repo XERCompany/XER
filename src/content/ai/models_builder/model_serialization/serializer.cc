@@ -20,19 +20,19 @@
 #include <utility>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Serialization {
+namespace XER::ModelsBuilder::Serialization {
 
 namespace {
 
-using Engine::ModelsBuilder::Core::ActivationType;
-using Engine::ModelsBuilder::Core::DenseLayer;
-using Engine::ModelsBuilder::Core::Layer;
-using Engine::ModelsBuilder::Core::LayerType;
-using Engine::ModelsBuilder::Core::Model;
-using Engine::ModelsBuilder::Core::ModelType;
-using Engine::ModelsBuilder::Utility::ModelBuilderErrorCode;
-using Engine::ModelsBuilder::Utility::ModelBuilderErrorHandler;
-using Engine::ModelsBuilder::Utility::ModelBuilderLogger;
+using XER::ModelsBuilder::Core::ActivationType;
+using XER::ModelsBuilder::Core::DenseLayer;
+using XER::ModelsBuilder::Core::Layer;
+using XER::ModelsBuilder::Core::LayerType;
+using XER::ModelsBuilder::Core::Model;
+using XER::ModelsBuilder::Core::ModelType;
+using XER::ModelsBuilder::Utility::ModelBuilderErrorCode;
+using XER::ModelsBuilder::Utility::ModelBuilderErrorHandler;
+using XER::ModelsBuilder::Utility::ModelBuilderLogger;
 
 struct SerializedLayer {
     std::string name;
@@ -227,4 +227,4 @@ bool ModelSerializer::LoadModelState(const std::string& filepath, Core::Model& m
     return true;
 }
 
-} // namespace Engine::ModelsBuilder::Serialization
+} // namespace XER::ModelsBuilder::Serialization

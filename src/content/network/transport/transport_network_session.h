@@ -10,7 +10,7 @@
 
 #include "content/network/transport/transport_network_delegate.h"
 
-namespace XER::network::transport {
+namespace XER::Network::Transport {
 
 struct TransportSessionParams {
     std::string host;
@@ -40,4 +40,4 @@ private:
     int                       fd_       = -1;
 };
 
-}  // namespace XER::network::transport
+}  // namespace XER::Network::Transport

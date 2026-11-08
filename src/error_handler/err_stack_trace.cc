@@ -8,7 +8,7 @@
 #include <sstream>
 #include <vector>
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 std::string StackTrace::Capture(int skip_frames, int max_frames) {
   std::vector<void*> frames(static_cast<size_t>(max_frames));
@@ -37,4 +37,4 @@ std::string StackTrace::Summary(int frames) {
   return Capture(1, frames + 1);
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

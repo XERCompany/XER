@@ -9,13 +9,13 @@
 #include "custom_effect_accel.h"
 #include "custom_effect_core.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 namespace {
 
 constexpr float kPi = 3.14159265358979323846f;
 
 std::string NormalizeName(const std::string& text) {
-	std::string lowered = XER::Engine::Helper::String::ToLowerAscii(text);
+	std::string lowered = XER::Helper::String::ToLowerAscii(text);
 	std::string result;
 	result.reserve(lowered.size());
 	for (unsigned char ch : lowered) {
@@ -302,4 +302,4 @@ bool TryRunAdvancedCustomEffectPackage(
 	return true;
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

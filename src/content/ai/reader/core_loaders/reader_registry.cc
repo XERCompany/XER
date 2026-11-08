@@ -1,6 +1,6 @@
 #include "reader_registry.h"
 
-namespace Engine::ModelsBuilder::Reader {
+namespace XER::ModelsBuilder::Reader {
 
 ReaderRegistry& ReaderRegistry::GetInstance() {
 	static ReaderRegistry instance;
@@ -23,5 +23,5 @@ bool ReaderRegistry::Has(const std::string& extension) const {
 	return factories_.find(extension) != factories_.end();
 }
 
-}  // namespace Engine::ModelsBuilder::Reader
+}  // namespace XER::ModelsBuilder::Reader
 

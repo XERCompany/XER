@@ -1,6 +1,6 @@
 #include "rm_logger.h"
 
-namespace Engine::ModelsBuilder::Reader::Utils {
+namespace XER::ModelsBuilder::Reader::Utils {
 
 ReaderLogger& ReaderLogger::GetInstance() {
 	static ReaderLogger instance;
@@ -47,5 +47,5 @@ void ReaderLogger::Clear() {
 	entries_.clear();
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Utils
+}  // namespace XER::ModelsBuilder::Reader::Utils
 

@@ -9,7 +9,7 @@
 #include "async_io/async_file_writer.h"
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace XER::Engine::Audio::CodecIO {
+namespace XER::Audio::CodecIO {
 
 class CodecFileStreamer {
 public:
@@ -30,4 +30,4 @@ private:
     bool writing_open_;
 };
 
-}  // namespace XER::Engine::Audio::CodecIO
+}  // namespace XER::Audio::CodecIO

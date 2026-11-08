@@ -1,7 +1,7 @@
 #pragma once
 #include <array>
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
     using Matrix4x4 = std::array<float, 16>;
 
     Matrix4x4 M44Identity();

@@ -6,7 +6,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "audio/dsp_algorithms/dsp_delay_line_circular.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 // Amplitude modulation: output = input * (1 - depth/2 + depth/2 * lfo).
 class ModTremolo {
@@ -49,7 +49,7 @@ private:
 	float depth_ms_ = 4.0f;
 	float mix_ = 1.0f;
 	float lfo_phase_ = 0.0f;
-	XER::Engine::Audio::DSP::CircularDelayLine delay_line_;
+	XER::Audio::DSP::CircularDelayLine delay_line_;
 	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
@@ -73,4 +73,4 @@ private:
 	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

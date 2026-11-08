@@ -1,6 +1,6 @@
 #include "mb_error_handler.h"
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 ModelBuilderErrorHandler& ModelBuilderErrorHandler::GetInstance() {
 	static ModelBuilderErrorHandler instance;
@@ -55,4 +55,4 @@ void ModelBuilderErrorHandler::PushIssue(ModelBuilderErrorCode code,
 	issues_.push_back(ModelBuilderIssue{code, severity, message, source, std::chrono::system_clock::now()});
 }
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility

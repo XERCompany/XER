@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Fully-connected (linear/dense) layer
 class LayerLinear : public Core::Layer {
@@ -25,4 +25,4 @@ class LayerLinear : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeLinear(const std::string& name,
                                           LayerLinear::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

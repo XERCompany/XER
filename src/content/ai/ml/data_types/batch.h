@@ -4,7 +4,7 @@
 #include <vector>
 #include <memory>
 
-namespace Engine::MLData::Types {
+namespace XER::MLData::Types {
 
 class Batch {
 public:
@@ -24,4 +24,4 @@ private:
     size_t expected_size_;
 };
 
-} // namespace Engine::MLData::Types
+} // namespace XER::MLData::Types

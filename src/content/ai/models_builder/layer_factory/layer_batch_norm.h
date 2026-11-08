@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Batch normalization layer
 class LayerBatchNorm : public Core::Layer {
@@ -26,4 +26,4 @@ class LayerBatchNorm : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeBatchNorm(const std::string& name,
                                               LayerBatchNorm::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

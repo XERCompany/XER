@@ -21,7 +21,7 @@ int GuessBytesPerPixel(const std::string& pixel_format) {
     return 0;
 }
 
-void EnsureFrameLineSizes(engine::bridge::ffmpeg::VideoFrameInfo* frame) {
+void EnsureFrameLineSizes(XER::Bridge::FFmpeg::VideoFrameInfo* frame) {
     if (frame == nullptr || !frame->line_sizes.empty()) return;
     if (frame->width <= 0 || frame->height <= 0) return;
 
@@ -51,11 +51,11 @@ bool ImageSaver::Save(const ImageBuffer& img, const std::string& path, int quali
 }
 
 bool ImageSaver::SavePng(const ImageBuffer& img, const std::string& path) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) return false;
+    if (!XER::Bridge::FFmpeg::IsAvailable()) return false;
     if (!img.IsValid()) return false;
     int w = img.Width(), h = img.Height();
     // Build VideoFrameInfo-compatible frame
-    engine::bridge::ffmpeg::EncodeVideoParams p;
+    XER::Bridge::FFmpeg::EncodeVideoParams p;
     p.output_path  = path;
     p.codec_name   = "png";
     p.width        = w;
@@ -64,14 +64,14 @@ bool ImageSaver::SavePng(const ImageBuffer& img, const std::string& path) {
     p.fps_den      = 1;
     p.pixel_format = "rgba";
 
-    engine::bridge::ffmpeg::VideoFrameInfo fr;
+    XER::Bridge::FFmpeg::VideoFrameInfo fr;
     fr.width  = w; fr.height = h;
     fr.pixel_format = "rgba";
     fr.data.assign(img.Data(), img.Data() + img.DataSize());
     EnsureFrameLineSizes(&fr);
 
     std::string err;
-    if (!engine::bridge::ffmpeg::EncodeVideoFrames(p, {fr}, &err)) {
+    if (!XER::Bridge::FFmpeg::EncodeVideoFrames(p, {fr}, &err)) {
         flux::core::Logger().Error("ImageSaver", "PNG save failed: " + err);
         return false;
     }
@@ -80,10 +80,10 @@ bool ImageSaver::SavePng(const ImageBuffer& img, const std::string& path) {
 
 bool ImageSaver::SaveJpeg(const ImageBuffer& img, const std::string& path,
                            int quality) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) return false;
+    if (!XER::Bridge::FFmpeg::IsAvailable()) return false;
     if (!img.IsValid()) return false;
     int w = img.Width(), h = img.Height();
-    engine::bridge::ffmpeg::EncodeVideoParams p;
+    XER::Bridge::FFmpeg::EncodeVideoParams p;
     p.output_path  = path;
     p.codec_name   = "mjpeg";
     p.width        = w;
@@ -93,14 +93,14 @@ bool ImageSaver::SaveJpeg(const ImageBuffer& img, const std::string& path,
     p.pixel_format = "rgba";
     (void)quality;
 
-    engine::bridge::ffmpeg::VideoFrameInfo fr;
+    XER::Bridge::FFmpeg::VideoFrameInfo fr;
     fr.width=w; fr.height=h;
     fr.pixel_format="rgba";
     fr.data.assign(img.Data(), img.Data()+img.DataSize());
     EnsureFrameLineSizes(&fr);
 
     std::string err;
-    if (!engine::bridge::ffmpeg::EncodeVideoFrames(p, {fr}, &err)) {
+    if (!XER::Bridge::FFmpeg::EncodeVideoFrames(p, {fr}, &err)) {
         flux::core::Logger().Error("ImageSaver", "JPEG save failed: " + err);
         return false;
     }

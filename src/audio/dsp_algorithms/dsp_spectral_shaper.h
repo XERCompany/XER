@@ -8,7 +8,7 @@
 
 #include "dsp_stft_processor.h"
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 class SpectralShaper {
 public:
@@ -30,4 +30,4 @@ private:
 	XER::AsyncIO::IO::Sync::MutexWrapper mutex_;
 };
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

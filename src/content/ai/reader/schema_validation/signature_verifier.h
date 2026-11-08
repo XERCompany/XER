@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 /// @brief Verifies cryptographic signatures on model files (planned)
 ///
@@ -21,4 +21,4 @@ class SignatureVerifier {
   static std::string ComputeSha256(const uint8_t* data, size_t size);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

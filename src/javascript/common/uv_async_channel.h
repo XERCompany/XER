@@ -6,7 +6,7 @@
 #include <mutex>
 #include <queue>
 
-namespace engine::javascript::common {
+namespace XER::JavaScript::Common {
 
 class UvAsyncChannel {
 public:
@@ -31,4 +31,4 @@ private:
     bool running_ = false;
 };
 
-}  // namespace engine::javascript::common
+}  // namespace XER::JavaScript::Common

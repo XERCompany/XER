@@ -1,7 +1,7 @@
 #pragma once
 #include "loader_base.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// Minimal JSON dataset loader (expects flat array-of-arrays format)
 /// Format: [[f0,f1,...,label], ...] or {"X":[[...]], "y":[...]}
@@ -14,4 +14,4 @@ private:
     bool has_labels_;
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 enum class LossType : uint8_t {
     MeanSquaredError = 0,
@@ -27,4 +27,4 @@ public:
     std::string GetLossName() const override { return "MSE"; }
 };
 
-} // namespace Engine::ModelsBuilder::Optimization
+} // namespace XER::ModelsBuilder::Optimization

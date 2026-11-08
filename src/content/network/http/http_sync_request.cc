@@ -19,7 +19,7 @@
 #include <algorithm>
 #include <cctype>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 namespace {
 
 size_t WriteBody(char* ptr, size_t size, size_t nmemb, void* userdata) {
@@ -41,9 +41,9 @@ size_t WriteHeader(char* ptr, size_t size, size_t nmemb, void* userdata) {
     if (colon == std::string_view::npos) {
         return size * nmemb;  // status line / stray line
     }
-    const std::string name = XER::Engine::Helper::String::ToLowerAscii(line.substr(0, colon));
+    const std::string name = XER::Helper::String::ToLowerAscii(line.substr(0, colon));
     std::string value(line.substr(colon + 1));
-    value = XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(value);
+    value = XER::Helper::String::TrimAsciiWhitespaceCopy(value);
     (*headers)[std::move(name)] = std::move(value);
     return size * nmemb;
 }
@@ -108,4 +108,4 @@ SyncResponse SyncRequest(const std::string& method,
     return r;
 }
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

@@ -93,7 +93,7 @@
 #define ENGINE_SKIA_NATIVE_CODEC 0
 #endif
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
 
 namespace {
 
@@ -519,7 +519,7 @@ uint32_t UnpremultiplyAlpha(uint32_t rgba) {
 }
 
 std::string NormalizeBlendModeName(const std::string& mode_name) {
-    std::string key = XER::Engine::Helper::String::ToLowerAscii(mode_name);
+    std::string key = XER::Helper::String::ToLowerAscii(mode_name);
     key.erase(std::remove_if(key.begin(), key.end(), [](unsigned char ch) {
         return std::isspace(ch) != 0;
     }), key.end());
@@ -530,7 +530,7 @@ std::string NormalizeBlendModeName(const std::string& mode_name) {
     }
 
     for (const auto& mode : BlendModesStorage()) {
-        if (XER::Engine::Helper::String::ToLowerAscii(mode) == key) {
+        if (XER::Helper::String::ToLowerAscii(mode) == key) {
             return mode;
         }
     }
@@ -1293,4 +1293,4 @@ bool DecodeImage(const std::vector<uint8_t>& bytes,
 #endif
 }
 
-}  // namespace XER::engine::bridge::skia
+}  // namespace XER::Bridge::Skia

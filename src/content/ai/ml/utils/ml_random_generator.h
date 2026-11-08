@@ -5,7 +5,7 @@
 #include <random>
 #include <vector>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 class MlRandomGenerator {
  public:
@@ -28,5 +28,5 @@ class MlRandomGenerator {
 	std::mt19937_64 engine_;
 };
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

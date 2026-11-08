@@ -4,7 +4,7 @@
 #include <utility>
 #include <vector>
 
-namespace XER::flux::history {
+namespace XER::Flux::History {
 
 ActionHistory::ActionHistory(std::size_t max_entries)
 	: max_entries_(max_entries == 0 ? 1 : max_entries) {}
@@ -43,4 +43,4 @@ std::vector<ActionRecord> ActionHistory::Recent(std::size_t limit) const {
 	return std::vector<ActionRecord>(entries_.end() - static_cast<std::ptrdiff_t>(limit), entries_.end());
 }
 
-}  // namespace XER::flux::history
+}  // namespace XER::Flux::History

@@ -18,7 +18,7 @@
 #include <stdexcept>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Onnx {
+namespace XER::ModelsBuilder::Reader::Onnx {
 
 std::shared_ptr<Core::Model> OnnxLoader::Load(const std::string& filepath) {
     Utils::ReaderLogger::GetInstance().Info("Loading ONNX model from path: " + filepath);
@@ -90,7 +90,7 @@ std::shared_ptr<Core::Model> OnnxLoader::LoadFromBuffer(const uint8_t* buffer,
             units = 32U;
         }
 
-        auto layer = std::make_shared<::Engine::ModelsBuilder::Core::DenseLayer>(units);
+        auto layer = std::make_shared<::XER::ModelsBuilder::Core::DenseLayer>(units);
         layer->SetLayerName(node.name.empty() ? ("dense_" + node.op_type) : node.name);
         if (mapping.activation.has_value()) {
             layer->SetActivation(*mapping.activation);
@@ -99,7 +99,7 @@ std::shared_ptr<Core::Model> OnnxLoader::LoadFromBuffer(const uint8_t* buffer,
     }
 
     if (model->GetLayerCount() == 0U) {
-        model->AddLayer(std::make_shared<::Engine::ModelsBuilder::Core::DenseLayer>(32U));
+        model->AddLayer(std::make_shared<::XER::ModelsBuilder::Core::DenseLayer>(32U));
     }
 
     if (!model->Build({1U, 128U})) {
@@ -139,4 +139,4 @@ std::string OnnxLoader::GetMetadata(const std::string& filepath) {
     return ss.str();
 }
 
-} // namespace Engine::ModelsBuilder::Reader::Onnx
+} // namespace XER::ModelsBuilder::Reader::Onnx

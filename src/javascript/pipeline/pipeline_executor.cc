@@ -3,9 +3,9 @@
 #include "javascript/common/compression_codec.h"
 #include "javascript/common/text_normalizer.h"
 
-namespace engine::javascript::pipeline {
+namespace XER::JavaScript::Pipeline {
 
-PipelineExecutor::PipelineExecutor(engine::javascript::events::EventRouter* router)
+PipelineExecutor::PipelineExecutor(XER::JavaScript::Events::EventRouter* router)
     : router_(router) {}
 
 std::size_t PipelineExecutor::PublishRaw(const std::string& topic, const std::string& text) {
@@ -13,8 +13,8 @@ std::size_t PipelineExecutor::PublishRaw(const std::string& topic, const std::st
         return 0;
     }
 
-    const std::string normalized_topic = engine::javascript::common::TextNormalizer::NormalizeTopic(topic);
-    const std::string normalized_text = engine::javascript::common::TextNormalizer::NormalizeText(text);
+    const std::string normalized_topic = XER::JavaScript::Common::TextNormalizer::NormalizeTopic(topic);
+    const std::string normalized_text = XER::JavaScript::Common::TextNormalizer::NormalizeText(text);
     return router_->Publish(normalized_topic, normalized_text);
 }
 
@@ -25,7 +25,7 @@ std::size_t PipelineExecutor::PublishCompressed(
         return 0;
     }
 
-    auto text = engine::javascript::common::CompressionCodec::DecompressToString(compressed);
+    auto text = XER::JavaScript::Common::CompressionCodec::DecompressToString(compressed);
     if (!text.has_value()) {
         return 0;
     }
@@ -33,4 +33,4 @@ std::size_t PipelineExecutor::PublishCompressed(
     return PublishRaw(topic, *text);
 }
 
-}  // namespace engine::javascript::pipeline
+}  // namespace XER::JavaScript::Pipeline

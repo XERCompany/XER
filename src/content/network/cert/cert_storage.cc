@@ -7,7 +7,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace XER::network::cert {
+namespace XER::Network::Cert {
 
 CertStorage::CertStorage(const std::string& bundle_path) {
     if (!bundle_path.empty()) Load(bundle_path);
@@ -54,4 +54,4 @@ std::string CertStorage::SystemCaBundlePath() {
     return {};
 }
 
-}  // namespace XER::network::cert
+}  // namespace XER::Network::Cert

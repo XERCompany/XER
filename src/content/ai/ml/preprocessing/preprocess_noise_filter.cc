@@ -1,6 +1,6 @@
 #include "preprocess_noise_filter.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 std::vector<std::vector<float>> PreprocessNoiseFilter::Transform(
         const std::vector<std::vector<float>>& X) const {
@@ -22,4 +22,4 @@ std::vector<std::vector<float>> PreprocessNoiseFilter::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

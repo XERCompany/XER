@@ -3,7 +3,7 @@
 #include "err_monitor.h"
 #include "err_diagnostic_data.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 bool ExceptionWrapper::TryCatch(std::string_view component,
                                  std::function<void()> work) noexcept {
@@ -25,4 +25,4 @@ void ExceptionWrapper::ReportCaughtException(std::string_view component,
   } catch (...) {}
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

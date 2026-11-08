@@ -12,7 +12,7 @@
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 static std::string Base64Encode(const std::string& in) {
     BIO* b64 = BIO_new(BIO_f_base64());
@@ -40,11 +40,11 @@ std::string BuildAuthorizationHeader(const HttpAuthCredentials& creds) {
 }
 
 AuthScheme ParseAuthChallenge(const std::string& challenge) {
-    const std::string lc = XER::Engine::Helper::String::ToLowerAscii(challenge);
+    const std::string lc = XER::Helper::String::ToLowerAscii(challenge);
     if (lc.find("bearer") == 0)  return AuthScheme::kBearer;
     if (lc.find("digest") == 0)  return AuthScheme::kDigest;
     if (lc.find("basic")  == 0)  return AuthScheme::kBasic;
     return AuthScheme::kNone;
 }
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

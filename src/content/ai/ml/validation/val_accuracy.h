@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// Accuracy score: (TP + TN) / N
 struct ValAccuracy {
@@ -17,4 +17,4 @@ struct ValAccuracy {
                        const std::vector<int>& ground_truth, int k = 5);
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

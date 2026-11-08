@@ -3,7 +3,7 @@
 #include <cuda_runtime.h>
 #include <cstddef>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 /// @brief Tensor reduction operations on GPU
 /// 
@@ -50,4 +50,4 @@ public:
                                         cudaStream_t stream = 0);
 };
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

@@ -6,19 +6,19 @@
 
 #include "content/network/proxy/socks_client_socket.h"
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
 // static
 std::unique_ptr<TcpClientSocket>
-SocketProxy::ConnectThrough(const proxy::ProxyServer& proxy,
+SocketProxy::ConnectThrough(const Proxy::ProxyServer& proxy,
                              const std::string& target_host,
                              uint16_t target_port,
                              std::string* error) {
     auto sock = std::make_unique<TcpClientSocket>();
     if (!sock->Connect(proxy.host, proxy.port, error)) return nullptr;
 
-    if (proxy.type == proxy::ProxyType::kHttp ||
-        proxy.type == proxy::ProxyType::kHttps) {
+    if (proxy.type == Proxy::ProxyType::kHttp ||
+        proxy.type == Proxy::ProxyType::kHttps) {
         // HTTP CONNECT tunnel
         const std::string req =
             "CONNECT " + target_host + ":" + std::to_string(target_port) +
@@ -34,12 +34,12 @@ SocketProxy::ConnectThrough(const proxy::ProxyServer& proxy,
             if (error) *error = "HTTP CONNECT failed: " + resp;
             return nullptr;
         }
-    } else if (proxy.type == proxy::ProxyType::kSocks4 ||
-               proxy.type == proxy::ProxyType::kSocks5) {
-        proxy::SocksClientSocket socks(sock->stream()->fd(), proxy);
+    } else if (proxy.type == Proxy::ProxyType::kSocks4 ||
+               proxy.type == Proxy::ProxyType::kSocks5) {
+        Proxy::SocksClientSocket socks(sock->stream()->fd(), proxy);
         if (!socks.Handshake(target_host, target_port, error)) return nullptr;
     }
     return sock;
 }
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

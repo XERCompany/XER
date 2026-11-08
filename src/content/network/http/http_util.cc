@@ -10,14 +10,14 @@
 #include <sstream>
 #include <vector>
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 std::string TrimWhitespace(const std::string& s) {
-    return XER::Engine::Helper::String::TrimAsciiWhitespaceCopy(s);
+    return XER::Helper::String::TrimAsciiWhitespaceCopy(s);
 }
 
 bool IEqualASCII(const std::string& a, const std::string& b) {
-    return XER::Engine::Helper::String::EqualsIgnoreAsciiCase(a, b);
+    return XER::Helper::String::EqualsIgnoreAsciiCase(a, b);
 }
 
 std::vector<std::string> SplitHeaderValue(const std::string& value, char delimiter) {
@@ -63,4 +63,4 @@ std::string ReasonPhrase(int code) {
     }
 }
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

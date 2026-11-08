@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// K-Fold cross-validation index splitter
 class ValKFold {
@@ -26,4 +26,4 @@ private:
     unsigned int seed_;
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

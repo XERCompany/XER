@@ -4,7 +4,7 @@
  
 #include <fftw3.h> 
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 class SynthOscWavetable {
 public:
@@ -19,4 +19,4 @@ private:
     float phase_ = 0.0f;
 };
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

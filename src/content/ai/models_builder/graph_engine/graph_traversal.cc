@@ -4,7 +4,7 @@
 #include <stack>
 #include <unordered_set>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 // Helper: build producer map (output tensor → node id)
 static std::unordered_map<std::string, int64_t>
@@ -77,4 +77,4 @@ void GraphTraversal::DFS(const GraphBase& graph, const Visitor& visitor,
   }
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

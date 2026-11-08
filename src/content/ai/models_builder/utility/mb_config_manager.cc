@@ -1,6 +1,6 @@
 #include "mb_config_manager.h"
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 MbConfigManager& MbConfigManager::Instance() {
   static MbConfigManager inst;
@@ -44,4 +44,4 @@ bool MbConfigManager::Has(const std::string& key) const {
   return store_.count(key) > 0;
 }
 
-}  // namespace Engine::ModelsBuilder::Utility
+}  // namespace XER::ModelsBuilder::Utility

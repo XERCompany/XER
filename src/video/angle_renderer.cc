@@ -13,11 +13,11 @@ static flux::core::Logger& Log() {
 AngleRenderer::~AngleRenderer() { Shutdown(); }
 
 bool AngleRenderer::Initialize(const std::string& /*device_hint*/) {
-    bool angle_ok = engine::bridge::angle::IsAvailable();
+    bool angle_ok = XER::Bridge::Angle::IsAvailable();
     Log().Info("AngleRenderer",
                std::string("ANGLE: ") +
                (angle_ok ? "available" : "not available") +
-               " | " + engine::bridge::angle::Summary());
+               " | " + XER::Bridge::Angle::Summary());
     ready_ = angle_ok;
     return ready_;
 }

@@ -1,7 +1,7 @@
 #include "preprocess_zscore.h"
 #include "preprocess_standardizer.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 void PreprocessZscore::Fit(const std::vector<std::vector<float>>& X) {
     PreprocessStandardizer s;
@@ -20,4 +20,4 @@ std::vector<std::vector<float>> PreprocessZscore::Transform(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

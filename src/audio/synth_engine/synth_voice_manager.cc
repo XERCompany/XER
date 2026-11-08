@@ -1,6 +1,6 @@
 #include "synth_voice_manager.h"
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 void SynthVoiceManager::SetMaxVoices(uint32_t max_voices) {
     polyphony_.SetMaxVoices(max_voices);
@@ -54,4 +54,4 @@ size_t SynthVoiceManager::GetResidentVoiceCount() const {
     return voices_.size();
 }
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

@@ -6,7 +6,7 @@
 
 #include <fstream>
 
-namespace Engine::ModelsBuilder::HardwareBinding {
+namespace XER::ModelsBuilder::HardwareBinding {
 
 void TensorRtConverter::SetConfig(const TensorRtConfig& config) {
 	config_ = config;
@@ -76,5 +76,5 @@ bool TensorRtConverter::Convert(const Core::Model& model, const std::string& out
 	return true;
 }
 
-}  // namespace Engine::ModelsBuilder::HardwareBinding
+}  // namespace XER::ModelsBuilder::HardwareBinding
 

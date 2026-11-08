@@ -4,7 +4,7 @@
 
 #include <algorithm>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 DatasetBase DatasetSampler::SampleFraction(const DatasetBase& dataset, float fraction, uint64_t seed) {
 	if (fraction <= 0.0f || dataset.Empty()) {
@@ -29,5 +29,5 @@ DatasetBase DatasetSampler::SampleCount(const DatasetBase& dataset, size_t count
 	return sampled;
 }
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

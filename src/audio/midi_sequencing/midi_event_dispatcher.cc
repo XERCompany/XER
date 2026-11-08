@@ -1,6 +1,6 @@
 #include "midi_event_dispatcher.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 void MidiEventDispatcher::AddListener(const Callback& cb) {
     XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
@@ -24,4 +24,4 @@ void MidiEventDispatcher::DispatchBatch(const std::vector<MidiEvent>& events) {
 	}
 }
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

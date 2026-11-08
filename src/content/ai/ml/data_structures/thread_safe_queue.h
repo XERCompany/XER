@@ -6,7 +6,7 @@
 #include <optional>
 #include <queue>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 template <typename T>
 class ThreadSafeQueue {
@@ -59,5 +59,5 @@ class ThreadSafeQueue {
 	std::queue<T> queue_;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

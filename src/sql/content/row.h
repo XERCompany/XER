@@ -8,7 +8,7 @@
 
 #include "sql/content/value.h"
 
-namespace XER::Engine::SQL::Content {
+namespace XER::SQL::Content {
 
 class Row {
 public:
@@ -30,4 +30,4 @@ private:
 	std::vector<Value> values_;
 };
 
-}  // namespace XER::Engine::SQL::Content
+}  // namespace XER::SQL::Content

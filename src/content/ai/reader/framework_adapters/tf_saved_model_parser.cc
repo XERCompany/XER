@@ -6,7 +6,7 @@
 
 namespace fs = std::filesystem;
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 LoadResult TfSavedModelParser::Load(const std::string& filepath) {
   // Check if filepath is a directory containing saved_model.pb
@@ -29,4 +29,4 @@ bool TfSavedModelParser::CanLoad(const std::string& filepath) const {
   return fs::exists(pb);
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

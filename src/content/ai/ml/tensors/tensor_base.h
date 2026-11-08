@@ -4,7 +4,7 @@
 #include <cstddef>
 #include <vector>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 /// Base utilities: shape arithmetic, strides, flat-index conversion
 struct TensorBase {
@@ -27,4 +27,4 @@ struct TensorBase {
                                                const std::vector<size_t>& b);
 };
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

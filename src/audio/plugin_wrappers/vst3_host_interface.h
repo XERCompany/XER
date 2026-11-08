@@ -8,7 +8,7 @@
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "plugin_builtin_host.h"
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 class Vst3ExternalHost;
 
@@ -56,4 +56,4 @@ private:
 	BackendMode backend_mode_ = BackendMode::kNone;
 };
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

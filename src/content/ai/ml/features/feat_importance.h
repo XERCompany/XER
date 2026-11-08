@@ -3,7 +3,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ML::Features {
+namespace XER::ML::Features {
 
 struct ImportanceScore {
     size_t feature_index = 0;
@@ -26,4 +26,4 @@ public:
     static std::vector<size_t> TopK(const std::vector<ImportanceScore>& scores, size_t k);
 };
 
-}  // namespace Engine::ML::Features
+}  // namespace XER::ML::Features

@@ -3,7 +3,7 @@
 #include <cmath>
 #include <random>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugZoom::AugZoom(float min_f, float max_f) : min_factor_(min_f), max_factor_(max_f) {}
 
@@ -32,4 +32,4 @@ bool AugZoom::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

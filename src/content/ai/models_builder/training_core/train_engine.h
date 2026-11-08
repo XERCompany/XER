@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 struct TrainConfig {
   int   epochs{10};
@@ -41,4 +41,4 @@ class TrainEngine {
   int current_epoch_{0};
 };
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

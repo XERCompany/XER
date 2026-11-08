@@ -7,7 +7,7 @@
 
 #include "helper/string_utils.h"
 
-namespace XER::flux::core {
+namespace XER::Flux::Core {
 namespace {
 
 std::string EnvString(const char* key, const std::string& fallback = {}) {
@@ -23,7 +23,7 @@ absl::string_view AsAbsl(std::string_view text) {
 }
 
 bool EnvBool(const char* key) {
-	const std::string raw = XER::Engine::Helper::String::CanonicalizeToken(EnvString(key));
+	const std::string raw = XER::Helper::String::CanonicalizeToken(EnvString(key));
 	return raw == "1" || raw == "true" || raw == "on" || raw == "yes";
 }
 
@@ -44,21 +44,21 @@ std::size_t EnvPositiveSize(const char* key, std::size_t fallback) {
 
 FluxConfig FluxConfigFromEnvironment() {
 	FluxConfig config;
-	config.application_name = XER::Engine::Helper::String::DefaultString(
+	config.application_name = XER::Helper::String::DefaultString(
 		EnvString("FLUX_APP_NAME", EnvString("ENGINE_APP_NAME", "flux")),
 		"flux");
 	config.log_level = ParseLogLevel(EnvString("FLUX_LOG_LEVEL", EnvString("ENGINE_LOG_LEVEL", "info")));
 	config.colors = !EnvBool("FLUX_NO_COLOR") && !EnvBool("ENGINE_STACK_FORMATING_NO_COLOR");
 	config.timestamps = EnvBool("FLUX_TIMESTAMPS") || EnvBool("ENGINE_TIMESTAMPS");
-	config.terminal_size = terminal::DetectTerminalSize();
+	config.terminal_size = Terminal::DetectTerminalSize();
 	config.terminal_size.columns = EnvPositiveSize("FLUX_COLUMNS", config.terminal_size.columns);
 	config.terminal_size.rows = EnvPositiveSize("FLUX_ROWS", config.terminal_size.rows);
-	config.terminal_size = terminal::ClampTerminalSize(config.terminal_size, 20, 5);
+	config.terminal_size = Terminal::ClampTerminalSize(config.terminal_size, 20, 5);
 	return config;
 }
 
 LogLevel ParseLogLevel(std::string_view text) {
-	const std::string token = XER::Engine::Helper::String::CanonicalizeToken(AsAbsl(text));
+	const std::string token = XER::Helper::String::CanonicalizeToken(AsAbsl(text));
 	if (token == "debug") {
 		return LogLevel::kDebug;
 	}
@@ -95,4 +95,4 @@ std::string BuildConfigSummary(const FluxConfig& config) {
 		", interactive=", config.terminal_size.interactive ? "true" : "false");
 }
 
-}  // namespace XER::flux::core
+}  // namespace XER::Flux::Core

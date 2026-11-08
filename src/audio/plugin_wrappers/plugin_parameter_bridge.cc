@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 void PluginParameterBridge::Clear() {
     XER::AsyncIO::IO::Sync::MutexWrapper::ScopedLock lock(mutex_);
@@ -100,4 +100,4 @@ std::vector<PluginParameterInfo> PluginParameterBridge::Snapshot() const {
     return snapshot;
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

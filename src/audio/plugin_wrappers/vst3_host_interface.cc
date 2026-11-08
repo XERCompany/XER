@@ -9,7 +9,7 @@
 namespace {
 
 std::string NormalizeBuiltinReference(std::string reference) {
-    reference = XER::Engine::Helper::String::ToLowerAscii(reference);
+    reference = XER::Helper::String::ToLowerAscii(reference);
     constexpr const char* kBuiltinPrefix = "builtin://";
     if (reference.rfind(kBuiltinPrefix, 0) == 0) {
         reference.erase(0, std::char_traits<char>::length(kBuiltinPrefix));
@@ -33,7 +33,7 @@ bool IsBuiltinPluginReference(const std::string& reference) {
 
 }  // namespace
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 Vst3HostInterface::Vst3HostInterface() = default;
 
@@ -188,4 +188,4 @@ void Vst3HostInterface::RemovePluginEditor() {
     }
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::Synth {
+namespace XER::Audio::Synth {
 
 void SynthFilterLadder::SetCutoff(float normalized) {
     cutoff_ = std::clamp(normalized, 0.001f, 0.99f);
@@ -21,4 +21,4 @@ float SynthFilterLadder::Process(float sample) {
     return z4_;
 }
 
-}  // namespace XER::Engine::Audio::Synth
+}  // namespace XER::Audio::Synth

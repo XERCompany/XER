@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::LayerFactory {
+namespace XER::ModelsBuilder::LayerFactory {
 
 /// @brief Recurrent layer (LSTM or GRU)
 class LayerRecurrent : public Core::Layer {
@@ -31,4 +31,4 @@ class LayerRecurrent : public Core::Layer {
 std::shared_ptr<Core::Layer> MakeRecurrent(const std::string& name,
                                               LayerRecurrent::Config config);
 
-}  // namespace Engine::ModelsBuilder::LayerFactory
+}  // namespace XER::ModelsBuilder::LayerFactory

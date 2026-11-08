@@ -8,7 +8,7 @@
 #include "async_io/async_buffer_pool.h"
 #include "async_io/log_and_debug/io_perf_counter.h"
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 class ConvolutionEngine {
 public:
@@ -32,4 +32,4 @@ private:
 	XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
 };
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

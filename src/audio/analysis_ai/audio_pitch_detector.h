@@ -5,7 +5,7 @@
 #include <memory>
  
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 struct PitchInfo {
     float frequency;
@@ -43,4 +43,4 @@ private:
     float AutocorrelationPeak(const float* audio, size_t frame_count) const;
 };
 
-}  // namespace XER::Engine::Audio::AnalysisAI
+}  // namespace XER::Audio::AnalysisAI

@@ -146,7 +146,7 @@ AudioBuffer WhisperTranscriber::ConvertFormat(const AudioBuffer& buffer, AudioFo
 
 // LocalWhisperTranscriber implementation
 LocalWhisperTranscriber::LocalWhisperTranscriber()
-    : audio_engine_(std::make_shared<Engine::Audio::Core::AudioEngine>()),
+    : audio_engine_(std::make_shared<XER::Audio::Core::AudioEngine>()),
       real_time_active_(false) {
 
     audio_engine_->Initialize(16000, 512, 1);

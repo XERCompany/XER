@@ -2,7 +2,7 @@
 
 #include <limits>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 EarlyStopping::EarlyStopping(int patience, float min_delta)
     : patience_(patience), min_delta_(min_delta),
@@ -18,4 +18,4 @@ bool EarlyStopping::ShouldStop(float current_metric) {
   return counter_ >= patience_;
 }
 
-}  // namespace Engine::ModelsBuilder::Training
+}  // namespace XER::ModelsBuilder::Training

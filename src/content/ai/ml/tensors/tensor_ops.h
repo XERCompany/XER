@@ -3,7 +3,7 @@
 #include "tensor.h"
 #include <vector>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 /// @brief Tensor broadcasting utilities
 /// 
@@ -82,4 +82,4 @@ public:
     static Tensor Stack(const std::vector<Tensor>& tensors, int axis = 0);
 };
 
-} // namespace Engine::ML::Tensors
+} // namespace XER::ML::Tensors

@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 class ModelCloner {
  public:
@@ -13,5 +13,5 @@ class ModelCloner {
 									 const std::string& cloned_name_suffix = "_clone") const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

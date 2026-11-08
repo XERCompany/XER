@@ -7,17 +7,17 @@
 #include "flux/core/flux_context.h"
 #include "helper/string_utils.h"
 
-namespace XER::flux::core {
+namespace XER::Flux::Core {
 namespace {
 
 std::string CanonicalName(std::string_view name) {
-	return XER::Engine::Helper::String::CanonicalizeToken(name);
+	return XER::Helper::String::CanonicalizeToken(name);
 }
 
 }  // namespace
 
 bool ModuleManager::Register(FluxModule module, std::string* error_out) {
-	if (XER::Engine::Helper::String::IsBlank(module.name)) {
+	if (XER::Helper::String::IsBlank(module.name)) {
 		if (error_out != nullptr) {
 			*error_out = "Flux module name must not be blank";
 		}
@@ -76,4 +76,4 @@ void ModuleManager::StopAll(FluxContext& context) {
 	started_modules_.clear();
 }
 
-}  // namespace XER::flux::core
+}  // namespace XER::Flux::Core

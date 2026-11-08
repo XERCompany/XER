@@ -8,7 +8,7 @@
 #include "async_io/io_thread_pool.h"
 #include "custom_effect_accel.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 bool ApplyCustomEffectProcessors(
 	std::deque<CustomEffectProcessor>* processors,
@@ -89,4 +89,4 @@ bool ApplyCustomEffectProcessors(
 	return true;
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

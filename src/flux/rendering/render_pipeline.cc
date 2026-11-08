@@ -4,15 +4,15 @@
 
 #include "flux/terminal/terminal_output_renderer.h"
 
-namespace XER::flux::rendering {
+namespace XER::Flux::Rendering {
 
-bool RenderPipeline::Present(const RenderContext& context, XER::flux::terminal::OutputStream stream) {
+bool RenderPipeline::Present(const RenderContext& context, XER::Flux::Terminal::OutputStream stream) {
 	const std::string plain = renderer_.RenderPlainText(context);
 	const std::string ansi = renderer_.RenderAnsi(context);
 	if (ansi == last_ansi_frame_) {
 		return false;
 	}
-	XER::flux::terminal::Write(stream, ansi);
+	XER::Flux::Terminal::Write(stream, ansi);
 	last_plain_frame_ = plain;
 	last_ansi_frame_ = ansi;
 	++frame_count_;
@@ -37,4 +37,4 @@ std::size_t RenderPipeline::frame_count() const {
 	return frame_count_;
 }
 
-}  // namespace XER::flux::rendering
+}  // namespace XER::Flux::Rendering

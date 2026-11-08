@@ -5,8 +5,8 @@
 
 #include "custom_effect_struct.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 std::vector<CustomEffectNode> CreateCustomEffectNodeList(const std::vector<std::string>& algorithm_names);
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

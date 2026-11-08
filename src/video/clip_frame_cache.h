@@ -22,9 +22,9 @@ public:
     bool RemoveFrame(std::size_t frame_index, std::string* error_out);
 
 private:
-    Engine::Cache::CacheEntry EntryFor(std::size_t frame_index) const;
+    XER::Cache::CacheEntry EntryFor(std::size_t frame_index) const;
 
-    Engine::Cache::PersistentStorage storage_;
+    XER::Cache::PersistentStorage storage_;
     std::string key_;
     std::uint32_t ttl_seconds_ = 0;
 };

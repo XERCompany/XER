@@ -113,7 +113,7 @@
 #define XER_AI_HAS_FP16_HEADER 0
 #endif
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 ExternalLibraryAvailability DetectExternalLibraries() {
     ExternalLibraryAvailability availability;
@@ -223,4 +223,4 @@ size_t SuggestedInferenceThreadCount() {
     return hw_threads > 0U ? static_cast<size_t>(hw_threads) : 4U;
 }
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility

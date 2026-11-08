@@ -6,7 +6,7 @@
 
 #include <string>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 class CheckpointRollback {
  public:
@@ -15,5 +15,5 @@ class CheckpointRollback {
 				  CheckpointMetadata* out_metadata) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

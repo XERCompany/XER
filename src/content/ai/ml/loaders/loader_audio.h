@@ -1,9 +1,9 @@
 #pragma once
 #include "loader_base.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
-/// Audio loader via Engine::Audio::CodecIO.
+/// Audio loader via XER::Audio::CodecIO.
 /// WAV: decoded with WavFloatCodec::Decode32.
 /// mp3/flac/ogg/aac/m4a: decoded via DecodeAudioBufferWithFfmpeg.
 /// Returns a single-row Dataset with raw float32 PCM samples.
@@ -13,4 +13,4 @@ public:
     std::string Name() const override { return "AudioLoader"; }
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

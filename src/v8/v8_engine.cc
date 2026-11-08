@@ -5,7 +5,7 @@
 #include "v8/v8_initializer.h"
 #include "v8/v8_memory_manager.h"
 
-namespace Engine::V8Runtime {
+namespace XER::V8Runtime {
 
 v8::Isolate* CreateManagedIsolate(const EngineParams& params, std::string* warning_out) {
 	EnsureInitialized(params.v8_platform_workers);
@@ -22,4 +22,4 @@ void DisposeManagedIsolate(v8::Isolate* isolate) {
 	isolate->Dispose();
 }
 
-}  // namespace Engine::V8Runtime
+}  // namespace XER::V8Runtime

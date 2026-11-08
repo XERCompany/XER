@@ -1,6 +1,6 @@
 #include "graph_memory_allocator.h"
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 std::unordered_map<std::string, GraphMemoryAllocator::TensorAllocation>
 GraphMemoryAllocator::Plan(
@@ -39,4 +39,4 @@ size_t GraphMemoryAllocator::ArenaSize(
   return max;
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

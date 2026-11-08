@@ -1,7 +1,7 @@
 #pragma once
 #include "preprocess_base.h"
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// Remove outliers per feature using IQR rule; replaces with NaN-sentinel (0)
 class PreprocessOutlierRemover : public PreprocessBase {
@@ -19,4 +19,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

@@ -1,7 +1,7 @@
 #pragma once
 #include "aug_base.h"
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 class AugFlip : public AugBase {
 public:
@@ -14,4 +14,4 @@ private:
     float prob_;
 };
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

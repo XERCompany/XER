@@ -23,7 +23,7 @@ bool SetText(std::string_view text) {
     }
 
     // UTF-16 payload + NUL terminator.
-    const std::wstring wide = XER::Engine::Helper::String::Utf8ToWide(text);
+    const std::wstring wide = XER::Helper::String::Utf8ToWide(text);
     if (wide.empty() && !text.empty()) {
         CloseClipboard();
         return false;
@@ -78,7 +78,7 @@ bool GetText(std::string& text_out) {
     }
 
     const int wide_len = static_cast<int>(std::wcslen(wide));
-    text_out = XER::Engine::Helper::String::WideToUtf8(
+    text_out = XER::Helper::String::WideToUtf8(
         std::wstring_view(wide, static_cast<size_t>(wide_len)));
     GlobalUnlock(handle);
     CloseClipboard();

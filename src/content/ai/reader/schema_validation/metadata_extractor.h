@@ -5,7 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 /// @brief Extracts metadata fields from a loaded model
 struct ModelMetadata {
@@ -28,4 +28,4 @@ class MetadataExtractor {
   static std::string ToJsonString(const ModelMetadata& meta);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

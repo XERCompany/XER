@@ -9,7 +9,7 @@
 #include "audio/fx_customs/fx_customs_effect_builder.h"
 #include "audio/fx_customs/fx_customs_spatial.h"
 
-namespace XER::Engine::Audio::FX::Customs {
+namespace XER::Audio::FX::Customs {
 
 namespace {
 
@@ -75,7 +75,7 @@ bool RenderFxCustomPresetInterleaved(
 	const std::string normalized = NormalizeFxCustomPresetName(name);
 	const size_t frame_count = input.size() / static_cast<size_t>(channels);
 	std::vector<std::vector<float>> input_channels;
-	if (!XER::Engine::Audio::Core::AudioInterleaveProcessor::DeinterleavePlanar(
+	if (!XER::Audio::Core::AudioInterleaveProcessor::DeinterleavePlanar(
 			input.data(),
 			channels,
 			frame_count,
@@ -127,7 +127,7 @@ bool RenderFxCustomPresetInterleaved(
 	for (int channel_index = 0; channel_index < channels; ++channel_index) {
 		channel_ptrs[static_cast<size_t>(channel_index)] = output_channels[static_cast<size_t>(channel_index)].data();
 	}
-	if (!XER::Engine::Audio::Core::AudioInterleaveProcessor::Interleave(
+	if (!XER::Audio::Core::AudioInterleaveProcessor::Interleave(
 			channel_ptrs.data(),
 			channels,
 			frame_count,
@@ -178,4 +178,4 @@ CustomEffectPackage BuildDelayReverbEffect() { return BuildNamedPreset("DelayRev
 CustomEffectPackage BuildDelayEffect() { return BuildNamedPreset("Delay"); }
 CustomEffectPackage BuildAirVoiceEffect() { return BuildNamedPreset("AIrVoice"); }
 
-}  // namespace XER::Engine::Audio::FX::Customs
+}  // namespace XER::Audio::FX::Customs

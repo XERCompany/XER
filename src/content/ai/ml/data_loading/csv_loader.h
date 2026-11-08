@@ -2,7 +2,7 @@
 
 #include "data_loader.h"
 
-namespace Engine::MLData::Loading {
+namespace XER::MLData::Loading {
 
 class CSVLoader : public DataLoader {
 public:
@@ -18,4 +18,4 @@ private:
     char delimiter_;
 };
 
-} // namespace Engine::MLData::Loading
+} // namespace XER::MLData::Loading

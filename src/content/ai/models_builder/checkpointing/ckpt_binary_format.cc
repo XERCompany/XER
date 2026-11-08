@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 namespace {
 
@@ -87,5 +87,5 @@ bool CheckpointBinaryFormat::ReadFromFile(const std::string& path, CheckpointSna
 	return out_snapshot->IsValid();
 }
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

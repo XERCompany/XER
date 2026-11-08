@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 /// @brief Checks model file integrity (magic bytes, checksums)
 class IntegrityCheck {
@@ -23,4 +23,4 @@ class IntegrityCheck {
                            std::string& out_error);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

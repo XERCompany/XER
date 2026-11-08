@@ -7,7 +7,7 @@
 #include <memory>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Training {
+namespace XER::ModelsBuilder::Training {
 
 struct TrainingConfig {
     uint32_t epochs;
@@ -46,4 +46,4 @@ private:
     float best_loss_ = 0.0f;
 };
 
-} // namespace Engine::ModelsBuilder::Training
+} // namespace XER::ModelsBuilder::Training

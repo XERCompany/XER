@@ -14,7 +14,7 @@
 #include <cstring>
 #include <stdexcept>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 Dataset LoaderVideo::Load(const std::string& path) {
 #ifdef LOADER_VIDEO_HAS_OPENCV
@@ -44,4 +44,4 @@ Dataset LoaderVideo::Load(const std::string& path) {
 #endif
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

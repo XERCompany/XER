@@ -5,7 +5,7 @@
 
 #include "err_diagnostic_data.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 /// @brief Actions the runtime may take when handling an error
 enum class RecoveryAction {
@@ -40,4 +40,4 @@ class RecoveryPolicy {
   std::unordered_map<std::string, RecoveryAction> component_overrides_;
 };
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

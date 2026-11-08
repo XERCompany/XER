@@ -9,7 +9,7 @@
 #include "clap_external_plugin_host.h"
 #include "plugin_builtin_host.h"
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 class ClapHostInterface {
 public:
@@ -39,4 +39,4 @@ private:
     Backend backend_ = Backend::kNone;
 };
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

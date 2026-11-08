@@ -8,7 +8,7 @@
 
 #include <thread>
 
-namespace XER::network::async::iocp {
+namespace XER::Network::Async::Iocp {
 
 IocpCompletionPort::IocpCompletionPort()
     : completion_port_(nullptr),
@@ -242,6 +242,6 @@ IocpCompletionPort& GetGlobalIocp() {
     return instance;
 }
 
-} // namespace XER::network::async::iocp
+} // namespace XER::Network::Async::Iocp
 
 #endif // _WIN32

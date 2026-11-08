@@ -7,7 +7,7 @@
 
 #include "async_io/log_and_debug/io_dump_helper.h"
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 enum class MidiMessageType {
     kUnknown,
@@ -50,4 +50,4 @@ public:
     static std::string DescribeEventType(MidiMessageType type);
 };
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

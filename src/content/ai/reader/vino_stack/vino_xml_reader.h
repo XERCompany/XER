@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 /// @brief Reads OpenVINO IR XML (v10/v11) and builds VinoLayerInfo list
 class VinoXmlReader {
@@ -38,4 +38,4 @@ class VinoXmlReader {
   std::string                model_name_{"openvino_model"};
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

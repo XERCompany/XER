@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 enum class CustomEffectBackend {
 	kBuiltinAlgorithm,
@@ -86,4 +86,4 @@ std::string CustomEffectAlgorithmToString(CustomEffectAlgorithm algorithm);
 bool ParseCustomEffectAlgorithm(const std::string& text, CustomEffectAlgorithm* algorithm_out);
 std::string BuildCustomEffectReportText(const CustomEffectReport& report);
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

@@ -8,7 +8,7 @@
 #include <string_view>
 #include <vector>
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 namespace {
 
 constexpr std::size_t kTabWidth = 8;
@@ -342,4 +342,4 @@ std::string EmulatePlainText(std::string_view text) {
 	return emulator.PlainText();
 }
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

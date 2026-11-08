@@ -6,7 +6,7 @@
 
 #include <string>
 
-namespace XER::network::url {
+namespace XER::Network::Url {
 
 // Percent-encode all reserved characters in |input|.
 std::string PercentEncode(const std::string& input);
@@ -20,4 +20,4 @@ std::string QueryEncode(const std::string& input);
 // Normalise a URL path (resolve . and ..).
 std::string NormalizePath(const std::string& path);
 
-}  // namespace XER::network::url
+}  // namespace XER::Network::Url

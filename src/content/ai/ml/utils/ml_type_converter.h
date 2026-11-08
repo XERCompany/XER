@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 class MlTypeConverter {
  public:
@@ -15,5 +15,5 @@ class MlTypeConverter {
 	static std::vector<float> Fp16RoundTrip(const std::vector<float>& input);
 };
 
-}  // namespace Engine::ML::Utils
+}  // namespace XER::ML::Utils
 

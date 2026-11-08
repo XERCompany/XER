@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace XER::network::transport {
+namespace XER::Network::Transport {
 
 // Delegate for observing raw transport events.
 class TransportNetworkDelegate {
@@ -24,4 +24,4 @@ public:
 // No-op default delegate.
 class DefaultTransportDelegate : public TransportNetworkDelegate {};
 
-}  // namespace XER::network::transport
+}  // namespace XER::Network::Transport

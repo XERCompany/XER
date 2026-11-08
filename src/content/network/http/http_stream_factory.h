@@ -9,15 +9,15 @@
 #include "content/network/http/http_stream.h"
 #include "content/network/transport/transport_client_socket.h"
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 // Creates an HttpStream from a connected TransportClientSocket.
 class HttpStreamFactory {
 public:
     static std::unique_ptr<HttpStream>
-    CreateFromSocket(std::unique_ptr<transport::TransportClientSocket> socket,
+    CreateFromSocket(std::unique_ptr<Transport::TransportClientSocket> socket,
                      const std::string& host,
                      std::string* error);
 };
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

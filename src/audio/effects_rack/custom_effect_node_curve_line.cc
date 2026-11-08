@@ -1,6 +1,6 @@
 #include "custom_effect_node_curve_line.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 float EvaluateCustomEffectCurve(
 	const std::vector<CustomEffectCurvePoint>& points,
@@ -28,4 +28,4 @@ float EvaluateCustomEffectCurve(
 	return points.back().value;
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

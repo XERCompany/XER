@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace Engine::ML::CudaOps {
+namespace XER::ML::CudaOps {
 
 /// @brief CUDA device memory management and mapping utilities
 /// 
@@ -72,4 +72,4 @@ private:
     size_t size_;
 };
 
-} // namespace Engine::ML::CudaOps
+} // namespace XER::ML::CudaOps

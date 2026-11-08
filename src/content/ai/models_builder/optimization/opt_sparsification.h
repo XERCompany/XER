@@ -3,7 +3,7 @@
 #include <Eigen/Dense>
 #include <Eigen/Sparse>
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 /// @brief Creates and manages sparse representations of dense weight matrices
 class OptSparsification {
@@ -16,4 +16,4 @@ class OptSparsification {
   static float Density(const Eigen::SparseMatrix<float>& sparse);
 };
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

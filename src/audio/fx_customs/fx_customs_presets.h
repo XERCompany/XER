@@ -5,7 +5,7 @@
 
 #include "audio/effects_rack/custom_effect.h"
 
-namespace XER::Engine::Audio::FX::Customs {
+namespace XER::Audio::FX::Customs {
 
 std::vector<std::string> ListFxCustomPresetNames();
 bool IsFxCustomPresetSupported(const std::string& name);
@@ -67,4 +67,4 @@ CustomEffectPackage BuildDelayReverbEffect();
 CustomEffectPackage BuildDelayEffect();
 CustomEffectPackage BuildAirVoiceEffect();
 
-}  // namespace XER::Engine::Audio::FX::Customs
+}  // namespace XER::Audio::FX::Customs

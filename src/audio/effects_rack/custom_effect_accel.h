@@ -6,7 +6,7 @@
 
 #include "custom_effect_struct.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 struct CustomEffectAccelerationInfo {
 	bool simd_enabled = false;
@@ -25,4 +25,4 @@ void MixDryWetConstant(const float* dry, const float* wet, size_t frame_count, f
 void LimitBufferInPlace(std::vector<float>* samples, float ceiling);
 void SumNormalizeBuffers(const std::vector<std::vector<float>>& branch_outputs, std::vector<float>* output);
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

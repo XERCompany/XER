@@ -1,6 +1,6 @@
 #include "custom_effect_fxdata.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 float GetCustomEffectParameterValue(
 	const std::vector<CustomEffectParameter>& parameters,
@@ -30,4 +30,4 @@ void SetCustomEffectParameterValue(
 	parameters->push_back(CustomEffectParameter{name, value});
 }
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

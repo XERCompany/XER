@@ -7,7 +7,7 @@
 #include <absl/strings/string_view.h>
 #include <range/v3/view.hpp>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// Async prefetch wrapper — enqueues load onto IO::AsyncIO::IOThreadPool,
 /// returns result via std::future<Dataset>.
@@ -26,4 +26,4 @@ private:
     std::future<Dataset>         future_;
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

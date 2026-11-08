@@ -14,7 +14,7 @@
 #include <unistd.h>
 #endif
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
 TcpClientSocket::~TcpClientSocket() {
     Disconnect();
@@ -23,20 +23,20 @@ TcpClientSocket::~TcpClientSocket() {
 bool TcpClientSocket::Connect(const std::string& host,
                                uint16_t port,
                                std::string* error) {
-    logging::NetworkLogger::Instance().LogConnectionAttempt(host, port);
+    Logging::NetworkLogger::Instance().LogConnectionAttempt(host, port);
 
-    auto& platform = platform::SocketPlatform::GetInstance();
+    auto& platform = Platform::SocketPlatform::GetInstance();
 
     // Resolve address
-    std::vector<platform::AddressInfo> addresses;
+    std::vector<Platform::AddressInfo> addresses;
     if (!platform.ResolveAddress(host, port, &addresses, error)) {
-        logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
+        Logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
         return false;
     }
 
     // Try each address
     for (const auto& addr : addresses) {
-        platform::SocketHandle socket;
+        Platform::SocketHandle socket;
         if (addr.is_ipv6) {
             socket = platform.CreateTcpSocket(true, error);
         } else {
@@ -53,7 +53,7 @@ bool TcpClientSocket::Connect(const std::string& host,
             socket.Detach();
             stream_ = std::make_unique<SocketStream>(fd_);
 
-            logging::NetworkLogger::Instance().LogConnectionSuccess(host, port, 0);
+            Logging::NetworkLogger::Instance().LogConnectionSuccess(host, port, 0);
             return true;
         }
     }
@@ -61,7 +61,7 @@ bool TcpClientSocket::Connect(const std::string& host,
     if (error && error->empty()) {
         *error = "Failed to connect to any address";
     }
-    logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
+    Logging::NetworkLogger::Instance().LogConnectionFailure(host, port, *error);
     return false;
 }
 
@@ -82,24 +82,24 @@ bool TcpClientSocket::IsConnected() const {
 }
 
 int TcpClientSocket::Read(uint8_t* buf, size_t len, std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
 
     int result = platform.Recv(socket, buf, len, error);
     return result;
 }
 
 int TcpClientSocket::Write(const uint8_t* buf, size_t len, std::string* error) {
-    auto& platform = platform::SocketPlatform::GetInstance();
-    platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    auto& platform = Platform::SocketPlatform::GetInstance();
+    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
 
     int result = platform.Send(socket, buf, len, error);
     return result;
 }
 
 void TcpClientSocket::ReadAsync(uint8_t* buf, size_t len,
-                                 transport::CompletionCallback cb) {
-    async::AsyncOperationManager::Instance().Enqueue(
+                                 Transport::CompletionCallback cb) {
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, buf, len, cb = std::move(cb)]() {
             std::string error;
             int result = Read(buf, len, &error);
@@ -108,9 +108,9 @@ void TcpClientSocket::ReadAsync(uint8_t* buf, size_t len,
 }
 
 void TcpClientSocket::WriteAsync(const uint8_t* buf, size_t len,
-                                  transport::CompletionCallback cb) {
+                                  Transport::CompletionCallback cb) {
     std::vector<uint8_t> data(buf, buf + len);
-    async::AsyncOperationManager::Instance().Enqueue(
+    Async::AsyncOperationManager::Instance().Enqueue(
         [this, data = std::move(data), cb = std::move(cb)]() mutable {
             std::string error;
             int result = Write(data.data(), data.size(), &error);
@@ -118,4 +118,4 @@ void TcpClientSocket::WriteAsync(const uint8_t* buf, size_t len,
         });
 }
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

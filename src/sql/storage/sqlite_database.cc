@@ -5,7 +5,7 @@
 #include <type_traits>
 #include <utility>
 
-namespace XER::Engine::SQL::Storage {
+namespace XER::SQL::Storage {
 namespace {
 
 void SetError(std::string* error_out, const char* message) {
@@ -16,7 +16,7 @@ void SetError(std::string* error_out, const char* message) {
 
 bool BindValue(sqlite3_stmt* statement,
 	       int index,
-	       const XER::Content::Value& value) {
+	       const XER::SQL::Content::Value& value) {
 	return std::visit([statement, index](const auto& item) {
 		using Item = std::decay_t<decltype(item)>;
 		if constexpr (std::is_same_v<Item, std::monostate>) {
@@ -134,7 +134,7 @@ std::int64_t SQLiteDatabase::Changes() const noexcept {
 }
 
 bool SQLiteDatabase::Execute(std::string_view sql,
-			     const std::vector<XER::Content::Value>& parameters,
+			     const std::vector<XER::SQL::Content::Value>& parameters,
 			     std::string* error_out) const {
 	Modern::Query query;
 	query.text = std::string(sql);
@@ -176,7 +176,7 @@ bool SQLiteDatabase::Query(const Modern::Query& query,
 }
 
 bool SQLiteDatabase::Query(std::string_view sql,
-			   const std::vector<XER::Content::Value>& parameters,
+			   const std::vector<XER::SQL::Content::Value>& parameters,
 			   std::vector<Row>& rows_out,
 			   std::string* error_out) const {
 	Modern::Query query;
@@ -220,7 +220,7 @@ std::unique_ptr<SQLiteStatement> SQLiteStatement::Prepare(
 }
 
 bool SQLiteStatement::Bind(std::size_t index_one_based,
-			   const XER::Content::Value& value,
+			   const XER::SQL::Content::Value& value,
 			   std::string* error_out) {
 	if (statement_ == nullptr || index_one_based == 0 ||
 	    index_one_based > static_cast<std::size_t>(sqlite3_bind_parameter_count(statement_))) {
@@ -234,7 +234,7 @@ bool SQLiteStatement::Bind(std::size_t index_one_based,
 	return true;
 }
 
-bool SQLiteStatement::BindAll(const std::vector<XER::Content::Value>& values,
+bool SQLiteStatement::BindAll(const std::vector<XER::SQL::Content::Value>& values,
 			      std::string* error_out) {
 	const int expected = sqlite3_bind_parameter_count(statement_);
 	if (expected != static_cast<int>(values.size())) {
@@ -291,34 +291,34 @@ std::string SQLiteStatement::ColumnName(std::size_t index_zero_based) const {
 	return name != nullptr ? std::string(name) : std::string{};
 }
 
-XER::Content::Value SQLiteStatement::ColumnValue(std::size_t index_zero_based) const {
+XER::SQL::Content::Value SQLiteStatement::ColumnValue(std::size_t index_zero_based) const {
 	if (statement_ == nullptr) {
 		return {};
 	}
 	const int col = static_cast<int>(index_zero_based);
 	switch (sqlite3_column_type(statement_, col)) {
 	case SQLITE_INTEGER:
-		return XER::Content::Value{sqlite3_column_int64(statement_, col)};
+		return XER::SQL::Content::Value{sqlite3_column_int64(statement_, col)};
 	case SQLITE_FLOAT:
-		return XER::Content::Value{sqlite3_column_double(statement_, col)};
+		return XER::SQL::Content::Value{sqlite3_column_double(statement_, col)};
 	case SQLITE_TEXT: {
 		const auto* text = reinterpret_cast<const char*>(sqlite3_column_text(statement_, col));
 		const int bytes = sqlite3_column_bytes(statement_, col);
-		return XER::Content::Value{std::string(text != nullptr ? text : "",
+		return XER::SQL::Content::Value{std::string(text != nullptr ? text : "",
 						   text != nullptr ? static_cast<std::size_t>(bytes) : 0)};
 	}
 	case SQLITE_BLOB: {
 		const auto* blob = sqlite3_column_blob(statement_, col);
 		const int bytes = sqlite3_column_bytes(statement_, col);
 		if (blob == nullptr || bytes <= 0) {
-			return XER::Content::Value{XER::Content::Blob{}};
+			return XER::SQL::Content::Value{XER::SQL::Content::Blob{}};
 		}
 		const auto* first = static_cast<const std::uint8_t*>(blob);
-		return XER::Content::Value{XER::Content::Blob(first, first + bytes)};
+		return XER::SQL::Content::Value{XER::SQL::Content::Blob(first, first + bytes)};
 	}
 	default:
 		return {};
 	}
 }
 
-}  // namespace XER::Engine::SQL::Storage
+}  // namespace XER::SQL::Storage

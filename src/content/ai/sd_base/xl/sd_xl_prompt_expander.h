@@ -2,11 +2,11 @@
 
 #include <string>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdXlPromptExpander {
 public:
     std::string Expand(const std::string& prompt) const;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

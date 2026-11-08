@@ -4,7 +4,7 @@
 #include <cstring>
 #include <limits>
 
-namespace Engine::MLData::Types {
+namespace XER::MLData::Types {
 
 static size_t GetTypeSize(DataType dtype) {
     switch (dtype) {
@@ -129,4 +129,4 @@ void Tensor::Release() {
     }
 }
 
-} // namespace Engine::MLData::Types
+} // namespace XER::MLData::Types

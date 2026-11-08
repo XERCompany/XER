@@ -9,7 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 namespace {
 
@@ -95,8 +95,8 @@ bool WeightSyncCuda::PushSync(const std::string& tensor_name,
                   std::lock_guard<std::mutex> lk(mtx);
                   result = ok;
                   if (!ok) {
-                      Engine::ErrorHandler::ReportDiagnostic(
-                          Engine::ErrorHandler::MakeDiagnosticData(
+                      XER::ErrorHandler::ReportDiagnostic(
+                          XER::ErrorHandler::MakeDiagnosticData(
                               "error", "WeightSyncCuda", err));
                   }
                   done = true;
@@ -141,4 +141,4 @@ void WeightSyncCuda::WaitAll() {
     }
 }
 
-}  // namespace Engine::ModelsBuilder::Weights
+}  // namespace XER::ModelsBuilder::Weights

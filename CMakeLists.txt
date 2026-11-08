@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.21)
 
+project(Editor)
+
 # Set C++23 standard
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -21,8 +23,7 @@ endforeach()
 if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 endif()
-
-# Explicit vcpkg path (C:/vcpkg)
+ 
 if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
     set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
 endif()
@@ -34,172 +35,174 @@ set(VCPKG_TARGET_TRIPLET "x64-windows-release" CACHE STRING "Vcpkg target triple
 set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Use preinstalled vcpkg packages")
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
 
-project(XER LANGUAGES C CXX)
+set(SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cc)
+file(GLOB HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/main.h)
 
-# Objective-C++ (.mm) sources are collected on macOS only (see the
-# if(APPLE) blocks next to the *.cc globs in src/**/CMakeLists.txt).
-if(APPLE)
-    enable_language(OBJC OBJCXX)
-endif()
-include(GNUInstallDirs)
-include(CTest)
-
-if(VCPKG_TARGET_TRIPLET STREQUAL "x64-windows-release")
-    if(CMAKE_BUILD_TYPE STREQUAL "Debug")
-        message(FATAL_ERROR "x64-windows-release requires Release or RelWithDebInfo, not Debug.")
-    endif()
-    if(CMAKE_CONFIGURATION_TYPES)
-        set(CMAKE_CONFIGURATION_TYPES "Release;RelWithDebInfo" CACHE STRING "Build configurations" FORCE)
-    endif()
-    set(CMAKE_MAP_IMPORTED_CONFIG_RELWITHDEBINFO "Release;")
-    set(CMAKE_MAP_IMPORTED_CONFIG_MINSIZEREL "Release;")
-endif()
-
-# Build options
-option(XER_FETCH_DEPENDENCIES "Fetch dependencies automatically" OFF)
-option(XER_FETCH_V8 "Fetch V8 from source" OFF)
-option(ENABLE_V8 "Build V8 and JavaScript runtime" OFF)
-option(ENABLE_MEDIA "Enable media dependencies" ON)
-option(ENABLE_CUDA "Enable CUDA support" OFF)
-option(ENABLE_CUDNN "Enable cuDNN support" OFF)
-option(ENABLE_OPENCV "Fetch and build OpenCV" OFF)
-option(ENABLE_AI "Enable AI and model-builder sources" OFF)
-option(XER_BUILD_APP "Build the XER application and its subsystems" ON)
-option(XER_BUILD_XBUILD "Build the xbuild configuration utility" OFF)
-option(XER_VST3SDK_USE_VCPKG "Use vst3sdk installed by vcpkg when present (otherwise fetch and build it)" ON)
-
-# Dependency cache directory (only used if XER_FETCH_DEPENDENCIES is ON)
-set(XER_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps" CACHE PATH "Directory for dependency cache")
-
-# V8 dependency cache directory (only used if XER_FETCH_V8 is ON)
-set(XER_V8_DEPS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps/v8" CACHE PATH "Directory for V8 dependency cache")
-
-# Find vcpkg packages
+find_package(ICU REQUIRED COMPONENTS uc i18n)
+find_package(ZLIB REQUIRED)
+find_package(FFMPEG REQUIRED)
 find_package(libuv CONFIG REQUIRED)
 find_package(absl CONFIG REQUIRED)
 find_package(fmt CONFIG REQUIRED)
 find_package(jsoncpp CONFIG REQUIRED)
 find_package(re2 CONFIG REQUIRED)
-find_package(unofficial-sqlite3 CONFIG REQUIRED)
-find_package(ZLIB REQUIRED)
+find_package(unofficial-sqlite3 CONFIG REQUIRED) 
 find_package(zstd CONFIG REQUIRED)
 find_package(unofficial-brotli CONFIG REQUIRED)
 find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(unofficial-pthreadpool CONFIG REQUIRED)
-find_package(unofficial-fxdiv CONFIG REQUIRED)
-find_package(Threads REQUIRED)
-if(XER_BUILD_APP)
-    find_package(FFTW3f CONFIG REQUIRED)
-endif()
+find_package(unofficial-fxdiv CONFIG REQUIRED) 
+find_package(CUDNN REQUIRED)
+find_package(Eigen3 CONFIG REQUIRED)
+find_package(range-v3 CONFIG REQUIRED)
+find_package(mimalloc CONFIG REQUIRED)
+find_package(ggml CONFIG REQUIRED)
+find_package(folly CONFIG REQUIRED)
+find_package(MKL CONFIG REQUIRED)
+# Intel MKL available project-wide (e.g. ENGINE_HAS_MKL gates the DFTI
+# backend in FFTEngine and other MKL-accelerated DSP paths).
+add_compile_definitions(ENGINE_HAS_MKL=1)
+find_package(Boost CONFIG REQUIRED)
+find_package(cereal CONFIG REQUIRED)
+find_package(FFTW3f CONFIG REQUIRED)
 
-# Find FFmpeg via pkg-config or direct find
-if(ENABLE_MEDIA)
-    if(POLICY CMP0174)
-        cmake_policy(SET CMP0174 NEW)
+# VST3 SDK (vcpkg port "vst3sdk", no cmake-config -> wire manually)
+if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
+    set(XER_VST3SDK_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
+else()
+    set(XER_VST3SDK_ROOT "C:/vcpkg/installed/x64-windows-release")
+endif()
+set(XER_VST3SDK_INCLUDE_DIR "${XER_VST3SDK_ROOT}/include/vst3sdk")
+set(XER_VST3SDK_LIB_DIR "${XER_VST3SDK_ROOT}/lib/vst3sdk")
+foreach(_vst3sdk_file IN ITEMS
+    "${XER_VST3SDK_INCLUDE_DIR}/pluginterfaces/base/funknown.h"
+    "${XER_VST3SDK_LIB_DIR}/sdk_hosting.lib"
+    "${XER_VST3SDK_LIB_DIR}/sdk.lib"
+    "${XER_VST3SDK_LIB_DIR}/sdk_common.lib"
+    "${XER_VST3SDK_LIB_DIR}/pluginterfaces.lib"
+    "${XER_VST3SDK_LIB_DIR}/base.lib")
+    if(NOT EXISTS "${_vst3sdk_file}")
+        message(FATAL_ERROR "VST3 SDK file missing: ${_vst3sdk_file} — install vcpkg port vst3sdk for ${VCPKG_TARGET_TRIPLET}")
     endif()
-    find_package(FFMPEG REQUIRED)
-    add_library(XER_FFmpeg INTERFACE)
-    target_include_directories(XER_FFmpeg INTERFACE ${FFMPEG_INCLUDE_DIRS})
-    target_link_directories(XER_FFmpeg INTERFACE ${FFMPEG_LIBRARY_DIRS})
-    target_link_libraries(XER_FFmpeg INTERFACE ${FFMPEG_LIBRARIES})
-endif()
+endforeach()
+add_library(XER_VST3SDK INTERFACE)
+target_include_directories(XER_VST3SDK INTERFACE "${XER_VST3SDK_INCLUDE_DIR}")
+target_link_libraries(XER_VST3SDK INTERFACE
+    "${XER_VST3SDK_LIB_DIR}/sdk_hosting.lib"
+    "${XER_VST3SDK_LIB_DIR}/sdk.lib"
+    "${XER_VST3SDK_LIB_DIR}/sdk_common.lib"
+    "${XER_VST3SDK_LIB_DIR}/pluginterfaces.lib"
+    "${XER_VST3SDK_LIB_DIR}/base.lib")
 
-# Find OpenCV if enabled
-if(ENABLE_OPENCV)
-    find_package(OpenCV CONFIG REQUIRED)
-endif()
-if(ENABLE_CUDA OR ENABLE_CUDNN)
-    find_package(CUDAToolkit REQUIRED)
-endif()
-if(ENABLE_CUDNN)
-    find_package(CUDNN REQUIRED)
-endif()
+add_subdirectory(src/flux)
+add_subdirectory(src/cache)
+add_subdirectory(src/wrapper/ffmpeg)
+add_subdirectory(src/content/video)
+add_subdirectory(src/sql)
+add_subdirectory(src/node_graph)
+add_subdirectory(src/async_io)
+add_subdirectory(src/ui)
+add_subdirectory(src/audio)
+add_subdirectory(src/content/audio)
+add_subdirectory(src/content/clipboard)
+add_subdirectory(src/content/hex)
+add_subdirectory(src/content/network)
+add_subdirectory(src/content/s3)
+add_subdirectory(src/helper)
+add_subdirectory(src/app)
+add_subdirectory(src/lsui)
 
-# AI/ML library backends for content/ai (ggml, MKL, Eigen, folly, range-v3, mimalloc)
-if(ENABLE_AI)
-    find_package(Eigen3 CONFIG REQUIRED)
-    find_package(range-v3 CONFIG REQUIRED)
-    find_package(mimalloc CONFIG REQUIRED)
-    find_package(ggml CONFIG REQUIRED)
-    find_package(folly CONFIG REQUIRED)
-    find_package(MKL CONFIG REQUIRED)
-    find_package(Boost CONFIG REQUIRED)
-    find_package(cereal CONFIG REQUIRED)
-endif()
+# Standalone VST3 scanner — loads plugin DLLs, so it runs as its own
+# process away from the editor's UI/audio threads.
+add_executable(EngineScanVST3 tools/EngineScanVST3/main.cc)
+target_include_directories(EngineScanVST3 PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(EngineScanVST3 PUBLIC cxx_std_23)
+target_link_libraries(EngineScanVST3 PRIVATE XER_AudioCore XER_Helper)
+set_target_properties(EngineScanVST3 PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-# Find SDL2 for audio
-if(ENABLE_MEDIA)
-    find_package(SDL2 CONFIG REQUIRED)
-endif()
-
-if(ENABLE_V8)
-    include(cmake/v8.cmake)
-endif()
-
-if(XER_BUILD_APP)
-    include(cmake/vst3sdk.cmake)
-    add_subdirectory(src)
-endif()
-if(XER_BUILD_XBUILD)
-    add_subdirectory(xbuild)
-endif()
+include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
 
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/apps")
-    add_subdirectory(apps)
-endif()
-# Examples are optional demos; examples/CMakeLists.txt guards the async_io
-# example behind `if(TARGET XER_AsyncIO)` so it only builds with the app.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/examples")
-    add_subdirectory(examples)
-endif()
+add_executable(Editor
+    ${SOURCES}
+    ${HEADERS}
+)
 
-# Link common vcpkg libraries to xer target
-if(TARGET xer)
-    target_link_libraries(xer PRIVATE
+target_include_directories(Editor
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(Editor PUBLIC cxx_std_23)
+
+target_link_libraries(Editor
+    PUBLIC
         $<IF:$<TARGET_EXISTS:libuv::uv_a>,libuv::uv_a,libuv::uv>
+        unofficial::sqlite3::sqlite3
         absl::strings
         absl::synchronization
         absl::flat_hash_map
         absl::flat_hash_set
+        unofficial::pthreadpool
+        unofficial::fxdiv::fxdiv
+        FFTW3::fftw3f
         fmt::fmt
         jsoncpp_lib
         re2::re2
-        unofficial::sqlite3::sqlite3
         ZLIB::ZLIB
+        range-v3::range-v3
         zstd::libzstd
         unofficial::brotli::brotlienc
         unofficial::brotli::brotlidec
         unofficial::brotli::brotlicommon
-    )
+        ICU::uc
+        ICU::i18n
+        OpenSSL::SSL
+        OpenSSL::Crypto
+        Comctl32
+        dbghelp
+        shlwapi
+        winmm
+        psapi
+        advapi32
+        userenv
+        shell32
+        version
+        ole32
+        ws2_32
+        crypt32
+        windowsapp
+        wbemuuid
+        XER_Helper
+        XER_UI_Core
+        XER_UI_Flux
+        XER_Flux_Core
+        XER_FFmpeg
+        XER_AsyncIO
+        XER_AudioCore
+        XER_ContentAudio
+        XER_App
+)
 
-    if(TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
-        target_link_libraries(xer PRIVATE OpenSSL::SSL OpenSSL::Crypto)
-    endif()
-
-    if(TARGET CURL::libcurl)
-        target_link_libraries(xer PRIVATE CURL::libcurl)
-    endif()
-
-    if(TARGET XER_FFmpeg)
-        target_link_libraries(xer PRIVATE XER_FFmpeg)
-    endif()
-
-    if(TARGET SDL2::SDL2)
-        target_link_libraries(xer PRIVATE SDL2::SDL2)
-    endif()
-
-    if(ENABLE_OPENCV)
-        target_link_libraries(xer PRIVATE
-            opencv_core
-            opencv_imgproc
-            opencv_imgcodecs
-        )
-    endif()
-    if(ENABLE_V8)
-        target_link_libraries(xer PRIVATE V8::V8)
-    endif()
+target_include_directories(Editor PRIVATE ${FFMPEG_INCLUDE_DIRS})
+target_link_directories(Editor PRIVATE ${FFMPEG_LIBRARY_DIRS})
+target_link_libraries(Editor PRIVATE ${FFMPEG_LIBRARIES})
+# Compiler flags
+if(MSVC)
+    target_compile_options(Editor PRIVATE /W4 /WX- /FS)
+else()
+    target_compile_options(Editor PRIVATE -Wall -Wextra -Wpedantic)
 endif()
+
+# Platform-specific flags
+if(WIN32)
+    target_compile_definitions(Editor PRIVATE _USE_MATH_DEFINES ENGINE_HAS_FFMPEG_BRIDGE ENGINE_HAS_FFMPEG_AVFILTER ENGINE_HAS_FFMPEG_AVDEVICE)
+endif()
+ 

@@ -1,7 +1,7 @@
 #include "preprocess_text_tokenizer.h"
 #include <cctype>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 bool PreprocessTextTokenizer::IsSeparator(char c) {
     return std::isspace(static_cast<unsigned char>(c)) ||
@@ -31,4 +31,4 @@ std::vector<std::vector<std::string>> PreprocessTextTokenizer::TokenizeBatch(
     return out;
 }
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

@@ -1,6 +1,6 @@
 #include "winapi_graphics.h"
 
-namespace Engine::Content::Platform::WinAPI::Graphics {
+namespace XER::Content::Platform::WinAPI::Graphics {
 
 // ---------------------------------------------------------------------------
 // GDI Helper
@@ -223,4 +223,4 @@ DisplayEnumerator::DisplayInfo DisplayEnumerator::GetPrimaryDisplay() {
     return info;
 }
 
-}  // namespace Engine::Content::Platform::WinAPI::Graphics
+}  // namespace XER::Content::Platform::WinAPI::Graphics

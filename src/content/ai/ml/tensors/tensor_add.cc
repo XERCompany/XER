@@ -1,6 +1,6 @@
 #include "tensor_add.h"
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 Tensor TensorAdd(const Tensor& a, const Tensor& b) {
     Tensor r(a);
@@ -12,4 +12,4 @@ void TensorAddInPlace(Tensor& a, const Tensor& b) {
     a += b;
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

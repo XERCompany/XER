@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Checkpointing {
+namespace XER::ModelsBuilder::Checkpointing {
 
 class CheckpointManager {
  public:
@@ -31,5 +31,5 @@ class CheckpointManager {
 	size_t max_checkpoints_ = 5U;
 };
 
-}  // namespace Engine::ModelsBuilder::Checkpointing
+}  // namespace XER::ModelsBuilder::Checkpointing
 

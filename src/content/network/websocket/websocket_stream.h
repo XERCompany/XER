@@ -10,7 +10,7 @@
 #include "content/network/websocket/websocket_frame.h"
 #include "content/network/transport/transport_client_socket.h"
 
-namespace XER::network::websocket {
+namespace XER::Network::WebSocket {
 
 using MessageCallback = std::function<void(const WebSocketFrame& frame)>;
 using CloseCallback   = std::function<void(uint16_t code, const std::string& reason)>;
@@ -21,7 +21,7 @@ using WebSocketCallback = std::function<void(bool, const std::string&)>;
 class WebSocketStream {
 public:
     explicit WebSocketStream(
-        std::unique_ptr<transport::TransportClientSocket> socket);
+        std::unique_ptr<Transport::TransportClientSocket> socket);
     ~WebSocketStream();
 
     void SetOnMessage(MessageCallback cb) { on_message_ = std::move(cb); }
@@ -47,11 +47,11 @@ public:
     bool IsOpen() const { return open_; }
 
 private:
-    std::unique_ptr<transport::TransportClientSocket> sock_;
+    std::unique_ptr<Transport::TransportClientSocket> sock_;
     MessageCallback on_message_;
     CloseCallback   on_close_;
     ErrorCallback   on_error_;
     bool            open_ = false;
 };
 
-}  // namespace XER::network::websocket
+}  // namespace XER::Network::WebSocket

@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 uint32_t SdFastPath::ResolveStepCount(const SdGenerationRequest& request) {
     uint32_t steps = request.steps;
@@ -15,4 +15,4 @@ uint32_t SdFastPath::ResolveStepCount(const SdGenerationRequest& request) {
     return std::max<uint32_t>(1, steps);
 }
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

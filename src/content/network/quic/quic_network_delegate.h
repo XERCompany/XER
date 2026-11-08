@@ -7,7 +7,7 @@
 #include <string>
 #include "content/network/quic/quic_protocol.h"
 
-namespace network::quic {
+namespace XER::Network::Quic {
 
 class QuicNetworkDelegate {
 public:
@@ -20,4 +20,4 @@ public:
 
 class DefaultQuicNetworkDelegate : public QuicNetworkDelegate {};
 
-}  // namespace network::quic
+}  // namespace XER::Network::Quic

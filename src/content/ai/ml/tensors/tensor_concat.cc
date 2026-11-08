@@ -1,7 +1,7 @@
 #include "tensor_concat.h"
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 Tensor TensorConcat(const std::vector<Tensor>& tensors, int axis) {
     // Only 2D axis=0 (row concat) supported as base case
@@ -31,4 +31,4 @@ Tensor TensorConcat(const std::vector<Tensor>& tensors, int axis) {
     return out;
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

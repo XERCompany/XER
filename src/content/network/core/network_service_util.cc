@@ -15,7 +15,7 @@
 #include <unistd.h>
 #endif
 
-namespace XER::network::core {
+namespace XER::Network::Core {
 
 bool HasNetworkAccess() {
     // Try a UDP "connect" to a public IP (no actual packet sent).
@@ -51,4 +51,4 @@ std::string FormatEndpoint(const std::string& host, uint16_t port) {
     return host + ":" + std::to_string(port);
 }
 
-}  // namespace XER::network::core
+}  // namespace XER::Network::Core

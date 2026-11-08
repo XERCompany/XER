@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace Engine::ML::DataStructures {
+namespace XER::ML::DataStructures {
 
 class MemoryPool {
  public:
@@ -27,5 +27,5 @@ class MemoryPool {
 	std::vector<size_t> free_indices_;
 };
 
-}  // namespace Engine::ML::DataStructures
+}  // namespace XER::ML::DataStructures
 

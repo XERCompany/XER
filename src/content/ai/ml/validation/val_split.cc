@@ -3,7 +3,7 @@
 #include <numeric>
 #include <random>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 ValSplit::SplitResult ValSplit::Split(size_t n_samples, float test_ratio,
                                       unsigned int seed) {
@@ -42,4 +42,4 @@ ValSplit::SplitY(const std::vector<int>& y, float test_ratio, unsigned int seed)
     return {tr, te};
 }
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

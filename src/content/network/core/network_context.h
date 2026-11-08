@@ -15,7 +15,7 @@
 #include "content/network/cert/cert_storage.h"
 #include "content/network/proxy/proxy_config.h"
 
-namespace XER::network::core {
+namespace XER::Network::Core {
 
 // Top-level network context that aggregates all subsystem singletons.
 // Provides centralized access to HTTP session, DNS, proxy, certificate,
@@ -35,16 +35,16 @@ public:
     static NetworkContext& Instance();
 
     // Get the URL request context (contains cookies, proxy config, timeout, etc.).
-    url::URLRequestContext&          RequestContext()     { return request_ctx_; }
+    Url::URLRequestContext&          RequestContext()     { return request_ctx_; }
     
     // Get the HTTP network session for managing HTTP/2 connections.
-    http::HttpNetworkSession&        HttpSession()        { return http::HttpNetworkSession::Default(); }
+    Http::HttpNetworkSession&        HttpSession()        { return Http::HttpNetworkSession::Default(); }
     
     // Get the HTTP cache for storing responses.
-    http::HttpCache&                 Cache()              { return http::HttpCache::Instance(); }
+    Http::HttpCache&                 Cache()              { return Http::HttpCache::Instance(); }
     
     // Get the HTTP server properties cache (alternate protocols, etc.).
-    http::HttpServerProperties&      ServerProperties()   { return http::HttpServerProperties::Instance(); }
+    Http::HttpServerProperties&      ServerProperties()   { return Http::HttpServerProperties::Instance(); }
 
     // Reset all network state (for cleanup or restart).
     // Should be called before isolate shutdown to clean up resources.
@@ -52,7 +52,7 @@ public:
 
 private:
     NetworkContext() = default;
-    url::URLRequestContext request_ctx_;
+    Url::URLRequestContext request_ctx_;
 };
 
-}  // namespace XER::network::core
+}  // namespace XER::Network::Core

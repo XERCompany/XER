@@ -21,7 +21,7 @@
 #include "fx_pitch_auto_tune_correct.h"
 #include "fx_reverb_algorithmic.h"
 
-namespace XER::Engine::Audio::FX {
+namespace XER::Audio::FX {
 
 class CustomEffectNodeWrapper {
 public:
@@ -63,4 +63,4 @@ private:
 	std::vector<float> wet_buffer_;
 };
 
-}  // namespace XER::Engine::Audio::FX
+}  // namespace XER::Audio::FX

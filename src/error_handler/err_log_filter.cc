@@ -1,6 +1,6 @@
 #include "err_log_filter.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 LogFilter& LogFilter::Instance() {
   static LogFilter inst;
@@ -42,4 +42,4 @@ int LogFilter::LevelToRank(std::string_view level) {
   return 0;
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

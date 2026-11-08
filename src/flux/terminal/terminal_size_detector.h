@@ -2,7 +2,7 @@
 
 #include <cstddef>
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 struct TerminalSize {
 	std::size_t columns = 80;
@@ -14,4 +14,4 @@ TerminalSize DefaultTerminalSize();
 TerminalSize DetectTerminalSize();
 TerminalSize ClampTerminalSize(const TerminalSize& size, std::size_t min_columns, std::size_t min_rows);
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

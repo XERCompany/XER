@@ -7,7 +7,7 @@
 #include <utility>
 #include <vector>
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 namespace {
 
 bool IsPrintableByte(unsigned char byte) {
@@ -232,4 +232,4 @@ bool IsCommandSubmission(const InputEvent& event) {
 	return event.kind == InputEventKind::kSubmit;
 }
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

@@ -6,13 +6,13 @@
 #include "../utility/mb_logger.h"
 #include <memory>
 
-namespace Engine::ModelsBuilder::Builder {
+namespace XER::ModelsBuilder::Builder {
 
 class ModelBuilderBase {
 public:
     virtual ~ModelBuilderBase() = default;
     
-    virtual std::shared_ptr<Engine::ModelsBuilder::Core::Model> Build() = 0;
+    virtual std::shared_ptr<XER::ModelsBuilder::Core::Model> Build() = 0;
 };
 
 class SequentialModelBuilder : public ModelBuilderBase {
@@ -24,10 +24,10 @@ public:
     SequentialModelBuilder& AddConvLayer(uint32_t filters, uint32_t kernel_size);
     SequentialModelBuilder& AddDropout(float rate);
     
-    std::shared_ptr<Engine::ModelsBuilder::Core::Model> Build() override;
+    std::shared_ptr<XER::ModelsBuilder::Core::Model> Build() override;
 
 private:
-    std::shared_ptr<Engine::ModelsBuilder::Core::Model> model_;
+    std::shared_ptr<XER::ModelsBuilder::Core::Model> model_;
 };
 
-} // namespace Engine::ModelsBuilder::Builder
+} // namespace XER::ModelsBuilder::Builder

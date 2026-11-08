@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::Native::Plugin::Pxer {
+namespace XER::Native::Plugin::Pxer {
 
 struct PluginSummary {
 	uint64_t instance_id = 0;
@@ -129,4 +129,4 @@ private:
 	PxerHostApi host_api_{};
 };
 
-}  // namespace Engine::Native::Plugin::Pxer
+}  // namespace XER::Native::Plugin::Pxer

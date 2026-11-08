@@ -4,7 +4,7 @@
 
 #pragma comment(lib, "winmm.lib")
 
-namespace Engine::Content::Platform::WinAPI::Audio {
+namespace XER::Content::Platform::WinAPI::Audio {
 
 // ---------------------------------------------------------------------------
 // Audio Device Enumerator
@@ -291,4 +291,4 @@ void MultimediaHelper::SetVolume(int volume) {
     // TODO: Implement actual volume control via mixer API
 }
 
-}  // namespace Engine::Content::Platform::WinAPI::Audio
+}  // namespace XER::Content::Platform::WinAPI::Audio

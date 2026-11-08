@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <string>
 
-namespace XER::network::dns {
+namespace XER::Network::Dns {
 
 // Standard DNS record types (RFC 1035 + extensions).
 enum class DnsRecordType : uint16_t {
@@ -27,4 +27,4 @@ enum class DnsRecordType : uint16_t {
 std::string DnsRecordTypeToString(DnsRecordType type);
 bool DnsRecordTypeFromString(const std::string& name, DnsRecordType* out);
 
-}  // namespace XER::network::dns
+}  // namespace XER::Network::Dns

@@ -14,7 +14,7 @@
 #include <vector>
 #include <sys/epoll.h>
 
-namespace XER::network::async::posix {
+namespace XER::Network::Async::Posix {
 
 // Async operation type
 enum class EpollOperationType {
@@ -93,6 +93,6 @@ private:
 // Global epoll manager instance
 EpollAsyncManager& GetGlobalEpollManager();
 
-} // namespace XER::network::async::posix
+} // namespace XER::Network::Async::Posix
 
 #endif // __linux__ || __ANDROID__

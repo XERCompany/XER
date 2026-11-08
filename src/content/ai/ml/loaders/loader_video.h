@@ -1,7 +1,7 @@
 #pragma once
 #include "loader_base.h"
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 /// Video frame loader using OpenCV VideoCapture.
 /// Each decoded frame becomes one row (HxWxC float32 pixels, [0,1]).
@@ -12,4 +12,4 @@ public:
     std::string Name() const override { return "VideoLoader"; }
 };
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

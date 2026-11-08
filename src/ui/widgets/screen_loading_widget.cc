@@ -17,7 +17,7 @@ namespace XER::UI::Widgets {
 namespace {
 
 namespace NG = XER::NodeGraph;
-namespace Cache = XER::Engine::Cache;
+namespace Cache = XER::Cache;
 namespace HW = XER::AsyncIO::IO::Hardware;
 
 constexpr std::size_t kStepDatabase = 0;

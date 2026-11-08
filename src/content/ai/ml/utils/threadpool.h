@@ -11,7 +11,7 @@
 #define XER_AI_HAS_PTHREADPOOL 0
 #endif
 
-namespace Engine::ML::Utils {
+namespace XER::ML::Utils {
 
 /// @brief Thread pool wrapper around pthreadpool
 /// 
@@ -72,4 +72,4 @@ private:
 #endif
 };
 
-} // namespace Engine::ML::Utils
+} // namespace XER::ML::Utils

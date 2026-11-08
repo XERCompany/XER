@@ -6,7 +6,7 @@
 
 #include "engine_params.h"
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 
 struct ThreadMonitorSnapshot {
 	std::size_t async_io_workers = 0;
@@ -34,4 +34,4 @@ bool ApplyCpuAffinity(const std::vector<int>& cpus, std::string* error_out);
 // No-op (returns true) when |affinity| is empty.
 bool ApplyCpuAffinityString(const std::string& affinity, std::string* error_out);
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

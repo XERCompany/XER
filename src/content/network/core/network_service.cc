@@ -6,7 +6,7 @@
 #include "content/network/url/url_request_job.h"
 #include "content/network/core/network_task_runner.h"
 
-namespace XER::network::core {
+namespace XER::Network::Core {
 
 NetworkService& NetworkService::Instance() {
     static NetworkService inst;
@@ -17,11 +17,11 @@ void NetworkService::SetDelegate(std::unique_ptr<NetworkServiceDelegate> d) {
     delegate_ = std::move(d);
 }
 
-url::URLResponse NetworkService::Fetch(const url::URLRequest& request,
+Url::URLResponse NetworkService::Fetch(const Url::URLRequest& request,
                                         std::string* error) {
     auto& ctx = NetworkContext::Instance().RequestContext();
-    url::URLRequestJob job(ctx);
-    url::URLResponse resp;
+    Url::URLRequestJob job(ctx);
+    Url::URLResponse resp;
     std::string local_err;
     const bool ok = job.Run(request, &resp, error ? error : &local_err);
     if (!ok && delegate_)
@@ -29,8 +29,8 @@ url::URLResponse NetworkService::Fetch(const url::URLRequest& request,
     return resp;
 }
 
-void NetworkService::FetchAsync(const url::URLRequest& request,
-                                 url::URLResponseCallback callback) {
+void NetworkService::FetchAsync(const Url::URLRequest& request,
+                                 Url::URLResponseCallback callback) {
     NetworkTaskRunner::Instance().PostTask(
         [this, request, cb = std::move(callback)]() mutable {
             std::string err;
@@ -44,4 +44,4 @@ void NetworkService::Shutdown() {
     if (delegate_) delegate_->OnNetworkStopped();
 }
 
-}  // namespace XER::network::core
+}  // namespace XER::Network::Core

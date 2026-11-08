@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdBaseScheduler {
 public:
@@ -32,4 +32,4 @@ private:
     std::vector<float> alphas_cumprod_;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

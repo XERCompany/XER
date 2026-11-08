@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 enum class WeightInitializationScheme : uint8_t {
 	Zeros = 0,
@@ -39,4 +39,4 @@ public:
 											  WeightInitializationScheme scheme) const;
 };
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

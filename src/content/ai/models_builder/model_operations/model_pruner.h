@@ -4,7 +4,7 @@
 
 #include <memory>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 class ModelPruner {
  public:
@@ -14,5 +14,5 @@ class ModelPruner {
 											   size_t layers_to_keep) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

@@ -10,7 +10,7 @@
   #define XER_HAS_NEON 1
 #endif
 
-namespace Engine::ModelsBuilder::Optimization {
+namespace XER::ModelsBuilder::Optimization {
 
 OptInstructionSet::ISA OptInstructionSet::Detect() {
 #if defined(XER_HAS_AVX512)
@@ -36,4 +36,4 @@ std::string OptInstructionSet::ToName(ISA isa) {
   }
 }
 
-}  // namespace Engine::ModelsBuilder::Optimization
+}  // namespace XER::ModelsBuilder::Optimization

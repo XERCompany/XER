@@ -5,7 +5,7 @@
 #include "flux/core/flux_context.h"
 #include "flux/core/module_manager.h"
 
-namespace XER::flux::core {
+namespace XER::Flux::Core {
 
 class FluxCore {
 public:
@@ -29,4 +29,4 @@ private:
 	bool running_ = false;
 };
 
-}  // namespace XER::flux::core
+}  // namespace XER::Flux::Core

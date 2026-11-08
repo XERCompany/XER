@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <memory>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 enum class QuantizationMode : uint8_t {
   None = 0,
@@ -27,4 +27,4 @@ class ModelQuantizer {
                                         QuantizationReport* report) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations

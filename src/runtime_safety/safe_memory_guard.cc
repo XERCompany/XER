@@ -5,7 +5,7 @@
 #include <absl/strings/str_cat.h>
 #include <range/v3/algorithm/any_of.hpp>
 
-namespace Engine::RuntimeSafety {
+namespace XER::RuntimeSafety {
 
 MemoryGuardSnapshot CaptureMemoryGuardSnapshot(const EngineParams& params) {
 	MemoryGuardSnapshot snapshot;
@@ -48,4 +48,4 @@ std::string BuildMemoryGuardSummary(const MemoryGuardSnapshot& snapshot) {
 		")");
 }
 
-}  // namespace Engine::RuntimeSafety
+}  // namespace XER::RuntimeSafety

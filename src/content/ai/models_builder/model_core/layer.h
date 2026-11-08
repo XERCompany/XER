@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <string_view>
 
-namespace Engine::ModelsBuilder::Core {
+namespace XER::ModelsBuilder::Core {
 
 /// @brief Layer type enumeration
 /// 
@@ -122,4 +122,4 @@ protected:
     std::vector<uint32_t> output_shape_;          ///< Computed during Initialize
 };
 
-} // namespace Engine::ModelsBuilder::Core
+} // namespace XER::ModelsBuilder::Core

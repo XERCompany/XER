@@ -6,7 +6,7 @@
 #include "flux/terminal/terminal_interface.h"
 #include "flux/terminal/terminal_size_detector.h"
 
-namespace XER::flux::terminal {
+namespace XER::Flux::Terminal {
 
 class TerminalWindow {
 public:
@@ -27,4 +27,4 @@ private:
 	TerminalSize size_;
 };
 
-}  // namespace XER::flux::terminal
+}  // namespace XER::Flux::Terminal

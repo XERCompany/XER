@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <numeric>
 
-namespace XER::Engine::Audio::AnalysisAI {
+namespace XER::Audio::AnalysisAI {
 
 BeatTracker::BeatTracker(size_t window_size, size_t hop_size)
 	: window_size_(window_size),

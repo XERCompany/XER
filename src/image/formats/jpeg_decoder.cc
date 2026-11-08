@@ -8,10 +8,10 @@ namespace image {
 static std::shared_ptr<ImageBuffer>
 DecodeViaFFmpeg(const std::string& path, const std::string& fmt_name,
                 ImageDescriptor& desc) {
-    if (!engine::bridge::ffmpeg::IsAvailable()) return nullptr;
+    if (!XER::Bridge::FFmpeg::IsAvailable()) return nullptr;
     std::string err;
-    std::vector<engine::bridge::ffmpeg::VideoFrameInfo> frames;
-    if (!engine::bridge::ffmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
+    std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
+    if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
         frames.empty()) {
         flux::core::Logger().Error("ImageDecoder", fmt_name + " decode failed: " + err);
         return nullptr;

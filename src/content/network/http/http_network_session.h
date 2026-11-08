@@ -8,13 +8,13 @@
 #include "content/network/url/url_request_context.h"
 #include "content/network/http/http_cache.h"
 
-namespace XER::network::http {
+namespace XER::Network::Http {
 
 // Aggregates context objects used across an HTTP session.
 struct HttpNetworkSession {
-    url::URLRequestContext request_context;
+    Url::URLRequestContext request_context;
 
     static HttpNetworkSession& Default();
 };
 
-}  // namespace XER::network::http
+}  // namespace XER::Network::Http

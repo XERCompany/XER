@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace XER::Engine::Audio::MIDI {
+namespace XER::Audio::MIDI {
 
 void MidiControllerMapping::Bind(
     uint8_t cc,
@@ -64,4 +64,4 @@ void MidiControllerMapping::Clear() {
     map_.clear();
 }
 
-}  // namespace XER::Engine::Audio::MIDI
+}  // namespace XER::Audio::MIDI

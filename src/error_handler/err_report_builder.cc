@@ -11,7 +11,7 @@
 #include "cache/cache_utils.h"
 #include "helper/string.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 std::string BuildDiagnosticReport(const DiagnosticData& data) {
 	std::vector<std::string> lines = {
@@ -39,8 +39,8 @@ std::string BuildDiagnosticFileName(const DiagnosticData& data) {
 	return absl::StrCat(
 		data.timestamp_ticks,
 		"_",
-		Engine::Cache::SanitizeFileName(data.component),
+		XER::Cache::SanitizeFileName(data.component),
 		".report.txt");
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

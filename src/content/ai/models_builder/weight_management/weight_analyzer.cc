@@ -6,7 +6,7 @@
 #include <numeric>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Weights {
+namespace XER::ModelsBuilder::Weights {
 
 WeightStatistics WeightAnalyzer::AnalyzeTensor(const WeightTensor& tensor) const {
 	float l1_norm = 0.0f;
@@ -55,4 +55,4 @@ WeightStatistics WeightAnalyzer::AnalyzePack(const std::vector<WeightTensor>& te
 	return stats;
 }
 
-} // namespace Engine::ModelsBuilder::Weights
+} // namespace XER::ModelsBuilder::Weights

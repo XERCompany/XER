@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 std::vector<size_t> TensorBase::ComputeStrides(const std::vector<size_t>& shape) {
     std::vector<size_t> strides(shape.size(), 1);
@@ -43,4 +43,4 @@ std::vector<size_t> TensorBase::BroadcastShape(const std::vector<size_t>& a,
     return out;
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

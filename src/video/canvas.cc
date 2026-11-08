@@ -15,7 +15,7 @@ static std::vector<uint32_t> FrameToSkia(const Frame& f) {
     std::vector<uint32_t> px(n);
     const uint8_t* d = f.Data();
     for (int i = 0; i < n; ++i) {
-        px[i] = engine::bridge::skia::MakeColorRGBA(
+        px[i] = XER::Bridge::Skia::MakeColorRGBA(
                     d[i*4+2], d[i*4+1], d[i*4+0], d[i*4+3]);
     }
     return px;
@@ -46,10 +46,10 @@ void Canvas::Resize(int width, int height, PixelFormat fmt) {
 void Canvas::Clear(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
     Frame* f = target_.GetFrame();
     if (!f || !f->IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto px = FrameToSkia(*f);
-        uint32_t color = engine::bridge::skia::MakeColorRGBA(r, g, b, a);
-        engine::bridge::skia::RasterClear(&px, f->Width(), f->Height(), color);
+        uint32_t color = XER::Bridge::Skia::MakeColorRGBA(r, g, b, a);
+        XER::Bridge::Skia::RasterClear(&px, f->Width(), f->Height(), color);
         SkiaToFrame(px, *f);
     } else {
         int n = f->Width() * f->Height() * 4;
@@ -63,10 +63,10 @@ void Canvas::Clear(uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 void Canvas::Blit(const Frame& src, int dx, int dy) {
     Frame* dst = target_.GetFrame();
     if (!dst || !dst->IsValid() || !src.IsValid()) return;
-    if (engine::bridge::skia::IsAvailable()) {
+    if (XER::Bridge::Skia::IsAvailable()) {
         auto dst_px = FrameToSkia(*dst);
         auto src_px = FrameToSkia(src);
-        engine::bridge::skia::RasterDrawImage(
+        XER::Bridge::Skia::RasterDrawImage(
                 &dst_px, dst->Width(), dst->Height(),
                 src_px,  src.Width(),  src.Height(),
                 dx, dy, "src_over");

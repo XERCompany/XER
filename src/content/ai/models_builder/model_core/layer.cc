@@ -2,7 +2,7 @@
 
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Core {
+namespace XER::ModelsBuilder::Core {
 
 Layer::Layer(LayerType type) : layer_type_(type) {
     layer_name_ = "Layer_" + std::to_string(static_cast<int>(type));
@@ -40,4 +40,4 @@ std::string Layer::Describe() const {
     return stream.str();
 }
 
-} // namespace Engine::ModelsBuilder::Core
+} // namespace XER::ModelsBuilder::Core

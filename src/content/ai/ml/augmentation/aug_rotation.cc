@@ -3,7 +3,7 @@
 #include <cmath>
 #include <random>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugRotation::AugRotation(float max_angle_deg) : max_angle_deg_(max_angle_deg) {}
 
@@ -34,4 +34,4 @@ bool AugRotation::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

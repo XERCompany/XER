@@ -1,6 +1,6 @@
 #include "clap_host_interface.h"
 
-namespace XER::Engine::Audio::Plugin {
+namespace XER::Audio::Plugin {
 
 namespace {
 
@@ -129,4 +129,4 @@ std::string ClapHostInterface::GetLoadedPluginId() const {
 	return plugin_path_;
 }
 
-}  // namespace XER::Engine::Audio::Plugin
+}  // namespace XER::Audio::Plugin

@@ -2,7 +2,7 @@
 
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Reader::Schema {
+namespace XER::ModelsBuilder::Reader::Schema {
 
 ModelMetadata MetadataExtractor::Extract(const Core::Model& model,
                                           const std::string& format) {
@@ -24,4 +24,4 @@ std::string MetadataExtractor::ToJsonString(const ModelMetadata& meta) {
   return oss.str();
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Schema
+}  // namespace XER::ModelsBuilder::Reader::Schema

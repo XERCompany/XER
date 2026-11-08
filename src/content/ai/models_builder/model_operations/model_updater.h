@@ -5,7 +5,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 class ModelUpdater {
  public:
@@ -17,5 +17,5 @@ class ModelUpdater {
 										   std::shared_ptr<Core::Layer> layer) const;
 };
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations
 

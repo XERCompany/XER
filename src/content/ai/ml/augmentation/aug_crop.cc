@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <random>
 
-namespace Engine::ML::Augmentation {
+namespace XER::ML::Augmentation {
 
 AugCrop::AugCrop(int crop_width, int crop_height, bool random)
     : crop_w_(crop_width), crop_h_(crop_height), random_(random) {}
@@ -34,4 +34,4 @@ bool AugCrop::Apply(ImageSample& sample) {
     return true;
 }
 
-}  // namespace Engine::ML::Augmentation
+}  // namespace XER::ML::Augmentation

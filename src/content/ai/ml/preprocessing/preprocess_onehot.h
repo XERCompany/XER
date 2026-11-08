@@ -2,7 +2,7 @@
 #include <vector>
 #include <cstddef>
 
-namespace Engine::ML::Preprocessing {
+namespace XER::ML::Preprocessing {
 
 /// One-hot encode integer class indices to binary row vectors
 struct PreprocessOnehot {
@@ -23,4 +23,4 @@ private:
     bool fitted_ = false;
 };
 
-}  // namespace Engine::ML::Preprocessing
+}  // namespace XER::ML::Preprocessing

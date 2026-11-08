@@ -4,7 +4,7 @@
  */
 #include "content/network/async/async_operation_manager.h"
 
-namespace XER::network::async {
+namespace XER::Network::Async {
 
 AsyncOperationManager::AsyncOperationManager()
     : thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {
@@ -66,4 +66,4 @@ void AsyncOperationWrapper::WrapVoid(std::function<void()> operation,
     });
 }
 
-} // namespace XER::network::async
+} // namespace XER::Network::Async

@@ -8,10 +8,10 @@
 #include <absl/strings/str_join.h>
 #include <absl/strings/str_split.h>
 
-namespace XER::network::cache {
+namespace XER::Network::Cache {
 
 NetworkCacheManager::NetworkCacheManager()
-    : cache_manager_(XER::Engine::Cache::CacheManager::Instance()) {
+    : cache_manager_(XER::Cache::CacheManager::Instance()) {
 }
 
 NetworkCacheManager& NetworkCacheManager::Instance() {
@@ -244,4 +244,4 @@ bool NetworkCacheManager::DeserializeHttpResponse(const std::vector<uint8_t>& da
     return true;
 }
 
-} // namespace XER::network::cache
+} // namespace XER::Network::Cache

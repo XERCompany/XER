@@ -14,7 +14,7 @@
 #include "audio/analysis_ai/anal_pitch_estimator.h"
 #include "audio/audio_core/audio_source_loader.h"
 
-namespace XER::Engine::Audio::Demo {
+namespace XER::Audio::Demo {
 
 namespace {
 
@@ -55,7 +55,7 @@ bool WriteTextFile(const std::filesystem::path& path, const std::string& text, s
 
 bool WriteBeatEventsCsv(
 	const std::filesystem::path& path,
-	const std::vector<XER::Engine::Audio::AnalysisAI::BeatEvent>& beat_events,
+	const std::vector<XER::Audio::AnalysisAI::BeatEvent>& beat_events,
 	std::string* error_out) {
 	std::ofstream output(path);
 	if (!output.is_open()) {
@@ -152,14 +152,14 @@ bool RunAudioAnalysisSmoke(
 		return false;
 	}
 
-	XER::Engine::Audio::Core::AudioSourceLoadOptions load_options;
+	XER::Audio::Core::AudioSourceLoadOptions load_options;
 	load_options.input_path = options.input_path;
 	load_options.raw_sample_rate = options.raw_sample_rate;
 	load_options.target_sample_rate = options.target_sample_rate;
 	load_options.target_channels = 1;
 
-	XER::Engine::Audio::Core::AudioSourceBuffer audio_buffer;
-	if (!XER::Engine::Audio::Core::AudioSourceLoader::Load(load_options, &audio_buffer, error_out)) {
+	XER::Audio::Core::AudioSourceBuffer audio_buffer;
+	if (!XER::Audio::Core::AudioSourceLoader::Load(load_options, &audio_buffer, error_out)) {
 		return false;
 	}
 	if (audio_buffer.samples.empty() || audio_buffer.sample_rate <= 0) {
@@ -169,7 +169,7 @@ bool RunAudioAnalysisSmoke(
 		return false;
 	}
 
-	XER::Engine::Audio::AnalysisAI::BeatTracker beat_tracker;
+	XER::Audio::AnalysisAI::BeatTracker beat_tracker;
 	if (!beat_tracker.Analyze(audio_buffer.samples.data(), audio_buffer.samples.size(), audio_buffer.sample_rate)) {
 		if (error_out != nullptr) {
 			*error_out = "beat tracker analysis failed";
@@ -178,7 +178,7 @@ bool RunAudioAnalysisSmoke(
 	}
 
 	const PitchWindowSelection pitch_window = SelectPitchWindow(audio_buffer.samples);
-	XER::Engine::Audio::AnalysisAI::PitchEstimator pitch_estimator(audio_buffer.sample_rate);
+	XER::Audio::AnalysisAI::PitchEstimator pitch_estimator(audio_buffer.sample_rate);
 	if (!pitch_estimator.Estimate(
 			audio_buffer.samples.data() + static_cast<std::ptrdiff_t>(pitch_window.offset),
 			pitch_window.frame_count)) {
@@ -188,7 +188,7 @@ bool RunAudioAnalysisSmoke(
 		return false;
 	}
 
-	XER::Engine::Audio::AnalysisAI::LoudnessMeterLUFS loudness_meter;
+	XER::Audio::AnalysisAI::LoudnessMeterLUFS loudness_meter;
 	for (size_t cursor = 0; cursor < audio_buffer.samples.size(); cursor += kLoudnessBlockSize) {
 		const size_t frames = std::min(kLoudnessBlockSize, audio_buffer.samples.size() - cursor);
 		if (!loudness_meter.ProcessBlock(
@@ -267,4 +267,4 @@ bool RunAudioAnalysisSmoke(
 	return true;
 }
 
-}  // namespace XER::Engine::Audio::Demo
+}  // namespace XER::Audio::Demo

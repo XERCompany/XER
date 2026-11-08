@@ -2,7 +2,7 @@
 
 #include <unordered_set>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 std::vector<int64_t> GraphInspector::FindByOpType(
     const GraphBase& graph, const std::string& op_type) {
@@ -43,4 +43,4 @@ std::vector<std::string> GraphInspector::GraphOutputs(
   return outputs;
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

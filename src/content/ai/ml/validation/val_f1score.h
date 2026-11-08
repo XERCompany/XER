@@ -2,7 +2,7 @@
 
 #include <vector>
 
-namespace Engine::ML::Validation {
+namespace XER::ML::Validation {
 
 /// F1 Score = 2 * precision * recall / (precision + recall)
 struct ValF1Score {
@@ -19,4 +19,4 @@ struct ValF1Score {
                                   const std::vector<int>& ground_truth);
 };
 
-}  // namespace Engine::ML::Validation
+}  // namespace XER::ML::Validation

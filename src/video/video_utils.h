@@ -29,7 +29,7 @@ std::vector<std::string> AvailableVideoCodecs();
 
 /// Probe a media file via FFmpeg bridge (returns stream metadata).
 bool ProbeFile(const std::string& path,
-               engine::bridge::ffmpeg::MediaInfo* out_info,
+               XER::Bridge::FFmpeg::MediaInfo* out_info,
                std::string* out_error = nullptr);
 
 /// Blend two BGRA8 pixels using a named Skia blend mode.

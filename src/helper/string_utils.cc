@@ -24,7 +24,7 @@
 #include <unicode/utypes.h>
 #endif
 
-namespace XER::Engine::Helper::String {
+namespace XER::Helper::String {
 
 std::string NormalizeUtf8(std::string_view text) {
 #if ENGINE_HAS_ICU
@@ -209,4 +209,4 @@ std::string WideToUtf8(std::wstring_view wide) {
 
 #endif  // _WIN32
 
-}  // namespace XER::Engine::Helper::String
+}  // namespace XER::Helper::String

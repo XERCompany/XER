@@ -6,7 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ModelsBuilder::TrainingMetrics {
+namespace XER::ModelsBuilder::TrainingMetrics {
 
 class TimingMetric {
  public:
@@ -33,5 +33,5 @@ class TimingMetric {
 	std::unordered_map<std::string, std::vector<double>> durations_ms_;
 };
 
-}  // namespace Engine::ModelsBuilder::TrainingMetrics
+}  // namespace XER::ModelsBuilder::TrainingMetrics
 

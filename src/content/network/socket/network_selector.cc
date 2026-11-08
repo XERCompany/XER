@@ -10,25 +10,25 @@
 #include "content/network/socket/socket_proxy.h"
 #include "content/network/socket/ssl_client_socket.h"
 
-namespace XER::network::socket {
+namespace XER::Network::Socket {
 
-NetworkSelector::NetworkSelector(const proxy::ProxyConfig& proxy_config)
+NetworkSelector::NetworkSelector(const Proxy::ProxyConfig& proxy_config)
     : proxy_config_(proxy_config) {}
 
-std::unique_ptr<transport::TransportClientSocket>
+std::unique_ptr<Transport::TransportClientSocket>
 NetworkSelector::CreateSocket(const std::string& scheme,
                                const std::string& host,
                                uint16_t port,
                                std::string* error) {
-    proxy::ProxyService resolver(proxy_config_);
-    proxy::ProxyInfo info;
+    Proxy::ProxyService resolver(proxy_config_);
+    Proxy::ProxyInfo info;
     resolver.Resolve(scheme + "://" + host, &info, nullptr);
 
     if (!info.is_direct) {
         auto sock = SocketProxy::ConnectThrough(
             info.server, host, port, error);
         if (!sock) return nullptr;
-        if (XER::network::IsSecureScheme(scheme)) {
+        if (XER::Network::IsSecureScheme(scheme)) {
             // Wrap in TLS (over the proxy tunnel) — return plain for now
         }
         return sock;
@@ -36,4 +36,4 @@ NetworkSelector::CreateSocket(const std::string& scheme,
     return CreateSocketForScheme(scheme);
 }
 
-}  // namespace XER::network::socket
+}  // namespace XER::Network::Socket

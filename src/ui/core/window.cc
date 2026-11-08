@@ -95,7 +95,7 @@ public:
         }
 
         // Convert title to wide string
-        const std::wstring wtitle = XER::Engine::Helper::String::Utf8ToWide(title);
+        const std::wstring wtitle = XER::Helper::String::Utf8ToWide(title);
 
         // Create window
         hwnd_ = CreateWindowExW(
@@ -192,7 +192,7 @@ public:
     void SetTitle(const std::string& title) {
         title_ = title;
         if (hwnd_) {
-            const std::wstring wtitle = XER::Engine::Helper::String::Utf8ToWide(title);
+            const std::wstring wtitle = XER::Helper::String::Utf8ToWide(title);
             SetWindowTextW(hwnd_, wtitle.c_str());
         }
     }

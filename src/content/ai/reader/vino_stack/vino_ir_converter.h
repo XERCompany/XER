@@ -7,7 +7,7 @@
 #include <unordered_map>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 /// @brief Parsed OpenVINO IR layer info from XML
 struct VinoLayerInfo {
@@ -34,4 +34,4 @@ class VinoIrConverter {
                                              const VinoBinReader& bin);
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

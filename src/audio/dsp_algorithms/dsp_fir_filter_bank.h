@@ -7,7 +7,7 @@
 #include "async_io/sync_primitives/mutex_wrapper.h"
 #include <future>
 
-namespace XER::Engine::Audio::DSP {
+namespace XER::Audio::DSP {
 
 class FIRFilterBank {
 public:
@@ -29,4 +29,4 @@ private:
 	std::vector<std::vector<float>> states_;
 };
 
-}  // namespace XER::Engine::Audio::DSP
+}  // namespace XER::Audio::DSP

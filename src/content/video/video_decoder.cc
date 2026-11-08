@@ -7,7 +7,7 @@ namespace XER::Content::Video {
 // All FFmpeg/libyuv usage for video decode lives in src/wrapper/ffmpeg —
 // this class is a thin adapter keeping the XER::Content::Video API stable.
 struct VideoDecoder::Impl {
-    XER::engine::bridge::ffmpeg::VideoDecoder decoder;
+    XER::Bridge::FFmpeg::VideoDecoder decoder;
 };
 
 VideoDecoder::VideoDecoder() : impl_(std::make_unique<Impl>()) {}

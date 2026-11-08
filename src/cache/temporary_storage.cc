@@ -8,7 +8,7 @@
 
 #include "cache/cache_utils.h"
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 
 std::string TemporaryStorage::StorageKey(const CacheEntry& entry) {
 	return absl::StrCat(entry.scope, "::", entry.key, "::", entry.name);
@@ -69,4 +69,4 @@ bool TemporaryStorage::WriteBinary(const CacheEntry& entry,
 	return true;
 }
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

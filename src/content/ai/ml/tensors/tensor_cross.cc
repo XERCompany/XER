@@ -1,7 +1,7 @@
 #include "tensor_cross.h"
 #include <stdexcept>
 
-namespace Engine::ML::Tensors {
+namespace XER::ML::Tensors {
 
 Tensor TensorCross(const Tensor& a, const Tensor& b) {
     if (a.NumElements() != 3 || b.NumElements() != 3)
@@ -16,4 +16,4 @@ Tensor TensorCross(const Tensor& a, const Tensor& b) {
     return out;
 }
 
-}  // namespace Engine::ML::Tensors
+}  // namespace XER::ML::Tensors

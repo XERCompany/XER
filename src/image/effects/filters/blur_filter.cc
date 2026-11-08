@@ -9,11 +9,11 @@ void BlurFilter::Apply(ImageBuffer& img) const {
     std::vector<uint32_t> px(w * h);
     const uint8_t* d = img.Data();
     for (int i = 0; i < w*h; ++i)
-        px[i] = engine::bridge::skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
+        px[i] = XER::Bridge::Skia::MakeColorRGBA(d[i*4+0],d[i*4+1],d[i*4+2],d[i*4+3]);
     if (gaussian_)
-        engine::bridge::skia::FilterGaussianBlur(&px, w, h, sigma_, sigma_);
+        XER::Bridge::Skia::FilterGaussianBlur(&px, w, h, sigma_, sigma_);
     else
-        engine::bridge::skia::FilterBlur(&px, w, h,
+        XER::Bridge::Skia::FilterBlur(&px, w, h,
                                          static_cast<int>(sigma_),
                                          static_cast<int>(sigma_));
     uint8_t* dst = img.Data();

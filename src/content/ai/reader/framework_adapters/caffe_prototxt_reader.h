@@ -4,7 +4,7 @@
 #include <memory>
 #include <string>
 
-namespace Engine::ModelsBuilder::Reader::Framework {
+namespace XER::ModelsBuilder::Reader::Framework {
 
 /// @brief Reads Caffe .prototxt + .caffemodel pairs
 class CaffeProtoxtReader : public ReaderBase {
@@ -21,4 +21,4 @@ class CaffeProtoxtReader : public ReaderBase {
   std::string weights_path_;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Framework
+}  // namespace XER::ModelsBuilder::Reader::Framework

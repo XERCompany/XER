@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 
-namespace XER::flux::input {
+namespace XER::Flux::Input {
 
 struct KeyBinding {
 	std::string sequence;
@@ -23,4 +23,4 @@ private:
 	std::vector<KeyBinding> bindings_;
 };
 
-}  // namespace XER::flux::input
+}  // namespace XER::Flux::Input

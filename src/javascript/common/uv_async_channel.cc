@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace engine::javascript::common {
+namespace XER::JavaScript::Common {
 
 UvAsyncChannel::UvAsyncChannel() = default;
 
@@ -76,4 +76,4 @@ void UvAsyncChannel::DrainPending() {
     }
 }
 
-}  // namespace engine::javascript::common
+}  // namespace XER::JavaScript::Common

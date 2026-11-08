@@ -1,7 +1,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::Engine::Helper {
+namespace XER::Helper {
 
 enum class FileDiffOperationType {
     Added,
@@ -38,7 +38,7 @@ private:
 
 }
 
-using FileDiffOperationType = XER::Engine::Helper::FileDiffOperationType;
-using FileDiffOperation = XER::Engine::Helper::FileDiffOperation;
-using FileDiffReturn = XER::Engine::Helper::FileDiffReturn;
-using FileDiff = XER::Engine::Helper::FileDiff;
+using FileDiffOperationType = XER::Helper::FileDiffOperationType;
+using FileDiffOperation = XER::Helper::FileDiffOperation;
+using FileDiffReturn = XER::Helper::FileDiffReturn;
+using FileDiff = XER::Helper::FileDiff;

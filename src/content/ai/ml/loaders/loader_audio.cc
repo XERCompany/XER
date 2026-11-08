@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <stdexcept>
 
-namespace Engine::ML::Loaders {
+namespace XER::ML::Loaders {
 
 Dataset LoaderAudio::Load(const std::string& path) {
     Dataset cached;
@@ -33,12 +33,12 @@ Dataset LoaderAudio::Load(const std::string& path) {
 
     std::vector<float> samples;
     if (ext == ".wav") {
-        Engine::Audio::CodecIO::WavFloatCodec codec;
+        XER::Audio::CodecIO::WavFloatCodec codec;
         if (!codec.Decode32(raw.data(), raw.size(), samples))
             throw std::runtime_error("AudioLoader: WAV decode failed: " + path);
     } else {
         std::string err;
-        if (!Engine::Audio::CodecIO::detail::DecodeAudioBufferWithFfmpeg(
+        if (!XER::Audio::CodecIO::detail::DecodeAudioBufferWithFfmpeg(
                 raw.data(), raw.size(), ext, &samples, &err))
             throw std::runtime_error("AudioLoader: FFmpeg decode failed (" + ext + "): " + err);
     }
@@ -48,4 +48,4 @@ Dataset LoaderAudio::Load(const std::string& path) {
     return ds;
 }
 
-}  // namespace Engine::ML::Loaders
+}  // namespace XER::ML::Loaders

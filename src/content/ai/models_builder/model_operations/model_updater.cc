@@ -2,7 +2,7 @@
 
 #include "model_cloner.h"
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::shared_ptr<Core::Model> ModelUpdater::Rename(const Core::Model& model,
                                                   const std::string& new_name) const {
@@ -55,4 +55,4 @@ std::shared_ptr<Core::Model> ModelUpdater::AppendLayer(const Core::Model& model,
   return updated;
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations

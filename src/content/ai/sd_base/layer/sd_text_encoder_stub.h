@@ -4,13 +4,13 @@
 
 #include <string>
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdTextEncoderStub {
 public:
-    Engine::MLData::Types::Tensor Encode(const std::string& prompt,
+    XER::MLData::Types::Tensor Encode(const std::string& prompt,
                                          uint32_t max_tokens,
                                          uint32_t embedding_dim) const;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

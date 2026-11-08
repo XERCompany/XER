@@ -12,7 +12,7 @@
 
 #include "error_handler/err_stack_trace.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -133,4 +133,4 @@ bool ErrMinidumpGenerator::Generate(absl::string_view path) const {
 	return out.good();
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

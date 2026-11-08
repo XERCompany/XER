@@ -4,6 +4,11 @@
 file(GLOB APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+list(APPEND APP_SOURCES
+    "${CMAKE_CURRENT_SOURCE_DIR}/../app_command.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../audio_config_helper.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/../json_config_helper.cc"
+)
 if(APPLE)
     file(GLOB _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
     list(APPEND APP_SOURCES ${_xer_apple_mm})

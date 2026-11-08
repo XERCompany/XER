@@ -4,7 +4,7 @@
 #include "content/ai/sd_base/core/sd_base_scheduler.h"
 #include "content/ai/sd_base/core/sd_base_types.h"
 
-namespace Engine::AI::SDBase {
+namespace XER::AI::SDBase {
 
 class SdPipeline {
 public:
@@ -17,4 +17,4 @@ private:
     SdBaseScheduler scheduler_;
 };
 
-}  // namespace Engine::AI::SDBase
+}  // namespace XER::AI::SDBase

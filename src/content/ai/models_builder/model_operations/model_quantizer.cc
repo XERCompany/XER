@@ -2,7 +2,7 @@
 
 #include "model_cloner.h"
 
-namespace Engine::ModelsBuilder::Operations {
+namespace XER::ModelsBuilder::Operations {
 
 std::shared_ptr<Core::Model> ModelQuantizer::Quantize(const Core::Model& model,
                                                       QuantizationMode mode,
@@ -31,4 +31,4 @@ std::shared_ptr<Core::Model> ModelQuantizer::Quantize(const Core::Model& model,
   return quantized;
 }
 
-}  // namespace Engine::ModelsBuilder::Operations
+}  // namespace XER::ModelsBuilder::Operations

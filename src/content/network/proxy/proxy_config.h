@@ -8,7 +8,7 @@
 #include <string>
 #include <vector>
 
-namespace XER::network::proxy {
+namespace XER::Network::Proxy {
 
 // Types of proxy servers supported by the network stack.
 enum class ProxyType { 
@@ -47,4 +47,4 @@ struct ProxyConfig {
     static ProxyConfig FromEnv();  // reads http_proxy / https_proxy env vars
 };
 
-}  // namespace XER::network::proxy
+}  // namespace XER::Network::Proxy

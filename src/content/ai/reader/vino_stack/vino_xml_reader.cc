@@ -3,7 +3,7 @@
 #include <fstream>
 #include <sstream>
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 bool VinoXmlReader::ParseFile(const std::string& xml_path) {
   std::ifstream file(xml_path);
@@ -87,4 +87,4 @@ std::shared_ptr<Core::Model> VinoXmlReader::BuildModel(
   return converter.Convert(layers_, bin_reader);
 }
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

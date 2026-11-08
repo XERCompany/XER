@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <unordered_set>
 
-namespace Engine::ModelsBuilder::GraphEngine {
+namespace XER::ModelsBuilder::GraphEngine {
 
 int64_t GraphBase::AddNode(GraphNode node) {
   if (node.id < 0) node.id = next_id_++;
@@ -69,4 +69,4 @@ std::vector<int64_t> GraphBase::TopologicalSort() const {
   return result;
 }
 
-}  // namespace Engine::ModelsBuilder::GraphEngine
+}  // namespace XER::ModelsBuilder::GraphEngine

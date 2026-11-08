@@ -4,7 +4,7 @@
 
 #include "resource_guard.h"
 
-namespace Engine::V8Runtime {
+namespace XER::V8Runtime {
 
 v8::Isolate::CreateParams BuildCreateParams() {
 	v8::Isolate::CreateParams create_params;
@@ -31,4 +31,4 @@ void DestroyAllocator(v8::Isolate* isolate) {
 	delete allocator;
 }
 
-}  // namespace Engine::V8Runtime
+}  // namespace XER::V8Runtime

@@ -7,7 +7,7 @@
 
 #include "helper/string.h"
 
-namespace Engine::ErrorHandler {
+namespace XER::ErrorHandler {
 
 DiagnosticData MakeDiagnosticData(std::string_view level,
 				 std::string_view component,
@@ -25,4 +25,4 @@ DiagnosticData MakeDiagnosticData(std::string_view level,
 	};
 }
 
-}  // namespace Engine::ErrorHandler
+}  // namespace XER::ErrorHandler

@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-namespace Engine::ModelsBuilder::Utility {
+namespace XER::ModelsBuilder::Utility {
 
 struct ExternalLibraryAvailability {
     bool has_range_v3 = false;
@@ -32,4 +32,4 @@ std::string BuildRuntimeBanner();
 std::string CompressStringFast(std::string_view text);
 size_t SuggestedInferenceThreadCount();
 
-} // namespace Engine::ModelsBuilder::Utility
+} // namespace XER::ModelsBuilder::Utility

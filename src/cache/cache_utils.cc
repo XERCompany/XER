@@ -15,7 +15,7 @@
 
 #include "helper/string_utils.h"
 
-namespace XER::Engine::Cache {
+namespace XER::Cache {
 namespace {
 
 std::string HexDigest(const unsigned char* digest, std::size_t size) {
@@ -32,14 +32,14 @@ std::string HexDigest(const unsigned char* digest, std::size_t size) {
 }  // namespace
 
 std::string HashKey(absl::string_view text) {
-	const std::string normalized = XER::Engine::Helper::String::NormalizeUtf8(text);
+	const std::string normalized = XER::Helper::String::NormalizeUtf8(text);
 	unsigned char digest[SHA256_DIGEST_LENGTH];
 	SHA256(reinterpret_cast<const unsigned char*>(normalized.data()), normalized.size(), digest);
 	return HexDigest(digest, SHA256_DIGEST_LENGTH);
 }
 
 std::string SanitizeFileName(absl::string_view text) {
-	const std::string normalized = XER::Engine::Helper::String::NormalizeUtf8(text);
+	const std::string normalized = XER::Helper::String::NormalizeUtf8(text);
 	const auto sanitized_bytes = normalized
 		| ranges::views::transform([](char ch) {
 			const unsigned char byte = static_cast<unsigned char>(ch);
@@ -54,7 +54,7 @@ std::string SanitizeFileName(absl::string_view text) {
 std::filesystem::path BuildScopedDirectory(const std::filesystem::path& root,
 					   absl::string_view scope,
 					   absl::string_view key) {
-	return root / SanitizeFileName(XER::Engine::Helper::String::CanonicalizeToken(scope)) / HashKey(key);
+	return root / SanitizeFileName(XER::Helper::String::CanonicalizeToken(scope)) / HashKey(key);
 }
 
 std::filesystem::path TempPathForTarget(const std::filesystem::path& target,
@@ -89,4 +89,4 @@ bool CommitTempFile(const std::filesystem::path& tmp,
 	return false;
 }
 
-}  // namespace XER::Engine::Cache
+}  // namespace XER::Cache

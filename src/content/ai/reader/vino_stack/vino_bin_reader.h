@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-namespace Engine::ModelsBuilder::Reader::Vino {
+namespace XER::ModelsBuilder::Reader::Vino {
 
 /// @brief Reads the OpenVINO .bin weights file (flat float32 buffer)
 class VinoBinReader {
@@ -28,4 +28,4 @@ class VinoBinReader {
   std::vector<uint8_t> data_;
 };
 
-}  // namespace Engine::ModelsBuilder::Reader::Vino
+}  // namespace XER::ModelsBuilder::Reader::Vino

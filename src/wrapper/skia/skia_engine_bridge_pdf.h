@@ -3,7 +3,7 @@
 #include <vector>
 #include <string>
 
-namespace XER::engine::bridge::skia {
+namespace XER::Bridge::Skia {
     // Begins a new PDF document. Returns an opaque ID or handle.
     int PDFBeginDocument(const std::string& author, const std::string& title);
     // Begins a new page in the given document. Returns a Canvas ID.

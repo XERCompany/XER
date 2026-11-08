@@ -2,7 +2,7 @@
 
 #include "data_loader.h"
 
-namespace Engine::MLData::Loading {
+namespace XER::MLData::Loading {
 
 class ImageLoader : public DataLoader {
 public:
@@ -16,4 +16,4 @@ private:
     uint32_t image_height_;
 };
 
-} // namespace Engine::MLData::Loading
+} // namespace XER::MLData::Loading
