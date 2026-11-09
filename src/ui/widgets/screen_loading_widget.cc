@@ -288,11 +288,12 @@ void ScreenLoadingWidget::Tick() {
 }
 
 void ScreenLoadingWidget::Layout(const Layout::Rect& bounds) {
-    Layout(bounds, tokens_valid_ ? tokens_ : Theme::Tokens{});
+    Layout(bounds, tokens_valid_ ? tokens_ : CachedLayoutTokens());
 }
 
 void ScreenLoadingWidget::Layout(const Layout::Rect& bounds,
                                  const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     bounds_ = bounds;
     SetBounds(bounds);
     if (tokens.spacing_medium > 0.0f) {

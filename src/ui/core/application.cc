@@ -16,6 +16,15 @@ public:
             return true;
         }
 
+        // Per-monitor v2 awareness must be set before any window is created;
+        // Window already tracks WM_DPICHANGED and scales input/layout by
+        // 96/dpi, so without this the app is bitmap-scaled (blurry) and the
+        // DPI paths never run. Fall back to system DPI awareness on older
+        // Windows where the v2 context is unavailable.
+        if (!SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)) {
+            SetProcessDPIAware();
+        }
+
         INITCOMMONCONTROLSEX icc{};
         icc.dwSize = sizeof(icc);
         icc.dwICC = ICC_WIN95_CLASSES | ICC_PROGRESS_CLASS;
@@ -31,7 +40,9 @@ public:
             return false;
         }
 
-        if (!SetPriorityClass(GetCurrentProcess(), HIGH_PRIORITY_CLASS)) {
+        // ABOVE_NORMAL keeps the UI responsive under load without starving
+        // other processes the way HIGH_PRIORITY_CLASS would.
+        if (!SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS)) {
             const DWORD error = GetLastError();
             fprintf(stderr,
                     "[XER UI] SetPriorityClass failed; "
@@ -50,9 +61,17 @@ public:
 
         running_ = true;
 
-        // Main message loop
+        // Main message loop. GetMessage returns -1 on error, which is truthy
+        // as a BOOL — compare explicitly so an error can't spin the loop.
         MSG msg = {};
-        while (running_ && GetMessage(&msg, nullptr, 0, 0)) {
+        for (;;) {
+            const INT result = GetMessage(&msg, nullptr, 0, 0);
+            if (result <= 0) {
+                break; // 0 = WM_QUIT, -1 = error
+            }
+            if (!running_) {
+                break;
+            }
             TranslateMessage(&msg);
             DispatchMessage(&msg);
         }

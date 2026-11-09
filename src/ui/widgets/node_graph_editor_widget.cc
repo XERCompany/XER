@@ -430,10 +430,11 @@ void NodeGraphEditorWidget::Layout(const Layout::Rect& bounds) {
     // spacing, which would lay the canvas out at pad=0 for a frame (visible
     // jump = flicker) if this overload is ever hit after a themed layout.
     Layout(bounds, canvas_tokens_valid_ ? canvas_tokens_
-                                      : Theme::Tokens{});
+                                      : CachedLayoutTokens());
 }
 
 void NodeGraphEditorWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     SetBounds(bounds);
     // Capture real theme tokens for canvas painting (Layout(bounds) may be
     // invoked with a value-initialized Tokens — spacing is 0 then, keep the
@@ -472,12 +473,12 @@ void NodeGraphEditorWidget::Layout(const Layout::Rect& bounds, const Theme::Toke
     const float back_w = show_back ? 96.0f : 0.0f;
     nav_tabs_->Layout(Layout::Rect{bounds.x + pad, bounds.y + pad * 0.4f,
                                    bounds.width - 2.0f * pad - back_w,
-                                   nav_h});
+                                   nav_h}, CachedLayoutTokens());
     if (show_back) {
         back_btn_->Layout(Layout::Rect{
             bounds.x + bounds.width - pad - back_w,
             bounds.y + pad * 0.4f + (nav_h - 30.0f) * 0.5f,
-            back_w, 30.0f});
+            back_w, 30.0f}, CachedLayoutTokens());
     }
 
     const float content_top = bounds.y + pad * 0.4f + nav_h + tokens.spacing_medium;
@@ -485,7 +486,7 @@ void NodeGraphEditorWidget::Layout(const Layout::Rect& bounds, const Theme::Toke
     const float content_h = std::max(60.0f, status_y - content_top - tokens.spacing_small);
 
     status_label_->Layout(Layout::Rect{bounds.x + pad + 4.0f, status_y + 3.0f,
-                                       900.0f, status_h});
+                                       900.0f, status_h}, CachedLayoutTokens());
 
     if (view_ == 2) {
         // Settings view: scrollable panel fills the content area.
@@ -565,7 +566,7 @@ void NodeGraphEditorWidget::Layout(const Layout::Rect& bounds, const Theme::Toke
             const float wh = std::max(0.0f, std::min(30.0f, ih - (cy - iy)));
             if (wh <= 0.0f) break;
             w->SetVisible(true);
-            w->Layout(Layout::Rect{ix + 8.0f, cy, iw - 16.0f, wh});
+            w->Layout(Layout::Rect{ix + 8.0f, cy, iw - 16.0f, wh}, CachedLayoutTokens());
             cy += wh + 4.0f;
             if (cy >= iy + ih) break;
         }

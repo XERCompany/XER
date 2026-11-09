@@ -24,6 +24,13 @@ struct DriveInfo {
 	bool ready = false;             // media present and space queryable
 };
 
+// Editable properties of a local Windows account.
+struct WindowsUserDetails {
+	std::string full_name;          // display name on the sign-in screen
+	std::string comment;            // description
+	bool disabled = false;          // UF_ACCOUNTDISABLE
+};
+
 // Decrypted contents of a token. The password field is sensitive —
 // callers must wipe it (SecureClear) as soon as it is no longer needed.
 struct TokenPayload {
@@ -123,6 +130,35 @@ public:
 				      std::string* error_out = nullptr);
 	static bool DeleteWindowsUser(const std::string& username,
 				     std::string* error_out = nullptr);
+
+	// Resets a local account password (NetUserSetInfo level 1003).
+	// Requires elevation unless changing the caller's own password.
+	static bool ChangeWindowsPassword(const std::string& username,
+					  const std::string& new_password,
+					  std::string* error_out = nullptr);
+
+	// Account editing (NetUserGetInfo / NetUserSetInfo). Update and
+	// rename require elevation.
+	static bool GetWindowsUserDetails(const std::string& username,
+					  WindowsUserDetails* details_out,
+					  std::string* error_out = nullptr);
+	static bool UpdateWindowsUserDetails(const std::string& username,
+					     const WindowsUserDetails& details,
+					     std::string* error_out = nullptr);
+	static bool RenameWindowsUser(const std::string& username,
+				      const std::string& new_username,
+				      std::string* error_out = nullptr);
+
+	// Lists local account names (NetUserEnum, normal accounts).
+	static bool EnumerateLocalUsers(std::vector<std::string>* names_out,
+					std::string* error_out = nullptr);
+
+	// Validates a username+password pair via LogonUserW — true only
+	// when the credentials are correct. No session is created.
+	static bool VerifyWindowsPassword(const std::string& username,
+					  const std::string& password,
+					  std::string* error_out = nullptr);
+
 	static bool IsAdministrator();
 
 	// Full cycle: erase token + delete account

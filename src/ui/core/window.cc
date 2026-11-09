@@ -364,6 +364,14 @@ public:
                 FlushDirtyState(message_hwnd);
                 return 0;
 
+            case WM_CAPTURECHANGED:
+                // Capture was lost without a MouseUp (another window stole
+                // it, or the button was released while unfocused). Settle
+                // any in-progress drag instead of leaving it stuck.
+                widget_tree_.CancelPointerCapture();
+                FlushDirtyState(message_hwnd);
+                return 0;
+
             case WM_MOUSEWHEEL: {
                 // lParam carries screen coordinates for wheel messages.
                 POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
@@ -430,10 +438,10 @@ public:
                     tme.hwndTrack = message_hwnd;
                     TrackMouseEvent(&tme);
                 }
-                if (msg == WM_LBUTTONUP || msg == WM_RBUTTONUP || msg == WM_MBUTTONUP) {
-                    if (GetCapture() == message_hwnd) {
-                        ReleaseCapture();
-                    }
+                // Losing focus mid-drag means the button-up may never reach
+                // us — settle drag state before dispatching Blur.
+                if (msg == WM_KILLFOCUS) {
+                    widget_tree_.CancelPointerCapture();
                 }
                 auto event = input_translator_.Translate(msg, wParam, lParam);
                 if (event) {
@@ -446,6 +454,14 @@ public:
                     }
                     widget_tree_.HandleEvent(*event);
                     FlushDirtyState(message_hwnd);
+                    // Release capture only after the MouseUp was delivered:
+                    // ReleaseCapture() posts WM_CAPTURECHANGED synchronously,
+                    // and cancelling capture first would swallow the click.
+                    // Only the left button owns capture (set on LBUTTONDOWN);
+                    // releasing on right/middle ups used to drop it mid-drag.
+                    if (msg == WM_LBUTTONUP && GetCapture() == message_hwnd) {
+                        ReleaseCapture();
+                    }
                     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
                         return DefWindowProc(message_hwnd, msg, wParam, lParam);
                     }

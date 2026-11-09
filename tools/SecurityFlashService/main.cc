@@ -14,6 +14,7 @@
 //   SecurityFlashService.exe --help
 
 #include <windows.h>
+#include <wtsapi32.h>
 
 #include <atomic>
 #include <chrono>
@@ -100,6 +101,40 @@ VOID WINAPI ServiceCtrlHandler(DWORD control) {
 	}
 }
 
+// Physical-key policy: when the flash drive carrying an armed
+// SecurityFlash token is removed, every active interactive session is
+// locked (not logged off): programs keep running, but the user has to
+// re-enter the Windows password. LockWorkStation only works from the
+// interactive desktop, so the service (session 0) disconnects the
+// sessions instead, which drops them to the Windows lock/sign-in screen.
+void TriggerSessionLock() {
+	WTS_SESSION_INFOW* sessions = nullptr;
+	DWORD count = 0;
+	if (!WTSEnumerateSessionsW(WTS_CURRENT_SERVER_HANDLE, 0, 1,
+	                           &sessions, &count)) {
+		Log("lock: WTSEnumerateSessions failed: " +
+		    std::to_string(GetLastError()));
+		return;
+	}
+	int locked = 0;
+	for (DWORD i = 0; i < count; ++i) {
+		if (sessions[i].State != WTSActive || sessions[i].SessionId == 0) {
+			continue;
+		}
+		if (WTSDisconnectSession(WTS_CURRENT_SERVER_HANDLE,
+		                         sessions[i].SessionId, FALSE)) {
+			++locked;
+		} else {
+			Log("lock: WTSDisconnectSession(" +
+			    std::to_string(sessions[i].SessionId) + ") failed: " +
+			    std::to_string(GetLastError()));
+		}
+	}
+	WTSFreeMemory(sessions);
+	Log("lock: armed token drive removed — locked " +
+	    std::to_string(locked) + " session(s)");
+}
+
 // One monitoring pass: snapshot removable drives + token presence,
 // log transitions against the previous snapshot.
 void MonitorPass(
@@ -112,12 +147,17 @@ void MonitorPass(
 	}
 
 	// Drives that disappeared.
+	bool armed_ejected = false;
 	for (const auto& [letter, info] : drives) {
 		if (!current.count(letter)) {
+			const bool was_armed = armed.count(letter) && armed[letter];
 			Log(std::string("drive ejected: ") + letter +
-			    (armed.count(letter) ? " (token was armed)" : ""));
+			    (was_armed ? " (token was armed)" : ""));
+			armed_ejected |= was_armed;
 		}
 	}
+	// Physical-key policy: losing the armed token drive locks sessions.
+	if (armed_ejected) TriggerSessionLock();
 	// Drives that appeared or changed readiness.
 	for (const auto& [letter, info] : current) {
 		const auto it = drives.find(letter);

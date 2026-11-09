@@ -21,7 +21,21 @@ Widgets::KeyCode TranslateKey(WPARAM key) {
     case VK_DOWN: return Widgets::KeyCode::ArrowDown;
     case VK_HOME: return Widgets::KeyCode::Home;
     case VK_END: return Widgets::KeyCode::End;
+    case VK_PRIOR: return Widgets::KeyCode::PageUp;
+    case VK_NEXT: return Widgets::KeyCode::PageDown;
     case VK_ESCAPE: return Widgets::KeyCode::Escape;
+    default: return Widgets::KeyCode::None;
+    }
+}
+
+Widgets::KeyCode TranslateShortcutKey(WPARAM key) {
+    switch (key) {
+    case 'A': return Widgets::KeyCode::A;
+    case 'C': return Widgets::KeyCode::C;
+    case 'V': return Widgets::KeyCode::V;
+    case 'X': return Widgets::KeyCode::X;
+    case 'Y': return Widgets::KeyCode::Y;
+    case 'Z': return Widgets::KeyCode::Z;
     default: return Widgets::KeyCode::None;
     }
 }
@@ -92,6 +106,15 @@ std::optional<Widgets::Event> InputTranslator::Translate(
         if (wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU) {
             alt_down_ = true;
             return std::nullopt;
+        }
+        // Ctrl+Alt is AltGr on many layouts and types characters.
+        if (control_down_ && !alt_down_) {
+            if (const auto key = TranslateShortcutKey(wParam);
+                key != Widgets::KeyCode::None) {
+                auto event = CreateEvent(Widgets::Event::Type::KeyDown);
+                event.key = key;
+                return event;
+            }
         }
         if (const auto key = TranslateKey(wParam); key != Widgets::KeyCode::None) {
             auto event = CreateEvent(Widgets::Event::Type::KeyDown);

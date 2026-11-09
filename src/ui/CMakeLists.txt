@@ -61,6 +61,7 @@ target_link_libraries(XER_UI_Core
         XER_NodeGraph
         XER_AsyncIO
         XER_SecurityFlash
+        XER_ContentPasswordGen
         unofficial::skia::skia
 )
 

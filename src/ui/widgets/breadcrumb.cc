@@ -39,18 +39,19 @@ void Breadcrumb::Render(Rendering::Renderer& renderer, const Theme::Tokens& toke
 
     float x = bounds.x;
     const float cy = bounds.y + bounds.height * 0.5f;
+    painted_item_rects_.clear();
+    painted_item_rects_.reserve(items_.size());
     for (std::size_t i = 0; i < items_.size(); ++i) {
         const bool last = i + 1 == items_.size();
         const auto& style = last ? active_style : muted_style;
         const auto size = renderer.MeasureText(items_[i], style);
         const Layout::Rect text_rect{x, cy - size.height * 0.5f, size.width, size.height};
+        painted_item_rects_.push_back(Layout::Rect{
+            text_rect.x - 4.0f, bounds.y, text_rect.width + 8.0f, bounds.height});
 
         if (!last && static_cast<int>(i) == hovered_item_ && IsEnabled()) {
-            renderer.FillRect(
-                Layout::Rect{text_rect.x - 4.0f, bounds.y, text_rect.width + 8.0f, bounds.height},
-                tokens.hover,
-                tokens.radius_small
-            );
+            renderer.FillRect(painted_item_rects_.back(),
+                              tokens.hover, tokens.radius_small);
         }
         if (!last && !IsEnabled()) {
             // disabled: no hover emphasis
@@ -108,8 +109,15 @@ bool Breadcrumb::HandleEvent(const Event& event) {
 }
 
 int Breadcrumb::HitItem(const Layout::Point& position) const {
-    for (std::size_t i = 0; i < item_rects_.size(); ++i) {
-        if (item_rects_[i].Contains(position)) {
+    // Prefer the exact rects painted last frame; fall back to the
+    // estimate-based item_rects_ before the first render.
+    const auto& rects = painted_item_rects_.size() == items_.size()
+                            ? painted_item_rects_
+                            : item_rects_;
+    const std::size_t count =
+        std::min(rects.size(), items_.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        if (rects[i].Contains(position)) {
             return static_cast<int>(i);
         }
     }

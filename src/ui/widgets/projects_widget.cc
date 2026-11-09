@@ -193,7 +193,7 @@ public:
     }
 
     bool HandleEvent(const Event& event) override {
-        if (event.type != Event::Type::Click ||
+        if (!IsEnabled() || event.type != Event::Type::Click ||
             event.mouse_button != MouseButton::Left) {
             return false;
         }
@@ -321,45 +321,45 @@ public:
         bounds_ = bounds;
         SetBounds(bounds);
         name_input_->Layout(
-            Layout::Rect{bounds.x, bounds.y, bounds.width, 30.0f});
+            Layout::Rect{bounds.x, bounds.y, bounds.width, 30.0f}, CachedLayoutTokens());
         version_input_->Layout(
-            Layout::Rect{bounds.x, bounds.y + 34.0f, 120.0f, 26.0f});
+            Layout::Rect{bounds.x, bounds.y + 34.0f, 120.0f, 26.0f}, CachedLayoutTokens());
         cache_path_input_->Layout(
             Layout::Rect{bounds.x + 136.0f, bounds.y + 34.0f,
-                         bounds.width - 136.0f, 26.0f});
+                         bounds.width - 136.0f, 26.0f}, CachedLayoutTokens());
         nodes_data_input_->Layout(
-            Layout::Rect{bounds.x, bounds.y + 96.0f, bounds.width, 26.0f});
+            Layout::Rect{bounds.x, bounds.y + 96.0f, bounds.width, 26.0f}, CachedLayoutTokens());
         icon_picker_->Layout(
-            Layout::Rect{bounds.x, bounds.y + 128.0f, bounds.width, 32.0f});
+            Layout::Rect{bounds.x, bounds.y + 128.0f, bounds.width, 32.0f}, CachedLayoutTokens());
         graphs_label_y_ = bounds.y + 170.0f;
         float y = graphs_label_y_ + 20.0f;
         for (auto& g : graph_rows_) {
             if (g.renaming) {
                 // Inline rename row: input + OK + Cancel.
                 g.rename_input->Layout(Layout::Rect{
-                    bounds.x, y + 3.0f, bounds.width - 130.0f, 24.0f});
+                    bounds.x, y + 3.0f, bounds.width - 130.0f, 24.0f}, CachedLayoutTokens());
                 g.rename_ok->Layout(Layout::Rect{
-                    bounds.x + bounds.width - 124.0f, y + 3.0f, 52.0f, 24.0f});
+                    bounds.x + bounds.width - 124.0f, y + 3.0f, 52.0f, 24.0f}, CachedLayoutTokens());
                 g.rename_cancel->Layout(Layout::Rect{
-                    bounds.x + bounds.width - 66.0f, y + 3.0f, 60.0f, 24.0f});
+                    bounds.x + bounds.width - 66.0f, y + 3.0f, 60.0f, 24.0f}, CachedLayoutTokens());
             } else {
                 // Normal row: label + Open / Rename / Delete.
                 g.label->Layout(Layout::Rect{
-                    bounds.x, y + 4.0f, bounds.width - 196.0f, 16.0f});
+                    bounds.x, y + 4.0f, bounds.width - 196.0f, 16.0f}, CachedLayoutTokens());
                 float bx = bounds.x + bounds.width;
-                g.del->Layout(Layout::Rect{bx - 56.0f, y + 3.0f, 56.0f, 24.0f});
+                g.del->Layout(Layout::Rect{bx - 56.0f, y + 3.0f, 56.0f, 24.0f}, CachedLayoutTokens());
                 bx -= 62.0f;
                 g.rename_btn->Layout(
-                    Layout::Rect{bx - 62.0f, y + 3.0f, 62.0f, 24.0f});
+                    Layout::Rect{bx - 62.0f, y + 3.0f, 62.0f, 24.0f}, CachedLayoutTokens());
                 bx -= 68.0f;
                 g.open_btn->Layout(
-                    Layout::Rect{bx - 54.0f, y + 3.0f, 54.0f, 24.0f});
+                    Layout::Rect{bx - 54.0f, y + 3.0f, 54.0f, 24.0f}, CachedLayoutTokens());
             }
             y += 30.0f;
         }
         if (empty_label_ != nullptr) {
             empty_label_->Layout(
-                Layout::Rect{bounds.x, y + 2.0f, bounds.width, 18.0f});
+                Layout::Rect{bounds.x, y + 2.0f, bounds.width, 18.0f}, CachedLayoutTokens());
             y += 22.0f;
         }
         content_h_ = y - bounds.y + 8.0f;
@@ -612,11 +612,11 @@ public:
     void Layout(const Layout::Rect& bounds) override {
         bounds_ = bounds;
         SetBounds(bounds);
-        name_input_->Layout(Layout::Rect{bounds.x, bounds.y, bounds.width, 30.0f});
-        version_input_->Layout(Layout::Rect{bounds.x, bounds.y + 34.0f, 120.0f, 26.0f});
-        cache_path_input_->Layout(Layout::Rect{bounds.x + 136.0f, bounds.y + 34.0f, bounds.width - 136.0f, 26.0f});
-        nodes_data_input_->Layout(Layout::Rect{bounds.x, bounds.y + 96.0f, bounds.width, 26.0f});
-        icon_picker_->Layout(Layout::Rect{bounds.x, bounds.y + 128.0f, bounds.width, 32.0f});
+        name_input_->Layout(Layout::Rect{bounds.x, bounds.y, bounds.width, 30.0f}, CachedLayoutTokens());
+        version_input_->Layout(Layout::Rect{bounds.x, bounds.y + 34.0f, 120.0f, 26.0f}, CachedLayoutTokens());
+        cache_path_input_->Layout(Layout::Rect{bounds.x + 136.0f, bounds.y + 34.0f, bounds.width - 136.0f, 26.0f}, CachedLayoutTokens());
+        nodes_data_input_->Layout(Layout::Rect{bounds.x, bounds.y + 96.0f, bounds.width, 26.0f}, CachedLayoutTokens());
+        icon_picker_->Layout(Layout::Rect{bounds.x, bounds.y + 128.0f, bounds.width, 32.0f}, CachedLayoutTokens());
     }
 
     void Layout(const Layout::Rect& bounds, const Theme::Tokens&) override {
@@ -668,7 +668,7 @@ public:
     void Layout(const Layout::Rect& bounds) override {
         SetBounds(bounds);
         input_->Layout(Layout::Rect{bounds.x, bounds.y + 42.0f,
-                                    bounds.width, 34.0f});
+                                    bounds.width, 34.0f}, CachedLayoutTokens());
     }
 
     void Layout(const Layout::Rect& bounds, const Theme::Tokens&) override {
@@ -800,7 +800,7 @@ public:
             const float w = std::max(56.0f, (*it)->GetPreferredSize().width);
             bx -= w;
             (*it)->Layout(Layout::Rect{bx, bounds.y + (bounds.height - kRowBtnH) * 0.5f,
-                                       w, kRowBtnH});
+                                       w, kRowBtnH}, CachedLayoutTokens());
             bx -= kGap;
         }
         buttons_x_ = bx + kGap;
@@ -811,6 +811,9 @@ public:
     }
 
     bool HandleEvent(const Event& event) override {
+        if (!IsEnabled()) {
+            return false;
+        }
         // Row-body click = primary action, but only left of the button
         // cluster — gaps between buttons must not open the project.
         if (event.type == Event::Type::Click &&
@@ -1283,6 +1286,7 @@ void ProjectsWidget::Layout(const Layout::Rect& bounds) {
 
 void ProjectsWidget::Layout(const Layout::Rect& bounds,
                             const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     last_tokens_ = tokens;
 
     // Build toolbar widgets once.
@@ -1368,16 +1372,16 @@ void ProjectsWidget::Layout(const Layout::Rect& bounds,
 
         if (mode_ == Mode::kBrowser) {
             search_input_->Layout(
-                Layout::Rect{inner_x, card_top + kCardPad, input_w, kInputH});
-            new_btn_->Layout(Layout::Rect{bx, by, 110.0f, kBtnH});
+                Layout::Rect{inner_x, card_top + kCardPad, input_w, kInputH}, CachedLayoutTokens());
+            new_btn_->Layout(Layout::Rect{bx, by, 110.0f, kBtnH}, CachedLayoutTokens());
             bx += 110.0f + btn_gap;
-            refresh_btn_->Layout(Layout::Rect{bx, by, 90.0f, kBtnH});
+            refresh_btn_->Layout(Layout::Rect{bx, by, 90.0f, kBtnH}, CachedLayoutTokens());
         } else {
             name_input_->Layout(
-                Layout::Rect{inner_x, card_top + kCardPad, input_w, kInputH});
-            new_btn_->Layout(Layout::Rect{bx, by, 110.0f, kBtnH});
+                Layout::Rect{inner_x, card_top + kCardPad, input_w, kInputH}, CachedLayoutTokens());
+            new_btn_->Layout(Layout::Rect{bx, by, 110.0f, kBtnH}, CachedLayoutTokens());
             bx += 110.0f + btn_gap;
-            save_as_btn_->Layout(Layout::Rect{bx, by, 140.0f, kBtnH});
+            save_as_btn_->Layout(Layout::Rect{bx, by, 140.0f, kBtnH}, CachedLayoutTokens());
         }
         // Unused widgets park offscreen (zero-size) so hit-tests can't reach.
         const Layout::Rect park{bounds.x - 5000.0f, bounds.y - 5000.0f,
@@ -1387,11 +1391,11 @@ void ProjectsWidget::Layout(const Layout::Rect& bounds,
         save_as_btn_->SetVisible(mode_ == Mode::kPage);
         refresh_btn_->SetVisible(mode_ == Mode::kBrowser);
         if (mode_ == Mode::kBrowser) {
-            name_input_->Layout(park);
-            save_as_btn_->Layout(park);
+            name_input_->Layout(park, CachedLayoutTokens());
+            save_as_btn_->Layout(park, CachedLayoutTokens());
         } else {
-            search_input_->Layout(park);
-            refresh_btn_->Layout(park);
+            search_input_->Layout(park, CachedLayoutTokens());
+            refresh_btn_->Layout(park, CachedLayoutTokens());
         }
         y = card_top + card_h + kSectionGap;
     }
@@ -1428,7 +1432,7 @@ void ProjectsWidget::Layout(const Layout::Rect& bounds,
             if (r.widget) {
                 r.widget->Layout(
                     Layout::Rect{inner_x + 4.0f, r.top, inner_w - 8.0f,
-                                 r.height});
+                                 r.height}, CachedLayoutTokens());
             }
         }
 

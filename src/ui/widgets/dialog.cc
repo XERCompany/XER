@@ -5,6 +5,7 @@
 
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "widget_tree.h"
 
 namespace XER::UI::Widgets {
 namespace {
@@ -64,7 +65,15 @@ void Dialog::Close() {
         return;
     }
     closed_ = true;
-    HideOverlay();
+    // The tree has a single modal overlay slot: ShowOverlay() may have
+    // replaced this dialog with another widget while the caller-held
+    // shared_ptr kept the dialog alive. Only hide the overlay when it is
+    // still ours, otherwise we'd tear down somebody else's popup.
+    const auto self = weak_from_this().lock();
+    if (self != nullptr && GetTree() != nullptr &&
+        GetTree()->GetOverlay() == self) {
+        HideOverlay();
+    }
     if (on_closed_) {
         on_closed_();
     }
@@ -153,10 +162,11 @@ void Dialog::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
 }
 
 void Dialog::Layout(const Layout::Rect& bounds) {
-    Layout(bounds, Theme::Tokens{});
+    Layout(bounds, CachedLayoutTokens());
 }
 
-void Dialog::Layout(const Layout::Rect& bounds, const Theme::Tokens&) {
+void Dialog::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     SetBounds(bounds);
     const auto panel = PanelRect(bounds);
 
@@ -182,7 +192,7 @@ void Dialog::Layout(const Layout::Rect& bounds, const Theme::Tokens&) {
             panel.y + kHeaderHeight,
             std::max(0.0f, panel.width - 2.0f * kPadding),
             content_h
-        });
+        }, CachedLayoutTokens());
     }
 }
 

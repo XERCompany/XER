@@ -6,6 +6,7 @@
 #include "motion/motion.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "widget_tree.h"
 
 namespace XER::UI::Widgets {
 namespace {
@@ -39,7 +40,13 @@ void ContextMenu::Close() {
         return;
     }
     closed_ = true;
-    HideOverlay();
+    // Same single-overlay-slot guard as Dialog::Close: only hide the
+    // tree's overlay when it is still this menu.
+    const auto self = weak_from_this().lock();
+    if (self != nullptr && GetTree() != nullptr &&
+        GetTree()->GetOverlay() == self) {
+        HideOverlay();
+    }
 }
 
 Layout::Rect ContextMenu::MenuRect(const Layout::Rect& bounds) const {
@@ -293,6 +300,10 @@ bool ContextMenu::HandleEvent(const Event& event) {
             }
             return false;
         case Event::Type::MouseDown:
+            // A stale suppress_click_ (scrollbar drag released outside the
+            // menu, so no synthesized click ever consumed it) must not eat
+            // the next real click. Every press re-arms it below if needed.
+            suppress_click_ = false;
             if (event.mouse_button == MouseButton::Left &&
                 ScrollbarZoneContains(event.position)) {
                 const auto thumb = ScrollbarThumbRect();

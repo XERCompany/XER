@@ -147,6 +147,20 @@ int main() {
 	Check(!SecurityFlash::IsValidUsername("way_too_long_username_xx"), "reject >20 chars");
 	Check(!SecurityFlash::IsValidUsername(""), "reject empty");
 
+	// --- Local account enumeration ---
+	// Regression: NetUserEnum crashed inside SAMCLI.DLL when totalentries
+	// was passed as nullptr.
+	{
+		std::vector<std::string> users;
+		std::string enum_error;
+		Check(SecurityFlash::EnumerateLocalUsers(&users, &enum_error),
+		      "EnumerateLocalUsers", enum_error);
+		Check(!users.empty(), "EnumerateLocalUsers non-empty");
+		for (const auto& name : users) {
+			Check(!name.empty(), "EnumerateLocalUsers name non-empty");
+		}
+	}
+
 	// --- Drive enumeration (informational, must not crash) ---
 	const auto drives = SecurityFlash::EnumerateDrives(true);
 	std::cout << "removable drives found: " << drives.size() << '\n';

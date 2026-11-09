@@ -22,6 +22,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    using Widget::Layout;
     void Tick(double dt_seconds) override;
 
     // Passive overlay: consumes no input.

@@ -111,6 +111,12 @@ void Switch::Layout(const Layout::Rect& bounds) {
 
 bool Switch::HandleEvent(const Event& event) {
     if (!IsEnabled()) {
+        // Disabled mid-press would leave held_ (and the thumb stretch)
+        // stuck until the next click — release it here instead.
+        if (held_) {
+            held_ = false;
+            press_t_.Set(0.0f, 0.12f);
+        }
         return false;
     }
 

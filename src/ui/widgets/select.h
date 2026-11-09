@@ -2,6 +2,7 @@
 #define XER_UI_WIDGETS_SELECT_H
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -15,6 +16,7 @@ namespace XER::UI::Widgets {
 class Select final : public Widget {
 public:
     Select(std::vector<std::string> options = {}, int selected = -1);
+    ~Select() override;
 
     void SetOptions(std::vector<std::string> options);
     void SetSelectedIndex(int index);
@@ -25,6 +27,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    using Widget::Layout;
     bool HandleEvent(const Event& event) override;
 
     Layout::Size GetMinSize() const override;
@@ -39,8 +42,11 @@ private:
     std::vector<std::string> options_;
     int selected_index_ = -1;
     std::string placeholder_ = "Select...";
-    int hovered_option_ = -1;
     bool open_ = false;
+    // The open dropdown overlay (SelectOverlay, defined in select.cc).
+    // Tracked weakly so SetOptions/Layout can refresh it while open and the
+    // destructor can close it before the tree loses the owner.
+    std::weak_ptr<Widget> dropdown_;
     std::function<void(int)> on_changed_;
 };
 

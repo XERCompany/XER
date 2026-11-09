@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "layout/geometry.h"
+#include "theme/tokens.h"
 #include "widgets/widget.h"
 
 namespace XER::UI::Theme {
@@ -45,6 +46,11 @@ public:
     bool ConsumeLayoutRequest();
     // Clears the hovered widget (e.g. on WM_MOUSELEAVE).
     void ClearHover();
+    // Drops left-button mouse capture without a MouseUp (e.g. the OS
+    // released capture on focus loss). A synthetic MouseUp is delivered to
+    // the captured widget first so drag state (sliders, scrollbars,
+    // selections) settles instead of sticking forever.
+    void CancelPointerCapture();
 
     // Fallback handler for right-button MouseDown events that no widget
     // consumed (returns true = handled). Used for context menus.
@@ -92,6 +98,10 @@ private:
     double hover_time_ = 0.0;
     bool tooltip_shown_ = false;
     Layout::Rect last_bounds_;
+    // Last tokens passed to Layout(bounds, tokens); reused when overlays
+    // and tooltips are shown between relayouts.
+    Theme::Tokens last_tokens_{};
+    Layout::Point last_pointer_position_{};
     std::weak_ptr<Widget> left_mouse_down_target_;
     std::weak_ptr<Widget> synthesized_click_target_;
     std::weak_ptr<Widget> hovered_widget_;

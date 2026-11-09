@@ -198,6 +198,11 @@ void Button::Layout(const Layout::Rect& bounds) {
 
 bool Button::HandleEvent(const Event& event) {
     if (!IsEnabled()) {
+        // A widget disabled mid-press would otherwise stay "held" forever.
+        if (held_) {
+            held_ = false;
+            press_.SetTarget(0.0f);
+        }
         return false;
     }
 
