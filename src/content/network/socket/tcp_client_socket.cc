@@ -66,15 +66,17 @@ bool TcpClientSocket::Connect(const std::string& host,
 }
 
 void TcpClientSocket::Disconnect() {
-    stream_.reset();
-    if (fd_ >= 0) {
+    // ~SocketStream closes fd_; only close it directly if no stream exists.
+    if (stream_) {
+        stream_.reset();
+    } else if (fd_ >= 0) {
 #ifdef _WIN32
         closesocket(fd_);
 #else
         close(fd_);
 #endif
-        fd_ = -1;
     }
+    fd_ = -1;
 }
 
 bool TcpClientSocket::IsConnected() const {
@@ -83,7 +85,8 @@ bool TcpClientSocket::IsConnected() const {
 
 int TcpClientSocket::Read(uint8_t* buf, size_t len, std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(fd_));
 
     int result = platform.Recv(socket, buf, len, error);
     return result;
@@ -91,7 +94,8 @@ int TcpClientSocket::Read(uint8_t* buf, size_t len, std::string* error) {
 
 int TcpClientSocket::Write(const uint8_t* buf, size_t len, std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(fd_));
 
     int result = platform.Send(socket, buf, len, error);
     return result;

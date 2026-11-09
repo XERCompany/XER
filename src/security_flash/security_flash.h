@@ -12,6 +12,10 @@ namespace XER::SecurityFlash {
 // The file is marked hidden + system after writing.
 inline constexpr std::string_view kTokenFileName = "xer_flash.tok";
 
+// SecurityFlashHello flash-only key: the token passphrase sealed with
+// DPAPI (machine scope), so the drive signs in without a PIN on this PC.
+inline constexpr std::string_view kLoginKeyFileName = "xer_flash.key";
+
 // Information about a mounted drive.
 struct DriveInfo {
 	char letter = 0;                // 'E'
@@ -160,6 +164,22 @@ public:
 					  std::string* error_out = nullptr);
 
 	static bool IsAdministrator();
+
+	// SecurityFlashHello login mode per drive. enable=true verifies the
+	// passphrase and writes the sealed key (flash-only); enable=false
+	// removes it (flash + PIN).
+	static bool SetFlashOnlyLogin(const std::string& drive_root,
+				      const std::string& passphrase,
+				      bool enable,
+				      std::string* error_out = nullptr);
+	static bool IsFlashOnlyLogin(const std::string& drive_root);
+
+	// Decrypts the token for sign-in: uses the sealed key when present,
+	// otherwise `pin` as the passphrase.
+	static bool ReadLoginToken(const std::string& drive_root,
+				   const std::string& pin,
+				   TokenPayload* payload_out,
+				   std::string* error_out = nullptr);
 
 	// Full cycle: erase token + delete account
 	static DeprovisionResult Deprovision(const DeprovisionOptions& options);

@@ -2,9 +2,12 @@
 // XER SecurityFlash tokens (xer_flash.tok).
 //
 // The service polls mounted removable drives and logs transitions:
-// drive inserted/ejected and credential token armed/disarmed. It never
-// reads token contents — decryption requires the user passphrase, which
-// is intentionally not stored in the service.
+// drive inserted/ejected and credential token armed/disarmed.
+//
+// It also serves the SecurityFlashHello credential provider over a
+// SYSTEM-only named pipe (\\.\pipe\XERSecurityFlashHello): LIST reports
+// token drives and their login mode, LOGON decrypts a token (sealed key
+// for flash-only drives, PIN otherwise) and returns the credentials.
 //
 // Usage:
 //   SecurityFlashService.exe              run under the Service Control Manager
@@ -15,9 +18,12 @@
 
 #include <windows.h>
 #include <wtsapi32.h>
+#include <sddl.h>
 
 #include <atomic>
+#include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -27,6 +33,7 @@
 #include <thread>
 #include <vector>
 
+#include "helper/string_utils.h"
 #include "security_flash/security_flash.h"
 
 namespace fs = std::filesystem;
@@ -204,6 +211,183 @@ void MonitorLoop() {
 	Log("monitor stopped");
 }
 
+// --- SecurityFlashHello credential pipe -----------------------------------
+
+constexpr wchar_t kHelloPipeName[] = L"\\\\.\\pipe\\XERSecurityFlashHello";
+constexpr DWORD kHelloPipeBufferBytes = 4096;
+constexpr DWORD kHelloIoTimeoutMs = 5000;
+
+bool HelloPipeIo(HANDLE pipe, bool write, void* data, DWORD size,
+                 DWORD* done) {
+	OVERLAPPED ov{};
+	ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+	if (!ov.hEvent) return false;
+	const BOOL started = write ? WriteFile(pipe, data, size, nullptr, &ov)
+	                           : ReadFile(pipe, data, size, nullptr, &ov);
+	if (!started && GetLastError() != ERROR_IO_PENDING) {
+		CloseHandle(ov.hEvent);
+		return false;
+	}
+	if (WaitForSingleObject(ov.hEvent, kHelloIoTimeoutMs) != WAIT_OBJECT_0) {
+		CancelIo(pipe);
+		GetOverlappedResult(pipe, &ov, done, TRUE);
+		CloseHandle(ov.hEvent);
+		return false;
+	}
+	const BOOL ok = GetOverlappedResult(pipe, &ov, done, FALSE);
+	CloseHandle(ov.hEvent);
+	return ok != FALSE;
+}
+
+// Usernames of flash-only tokens by volume serial, so LIST does not
+// re-run the token KDF every poll.
+std::map<std::uint32_t, std::string> g_flash_user_cache;
+
+namespace Str = XER::Helper::String;
+
+std::string HandleHelloRequest(const std::string& request) {
+	if (request == "LIST") {
+		std::string out = "LIST\n";
+		for (const auto& d : SFS::EnumerateDrives(/*removable_only=*/true)) {
+			if (!d.letter || !d.ready || !SFS::TokenExists(d.root_path)) {
+				continue;
+			}
+			const bool flash_only = SFS::IsFlashOnlyLogin(d.root_path);
+			std::string user;
+			if (flash_only) {
+				auto it = g_flash_user_cache.find(d.volume_serial);
+				if (it != g_flash_user_cache.end()) {
+					user = it->second;
+				} else {
+					XER::SecurityFlash::TokenPayload payload;
+					if (SFS::ReadLoginToken(d.root_path, "", &payload,
+					                        nullptr)) {
+						user = payload.username;
+						SFS::SecureClear(payload.password);
+						g_flash_user_cache[d.volume_serial] = user;
+					}
+				}
+			}
+			out += std::string(1, d.letter) + "\t" +
+			       (flash_only ? "flash" : "pin") + "\t" + user + "\n";
+		}
+		static std::string last_list;
+		if (out != last_list) {
+			last_list = out;
+			const std::string shown = Str::ReplaceAll(
+			    Str::ReplaceAll(out.substr(5), "\t", " "), "\n", ";");
+			Log("hello: LIST -> " + (shown.empty() ? "(no token drives)" : shown));
+		}
+		return out;
+	}
+
+	constexpr char kLogon[] = "LOGON\t";
+	if (Str::StartsWith(request, kLogon)) {
+		constexpr std::size_t kLetterPos = sizeof(kLogon) - 1;
+		if (request.size() < kLetterPos + 2 ||
+		    request[kLetterPos + 1] != '\t' ||
+		    !std::isalpha(static_cast<unsigned char>(request[kLetterPos]))) {
+			return "ERR\tbad request";
+		}
+		const std::string root = std::string(1, request[kLetterPos]) + ":\\";
+		std::string pin = request.substr(kLetterPos + 2);
+		XER::SecurityFlash::TokenPayload payload;
+		std::string err;
+		const bool ok = SFS::ReadLoginToken(root, pin, &payload, &err);
+		SFS::SecureClear(pin);
+		if (!ok) {
+			Log("hello: sign-in rejected for " + root + ": " + err);
+			// Slow down PIN guessing.
+			Sleep(1500);
+			return "ERR\t" + (err.empty() ? std::string("wrong PIN") : err);
+		}
+		Log("hello: credentials released for '" + payload.username +
+		    "' from " + root);
+		std::string reply = "OK\t" + payload.username + "\t" +
+		                    payload.password;
+		SFS::SecureClear(payload.password);
+		return reply;
+	}
+	return "ERR\tunknown request";
+}
+
+void HelloPipeLoop() {
+	// SYSTEM only: LogonUI, which hosts the credential provider, runs as
+	// SYSTEM, so no user process can request credentials.
+	PSECURITY_DESCRIPTOR sd = nullptr;
+	if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(
+	        L"D:P(A;;GA;;;SY)", SDDL_REVISION_1, &sd, nullptr)) {
+		Log("hello: security descriptor failed: " +
+		    std::to_string(GetLastError()));
+		return;
+	}
+	SECURITY_ATTRIBUTES sa{sizeof(sa), sd, FALSE};
+	Log("hello: credential pipe started");
+
+	while (g_running) {
+		HANDLE pipe = CreateNamedPipeW(
+		    kHelloPipeName,
+		    PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED |
+		        FILE_FLAG_FIRST_PIPE_INSTANCE,
+		    PIPE_TYPE_MESSAGE | PIPE_READMODE_MESSAGE | PIPE_WAIT |
+		        PIPE_REJECT_REMOTE_CLIENTS,
+		    1, kHelloPipeBufferBytes, kHelloPipeBufferBytes, 0, &sa);
+		if (pipe == INVALID_HANDLE_VALUE) {
+			Log("hello: CreateNamedPipe failed: " +
+			    std::to_string(GetLastError()));
+			if (WaitForSingleObject(g_stop_event, 5000) == WAIT_OBJECT_0) {
+				break;
+			}
+			continue;
+		}
+
+		OVERLAPPED ov{};
+		ov.hEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+		bool connected = ConnectNamedPipe(pipe, &ov) != FALSE;
+		if (!connected) {
+			const DWORD err = GetLastError();
+			if (err == ERROR_PIPE_CONNECTED) {
+				connected = true;
+			} else if (err == ERROR_IO_PENDING) {
+				HANDLE waits[2] = {ov.hEvent, g_stop_event};
+				DWORD unused = 0;
+				if (WaitForMultipleObjects(2, waits, FALSE, INFINITE) ==
+				    WAIT_OBJECT_0) {
+					connected =
+					    GetOverlappedResult(pipe, &ov, &unused, FALSE) != FALSE;
+				} else {
+					CancelIo(pipe);
+					GetOverlappedResult(pipe, &ov, &unused, TRUE);
+				}
+			}
+		}
+		if (ov.hEvent) CloseHandle(ov.hEvent);
+
+		if (connected) {
+			char buf[kHelloPipeBufferBytes];
+			DWORD read = 0;
+			if (HelloPipeIo(pipe, false, buf, sizeof(buf), &read) &&
+			    read > 0) {
+				std::string request(buf, read);
+				std::string reply = HandleHelloRequest(request);
+				SFS::SecureClear(request);
+				DWORD written = 0;
+				if (HelloPipeIo(pipe, true, reply.data(),
+				                static_cast<DWORD>(reply.size()), &written)) {
+					FlushFileBuffers(pipe);
+				}
+				SFS::SecureClear(reply);
+			}
+			SecureZeroMemory(buf, sizeof(buf));
+			DisconnectNamedPipe(pipe);
+		}
+		CloseHandle(pipe);
+	}
+
+	LocalFree(sd);
+	Log("hello: credential pipe stopped");
+}
+
 VOID WINAPI ServiceMain(DWORD /*argc*/, LPWSTR* /*argv*/) {
 	g_status_handle = RegisterServiceCtrlHandlerW(kServiceName,
 	                                             ServiceCtrlHandler);
@@ -231,7 +415,9 @@ VOID WINAPI ServiceMain(DWORD /*argc*/, LPWSTR* /*argv*/) {
 	SetServiceState(SERVICE_RUNNING);
 
 	std::thread worker(MonitorLoop);
+	std::thread hello(HelloPipeLoop);
 	worker.join();
+	hello.join();
 
 	CloseHandle(g_stop_event);
 	g_stop_event = nullptr;

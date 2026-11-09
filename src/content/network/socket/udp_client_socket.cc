@@ -99,7 +99,8 @@ int UdpClientSocket::SendTo(const uint8_t* buf, size_t len,
                              const std::string& host, uint16_t port,
                              std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(fd_));
 
     if (!socket.IsValid()) {
         if (error) *error = "Socket not created";
@@ -113,7 +114,8 @@ int UdpClientSocket::RecvFrom(std::vector<uint8_t>* buf,
                                std::string* from_host, uint16_t* from_port,
                                std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(fd_));
 
     if (!socket.IsValid()) {
         if (error) *error = "Socket not created";

@@ -35,5 +35,5 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(XER_SecurityFlash PUBLIC netapi32 advapi32)
+    target_link_libraries(XER_SecurityFlash PUBLIC netapi32 advapi32 crypt32)
 endif()

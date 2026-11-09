@@ -144,6 +144,7 @@ target_include_directories(SecurityFlashService PRIVATE
 target_compile_features(SecurityFlashService PRIVATE cxx_std_23)
 target_link_libraries(SecurityFlashService PRIVATE
     XER_SecurityFlash
+    XER_Helper
     wtsapi32
 )
 set_target_properties(SecurityFlashService PROPERTIES
@@ -164,6 +165,46 @@ target_link_libraries(ControllAccountsWindows PRIVATE
     shell32
 )
 set_target_properties(ControllAccountsWindows PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# ServerAudio: TCP server that loads audio into cached ids, applies XER
+# effects and saves the processed result (see tools/ServerAudio/main.cc).
+add_executable(ServerAudio tools/ServerAudio/main.cc)
+target_include_directories(ServerAudio PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(ServerAudio PRIVATE cxx_std_23)
+target_link_libraries(ServerAudio PRIVATE
+    XER_AudioCore
+    XER_Network
+    XER_Cache
+    XER_Helper
+    ole32
+)
+set_target_properties(ServerAudio PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# SecurityFlashHello: Windows Credential Provider (sign-in tile) that logs
+# in with a SecurityFlash drive (flash-only or flash + PIN). Talks to
+# SecurityFlashService over a SYSTEM-only pipe. COM loads it with the DLL's
+# directory on the search path, so the vcpkg DLLs in bin/ resolve.
+add_library(SecurityFlashHello SHARED
+    tools/SecurityFlashHello/security_flash_hello.cc
+    tools/SecurityFlashHello/SecurityFlashHello.def
+)
+target_include_directories(SecurityFlashHello PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(SecurityFlashHello PRIVATE cxx_std_23)
+target_compile_definitions(SecurityFlashHello PRIVATE UNICODE _UNICODE)
+target_link_libraries(SecurityFlashHello PRIVATE
+    XER_SecurityFlash
+    XER_Helper
+    secur32
+    ole32
+    advapi32
+)
+set_target_properties(SecurityFlashHello PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 include(CTest)

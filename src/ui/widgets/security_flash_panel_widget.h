@@ -39,6 +39,9 @@ class TextInput;
 //   Enable|Disable — toggle UF_ACCOUNTDISABLE,
 //   Delete User  — NetUserDel (second click confirms).
 //
+// SecurityFlashHello (sign-in tile): per-drive login mode (flash + PIN or
+// flash only) and credential-provider register/unregister.
+//
 // Status is polled from Tick(); labels invalidate only on change.
 class SecurityFlashPanelWidget final : public Widget {
 public:
@@ -88,6 +91,8 @@ private:
     void OnSaveUser();
     void OnToggleUser();
     void OnDeleteUser();
+    void OnApplyLoginMode();
+    void OnHelloRegister(bool enable);
 
     std::shared_ptr<Label> service_label_;
     std::shared_ptr<Label> section_label_;
@@ -114,6 +119,10 @@ private:
     std::shared_ptr<Button> save_user_button_;
     std::shared_ptr<Button> toggle_user_button_;
     std::shared_ptr<Button> delete_user_button_;
+    std::shared_ptr<Select> login_mode_select_;
+    std::shared_ptr<Button> apply_mode_button_;
+    std::shared_ptr<Button> hello_on_button_;
+    std::shared_ptr<Button> hello_off_button_;
 
     bool children_attached_ = false;
     double poll_accumulator_ = 0.0;

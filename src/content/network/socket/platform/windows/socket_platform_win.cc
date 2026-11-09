@@ -21,12 +21,19 @@ SocketHandle::SocketHandle() : handle_(static_cast<uintptr_t>(INVALID_SOCKET)) {
 
 SocketHandle::SocketHandle(uintptr_t handle) : handle_(handle) {}
 
+SocketHandle::SocketHandle(uintptr_t handle, bool owned)
+    : handle_(handle), owned_(owned) {}
+
+SocketHandle SocketHandle::Borrowed(uintptr_t handle) {
+    return SocketHandle(handle, false);
+}
+
 SocketHandle::~SocketHandle() {
     Close();
 }
 
 SocketHandle::SocketHandle(SocketHandle&& other) noexcept
-    : handle_(other.handle_) {
+    : handle_(other.handle_), owned_(other.owned_) {
     other.handle_ = static_cast<uintptr_t>(INVALID_SOCKET);
 }
 
@@ -34,6 +41,7 @@ SocketHandle& SocketHandle::operator=(SocketHandle&& other) noexcept {
     if (this != &other) {
         Close();
         handle_ = other.handle_;
+        owned_ = other.owned_;
         other.handle_ = static_cast<uintptr_t>(INVALID_SOCKET);
     }
     return *this;
@@ -48,10 +56,13 @@ bool SocketHandle::IsValid() const {
 }
 
 void SocketHandle::Close() {
-    if (IsValid()) {
-        closesocket(static_cast<SOCKET>(handle_));
-        handle_ = static_cast<uintptr_t>(INVALID_SOCKET);
+    if (!IsValid()) {
+        return;
     }
+    if (owned_) {
+        closesocket(static_cast<SOCKET>(handle_));
+    }
+    handle_ = static_cast<uintptr_t>(INVALID_SOCKET);
 }
 
 // SocketPlatform implementation for Windows
@@ -431,6 +442,7 @@ std::string SocketPlatform::GetLastError() {
                    nullptr);
     std::string result = msg ? msg : "Unknown error";
     LocalFree(msg);
+    result += " [" + std::to_string(error_code) + "]";
     return result;
 }
 
