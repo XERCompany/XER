@@ -18,12 +18,12 @@ int main() {
 	}
 
 	auto window = std::make_shared<XER::UI::Core::Window>();
-	// The panel needs ~570 logical px of height; with per-monitor DPI
+	// The panel needs ~610 logical px of height; with per-monitor DPI
 	// awareness the client area shrinks by 96/dpi, so leave headroom.
-	if (!window->Create("SecurityFlash — Account Control", 820, 680)) {
+	if (!window->Create("SecurityFlash — Account Control", 820, 740)) {
 		return 1;
 	}
-	window->SetSizeLimits(720, 580, 0, 0);
+	window->SetSizeLimits(720, 620, 0, 0);
 
 	auto panel =
 	    std::make_shared<XER::UI::Widgets::SecurityFlashPanelWidget>();

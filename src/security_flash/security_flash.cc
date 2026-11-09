@@ -28,6 +28,7 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <wincrypt.h>
 #else
 #include <unistd.h>
 #endif
@@ -649,6 +650,170 @@ bool SecurityFlash::EraseToken(const std::string& drive_root,
 		return false;
 	}
 	return EraseTokenFromDir(dir, error_out);
+}
+
+namespace {
+
+std::string LoginKeyPathForDir(const std::string& dir) {
+	return (std::filesystem::path(dir) / std::string(kLoginKeyFileName)).string();
+}
+
+#ifdef _WIN32
+constexpr char kLoginKeyEntropy[] = "XER.SecurityFlashHello.v1";
+constexpr std::uintmax_t kMaxLoginKeyBytes = 64u * 1024u;
+
+DATA_BLOB LoginKeyEntropyBlob() {
+	DATA_BLOB blob{};
+	blob.cbData = static_cast<DWORD>(sizeof(kLoginKeyEntropy) - 1);
+	blob.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(kLoginKeyEntropy));
+	return blob;
+}
+#endif
+
+}  // namespace
+
+bool SecurityFlash::SetFlashOnlyLogin(const std::string& drive_root,
+				      const std::string& passphrase,
+				      bool enable,
+				      std::string* error_out) {
+	std::string dir;
+	if (!ResolveTokenDirectory(drive_root, &dir, error_out)) {
+		return false;
+	}
+	const std::string key_path = LoginKeyPathForDir(dir);
+#ifdef _WIN32
+	const std::wstring wide_key_path = Detail::Utf8ToWideLocal(key_path);
+	if (!wide_key_path.empty() && PathExists(key_path)) {
+		SetFileAttributesW(wide_key_path.c_str(), FILE_ATTRIBUTE_NORMAL);
+	}
+	if (!enable) {
+		std::error_code ec;
+		std::filesystem::remove(key_path, ec);
+		if (ec) {
+			SetError(error_out, absl::StrCat("cannot remove '", key_path,
+							 "': ", ec.message()));
+			return false;
+		}
+		if (error_out != nullptr) {
+			error_out->clear();
+		}
+		return true;
+	}
+
+	// Only seal a passphrase that actually opens this drive's token.
+	TokenPayload payload;
+	if (!ReadTokenFromDir(dir, passphrase, &payload, error_out)) {
+		return false;
+	}
+	SecureClear(payload.password);
+
+	DATA_BLOB input{};
+	input.cbData = static_cast<DWORD>(passphrase.size());
+	input.pbData = reinterpret_cast<BYTE*>(const_cast<char*>(passphrase.data()));
+	DATA_BLOB entropy = LoginKeyEntropyBlob();
+	DATA_BLOB sealed{};
+	if (!CryptProtectData(&input, L"XER SecurityFlashHello", &entropy, nullptr,
+			      nullptr,
+			      CRYPTPROTECT_LOCAL_MACHINE | CRYPTPROTECT_UI_FORBIDDEN,
+			      &sealed)) {
+		SetError(error_out, absl::StrCat("CryptProtectData failed: ",
+						 static_cast<unsigned long>(GetLastError())));
+		return false;
+	}
+	bool written = false;
+	{
+		std::ofstream output(key_path, std::ios::binary | std::ios::trunc);
+		if (output.is_open()) {
+			output.write(reinterpret_cast<const char*>(sealed.pbData),
+				     static_cast<std::streamsize>(sealed.cbData));
+			output.flush();
+			written = output.good();
+		}
+	}
+	LocalFree(sealed.pbData);
+	if (!written) {
+		SetError(error_out, absl::StrCat("failed writing '", key_path, "'"));
+		return false;
+	}
+	if (!wide_key_path.empty()) {
+		SetFileAttributesW(wide_key_path.c_str(),
+				   FILE_ATTRIBUTE_HIDDEN | FILE_ATTRIBUTE_SYSTEM);
+	}
+	if (error_out != nullptr) {
+		error_out->clear();
+	}
+	return true;
+#else
+	(void)passphrase;
+	(void)enable;
+	(void)key_path;
+	SetError(error_out, "flash-only login requires Windows");
+	return false;
+#endif
+}
+
+bool SecurityFlash::IsFlashOnlyLogin(const std::string& drive_root) {
+	std::string dir;
+	if (!ResolveTokenDirectory(drive_root, &dir, nullptr)) {
+		return false;
+	}
+	return PathExists(LoginKeyPathForDir(dir));
+}
+
+bool SecurityFlash::ReadLoginToken(const std::string& drive_root,
+				   const std::string& pin,
+				   TokenPayload* payload_out,
+				   std::string* error_out) {
+	if (payload_out == nullptr) {
+		SetError(error_out, "payload_out must not be null");
+		return false;
+	}
+	std::string dir;
+	if (!ResolveTokenDirectory(drive_root, &dir, error_out)) {
+		return false;
+	}
+	std::string passphrase = pin;
+#ifdef _WIN32
+	const std::string key_path = LoginKeyPathForDir(dir);
+	if (PathExists(key_path)) {
+		std::error_code ec;
+		const auto size = std::filesystem::file_size(key_path, ec);
+		if (ec || size == 0 || size > kMaxLoginKeyBytes) {
+			SetError(error_out, "flash-only key file is invalid");
+			return false;
+		}
+		std::vector<std::uint8_t> sealed_bytes(static_cast<std::size_t>(size));
+		std::ifstream input(key_path, std::ios::binary);
+		input.read(reinterpret_cast<char*>(sealed_bytes.data()),
+			   static_cast<std::streamsize>(sealed_bytes.size()));
+		if (!input) {
+			SetError(error_out, "cannot read flash-only key file");
+			return false;
+		}
+		DATA_BLOB sealed{};
+		sealed.cbData = static_cast<DWORD>(sealed_bytes.size());
+		sealed.pbData = sealed_bytes.data();
+		DATA_BLOB entropy = LoginKeyEntropyBlob();
+		DATA_BLOB plain{};
+		if (!CryptUnprotectData(&sealed, nullptr, &entropy, nullptr, nullptr,
+					CRYPTPROTECT_UI_FORBIDDEN, &plain)) {
+			SetError(error_out, "flash-only key is not valid on this PC");
+			return false;
+		}
+		SecureClear(passphrase);
+		passphrase.assign(reinterpret_cast<const char*>(plain.pbData),
+				  plain.cbData);
+		SecureZeroMemory(plain.pbData, plain.cbData);
+		LocalFree(plain.pbData);
+	}
+#endif
+	if (passphrase.empty()) {
+		SetError(error_out, "PIN is required");
+		return false;
+	}
+	const bool ok = ReadTokenFromDir(dir, passphrase, payload_out, error_out);
+	SecureClear(passphrase);
+	return ok;
 }
 
 bool SecurityFlash::TokenExists(const std::string& drive_root) {

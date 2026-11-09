@@ -52,7 +52,8 @@ bool SocksClientSocket::Socks4Handshake(const std::string& host,
                                          uint16_t port,
                                          std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(fd_));
 
     struct in_addr addr{};
     if (inet_pton(AF_INET, host.c_str(), &addr) != 1) {
@@ -82,7 +83,8 @@ bool SocksClientSocket::Socks5Handshake(const std::string& host,
                                          uint16_t port,
                                          std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(fd_));
 
     // Auth negotiation
     const bool has_auth = !proxy_.username.empty();

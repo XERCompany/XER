@@ -59,7 +59,8 @@ bool SocketServer::Listen(const std::string& address, uint16_t port,
 
 std::unique_ptr<TcpClientSocket> SocketServer::Accept(std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle server_socket(static_cast<uintptr_t>(fd_));
+    Platform::SocketHandle server_socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(fd_));
 
     if (!server_socket.IsValid()) {
         if (error) *error = "Server socket not listening";

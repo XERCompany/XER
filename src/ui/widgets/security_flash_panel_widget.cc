@@ -9,6 +9,7 @@
 #include <shellapi.h>
 
 #include "content/passwordgen/password_generator.h"
+#include "helper/string_utils.h"
 #include "rendering/renderer.h"
 #include "security_flash/security_flash.h"
 #include "theme/tokens.h"
@@ -203,14 +204,63 @@ bool IsSignedInUser(const std::string& username) {
 	wchar_t current[257];
 	DWORD len = 257;
 	if (!GetUserNameW(current, &len)) return false;
-	const int n = MultiByteToWideChar(CP_UTF8, 0, username.c_str(), -1,
-	                                  nullptr, 0);
-	if (n <= 0) return false;
-	std::wstring wide(static_cast<std::size_t>(n), L'\0');
-	MultiByteToWideChar(CP_UTF8, 0, username.c_str(), -1, wide.data(), n);
-	return _wcsicmp(wide.c_str(), current) == 0;
+	const std::wstring wide = XER::Helper::String::Utf8ToWide(username);
+	return !wide.empty() && _wcsicmp(wide.c_str(), current) == 0;
 #else
 	(void)username;
+	return false;
+#endif
+}
+
+constexpr char kLoginModePin[] = "Login: flash + PIN";
+constexpr char kLoginModeFlash[] = "Login: flash only (this PC)";
+
+// Elevated regsvr32 of the sibling SecurityFlashHello.dll; waits for it.
+bool LaunchHelloRegistration(bool enable, std::string* error) {
+#ifdef _WIN32
+	wchar_t buf[MAX_PATH];
+	const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH);
+	wchar_t* slash = n ? wcsrchr(buf, L'\\') : nullptr;
+	if (!slash) {
+		*error = "cannot resolve the executable directory";
+		return false;
+	}
+	*(slash + 1) = L'\0';
+	const std::wstring dll = std::wstring(buf) + L"SecurityFlashHello.dll";
+	if (GetFileAttributesW(dll.c_str()) == INVALID_FILE_ATTRIBUTES) {
+		*error = "SecurityFlashHello.dll not found next to this executable";
+		return false;
+	}
+	const std::wstring args =
+	    std::wstring(enable ? L"/s \"" : L"/s /u \"") + dll + L"\"";
+	SHELLEXECUTEINFOW sei{};
+	sei.cbSize = sizeof(sei);
+	sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI;
+	sei.lpVerb = L"runas";
+	sei.lpFile = L"regsvr32.exe";
+	sei.lpParameters = args.c_str();
+	sei.nShow = SW_HIDE;
+	if (!ShellExecuteExW(&sei)) {
+		const DWORD err = GetLastError();
+		*error = err == ERROR_CANCELLED
+		             ? std::string("elevation cancelled")
+		             : "ShellExecuteEx failed: " + std::to_string(err);
+		return false;
+	}
+	DWORD code = 1;
+	if (sei.hProcess) {
+		WaitForSingleObject(sei.hProcess, 15000);
+		GetExitCodeProcess(sei.hProcess, &code);
+		CloseHandle(sei.hProcess);
+	}
+	if (code != 0) {
+		*error = "regsvr32 exit code " + std::to_string(code);
+		return false;
+	}
+	return true;
+#else
+	(void)enable;
+	*error = "not supported on this platform";
 	return false;
 #endif
 }
@@ -218,11 +268,19 @@ bool IsSignedInUser(const std::string& username) {
 std::string DriveStatusLine(const XER::SecurityFlash::DriveInfo& d) {
 	char letter = d.letter ? d.letter : '?';
 	const bool token = d.ready && SFS::TokenExists(d.root_path);
+	const char* token_text = "none";
+	if (!d.ready) {
+		token_text = "no media";
+	} else if (token) {
+		token_text = SFS::IsFlashOnlyLogin(d.root_path)
+		                 ? "ARMED, login: flash only"
+		                 : "ARMED, login: flash + PIN";
+	}
 	char line[512];
 	std::snprintf(line, sizeof(line),
 	              "%c:\\  %-22s serial=0x%08X  token: %s",
 	              letter, d.volume_label.c_str(), d.volume_serial,
-	              !d.ready ? "no media" : (token ? "ARMED" : "none"));
+	              token_text);
 	return line;
 }
 
@@ -312,6 +370,31 @@ SecurityFlashPanelWidget::SecurityFlashPanelWidget() {
 	    "Delete the selected Windows account (click twice to confirm). "
 	    "The profile folder in C:\\Users is kept.");
 
+	login_mode_select_ = std::make_shared<Select>();
+	login_mode_select_->SetOptions(
+	    std::vector<std::string>{kLoginModePin, kLoginModeFlash});
+	login_mode_select_->SetSelectedIndex(0);
+	login_mode_select_->SetTooltip(
+	    "SecurityFlashHello login mode for the selected drive: flash + PIN "
+	    "(PIN = flash passphrase) or flash only (sealed to this PC)");
+	apply_mode_button_ =
+	    std::make_shared<Button>("Apply Mode", ButtonStyle::Secondary);
+	hello_on_button_ =
+	    std::make_shared<Button>("Hello On", ButtonStyle::Primary);
+	hello_off_button_ =
+	    std::make_shared<Button>("Hello Off", ButtonStyle::Secondary);
+	apply_mode_button_->SetOnClick([this] { OnApplyLoginMode(); });
+	hello_on_button_->SetOnClick([this] { OnHelloRegister(true); });
+	hello_off_button_->SetOnClick([this] { OnHelloRegister(false); });
+	apply_mode_button_->SetTooltip(
+	    "Set the login mode of the token on the selected drive (flash "
+	    "only needs the flash passphrase once)");
+	hello_on_button_->SetTooltip(
+	    "Register the SecurityFlashHello tile on the Windows sign-in "
+	    "screen (UAC). The service must be installed and running.");
+	hello_off_button_->SetTooltip(
+	    "Remove the SecurityFlashHello tile (password sign-in stays)");
+
 	create_button_ = std::make_shared<Button>("Create + Write Token",
 	                                          ButtonStyle::Primary);
 	change_button_ =
@@ -373,6 +456,10 @@ void SecurityFlashPanelWidget::EnsureChildrenAttached() {
 	AddChild(toggle_user_button_);
 	AddChild(delete_user_button_);
 	AddChild(user_select_);
+	AddChild(apply_mode_button_);
+	AddChild(hello_on_button_);
+	AddChild(hello_off_button_);
+	AddChild(login_mode_select_);
 	AddChild(username_input_);
 	AddChild(password_input_);
 	AddChild(passphrase_input_);
@@ -466,6 +553,21 @@ void SecurityFlashPanelWidget::Layout(const Layout::Rect& bounds,
 	                       kInputH}, CachedLayoutTokens());
 	y += kInputH + 14.0f;
 
+	// SecurityFlashHello: login mode + tile registration.
+	login_mode_select_->Layout({bounds.x + kPad, y, col, kInputH},
+	                           CachedLayoutTokens());
+	{
+		constexpr float kGap = 8.0f;
+		const float bw = (col - 2.0f * kGap) / 3.0f;
+		float bx = bounds.x + kPad + col + 12.0f;
+		for (Button* b : {apply_mode_button_.get(), hello_on_button_.get(),
+		                  hello_off_button_.get()}) {
+			b->Layout({bx, y, bw, kInputH}, CachedLayoutTokens());
+			bx += bw + kGap;
+		}
+	}
+	y += kInputH + 10.0f;
+
 	// Account action buttons.
 	{
 		constexpr int kN = 5;
@@ -489,11 +591,11 @@ bool SecurityFlashPanelWidget::HandleEvent(const Event&) {
 }
 
 Layout::Size SecurityFlashPanelWidget::GetMinSize() const {
-	return {640.0f, 510.0f};
+	return {640.0f, 554.0f};
 }
 
 Layout::Size SecurityFlashPanelWidget::GetPreferredSize() const {
-	return {760.0f, 566.0f};
+	return {760.0f, 610.0f};
 }
 
 Layout::Size SecurityFlashPanelWidget::GetMaxSize() const {
@@ -1026,6 +1128,53 @@ void SecurityFlashPanelWidget::OnDeleteUser() {
 	SetActionResult("deleted '" + user +
 	                "' (profile folder in C:\\Users is kept)");
 	OnRefresh();
+}
+
+// ---- SecurityFlashHello -------------------------------------------------
+
+void SecurityFlashPanelWidget::OnApplyLoginMode() {
+	const char drive = SelectedDriveLetter();
+	if (!drive || !SelectedDriveReady()) {
+		SetActionResult("select a ready removable drive");
+		return;
+	}
+	const std::string root = std::string(1, drive) + ":\\";
+	if (!SFS::TokenExists(root)) {
+		SetActionResult("no token on " + root + " — write a token first");
+		return;
+	}
+	const bool flash_only =
+	    login_mode_select_->GetSelectedText() == kLoginModeFlash;
+	const std::string phrase = passphrase_input_->GetValue();
+	if (flash_only && phrase.empty()) {
+		SetActionResult("flash passphrase is required for flash-only mode");
+		return;
+	}
+	std::string err;
+	if (!SFS::SetFlashOnlyLogin(root, phrase, flash_only, &err)) {
+		SetActionResult("login mode failed: " + err);
+		return;
+	}
+	SetActionResult(flash_only
+	                    ? "login mode for " + root +
+	                          ": flash only (works on this PC only)"
+	                    : "login mode for " + root +
+	                          ": flash + PIN (PIN = flash passphrase)");
+	last_drive_options_key_.clear();
+	OnRefresh();
+}
+
+void SecurityFlashPanelWidget::OnHelloRegister(bool enable) {
+	std::string err;
+	if (LaunchHelloRegistration(enable, &err)) {
+		SetActionResult(enable
+		                    ? "SecurityFlashHello enabled — tile shows on the "
+		                      "sign-in screen (service must be running)"
+		                    : "SecurityFlashHello disabled");
+	} else {
+		SetActionResult(std::string(enable ? "Hello On" : "Hello Off") +
+		                " failed: " + err);
+	}
 }
 
 }  // namespace XER::UI::Widgets

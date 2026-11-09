@@ -166,7 +166,8 @@ bool FtpStream::Retrieve(const std::string& path,
 
     uint8_t buf[8192];
     int n;
-    Platform::SocketHandle data_recv_handle(static_cast<uintptr_t>(dfd));
+    Platform::SocketHandle data_recv_handle =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(dfd));
     while ((n = platform.Recv(data_recv_handle,
                              buf, sizeof(buf), error)) > 0) {
         out->insert(out->end(), buf, buf + n);
@@ -221,7 +222,8 @@ bool FtpStream::List(const std::string& path,
     std::string raw;
     uint8_t buf[4096];
     int n;
-    Platform::SocketHandle list_recv_handle(static_cast<uintptr_t>(dfd));
+    Platform::SocketHandle list_recv_handle =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(dfd));
     while ((n = platform.Recv(list_recv_handle,
                              buf, sizeof(buf), error)) > 0) {
         raw.append(reinterpret_cast<char*>(buf), n);
@@ -280,7 +282,8 @@ bool FtpStream::Quit() {
 
 bool FtpStream::SendCommand(const std::string& cmd, std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(ctrl_fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(ctrl_fd_));
 
     const std::string line = cmd + "\r\n";
     int n = platform.Send(socket,
@@ -293,7 +296,8 @@ bool FtpStream::SendCommand(const std::string& cmd, std::string* error) {
 
 bool FtpStream::ReadReply(int* code, std::string* text, std::string* error) {
     auto& platform = Platform::SocketPlatform::GetInstance();
-    Platform::SocketHandle socket(static_cast<uintptr_t>(ctrl_fd_));
+    Platform::SocketHandle socket =
+        Platform::SocketHandle::Borrowed(static_cast<uintptr_t>(ctrl_fd_));
 
     std::string line;
     uint8_t c;

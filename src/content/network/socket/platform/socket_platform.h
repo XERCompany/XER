@@ -44,9 +44,17 @@ public:
     // Detach the handle (won't be closed by destructor)
     void Detach() { handle_ = GetInvalidValue(); }
 
+    // Non-owning view of an externally-owned socket handle.
+    // Close() and the destructor release the view but do not close
+    // the underlying socket.
+    static SocketHandle Borrowed(uintptr_t handle);
+
 private:
+    SocketHandle(uintptr_t handle, bool owned);
+
     static uintptr_t GetInvalidValue();
     uintptr_t handle_;
+    bool owned_ = true;
 };
 
 // Platform-specific socket operations

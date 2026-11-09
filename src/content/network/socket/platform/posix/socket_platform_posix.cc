@@ -22,12 +22,19 @@ SocketHandle::SocketHandle() : handle_(static_cast<uintptr_t>(-1)) {}
 
 SocketHandle::SocketHandle(uintptr_t handle) : handle_(handle) {}
 
+SocketHandle::SocketHandle(uintptr_t handle, bool owned)
+    : handle_(handle), owned_(owned) {}
+
+SocketHandle SocketHandle::Borrowed(uintptr_t handle) {
+    return SocketHandle(handle, false);
+}
+
 SocketHandle::~SocketHandle() {
     Close();
 }
 
 SocketHandle::SocketHandle(SocketHandle&& other) noexcept
-    : handle_(other.handle_) {
+    : handle_(other.handle_), owned_(other.owned_) {
     other.handle_ = static_cast<uintptr_t>(-1);
 }
 
@@ -35,6 +42,7 @@ SocketHandle& SocketHandle::operator=(SocketHandle&& other) noexcept {
     if (this != &other) {
         Close();
         handle_ = other.handle_;
+        owned_ = other.owned_;
         other.handle_ = static_cast<uintptr_t>(-1);
     }
     return *this;
@@ -49,10 +57,13 @@ bool SocketHandle::IsValid() const {
 }
 
 void SocketHandle::Close() {
-    if (IsValid()) {
-        close(static_cast<int>(handle_));
-        handle_ = static_cast<uintptr_t>(-1);
+    if (!IsValid()) {
+        return;
     }
+    if (owned_) {
+        close(static_cast<int>(handle_));
+    }
+    handle_ = static_cast<uintptr_t>(-1);
 }
 
 // SocketPlatform implementation for POSIX
