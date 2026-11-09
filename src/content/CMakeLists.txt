@@ -139,7 +139,7 @@ endif()
 
 # Platform-specific
 if(WIN32)
-    target_link_libraries(XER_Content PRIVATE ws2_32 crypt32)
+    target_link_libraries(XER_Content PRIVATE ws2_32 crypt32 bcrypt)
 endif()
 
 # Add OpenAI subdirectory

@@ -288,6 +288,7 @@ void SettingsWidget::Layout(const Layout::Rect& bounds) {
 }
 
 void SettingsWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     last_tokens_ = tokens;
     if (!built_) {
         Build();
@@ -331,12 +332,12 @@ void SettingsWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tok
             if (e.label) {
                 if (e.desc) {
                     e.label->Layout(Layout::Rect{inner_x, ry + 7.0f,
-                                                 kLabelW, 15.0f});
+                                                 kLabelW, 15.0f}, CachedLayoutTokens());
                     e.desc->Layout(Layout::Rect{inner_x, ry + 24.0f,
-                                                kLabelW, 13.0f});
+                                                kLabelW, 13.0f}, CachedLayoutTokens());
                 } else {
                     e.label->Layout(Layout::Rect{inner_x, ry, kLabelW,
-                                                 e.height});
+                                                 e.height}, CachedLayoutTokens());
                 }
             }
 
@@ -365,7 +366,7 @@ void SettingsWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tok
                                   std::max(0.0f, e.height - 4.0f));
                 }
                 c->Layout(Layout::Rect{cx, ry + (e.height - ch) * 0.5f,
-                                       cw, ch});
+                                       cw, ch}, CachedLayoutTokens());
                 used += cw + kControlGap;
                 cx += cw + kControlGap;
             }

@@ -554,10 +554,11 @@ void FxRackWidget::AttachAllChildren() {
 }
 
 void FxRackWidget::Layout(const Layout::Rect& bounds) {
-    Layout(bounds, Theme::Tokens{});
+    Layout(bounds, CachedLayoutTokens());
 }
 
 void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     if (!children_attached_) {
         AttachAllChildren();
     }
@@ -576,9 +577,9 @@ void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& token
     float y = bounds.y + spacing;
 
     // --- Master row (flat, above cards) ---
-    master_switch_->Layout(Layout::Rect{pad, y + 2.0f, 36.0f, 20.0f});
-    master_label_->Layout(Layout::Rect{pad + 44.0f, y, 160.0f, 24.0f});
-    live_label_->Layout(Layout::Rect{pad + content_w - 80.0f, y + 3.0f, 80.0f, 18.0f});
+    master_switch_->Layout(Layout::Rect{pad, y + 2.0f, 36.0f, 20.0f}, CachedLayoutTokens());
+    master_label_->Layout(Layout::Rect{pad + 44.0f, y, 160.0f, 24.0f}, CachedLayoutTokens());
+    live_label_->Layout(Layout::Rect{pad + content_w - 80.0f, y + 3.0f, 80.0f, 18.0f}, CachedLayoutTokens());
     y += 34.0f + card_gap;
 
     // --- VST3 plugin card (only when a plugin host bridge is provided) ---
@@ -588,18 +589,18 @@ void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& token
                                 (show_editor ? 308.0f : 20.0f) + 8.0f;
         plugin_card_rect_ = Layout::Rect{pad, y, content_w, plugin_h};
         float py = y + 16.0f;
-        plugin_header_->Layout(Layout::Rect{inner_x, py, 200.0f, 24.0f});
+        plugin_header_->Layout(Layout::Rect{inner_x, py, 200.0f, 24.0f}, CachedLayoutTokens());
         plugin_status_label_->Layout(Layout::Rect{inner_x + 210.0f, py + 3.0f,
-                                                  inner_w - 210.0f, 18.0f});
+                                                  inner_w - 210.0f, 18.0f}, CachedLayoutTokens());
         py += 32.0f;
         // Row 1: scanned-plugin dropdown + Load/Unload.
-        plugin_select_->Layout(Layout::Rect{inner_x, py, inner_w - 148.0f, 30.0f});
-        plugin_load_button_->Layout(Layout::Rect{inner_x + inner_w - 140.0f, py, 68.0f, 30.0f});
-        plugin_unload_button_->Layout(Layout::Rect{inner_x + inner_w - 68.0f, py, 64.0f, 30.0f});
+        plugin_select_->Layout(Layout::Rect{inner_x, py, inner_w - 148.0f, 30.0f}, CachedLayoutTokens());
+        plugin_load_button_->Layout(Layout::Rect{inner_x + inner_w - 140.0f, py, 68.0f, 30.0f}, CachedLayoutTokens());
+        plugin_unload_button_->Layout(Layout::Rect{inner_x + inner_w - 68.0f, py, 64.0f, 30.0f}, CachedLayoutTokens());
         py += 38.0f;
         // Row 2: manual path entry + Scan.
-        plugin_path_input_->Layout(Layout::Rect{inner_x, py, inner_w - 92.0f, 30.0f});
-        plugin_scan_button_->Layout(Layout::Rect{inner_x + inner_w - 84.0f, py, 80.0f, 30.0f});
+        plugin_path_input_->Layout(Layout::Rect{inner_x, py, inner_w - 92.0f, 30.0f}, CachedLayoutTokens());
+        plugin_scan_button_->Layout(Layout::Rect{inner_x + inner_w - 84.0f, py, 80.0f, 30.0f}, CachedLayoutTokens());
         py += 40.0f;
         if (show_editor) {
             plugin_editor_rect_ = Layout::Rect{inner_x, py, inner_w, 300.0f};
@@ -619,22 +620,22 @@ void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& token
 
     auto slider_row = [&](float x, float w, float sy, const std::shared_ptr<Label>& label,
                           const std::shared_ptr<Slider>& slider) {
-        label->Layout(Layout::Rect{x, sy, 92.0f, 24.0f});
-        slider->Layout(Layout::Rect{x + 98.0f, sy + 1.0f, w - 98.0f, 22.0f});
+        label->Layout(Layout::Rect{x, sy, 92.0f, 24.0f}, CachedLayoutTokens());
+        slider->Layout(Layout::Rect{x + 98.0f, sy + 1.0f, w - 98.0f, 22.0f}, CachedLayoutTokens());
     };
 
     // --- EQ card: header + graphical editor ---
     eq_card_rect_ = Layout::Rect{pad, y, content_w, 232.0f};
     float cy = y + 16.0f;
-    eq_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f});
+    eq_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f}, CachedLayoutTokens());
     cy += 28.0f;
-    eq_editor_->Layout(Layout::Rect{inner_x, cy, inner_w, 176.0f});
+    eq_editor_->Layout(Layout::Rect{inner_x, cy, inner_w, 176.0f}, CachedLayoutTokens());
     y += 232.0f + card_gap;
 
     // --- Bass card ---
     bass_card_rect_ = Layout::Rect{pad, y, content_w, 94.0f};
     cy = y + 16.0f;
-    bass_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f});
+    bass_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f}, CachedLayoutTokens());
     cy += 32.0f;
     slider_row(inner_x, inner_w, cy, bass_value_label_, bass_slider_);
     y += 94.0f + card_gap;
@@ -642,7 +643,7 @@ void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& token
     // --- Reverb card ---
     reverb_card_rect_ = Layout::Rect{pad, y, content_w, 150.0f};
     cy = y + 16.0f;
-    reverb_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f});
+    reverb_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f}, CachedLayoutTokens());
     cy += 32.0f;
     for (int i = 0; i < 3; ++i) {
         slider_row(inner_x, inner_w, cy + static_cast<float>(i) * 28.0f,
@@ -653,8 +654,8 @@ void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& token
     // --- Signal-flow map card (read-only node graph of the chain) ---
     map_card_rect_ = Layout::Rect{pad, y, content_w, 78.0f};
     cy = y + 14.0f;
-    chain_map_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 20.0f});
-    chain_map_->Layout(Layout::Rect{inner_x, cy + 24.0f, inner_w, 32.0f});
+    chain_map_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 20.0f}, CachedLayoutTokens());
+    chain_map_->Layout(Layout::Rect{inner_x, cy + 24.0f, inner_w, 32.0f}, CachedLayoutTokens());
     y += 78.0f + card_gap;
 
     // --- Chain card (height depends on node count) ---
@@ -666,10 +667,10 @@ void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& token
     }
     chain_card_rect_ = Layout::Rect{pad, y, content_w, chain_h};
     cy = y + 16.0f;
-    chain_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f});
+    chain_header_->Layout(Layout::Rect{inner_x, cy, 200.0f, 24.0f}, CachedLayoutTokens());
     cy += 30.0f;
-    add_select_->Layout(Layout::Rect{inner_x, cy, inner_w - 76.0f, 30.0f});
-    add_button_->Layout(Layout::Rect{inner_x + inner_w - 68.0f, cy, 68.0f, 30.0f});
+    add_select_->Layout(Layout::Rect{inner_x, cy, inner_w - 76.0f, 30.0f}, CachedLayoutTokens());
+    add_button_->Layout(Layout::Rect{inner_x + inner_w - 68.0f, cy, 68.0f, 30.0f}, CachedLayoutTokens());
     cy += 42.0f;
 
     for (std::size_t n = 0; n < node_ui_.size(); ++n) {
@@ -679,11 +680,11 @@ void FxRackWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& token
                              (node.wet_mix_slider != nullptr ? 30.0f : 0.0f) + 10.0f;
         node_card_rects_.push_back(Layout::Rect{inner_x, cy, inner_w, node_h});
 
-        node.title_label->Layout(Layout::Rect{inner_x + 12.0f, cy + 8.0f, inner_w - 260.0f, 24.0f});
-        node.up_button->Layout(Layout::Rect{inner_x + inner_w - 236.0f, cy + 8.0f, 26.0f, 24.0f});
-        node.down_button->Layout(Layout::Rect{inner_x + inner_w - 206.0f, cy + 8.0f, 26.0f, 24.0f});
-        node.enable_switch->Layout(Layout::Rect{inner_x + inner_w - 172.0f, cy + 10.0f, 36.0f, 20.0f});
-        node.remove_button->Layout(Layout::Rect{inner_x + inner_w - 128.0f, cy + 8.0f, 56.0f, 24.0f});
+        node.title_label->Layout(Layout::Rect{inner_x + 12.0f, cy + 8.0f, inner_w - 260.0f, 24.0f}, CachedLayoutTokens());
+        node.up_button->Layout(Layout::Rect{inner_x + inner_w - 236.0f, cy + 8.0f, 26.0f, 24.0f}, CachedLayoutTokens());
+        node.down_button->Layout(Layout::Rect{inner_x + inner_w - 206.0f, cy + 8.0f, 26.0f, 24.0f}, CachedLayoutTokens());
+        node.enable_switch->Layout(Layout::Rect{inner_x + inner_w - 172.0f, cy + 10.0f, 36.0f, 20.0f}, CachedLayoutTokens());
+        node.remove_button->Layout(Layout::Rect{inner_x + inner_w - 128.0f, cy + 8.0f, 56.0f, 24.0f}, CachedLayoutTokens());
         float ny = cy + 36.0f;
 
         for (std::size_t p = 0; p < node.param_sliders.size(); ++p) {

@@ -103,6 +103,7 @@ add_subdirectory(src/sql)
 add_subdirectory(src/node_graph)
 add_subdirectory(src/async_io)
 add_subdirectory(src/security_flash)
+add_subdirectory(src/content/passwordgen)
 add_subdirectory(src/ui)
 add_subdirectory(src/audio)
 add_subdirectory(src/content/audio)
@@ -141,7 +142,10 @@ target_include_directories(SecurityFlashService PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_features(SecurityFlashService PRIVATE cxx_std_23)
-target_link_libraries(SecurityFlashService PRIVATE XER_SecurityFlash)
+target_link_libraries(SecurityFlashService PRIVATE
+    XER_SecurityFlash
+    wtsapi32
+)
 set_target_properties(SecurityFlashService PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 

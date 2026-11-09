@@ -135,10 +135,11 @@ void AudioPlayerWidget::Render(Rendering::Renderer& renderer, const Theme::Token
 }
 
 void AudioPlayerWidget::Layout(const Layout::Rect& bounds) {
-    Layout(bounds, Theme::Tokens{});
+    Layout(bounds, CachedLayoutTokens());
 }
 
 void AudioPlayerWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     EnsureChildrenAttached();
     SetBounds(bounds);
 
@@ -152,14 +153,14 @@ void AudioPlayerWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& 
     const float y = bounds.y + std::max(0.0f, (controls_h - row_h) * 0.5f);
     waveform_->Layout(Layout::Rect{
         bounds.x + padding, bounds.y + bounds.height - strip_h - 2.0f,
-        bounds.width - 2.0f * padding, strip_h});
+        bounds.width - 2.0f * padding, strip_h}, CachedLayoutTokens());
     float x = bounds.x + padding;
 
-    play_pause_button_->Layout(Layout::Rect{x, y, 92.0f, row_h});
+    play_pause_button_->Layout(Layout::Rect{x, y, 92.0f, row_h}, CachedLayoutTokens());
     x += 92.0f + spacing;
-    stop_button_->Layout(Layout::Rect{x, y, 56.0f, row_h});
+    stop_button_->Layout(Layout::Rect{x, y, 56.0f, row_h}, CachedLayoutTokens());
     x += 56.0f + spacing;
-    mute_button_->Layout(Layout::Rect{x, y, 72.0f, row_h});
+    mute_button_->Layout(Layout::Rect{x, y, 72.0f, row_h}, CachedLayoutTokens());
     x += 72.0f + spacing;
 
     // Right-side fixed cluster, seek takes whatever remains.
@@ -174,17 +175,17 @@ void AudioPlayerWidget::Layout(const Layout::Rect& bounds, const Theme::Tokens& 
     const float seek_width = std::max(80.0f,
         bounds.x + bounds.width - padding - x - right_fixed);
 
-    seek_slider_->Layout(Layout::Rect{x, y + 7.0f, seek_width, 22.0f});
+    seek_slider_->Layout(Layout::Rect{x, y + 7.0f, seek_width, 22.0f}, CachedLayoutTokens());
     x += seek_width + spacing;
-    time_label_->Layout(Layout::Rect{x, y, time_w, row_h});
+    time_label_->Layout(Layout::Rect{x, y, time_w, row_h}, CachedLayoutTokens());
     x += time_w + spacing;
-    volume_label_->Layout(Layout::Rect{x, y + 2.0f, vol_label_w, 32.0f});
+    volume_label_->Layout(Layout::Rect{x, y + 2.0f, vol_label_w, 32.0f}, CachedLayoutTokens());
     x += vol_label_w + spacing;
-    volume_slider_->Layout(Layout::Rect{x, y + 7.0f, vol_slider_w, 22.0f});
+    volume_slider_->Layout(Layout::Rect{x, y + 7.0f, vol_slider_w, 22.0f}, CachedLayoutTokens());
     x += vol_slider_w + spacing * 2.0f;
-    fx_button_->Layout(Layout::Rect{x, y, fx_w, row_h});
+    fx_button_->Layout(Layout::Rect{x, y, fx_w, row_h}, CachedLayoutTokens());
     x += fx_w + spacing;
-    status_label_->Layout(Layout::Rect{x, y + 2.0f, status_w, 32.0f});
+    status_label_->Layout(Layout::Rect{x, y + 2.0f, status_w, 32.0f}, CachedLayoutTokens());
 }
 
 bool AudioPlayerWidget::HandleEvent(const Event&) {

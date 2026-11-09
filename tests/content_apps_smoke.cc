@@ -25,6 +25,7 @@
 #include "content/formatconv/batch_converter.h"
 #include "content/model3d/model_document.h"
 #include "content/modeldiff/model_diff.h"
+#include "content/passwordgen/password_generator.h"
 #include "content/nettest/protocol_client.h"
 #include "content/nettest/protocol_message.h"
 #include "content/network/socket/socket_server.h"
@@ -385,6 +386,48 @@ static void TestModelDiff() {
 	RemoveDirectoryA(dir.c_str());
 }
 
+// --- passwordgen ---------------------------------------------------------
+
+static void TestPasswordGen() {
+	using namespace XER::Content;
+
+	auto res = PasswordGen::PasswordGenerator::Generate(20);
+	CHECK(res.ok, "passgen: generate ok");
+	CHECK(res.password.size() == 20, "passgen: length");
+	CHECK(PasswordGen::PasswordGenerator::IsStrongEnough(res.password),
+	      "passgen: strength heuristic");
+
+	// Guaranteed classes: all four present.
+	bool lo = false, up = false, dg = false, sy = false;
+	for (char c : res.password) {
+		lo |= c >= 'a' && c <= 'z';
+		up |= c >= 'A' && c <= 'Z';
+		dg |= c >= '0' && c <= '9';
+		sy |= !(std::isalnum(static_cast<unsigned char>(c)));
+	}
+	CHECK(lo && up && dg && sy, "passgen: class coverage");
+
+	// Ambiguity exclusion.
+	PasswordGen::Policy p;
+	p.length = 64;
+	p.exclude_ambiguous = true;
+	auto clean = PasswordGen::PasswordGenerator::Generate(p);
+	CHECK(clean.ok, "passgen: policy generate");
+	CHECK(clean.password.find_first_of("l1IO0") == std::string::npos,
+	      "passgen: ambiguous excluded");
+
+	// Two draws differ (RNG sanity).
+	auto res2 = PasswordGen::PasswordGenerator::Generate(20);
+	CHECK(res2.ok && res2.password != res.password,
+	      "passgen: distinct outputs");
+
+	// Bad policy rejected.
+	PasswordGen::Policy bad;
+	bad.length = 2;
+	CHECK(!PasswordGen::PasswordGenerator::Generate(bad).ok,
+	      "passgen: short length rejected");
+}
+
 // --- dawn ---------------------------------------------------------------
 
 static void TestDawn() {
@@ -426,6 +469,7 @@ int main() {
 	TestModel3D();
 	TestModelDiff();
 	TestFormatConv();
+	TestPasswordGen();
 	TestDawn();
 
 	if (g_failures == 0) {

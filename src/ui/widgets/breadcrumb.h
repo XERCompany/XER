@@ -19,6 +19,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    using Widget::Layout;
     bool HandleEvent(const Event& event) override;
 
     Layout::Size GetMinSize() const override;
@@ -30,6 +31,9 @@ private:
 
     std::vector<std::string> items_;
     std::vector<Layout::Rect> item_rects_;
+    // Exact hit rects recorded during Render (text metrics are only
+    // available there); item_rects_ remains the pre-render estimate.
+    mutable std::vector<Layout::Rect> painted_item_rects_;
     int hovered_item_ = -1;
     std::function<void(int)> on_navigate_;
 };

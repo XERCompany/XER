@@ -51,11 +51,20 @@ bool ScrollBarWidget::HandleEvent(const Event& event) {
     switch (event.type) {
     case Event::Type::MouseMove:
         if (owner_->scrollbar_dragging_) {
+            if (!owner_->IsEnabled()) {
+                // Disabled mid-drag: settle the drag instead of leaving
+                // scrollbar_dragging_ stuck on.
+                owner_->scrollbar_dragging_ = false;
+                return true;
+            }
             owner_->ScrollFromPointer(event.position.y, true, owner_->scrollbar_grab_);
             return true;
         }
         return false;
     case Event::Type::MouseDown:
+        if (!owner_->IsEnabled()) {
+            return false;
+        }
         if (event.mouse_button == MouseButton::Left &&
             owner_->ScrollbarZoneContains(event.position)) {
             const auto thumb = owner_->ScrollbarThumbRect();
@@ -138,6 +147,7 @@ void ScrollArea::Layout(const Layout::Rect& bounds) {
 }
 
 void ScrollArea::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     last_tokens_ = tokens;
     EnsureChildrenAttached();
     SetBounds(bounds);
@@ -146,7 +156,7 @@ void ScrollArea::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
     if (content_ == nullptr) {
         UpdateScrollRange();
         scrollbar_->Layout(Layout::Rect{bounds.x + bounds.width - kBarWidth - kBarPad,
-                                        bounds.y, kBarWidth, bounds.height});
+                                        bounds.y, kBarWidth, bounds.height}, CachedLayoutTokens());
         return;
     }
 
@@ -179,7 +189,7 @@ void ScrollArea::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
     }
 
     scrollbar_->Layout(Layout::Rect{bounds.x + bounds.width - kBarWidth - kBarPad,
-                                    bounds.y, kBarWidth, bounds.height});
+                                    bounds.y, kBarWidth, bounds.height}, CachedLayoutTokens());
 }
 
 void ScrollArea::RelayoutContent() {
@@ -239,12 +249,17 @@ void ScrollArea::ScrollFromPointer(float y, bool grab_offset, float grab) {
 
 bool ScrollArea::ScrollbarZoneContains(const Layout::Point& position) const {
     const auto bounds = GetBounds();
-    return position.x >= bounds.x + bounds.width - kBarWidth - kBarPad &&
+    // Without scroll range the bar is invisible — don't let it swallow input.
+    return scroll_range_ > 0.0f &&
+           position.x >= bounds.x + bounds.width - kBarWidth - kBarPad &&
            position.x < bounds.x + bounds.width &&
            position.y >= bounds.y && position.y < bounds.y + bounds.height;
 }
 
 bool ScrollArea::HandleEvent(const Event& event) {
+    if (!IsEnabled()) {
+        return false;
+    }
     if (event.type == Event::Type::MouseWheel && scroll_range_ > 0.0f) {
         // One notch ≈ 12% of the viewport, clamped to a sane minimum.
         const float step = std::max(48.0f, viewport_height_ * 0.12f);

@@ -23,11 +23,12 @@ void Card::Layout(const Layout::Rect& bounds) {
     SetBounds(bounds);
     const auto content_bounds = Layout::EdgeInsets(kPadding).Apply(bounds);
     for (const auto& child : GetChildren()) {
-        child->Layout(content_bounds);
+        child->Layout(content_bounds, CachedLayoutTokens());
     }
 }
 
 void Card::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     SetBounds(bounds);
     const auto content_bounds = Layout::EdgeInsets(tokens.spacing_large).Apply(bounds);
     for (const auto& child : GetChildren()) {

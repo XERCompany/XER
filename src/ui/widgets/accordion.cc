@@ -65,6 +65,9 @@ void Accordion::Render(Rendering::Renderer& renderer, const Theme::Tokens& token
     const auto bounds = GetBounds();
     float y = bounds.y;
     for (std::size_t i = 0; i < items_.size(); ++i) {
+        if (i >= header_rects_.size()) {
+            break;  // Render can race a SetItems() that hasn't relaid out yet.
+        }
         const auto& header = header_rects_[i];
         const bool open = items_[i].open;
         const bool hovered = static_cast<int>(i) == hovered_header_;
@@ -130,10 +133,11 @@ void Accordion::Render(Rendering::Renderer& renderer, const Theme::Tokens& token
 }
 
 void Accordion::Layout(const Layout::Rect& bounds) {
-    Layout(bounds, Theme::Tokens{});
+    Layout(bounds, CachedLayoutTokens());
 }
 
-void Accordion::Layout(const Layout::Rect& bounds, const Theme::Tokens&) {
+void Accordion::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     SetBounds(bounds);
     header_rects_.clear();
     content_heights_.assign(items_.size(), 0.0f);
@@ -150,7 +154,7 @@ void Accordion::Layout(const Layout::Rect& bounds, const Theme::Tokens&) {
                 y + kContentPadding,
                 std::max(0.0f, bounds.width - 2.0f * kContentPadding),
                 content_height - 2.0f * kContentPadding
-            });
+            }, CachedLayoutTokens());
             y += content_height;
         }
     }
@@ -180,7 +184,11 @@ bool Accordion::HandleEvent(const Event& event) {
 }
 
 std::size_t Accordion::HitHeader(const Layout::Point& position) const {
-    for (std::size_t i = 0; i < header_rects_.size(); ++i) {
+    // header_rects_ may still describe the previous item list until the
+    // next Layout; never return an index items_ doesn't own.
+    const std::size_t count =
+        std::min(header_rects_.size(), items_.size());
+    for (std::size_t i = 0; i < count; ++i) {
         if (header_rects_[i].Contains(position)) {
             return i;
         }

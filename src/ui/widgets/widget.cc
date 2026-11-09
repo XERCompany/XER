@@ -8,7 +8,8 @@
 
 namespace XER::UI::Widgets {
 
-void Widget::Layout(const Layout::Rect& bounds, const Theme::Tokens&) {
+void Widget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    cached_tokens_ = tokens;
     Layout(bounds);
 }
 
@@ -18,8 +19,7 @@ void Widget::SetVisible(bool visible) {
     }
     visible_ = visible;
     if (!visible_) {
-        ClearFocusedSubtree();
-        hovered_ = false;
+        ClearSubtreeInteractionState();
     }
     Invalidate();
 }
@@ -34,8 +34,7 @@ void Widget::SetEnabled(bool enabled) {
     }
     enabled_ = enabled;
     if (!enabled_) {
-        ClearFocusedSubtree();
-        hovered_ = false;
+        ClearSubtreeInteractionState();
     }
     Invalidate();
 }
@@ -158,10 +157,14 @@ void Widget::HideOverlay() {
     }
 }
 
-void Widget::ClearFocusedSubtree() {
+void Widget::ClearSubtreeInteractionState() {
+    // Focus AND hover are per-widget flags; hiding/disabling a parent must
+    // not leave descendants stuck in either state (they would repaint with
+    // a stale highlight if the subtree is shown again).
     focused_ = false;
+    hovered_ = false;
     for (const auto& child : children_) {
-        child->ClearFocusedSubtree();
+        child->ClearSubtreeInteractionState();
     }
 }
 

@@ -250,11 +250,12 @@ void VideoPreviewWidget::Render(Rendering::Renderer& renderer,
 }
 
 void VideoPreviewWidget::Layout(const Layout::Rect& bounds) {
-    Layout(bounds, Theme::Tokens{});
+    Layout(bounds, CachedLayoutTokens());
 }
 
 void VideoPreviewWidget::Layout(const Layout::Rect& bounds,
                                 const Theme::Tokens& tokens) {
+    CacheLayoutTokens(tokens);
     EnsureChildren();
     SetBounds(bounds);
 
@@ -268,38 +269,38 @@ void VideoPreviewWidget::Layout(const Layout::Rect& bounds,
     const float browse_w = 92.0f;
     const float load_w = 64.0f;
     browse_btn_->Layout(Layout::Rect{
-        bounds.x + bounds.width - pad - browse_w, y, browse_w, row_h});
+        bounds.x + bounds.width - pad - browse_w, y, browse_w, row_h}, CachedLayoutTokens());
     load_btn_->Layout(Layout::Rect{
         bounds.x + bounds.width - pad - browse_w - gap - load_w, y,
-        load_w, row_h});
+        load_w, row_h}, CachedLayoutTokens());
     path_input_->Layout(Layout::Rect{
         bounds.x + pad, y,
         bounds.width - 2.0f * pad - browse_w - load_w - 2.0f * gap,
-        row_h});
+        row_h}, CachedLayoutTokens());
     y += row_h + gap;
 
     // Row 2: transport — play/stop, seek slider, time, loop.
     const float tbtn_w = 64.0f;
-    play_btn_->Layout(Layout::Rect{bounds.x + pad, y, tbtn_w, row_h});
+    play_btn_->Layout(Layout::Rect{bounds.x + pad, y, tbtn_w, row_h}, CachedLayoutTokens());
     stop_btn_->Layout(Layout::Rect{bounds.x + pad + tbtn_w + gap, y,
-                                   tbtn_w, row_h});
+                                   tbtn_w, row_h}, CachedLayoutTokens());
     const float time_w = 110.0f;
     const float loop_w = 46.0f;
     seek_slider_->Layout(Layout::Rect{
         bounds.x + pad + 2.0f * tbtn_w + 2.0f * gap, y,
         bounds.width - 2.0f * pad - 2.0f * tbtn_w - 2.0f * gap -
             time_w - loop_w - 3.0f * gap,
-        row_h});
+        row_h}, CachedLayoutTokens());
     time_label_->Layout(Layout::Rect{
         bounds.x + bounds.width - pad - time_w - loop_w - gap, y,
-        time_w, row_h});
+        time_w, row_h}, CachedLayoutTokens());
     loop_switch_->Layout(Layout::Rect{
-        bounds.x + bounds.width - pad - loop_w, y, loop_w, row_h});
+        bounds.x + bounds.width - pad - loop_w, y, loop_w, row_h}, CachedLayoutTokens());
     y += row_h + gap;
 
     // Row 3: status line.
     status_label_->Layout(Layout::Rect{bounds.x + pad, y,
-                                       bounds.width - 2.0f * pad, 20.0f});
+                                       bounds.width - 2.0f * pad, 20.0f}, CachedLayoutTokens());
     y += 20.0f + gap;
 
     // Rest: video surface.
@@ -310,6 +311,9 @@ void VideoPreviewWidget::Layout(const Layout::Rect& bounds,
 }
 
 bool VideoPreviewWidget::HandleEvent(const Event& event) {
+    if (!IsEnabled()) {
+        return false;
+    }
     // Click on the video surface toggles play/pause — standard preview UX.
     if (event.type == Event::Type::Click &&
         event.mouse_button == MouseButton::Left && engine_->IsOpen() &&

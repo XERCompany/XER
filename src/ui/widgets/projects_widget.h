@@ -70,6 +70,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    using Widget::Layout;
     void Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) override;
     bool HandleEvent(const Event& event) override { (void)event; return false; }
     void Tick(double dt_seconds) override;

@@ -32,6 +32,7 @@ target_link_libraries(XER_ContentApps_Smoke PRIVATE
     XER_ContentModel3D
     XER_ContentModelDiff
     XER_ContentFormatConv
+    XER_ContentPasswordGen
     XER_ContentDawn
     XER_ContentSim
     XER_ContentNetTest

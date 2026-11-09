@@ -483,7 +483,7 @@ ProvisionResult SecurityFlash::Provision(const ProvisionOptions& options) {
 		}
 
 		bool exists = false;
-		if (!UserExists(username, &result.error)) {
+		if (!Detail::LocalUserExists(username, &exists, &result.error)) {
 			return result;
 		}
 		if (exists) {
@@ -597,7 +597,7 @@ DeprovisionResult SecurityFlash::Deprovision(const DeprovisionOptions& options) 
 		}
 
 		bool exists = false;
-		if (!UserExists(username, &result.error)) {
+		if (!Detail::LocalUserExists(username, &exists, &result.error)) {
 			return result;
 		}
 		if (!exists) {
@@ -715,6 +715,84 @@ bool SecurityFlash::DeleteWindowsUser(const std::string& username,
 
 bool SecurityFlash::IsAdministrator() {
 	return Detail::ProcessIsElevated();
+}
+
+bool SecurityFlash::ChangeWindowsPassword(const std::string& username,
+					  const std::string& new_password,
+					  std::string* error_out) {
+	if (!IsValidUsername(username)) {
+		SetError(error_out, absl::StrCat("invalid username: '", username, "'"));
+		return false;
+	}
+	if (new_password.empty()) {
+		SetError(error_out, "new_password must not be empty");
+		return false;
+	}
+	return Detail::ChangeLocalUserPassword(username, new_password,
+					       error_out);
+}
+
+bool SecurityFlash::EnumerateLocalUsers(std::vector<std::string>* names_out,
+					std::string* error_out) {
+	return Detail::EnumerateLocalUsers(names_out, error_out);
+}
+
+bool SecurityFlash::GetWindowsUserDetails(const std::string& username,
+					  WindowsUserDetails* details_out,
+					  std::string* error_out) {
+	if (details_out == nullptr) {
+		SetError(error_out, "details_out must not be null");
+		return false;
+	}
+	return Detail::GetLocalUserDetails(username, &details_out->full_name,
+					   &details_out->comment,
+					   &details_out->disabled, error_out);
+}
+
+bool SecurityFlash::UpdateWindowsUserDetails(const std::string& username,
+					     const WindowsUserDetails& details,
+					     std::string* error_out) {
+	if (!IsValidUsername(username)) {
+		SetError(error_out, absl::StrCat("invalid username: '", username, "'"));
+		return false;
+	}
+	return Detail::UpdateLocalUserDetails(username, details.full_name,
+					      details.comment, details.disabled,
+					      error_out);
+}
+
+bool SecurityFlash::RenameWindowsUser(const std::string& username,
+				      const std::string& new_username,
+				      std::string* error_out) {
+	if (!IsValidUsername(username)) {
+		SetError(error_out, absl::StrCat("invalid username: '", username, "'"));
+		return false;
+	}
+	if (!IsValidUsername(new_username)) {
+		SetError(error_out,
+			 absl::StrCat("invalid new username: '", new_username, "'"));
+		return false;
+	}
+	bool exists = false;
+	if (!Detail::LocalUserExists(new_username, &exists, error_out)) {
+		return false;
+	}
+	if (exists) {
+		SetError(error_out,
+			 absl::StrCat("Windows user '", new_username, "' already exists"));
+		return false;
+	}
+	return Detail::RenameLocalUser(username, new_username, error_out);
+}
+
+bool SecurityFlash::VerifyWindowsPassword(const std::string& username,
+					  const std::string& password,
+					  std::string* error_out) {
+	if (username.empty()) {
+		SetError(error_out, "username must not be empty");
+		return false;
+	}
+	return Detail::VerifyLocalUserPassword(username, password, error_out);
 }
 
 std::string SecurityFlash::GeneratePassword(std::size_t length,

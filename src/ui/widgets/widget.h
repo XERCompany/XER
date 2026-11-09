@@ -7,16 +7,13 @@
 #include <vector>
 
 #include "layout/geometry.h"
+#include "theme/tokens.h"
 
 namespace XER::UI {
 
 namespace Rendering {
 class Renderer;
 struct TextStyle;
-}
-
-namespace Theme {
-struct Tokens;
 }
 
 namespace Widgets {
@@ -36,7 +33,16 @@ enum class KeyCode {
     ArrowDown,
     Home,
     End,
-    Escape
+    PageUp,
+    PageDown,
+    Escape,
+    // Letter keys are reported only while Ctrl is held (editing shortcuts).
+    A,
+    C,
+    V,
+    X,
+    Y,
+    Z
 };
 
 enum class MouseButton {
@@ -169,6 +175,14 @@ protected:
         float radius
     ) const;
 
+    // Theme tokens captured by the most recent Layout(bounds, tokens)
+    // call. Containers that implement only the legacy one-arg Layout use
+    // CachedLayoutTokens() to keep forwarding theme metrics to children;
+    // overrides of the two-arg form should call CacheLayoutTokens(tokens)
+    // so the cache stays fresh.
+    const Theme::Tokens& CachedLayoutTokens() const { return cached_tokens_; }
+    void CacheLayoutTokens(const Theme::Tokens& tokens) { cached_tokens_ = tokens; }
+
     // Returns a rect inside the widget bounds with the text vertically
     // centered and `horizontal_padding` applied on both sides.
     Layout::Rect CenteredTextRect(
@@ -181,7 +195,7 @@ protected:
 private:
     friend class WidgetTree;
 
-    void ClearFocusedSubtree();
+    void ClearSubtreeInteractionState();
     void SetTreeRecursive(WidgetTree* tree);
     // Registers children that were AddChild()ed while the widget was still
     // under construction (shared ownership not yet established, so
@@ -190,6 +204,7 @@ private:
     void FlushPendingChildren();
 
     Layout::Rect bounds_;
+    Theme::Tokens cached_tokens_{};
     bool visible_ = true;
     bool enabled_ = true;
     bool focusable_ = false;

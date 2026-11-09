@@ -12,7 +12,10 @@ namespace XER::UI::Widgets {
 
 void WidgetTree::SetRoot(std::shared_ptr<Widget> root) {
     ClearFocus(root_);
-    hovered_widget_.reset();
+    HideTooltip();
+    // UpdateHover(nullptr) also clears hovered_=false on the old widget;
+    // a bare weak_ptr reset would leave it stuck in the hover state.
+    UpdateHover(nullptr);
     root_ = std::move(root);
     if (root_ != nullptr) {
         root_->SetTreeRecursive(this);
@@ -22,11 +25,14 @@ void WidgetTree::SetRoot(std::shared_ptr<Widget> root) {
 void WidgetTree::ShowOverlay(std::shared_ptr<Widget> overlay) {
     HideTooltip();
     ClearFocus(overlay_);
+    // Modal layer: drop stale hover state on the main tree so no widget
+    // keeps a hover highlight while it is unreachable.
+    UpdateHover(nullptr);
     overlay_ = std::move(overlay);
     if (overlay_ != nullptr) {
         overlay_->SetTreeRecursive(this);
         overlay_->SetBounds(last_bounds_);
-        overlay_->Layout(last_bounds_);
+        overlay_->Layout(last_bounds_, last_tokens_);
         // Move focus into the overlay so keyboard input (Escape etc.) works.
         // Prefer focusable descendants; fall back to the overlay root itself.
         std::vector<std::shared_ptr<Widget>> focusable;
@@ -44,7 +50,7 @@ void WidgetTree::ShowOverlay(std::shared_ptr<Widget> overlay) {
 
 void WidgetTree::HideOverlay() {
     ClearFocus(overlay_);
-    hovered_widget_.reset();
+    UpdateHover(nullptr);
     overlay_.reset();
 }
 
@@ -53,23 +59,12 @@ std::shared_ptr<Widget> WidgetTree::GetRoot() const {
 }
 
 void WidgetTree::Layout(const Layout::Rect& bounds) {
-    last_bounds_ = bounds;
-    if (root_ != nullptr) {
-        root_->SetBounds(bounds);
-        root_->Layout(bounds);
-    }
-    if (overlay_ != nullptr) {
-        overlay_->SetBounds(bounds);
-        overlay_->Layout(bounds);
-    }
-    if (passive_overlay_ != nullptr) {
-        passive_overlay_->SetBounds(bounds);
-        passive_overlay_->Layout(bounds);
-    }
+    Layout(bounds, last_tokens_);
 }
 
 void WidgetTree::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
     last_bounds_ = bounds;
+    last_tokens_ = tokens;
     if (root_ != nullptr) {
         root_->SetBounds(bounds);
         root_->Layout(bounds, tokens);
@@ -137,6 +132,7 @@ bool WidgetTree::HandleEvent(const Event& event) {
         return false;
     }
     case Event::Type::MouseMove: {
+        last_pointer_position_ = event.position;
         // While the left button is held, mouse messages stay routed to the
         // widget that received MouseDown (mouse-capture semantics), which is
         // what makes slider dragging work outside the widget bounds.
@@ -153,6 +149,7 @@ bool WidgetTree::HandleEvent(const Event& event) {
         return target->HandleEvent(event);
     }
     case Event::Type::Click: {
+        last_pointer_position_ = event.position;
         const auto target = FindHitTarget(input_root, event.position, true);
         if (suppress_duplicate_click_) {
             const auto synthesized_target = synthesized_click_target_.lock();
@@ -175,6 +172,7 @@ bool WidgetTree::HandleEvent(const Event& event) {
         return target->HandleEvent(event);
     }
     case Event::Type::MouseDown: {
+        last_pointer_position_ = event.position;
         const auto target = FindHitTarget(input_root, event.position, true);
         if (event.mouse_button == MouseButton::Left) {
             left_mouse_down_target_ = target;
@@ -199,6 +197,7 @@ bool WidgetTree::HandleEvent(const Event& event) {
         return handled;
     }
     case Event::Type::MouseUp: {
+        last_pointer_position_ = event.position;
         const auto hit = FindHitTarget(input_root, event.position, true);
         const auto pressed_target = left_mouse_down_target_.lock();
         if (event.mouse_button == MouseButton::Left) {
@@ -416,6 +415,25 @@ void WidgetTree::ClearHover() {
     UpdateHover(nullptr);
 }
 
+void WidgetTree::CancelPointerCapture() {
+    const auto target = left_mouse_down_target_.lock();
+    left_mouse_down_target_.reset();
+    suppress_duplicate_click_ = false;
+    synthesized_click_target_.reset();
+    if (target != nullptr) {
+        // Deliver a synthetic MouseUp so widgets end their drag/press state
+        // (slider dragging_, scrollbar dragging_, button held_) instead of
+        // waiting for an up event that will never arrive.
+        Event up;
+        up.type = Event::Type::MouseUp;
+        up.mouse_button = MouseButton::Left;
+        up.position = last_pointer_position_;
+        target->HandleEvent(up);
+    }
+    const auto& input_root = overlay_ != nullptr ? overlay_ : root_;
+    UpdateHover(FindHitTarget(input_root, last_pointer_position_, true));
+}
+
 void WidgetTree::UpdateHover(const std::shared_ptr<Widget>& target) {
     const auto current = hovered_widget_.lock();
     if (current == target) {
@@ -451,6 +469,8 @@ void WidgetTree::ShowTooltipFor(const std::shared_ptr<Widget>& target) {
     tip->SetAnchor(target->GetBounds());
     tip->SetTreeRecursive(this);
     tip->SetBounds(last_bounds_);
+    // Tooltip::Layout(bounds) hides the base two-arg overload; the base
+    // version only delegates to it anyway and Tooltip has no children.
     tip->Layout(last_bounds_);
     passive_overlay_ = std::move(tip);
     tooltip_target_ = target;

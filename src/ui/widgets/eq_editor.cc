@@ -212,6 +212,14 @@ bool EqEditorWidget::HandleEvent(const Event& event) {
     if (bands_ == nullptr) {
         return false;
     }
+    if (!IsEnabled()) {
+        // A widget disabled mid-drag must not keep writing band values.
+        if (dragging_band_ >= 0) {
+            dragging_band_ = -1;
+            just_dragged_ = false;
+        }
+        return false;
+    }
     const auto plot = PlotRect();
     switch (event.type) {
     case Event::Type::MouseDown:

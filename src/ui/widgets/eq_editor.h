@@ -25,6 +25,7 @@ public:
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
+    using Widget::Layout;
     bool HandleEvent(const Event& event) override;
 
     Layout::Size GetMinSize() const override { return {340.0f, 150.0f}; }
