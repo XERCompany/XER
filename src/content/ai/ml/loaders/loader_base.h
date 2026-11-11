@@ -7,8 +7,8 @@
 #include <range/v3/view.hpp>
 
 // Forward declarations to avoid heavy transitive includes
-namespace flux::core { class Logger; }
-namespace IO::AsyncIO { class IOCacheManager; }
+namespace XER::Flux::Core { class Logger; }
+namespace XER::AsyncIO::IO::Async { class IOCacheManager; }
 
 namespace XER::ML::Loaders {
 
@@ -30,10 +30,10 @@ public:
     virtual std::string Name() const = 0;
 
     /// Inject a flux logger for diagnostic output
-    void SetLogger(flux::core::Logger* logger) { logger_ = logger; }
+    void SetLogger(XER::Flux::Core::Logger* logger) { logger_ = logger; }
 
     /// Inject an IO cache manager to cache loaded datasets
-    void EnableCache(IO::AsyncIO::IOCacheManager* cache) { cache_ = cache; }
+    void EnableCache(XER::AsyncIO::IO::Async::IOCacheManager* cache) { cache_ = cache; }
 
     /// Configure persistent cache time-to-live in seconds
     void SetCacheTtlSeconds(std::uint64_t ttl_seconds) {
@@ -56,8 +56,8 @@ protected:
     void InvalidateCachedDataset(absl::string_view loader_name,
                                  absl::string_view source_path) const;
 
-    flux::core::Logger*          logger_ = nullptr;
-    IO::AsyncIO::IOCacheManager* cache_  = nullptr;
+    XER::Flux::Core::Logger*          logger_ = nullptr;
+    XER::AsyncIO::IO::Async::IOCacheManager* cache_  = nullptr;
     std::uint64_t                cache_ttl_seconds_ = 600;
     bool                         cache_enabled_ = true;
 };

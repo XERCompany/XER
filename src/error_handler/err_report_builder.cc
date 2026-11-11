@@ -9,7 +9,7 @@
 #include <range/v3/view/filter.hpp>
 
 #include "cache/cache_utils.h"
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
 namespace XER::ErrorHandler {
 

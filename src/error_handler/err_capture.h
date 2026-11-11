@@ -3,7 +3,9 @@
 #include <string>
 #include <string_view>
 
-#include <v8.h>
+namespace v8 {
+class Isolate;
+}
 
 namespace XER::ErrorHandler {
 

@@ -4,9 +4,12 @@
 #include <condition_variable>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <thread>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace XER::AsyncIO::IO::Async {
@@ -24,10 +27,26 @@ public:
     void Start();
     void Stop();
     void Enqueue(std::function<void()> task);
+    // Move-only task overload: the queue stores std::function, which requires
+    // copyable targets, so the callable is heap-held via shared_ptr and
+    // invoked through a copyable trampoline. Use this for lambdas capturing
+    // std::promise/std::future/std::unique_ptr.
+    template <typename F>
+    void Enqueue(F&& task) {
+        auto shared = std::make_shared<std::decay_t<F>>(std::forward<F>(task));
+        Enqueue(std::function<void()>(
+            [shared]() mutable { (*shared)(); }));
+    }
     // Non-blocking enqueue with backpressure: returns false if the pool is
     // stopped or the pending queue has reached max_pending. max_pending==0
     // means unlimited (legacy behavior).
     bool TryEnqueue(std::function<void()> task, size_t max_pending = 0);
+    template <typename F>
+    bool TryEnqueue(F&& task, size_t max_pending = 0) {
+        auto shared = std::make_shared<std::decay_t<F>>(std::forward<F>(task));
+        return TryEnqueue(std::function<void()>(
+            [shared]() mutable { (*shared)(); }), max_pending);
+    }
     // Block until all currently-enqueued tasks finish. Tasks enqueued
     // concurrently with WaitAll are not guaranteed to be awaited.
     void WaitAll();

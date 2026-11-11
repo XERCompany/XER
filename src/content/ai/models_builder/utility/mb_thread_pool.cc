@@ -15,7 +15,7 @@ void ModelThreadPool::Enqueue(std::function<void()> task) {
 	}
 
 	pending_tasks_.fetch_add(1, std::memory_order_relaxed);
-	IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue([this, task = std::move(task)]() mutable {
+	XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue([this, task = std::move(task)]() mutable {
 		task();
 
 		const size_t remaining = pending_tasks_.fetch_sub(1, std::memory_order_acq_rel) - 1U;

@@ -16,14 +16,14 @@ class OpenAIClient::Impl {
 public:
     Impl(const Config& config)
         : config_(config),
-          thread_pool_(IO::AsyncIO::IOThreadPool::GetSharedInstance()),
+          thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()),
           usage_stats_{0, 0, 0, 0} {
     }
 
     ~Impl() = default;
 
     Config config_;
-    IO::AsyncIO::IOThreadPool& thread_pool_;
+    XER::AsyncIO::IO::Async::IOThreadPool& thread_pool_;
     std::mutex usage_mutex_;
     UsageStats usage_stats_;
     int rate_limit_ = 0;
@@ -91,13 +91,13 @@ std::future<CompletionResponse> OpenAIClient::CreateChatCompletionAsync(
         }
 
         // Build HTTP request using XER network subsystem
-        network::url::URLRequest request;
+        XER::Network::Url::URLRequest request;
         request.url = impl_->config_.base_url + "/chat/completions";
         request.method = "POST";
         
         // Build JSON body from messages and options
         std::string body = impl_->BuildChatCompletionBody(messages, options);
-        request.upload_data = body;
+        request.body.assign(body.begin(), body.end());
         
         // Set headers
         request.headers["Authorization"] = "Bearer " + impl_->config_.api_key;
@@ -105,14 +105,16 @@ std::future<CompletionResponse> OpenAIClient::CreateChatCompletionAsync(
         request.headers["User-Agent"] = impl_->config_.user_agent;
 
         // Execute HTTP transaction
-        network::http::HttpTransaction transaction;
+        XER::Network::Http::HttpTransaction transaction;
         auto result = transaction.Execute(request);
 
         CompletionResponse response;
 
         if (result.ok) {
             // Parse response
-            response = impl_->ParseChatCompletionResponse(result.response.body);
+            const std::string resp_body(result.response.body.begin(),
+                                        result.response.body.end());
+            response = impl_->ParseChatCompletionResponse(resp_body);
         } else {
             // Handle error
             response.id = "error";
@@ -200,7 +202,7 @@ std::future<ImageResponse> OpenAIClient::GenerateImage(
 
 std::future<ImageResponse> OpenAIClient::GenerateImageAsync(
     const ImageGenerationParams& params,
-    CompletionCallback on_complete,
+    std::function<void(const ImageResponse&)> on_complete,
     ErrorCallback on_error) {
 
     std::promise<ImageResponse> promise;
@@ -212,9 +214,7 @@ std::future<ImageResponse> OpenAIClient::GenerateImageAsync(
         response.url = "https://example.com/generated-image.png";
 
         if (on_complete) {
-            CompletionResponse comp_response;
-            comp_response.id = "img-" + std::to_string(std::time(nullptr));
-            on_complete(comp_response);
+            on_complete(response);
         }
         promise.set_value(response);
     });
@@ -245,7 +245,7 @@ std::future<AudioTranscriptionResponse> OpenAIClient::TranscribeAudio(
 
 std::future<AudioTranscriptionResponse> OpenAIClient::TranscribeAudioAsync(
     const AudioTranscriptionParams& params,
-    CompletionCallback on_complete,
+    std::function<void(const AudioTranscriptionResponse&)> on_complete,
     ErrorCallback on_error) {
 
     std::promise<AudioTranscriptionResponse> promise;
@@ -258,9 +258,7 @@ std::future<AudioTranscriptionResponse> OpenAIClient::TranscribeAudioAsync(
         response.duration = 10.5f;
 
         if (on_complete) {
-            CompletionResponse comp_response;
-            comp_response.id = "trans-" + std::to_string(std::time(nullptr));
-            on_complete(comp_response);
+            on_complete(response);
         }
         promise.set_value(response);
     });
@@ -295,7 +293,7 @@ void OpenAIClient::ResetUsageStats() {
 }
 
 std::unique_ptr<OpenAIClient> ClientFactory::CreateFromEnv() {
-    Config config;
+    OpenAIClient::Config config;
     const char* api_key = std::getenv("OPENAI_API_KEY");
     if (api_key) {
         config.api_key = api_key;
@@ -310,12 +308,12 @@ std::unique_ptr<OpenAIClient> ClientFactory::CreateFromEnv() {
 std::unique_ptr<OpenAIClient> ClientFactory::CreateFromConfigFile(
     const std::string& config_path) {
     // TODO: Implement config file parsing
-    Config config;
+    OpenAIClient::Config config;
     return std::make_unique<OpenAIClient>(config);
 }
 
 std::unique_ptr<OpenAIClient> ClientFactory::CreateDefault() {
-    Config config;
+    OpenAIClient::Config config;
     return std::make_unique<OpenAIClient>(config);
 }
 

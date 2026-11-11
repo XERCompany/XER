@@ -12,7 +12,7 @@
 
 // Uses project's async thread pool and UDP socket.
 namespace IO::AsyncIO  { class IOThreadPool; }
-namespace network::dns { class HostResolver;  }
+namespace XER::Network::Dns { class HostResolver; }
 
 namespace device::wifi {
 
@@ -29,7 +29,7 @@ using ConnectionStateCallback =
 
 // WifiConnectionManager wraps wpa_supplicant (via wpa_cli / ctrl socket) to
 // connect/disconnect Wi-Fi networks and monitors association state.
-// Background scans run on IO::AsyncIO::IOThreadPool.
+// Background scans run on XER::AsyncIO::IO::Async::IOThreadPool.
 class WifiConnectionManager {
 public:
     static WifiConnectionManager& Instance();

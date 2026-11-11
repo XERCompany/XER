@@ -15,7 +15,7 @@ void LoaderPrefetcher::Prefetch(const std::string& path) {
     auto prom = std::make_shared<std::promise<Dataset>>();
     future_ = prom->get_future();
     LoaderBase* loader = inner_.get();
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(
+    XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
         [loader, path, prom]() mutable {
             try {
                 prom->set_value(loader->Load(path));

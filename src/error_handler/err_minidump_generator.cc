@@ -6,7 +6,12 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <unistd.h>
+#endif
 
 #include <absl/strings/str_cat.h>
 
@@ -22,8 +27,14 @@ namespace {
 std::string CurrentTimestamp() {
 	const auto tp = std::chrono::system_clock::now();
 	const std::time_t t = std::chrono::system_clock::to_time_t(tp);
+	std::tm tm{};
+#if defined(_WIN32)
+	gmtime_s(&tm, &t);
+#else
+	gmtime_r(&t, &tm);
+#endif
 	std::ostringstream ss;
-	ss << std::put_time(std::gmtime(&t), "%Y-%m-%dT%H:%M:%SZ");
+	ss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
 	return ss.str();
 }
 
@@ -68,7 +79,11 @@ std::string BuildDumpText(const std::string& component,
 	// ── Header ──────────────────────────────────────────────────────────────
 	out << "=== XER PROCESS DUMP ===\n";
 	out << "timestamp   : " << CurrentTimestamp() << "\n";
+#ifdef _WIN32
+	out << "pid         : " << static_cast<long>(::GetCurrentProcessId()) << "\n";
+#else
 	out << "pid         : " << static_cast<long>(::getpid()) << "\n";
+#endif
 	if (!component.empty()) {
 		out << "component   : " << component << "\n";
 	}

@@ -7,7 +7,7 @@
 namespace XER::ML::Features {
 
 // Generates composite feature vectors by combining multiple extraction strategies.
-// Integrates with IO::AsyncIO::IOCacheManager via #if __has_include guard.
+// Integrates with XER::AsyncIO::IO::Async::IOCacheManager via #if __has_include guard.
 class FeatGenerator {
 public:
     FeatGenerator();

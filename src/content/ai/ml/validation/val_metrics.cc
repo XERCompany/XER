@@ -25,8 +25,8 @@ namespace {
 constexpr std::uint32_t kMetricsCacheMagic = 0x3156434D;  // MCV1
 constexpr std::uint32_t kMetricsCacheVersion = 1;
 
-flux::core::Logger* g_logger = nullptr;
-IO::AsyncIO::IOCacheManager* g_cache = nullptr;
+XER::Flux::Core::Logger* g_logger = nullptr;
+XER::AsyncIO::IO::Async::IOCacheManager* g_cache = nullptr;
 std::uint64_t g_cache_ttl_seconds = 600;
 
 template <typename T>
@@ -138,11 +138,11 @@ std::string ValidationMetrics::ToString() const {
     return os.str();
 }
 
-void ValMetrics::SetLogger(flux::core::Logger* logger) {
+void ValMetrics::SetLogger(XER::Flux::Core::Logger* logger) {
     g_logger = logger;
 }
 
-void ValMetrics::EnableCache(IO::AsyncIO::IOCacheManager* cache) {
+void ValMetrics::EnableCache(XER::AsyncIO::IO::Async::IOCacheManager* cache) {
     g_cache = cache;
 }
 

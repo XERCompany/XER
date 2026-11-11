@@ -5,8 +5,8 @@
 #include <string>
 #include <vector>
 
-namespace flux::core { class Logger; }
-namespace IO::AsyncIO { class IOCacheManager; }
+namespace XER::Flux::Core { class Logger; }
+namespace XER::AsyncIO::IO::Async { class IOCacheManager; }
 
 namespace XER::ML::Validation {
 
@@ -24,8 +24,8 @@ struct ValidationMetrics {
 };
 
 struct ValMetrics {
-    static void SetLogger(flux::core::Logger* logger);
-    static void EnableCache(IO::AsyncIO::IOCacheManager* cache);
+    static void SetLogger(XER::Flux::Core::Logger* logger);
+    static void EnableCache(XER::AsyncIO::IO::Async::IOCacheManager* cache);
     static void SetCacheTtlSeconds(std::uint64_t ttl_seconds);
     static void InvalidateCache(const std::vector<int>& predictions,
                                 const std::vector<int>& ground_truth,
