@@ -9,7 +9,7 @@
 
 namespace XER::ML::Loaders {
 
-/// Async prefetch wrapper — enqueues load onto IO::AsyncIO::IOThreadPool,
+/// Async prefetch wrapper — enqueues load onto XER::AsyncIO::IO::Async::IOThreadPool,
 /// returns result via std::future<Dataset>.
 class LoaderPrefetcher {
 public:

@@ -53,7 +53,7 @@ void TensorManager::Register(const std::string& name, std::shared_ptr<Tensor> te
 }
 
 void TensorManager::RegisterAsync(const std::string& name, std::shared_ptr<Tensor> tensor) {
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(
+    XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
         [this, name, tensor = std::move(tensor)]() mutable {
             Register(name, std::move(tensor));
         });

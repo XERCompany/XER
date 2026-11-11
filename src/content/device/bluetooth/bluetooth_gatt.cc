@@ -22,6 +22,13 @@ BluetoothGattClient& BluetoothGattClient::Instance() {
 
 std::string BluetoothGattClient::RunGatttool(const std::string& address,
                                                const std::string& args) const {
+#if !defined(__linux__)
+    // gatttool/bluetoothctl are BlueZ (Linux) tools; no GATT backend on
+    // this platform yet.
+    (void)address;
+    (void)args;
+    return {};
+#else
     // gatttool is part of bluez-utils; fall back to bluetoothctl if missing.
     const std::string cmd =
         "gatttool -b " + address + " " + args + " 2>/dev/null";
@@ -32,6 +39,7 @@ std::string BluetoothGattClient::RunGatttool(const std::string& address,
     while (fgets(buf, sizeof(buf), fp)) out += buf;
     pclose(fp);
     return out;
+#endif
 }
 
 namespace {
@@ -65,7 +73,7 @@ static GattCharacteristic ParseCharLine(const std::string& line) {
 void BluetoothGattClient::DiscoverServicesAsync(const std::string& address,
                                                   GattDiscoveryCallback callback) {
     // Offload to the shared IO thread pool so discovery does not block.
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(
+    XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
         [this, address, cb = std::move(callback)]() mutable {
             std::vector<GattService> services;
             std::string err;
@@ -151,8 +159,15 @@ bool BluetoothGattClient::WriteCharacteristic(const std::string& address,
 bool BluetoothGattClient::Subscribe(const std::string& address,
                                      const std::string& char_uuid,
                                      GattNotifyCallback callback) {
+#if !defined(__linux__)
+    // No GATT notification backend on this platform yet.
+    (void)address;
+    (void)char_uuid;
+    (void)callback;
+    return false;
+#else
     // Start a background notification listener via gatttool --listen.
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(
+    XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(
         [this, address, char_uuid, cb = std::move(callback)]() mutable {
             const std::string cmd =
                 "gatttool -b " + address +
@@ -178,6 +193,7 @@ bool BluetoothGattClient::Subscribe(const std::string& address,
             pclose(fp);
         });
     return true;
+#endif
 }
 
 void BluetoothGattClient::Unsubscribe(const std::string& /*address*/,

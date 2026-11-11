@@ -1,6 +1,5 @@
 #include "image_processor.h"
 #include "../../../async_io/io_thread_pool.h"
-#include <base64.h>
 #include <sstream>
 
 namespace Content::OpenAI::Image {
@@ -24,7 +23,7 @@ std::future<ImageAnalysisResult> OpenAIImageProcessor::AnalyzeImage(
     std::promise<ImageAnalysisResult> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, image, promise = std::move(promise)]() mutable {
         ImageAnalysisResult result;
@@ -52,7 +51,7 @@ std::future<ImageData> OpenAIImageProcessor::ProcessImage(
     std::promise<ImageData> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([image, params, promise = std::move(promise)]() mutable {
         ImageData result = image;
@@ -94,7 +93,7 @@ std::future<ImageData> OpenAIImageProcessor::ConvertFormat(
     std::promise<ImageData> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([image, target_format, promise = std::move(promise)]() mutable {
         ImageData result = image;

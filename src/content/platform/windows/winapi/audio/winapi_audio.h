@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../winapi_common.h"
+#include <mmsystem.h>
 #include <string>
 #include <vector>
 

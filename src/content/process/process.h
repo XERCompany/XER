@@ -9,6 +9,14 @@
 #include <string>
 #include <vector>
 
+#ifdef _WIN32
+#include <windows.h>
+// Windows has no pid_t; process IDs are DWORDs and always fit in int.
+using pid_t = int;
+#else
+#include <sys/types.h>
+#endif
+
 #include "async_io/io_thread_pool.h"
 
 namespace content::process {
@@ -238,7 +246,7 @@ private:
   int stderr_fd_;
 #endif
   
-  AsyncIO::IO::IOThreadPool* thread_pool_;
+  XER::AsyncIO::IO::Async::IOThreadPool* thread_pool_;
 };
 
 /**
@@ -290,7 +298,7 @@ private:
   ~ProcessManager() = default;
   
   std::vector<std::shared_ptr<Process>> processes_;
-  AsyncIO::IO::IOThreadPool* thread_pool_;
+  XER::AsyncIO::IO::Async::IOThreadPool* thread_pool_;
 };
 
 }  // namespace content::process

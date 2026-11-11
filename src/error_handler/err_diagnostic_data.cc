@@ -5,7 +5,7 @@
 #include <absl/strings/string_view.h>
 #include <range/v3/algorithm/any_of.hpp>
 
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
 namespace XER::ErrorHandler {
 

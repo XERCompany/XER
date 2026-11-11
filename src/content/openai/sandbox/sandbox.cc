@@ -10,7 +10,7 @@ public:
     Impl(const ResourceLimits& limits)
         : limits_(limits),
           policy_(SandboxPolicy::kModerate),
-          thread_pool_(IO::AsyncIO::IOThreadPool::GetSharedInstance()),
+          thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()),
           is_running_(false),
           active_processes_(0),
           current_memory_mb_(0.0) {
@@ -18,7 +18,7 @@ public:
 
     ResourceLimits limits_;
     SandboxPolicy policy_;
-    IO::AsyncIO::IOThreadPool& thread_pool_;
+    XER::AsyncIO::IO::Async::IOThreadPool& thread_pool_;
     std::atomic<bool> is_running_;
     std::atomic<int> active_processes_;
     std::atomic<double> current_memory_mb_;
@@ -140,7 +140,7 @@ public:
     Impl(const ResourceLimits& limits)
         : limits_(limits),
           policy_(SandboxPolicy::kModerate),
-          thread_pool_(IO::AsyncIO::IOThreadPool::GetSharedInstance()),
+          thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()),
           is_running_(false),
           active_processes_(0),
           current_memory_mb_(0.0) {
@@ -148,7 +148,7 @@ public:
 
     ResourceLimits limits_;
     SandboxPolicy policy_;
-    IO::AsyncIO::IOThreadPool& thread_pool_;
+    XER::AsyncIO::IO::Async::IOThreadPool& thread_pool_;
     std::atomic<bool> is_running_;
     std::atomic<int> active_processes_;
     std::atomic<double> current_memory_mb_;
