@@ -13,7 +13,7 @@
 #include "cache/cache_configuration.h"
 #include "engine_params.h"
 #include "error_handler/err_monitor.h"
-#include "helper/string.h"
+#include "helper/string_utils.h"
 #include "runtime_safety/safe_memory_guard.h"
 #include "runtime_safety/safe_sandbox.h"
 #include "runtime_safety/safe_thread_monitor.h"
@@ -71,7 +71,8 @@ bool BootstrapStartup(const StartupOptions& options, StartupState* state, std::s
 		return false;
 	}
 
-	IO::AsyncIO::IOThreadPool& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+	XER::AsyncIO::IO::Async::IOThreadPool& thread_pool =
+		XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
 	StartupState resolved_state;
 	resolved_state.cache_directory = cache_config.directory;

@@ -17,7 +17,7 @@ class XerSandbox {
 public:
     XerSandbox();
     explicit XerSandbox(XerSandboxSettings settings);
-    explicit XerSandbox(const EngineParams& params);
+    explicit XerSandbox(const XER::EngineParams& params);
 
     bool enabled() const { return settings_.enabled; }
     bool CanRead(const std::filesystem::path& path) const;

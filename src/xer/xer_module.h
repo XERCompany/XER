@@ -30,7 +30,7 @@ public:
     std::string Report() const;
 
 private:
-    mutable AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
+    mutable XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_counter_;
     absl::flat_hash_map<std::string, XerModuleHandler> handlers_;
 };
 

@@ -776,7 +776,7 @@ private:
             output = absl::StrReplaceAll(output, replacements);
         }
 
-		flux::terminal::WriteLine(flux::terminal::OutputStream::kStdout, output);
+		XER::Flux::Terminal::WriteLine(XER::Flux::Terminal::OutputStream::kStdout, output);
         return RuntimeValue();
     }
 
@@ -970,7 +970,7 @@ bool XerScript::Run() const {
     std::string error;
     const bool ok = Run(&error);
     if (!ok && !error.empty()) {
-		flux::terminal::WriteLine(flux::terminal::OutputStream::kStderr, error);
+		XER::Flux::Terminal::WriteLine(XER::Flux::Terminal::OutputStream::kStderr, error);
     }
     return ok;
 }

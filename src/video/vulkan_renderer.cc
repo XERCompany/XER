@@ -46,8 +46,8 @@ bool ProbeVulkanRuntime() {
 
 }  // namespace
 
-static flux::core::Logger& Log() {
-    static flux::core::Logger logger;
+static XER::Flux::Core::Logger& Log() {
+    static XER::Flux::Core::Logger logger;
     return logger;
 }
 

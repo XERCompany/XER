@@ -13,7 +13,7 @@ DecodeViaFFmpeg(const std::string& path, const std::string& fmt_name,
     std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
     if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
         frames.empty()) {
-        flux::core::Logger().Error("ImageDecoder", fmt_name + " decode failed: " + err);
+        XER::Flux::Core::Logger().Error("ImageDecoder", fmt_name + " decode failed: " + err);
         return nullptr;
     }
     auto& fr = frames[0];

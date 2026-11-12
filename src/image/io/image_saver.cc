@@ -72,7 +72,7 @@ bool ImageSaver::SavePng(const ImageBuffer& img, const std::string& path) {
 
     std::string err;
     if (!XER::Bridge::FFmpeg::EncodeVideoFrames(p, {fr}, &err)) {
-        flux::core::Logger().Error("ImageSaver", "PNG save failed: " + err);
+        XER::Flux::Core::Logger().Error("ImageSaver", "PNG save failed: " + err);
         return false;
     }
     return true;
@@ -101,7 +101,7 @@ bool ImageSaver::SaveJpeg(const ImageBuffer& img, const std::string& path,
 
     std::string err;
     if (!XER::Bridge::FFmpeg::EncodeVideoFrames(p, {fr}, &err)) {
-        flux::core::Logger().Error("ImageSaver", "JPEG save failed: " + err);
+        XER::Flux::Core::Logger().Error("ImageSaver", "JPEG save failed: " + err);
         return false;
     }
     return true;

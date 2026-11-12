@@ -4,16 +4,64 @@
 #include "watch/watch_lock_recovery.h"
 
 #include <filesystem>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
 #include <limits.h>
 #include <signal.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#endif
 
 #include <chrono>
 #include <thread>
 
 namespace {
+
+#ifdef _WIN32
+
+std::wstring Utf8ToWide(const std::string& utf8) {
+    if (utf8.empty()) {
+        return {};
+    }
+    const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.data(),
+                                        static_cast<int>(utf8.size()), nullptr, 0);
+    if (len <= 0) {
+        return {};
+    }
+    std::wstring wide(static_cast<std::size_t>(len), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
+                        wide.data(), len);
+    return wide;
+}
+
+std::string WideToUtf8(const wchar_t* wide, int len) {
+    if (wide == nullptr || len <= 0) {
+        return {};
+    }
+    const int out_len = WideCharToMultiByte(CP_UTF8, 0, wide, len, nullptr, 0,
+                                            nullptr, nullptr);
+    if (out_len <= 0) {
+        return {};
+    }
+    std::string utf8(static_cast<std::size_t>(out_len), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide, len, utf8.data(), out_len,
+                        nullptr, nullptr);
+    return utf8;
+}
+
+std::string CurrentExecutablePath() {
+    wchar_t buf[MAX_PATH * 4]{};
+    const DWORD n = GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(std::size(buf)));
+    if (n == 0) {
+        return "./build-copilot/EngineBuilder";
+    }
+    return WideToUtf8(buf, static_cast<int>(n));
+}
+
+#else
 
 std::string CurrentExecutablePath() {
     char buf[PATH_MAX];
@@ -25,6 +73,8 @@ std::string CurrentExecutablePath() {
     return std::string(buf);
 }
 
+#endif
+
 }  // namespace
 
 WatchRecompileService::WatchRecompileService() = default;
@@ -35,11 +85,19 @@ WatchRecompileService::~WatchRecompileService() {
 
 bool WatchRecompileService::Recompile(const std::string& script_path,
                                       std::string* error_message) const {
+#ifdef _WIN32
+    if (child_process_ != nullptr) {
+        if (!const_cast<WatchRecompileService*>(this)->StopChild(800, error_message)) {
+            return false;
+        }
+    }
+#else
     if (child_pid_ > 0) {
         if (!const_cast<WatchRecompileService*>(this)->StopChild(800, error_message)) {
             return false;
         }
     }
+#endif
 
     std::string lock_error;
     const std::filesystem::path script_fs(script_path);
@@ -64,6 +122,26 @@ bool WatchRecompileService::SpawnChild(const std::string& script_path,
                                        std::string* error_message) {
     const std::string exe = CurrentExecutablePath();
 
+#ifdef _WIN32
+    const std::wstring exe_w = Utf8ToWide(exe);
+    const std::wstring script_w = Utf8ToWide(script_path);
+    std::wstring command = L"\"" + exe_w + L"\" run \"" + script_w + L"\"";
+
+    STARTUPINFOW si{};
+    si.cb = sizeof(si);
+    PROCESS_INFORMATION pi{};
+    if (!CreateProcessW(exe_w.c_str(), command.data(), nullptr, nullptr, FALSE,
+                        0, nullptr, nullptr, &si, &pi)) {
+        if (error_message) {
+            *error_message = "CreateProcess failed while starting watch child (error " +
+                std::to_string(GetLastError()) + ")";
+        }
+        return false;
+    }
+    CloseHandle(pi.hThread);
+    child_process_ = pi.hProcess;
+    return true;
+#else
     const pid_t pid = ::fork();
     if (pid < 0) {
         if (error_message) {
@@ -79,10 +157,50 @@ bool WatchRecompileService::SpawnChild(const std::string& script_path,
 
     child_pid_ = static_cast<int>(pid);
     return true;
+#endif
 }
 
 bool WatchRecompileService::StopChild(int grace_ms,
                                       std::string* error_message) {
+#ifdef _WIN32
+    if (child_process_ == nullptr) {
+        return true;
+    }
+    HANDLE process = static_cast<HANDLE>(child_process_);
+
+    // If already exited, reap immediately.
+    if (WaitForSingleObject(process, 0) == WAIT_OBJECT_0) {
+        CloseHandle(process);
+        child_process_ = nullptr;
+        return true;
+    }
+
+    // Grace period: wait for natural exit before terminating.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(grace_ms);
+    while (std::chrono::steady_clock::now() < deadline) {
+        const DWORD rc = WaitForSingleObject(process, 20);
+        if (rc == WAIT_OBJECT_0) {
+            CloseHandle(process);
+            child_process_ = nullptr;
+            return true;
+        }
+        if (rc == WAIT_FAILED) {
+            CloseHandle(process);
+            child_process_ = nullptr;
+            return true;
+        }
+    }
+
+    TerminateProcess(process, 1);
+    WaitForSingleObject(process, 5000);
+    CloseHandle(process);
+    child_process_ = nullptr;
+
+    if (error_message) {
+        *error_message = "Watch child force-killed after timeout";
+    }
+    return true;
+#else
     if (child_pid_ <= 0) {
         return true;
     }
@@ -120,4 +238,5 @@ bool WatchRecompileService::StopChild(int grace_ms,
         *error_message = "Watch child force-killed after timeout";
     }
     return true;
+#endif
 }

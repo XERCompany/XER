@@ -5,10 +5,13 @@
 
 namespace XER::Content::Platform {
 
-class WindowsPlatform : public IPlatform {
+// Native per-OS backend for IPlatform. platform_common.cc provides the
+// canonical CreatePlatform() implementation; this class is the standalone
+// Windows backend (distinct name to avoid clashing with it).
+class NativeWindowsPlatform : public IPlatform {
 public:
-    WindowsPlatform();
-    ~WindowsPlatform() override = default;
+    NativeWindowsPlatform();
+    ~NativeWindowsPlatform() override = default;
 
     // System information
     std::string GetOSVersion() const override;
@@ -21,8 +24,8 @@ public:
     std::string GetApplicationDataDirectory() const override;
 
     // Process/Thread
-    unsigned int GetCurrentProcessId() const;
-    unsigned int GetCurrentThreadId() const;
+    unsigned int GetProcessId() const override;
+    unsigned int GetThreadId() const override;
 
     // Memory
     size_t GetTotalMemory() const override;

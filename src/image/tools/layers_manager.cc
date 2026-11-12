@@ -32,7 +32,7 @@ ImageBuffer LayersManager::Flatten(int width, int height) const {
     ImageBuffer result(width, height, PixelFormat::RGBA8, ColorSpace::sRGB);
     result.Clear(0, 0, 0, 0);
     if (!XER::Bridge::Skia::IsAvailable()) {
-        flux::core::Logger().Warning("LayersManager", "Skia not available, returning blank");
+        XER::Flux::Core::Logger().Warning("LayersManager", "Skia not available, returning blank");
         return result;
     }
     std::vector<uint32_t> dst_px(width*height, 0);

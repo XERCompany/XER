@@ -22,7 +22,7 @@ TiffDecoder::DecodePage(const std::string& path, int page, ImageDescriptor& desc
     std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
     if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, page+1, &frames, &err) ||
         frames.empty()) {
-        flux::core::Logger().Error("TiffDecoder", "Decode failed: " + err);
+        XER::Flux::Core::Logger().Error("TiffDecoder", "Decode failed: " + err);
         return nullptr;
     }
     int idx = std::min(page, static_cast<int>(frames.size())-1);

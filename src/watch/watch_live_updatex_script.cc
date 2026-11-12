@@ -30,20 +30,20 @@ struct WatchLoopState {
     bool last_ok = true;
 };
 
-void WriteWatchLine(flux::terminal::OutputStream stream, const std::string& text) {
-	flux::terminal::WriteLine(stream, text);
+void WriteWatchLine(XER::Flux::Terminal::OutputStream stream, const std::string& text) {
+	XER::Flux::Terminal::WriteLine(stream, text);
 }
 
 void TriggerRestart(WatchLoopState* state, const std::string& reason) {
     ++state->cycles;
-	WriteWatchLine(flux::terminal::OutputStream::kStdout,
+	WriteWatchLine(XER::Flux::Terminal::OutputStream::kStdout,
 		WatchCliSupport::CycleMessage(state->cycles, reason));
     state->previous = WatchChangeDetector::BuildMap(state->scanner.Scan());
 
     std::string compile_error;
     state->last_ok = state->service.Recompile(state->script_path, &compile_error);
     if (!state->last_ok && !compile_error.empty()) {
-		WriteWatchLine(flux::terminal::OutputStream::kStderr,
+		WriteWatchLine(XER::Flux::Terminal::OutputStream::kStderr,
 			absl::StrCat("[watch] ", compile_error));
     }
 }
@@ -113,8 +113,8 @@ int WatchLiveUpdatexScript::Run() {
     std::signal(SIGINT, HandleWatchSignal);
     std::signal(SIGTERM, HandleWatchSignal);
 
-    flux::terminal::Write(
-        flux::terminal::OutputStream::kStdout,
+    XER::Flux::Terminal::Write(
+        XER::Flux::Terminal::OutputStream::kStdout,
         WatchCliSupport::Header(config_.script_path, config_.poll_interval_ms));
 
     const std::filesystem::path script_path(config_.script_path);
@@ -128,7 +128,7 @@ int WatchLiveUpdatexScript::Run() {
     std::string compile_error;
     state.last_ok = state.service.Recompile(config_.script_path, &compile_error);
     if (!state.last_ok && !compile_error.empty()) {
-        WriteWatchLine(flux::terminal::OutputStream::kStderr,
+        WriteWatchLine(XER::Flux::Terminal::OutputStream::kStderr,
             absl::StrCat("[watch] ", compile_error));
     }
 
@@ -150,7 +150,7 @@ int WatchLiveUpdatexScript::Run() {
     const std::string watch_path = root.string();
     const int fs_rc = uv_fs_event_start(&fs_watcher, WatchFsEvent, watch_path.c_str(), 0);
     if (fs_rc != 0) {
-        WriteWatchLine(flux::terminal::OutputStream::kStderr,
+        WriteWatchLine(XER::Flux::Terminal::OutputStream::kStderr,
             "[watch] fs-event disabled, fallback to timer polling only");
     }
 
@@ -174,7 +174,7 @@ int WatchLiveUpdatexScript::Run() {
     uv_loop_close(&loop);
 
     state.service.Stop();
-    WriteWatchLine(flux::terminal::OutputStream::kStdout, "[watch] stopped");
+    WriteWatchLine(XER::Flux::Terminal::OutputStream::kStdout, "[watch] stopped");
     return state.last_ok ? 0 : 1;
 }
 

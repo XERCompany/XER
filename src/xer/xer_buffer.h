@@ -1,6 +1,6 @@
 #pragma once
 
-#include "helper/js_buffer.h"
+#include "helper/buffer.h"
 #include "helper/tool_to.h"
 
 #include <cstdint>

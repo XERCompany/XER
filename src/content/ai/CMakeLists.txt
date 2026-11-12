@@ -48,10 +48,7 @@ target_link_libraries(XER_ContentAI
         cereal::cereal
         OpenSSL::SSL
         OpenSSL::Crypto
-<<<<<<< HEAD
         jsoncpp_lib
-=======
->>>>>>> 6d22e124f5563919aa1743749d62d0074167bbee
         ICU::uc
         ICU::i18n
         ZLIB::ZLIB
@@ -72,7 +69,6 @@ if(TARGET ggml::ggml)
 endif()
 
 find_package(ONNX QUIET)
-<<<<<<< HEAD
 if(TARGET ONNX::onnx_proto)
     # ONNX::onnx_proto carries the protobuf-generated model definitions
     # (<onnx/onnx_pb.h>) used by the reader/vino adapters.
@@ -80,14 +76,15 @@ if(TARGET ONNX::onnx_proto)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
 elseif(TARGET ONNX::onnx)
     target_link_libraries(XER_ContentAI PUBLIC ONNX::onnx)
-=======
-if(TARGET onnxruntime OR TARGET ONNX::onnxruntime)
-    if(TARGET onnxruntime)
-        target_link_libraries(XER_ContentAI PUBLIC onnxruntime)
-    else()
-        target_link_libraries(XER_ContentAI PUBLIC ONNX::onnxruntime)
-    endif()
->>>>>>> 6d22e124f5563919aa1743749d62d0074167bbee
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
+endif()
+
+find_package(onnxruntime QUIET)
+if(TARGET onnxruntime)
+    target_link_libraries(XER_ContentAI PUBLIC onnxruntime)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
+elseif(TARGET ONNX::onnxruntime)
+    target_link_libraries(XER_ContentAI PUBLIC ONNX::onnxruntime)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
 endif()
 
@@ -139,6 +136,96 @@ if(OpenCV_FOUND)
     target_include_directories(XER_ContentAI PUBLIC ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(XER_ContentAI PUBLIC ${OpenCV_LIBS})
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_OPENCV=1)
+endif()
+
+# ---------------------------------------------------------------------------
+# Additional AI/ML backends. All optional: each block only activates when the
+# vcpkg port is installed, and publishes a XER_AI_HAS_<NAME> definition that
+# models_builder/utility/ai_runtime_features.cc reports at runtime.
+# ---------------------------------------------------------------------------
+
+# Intel MKL: BLAS/LAPACK + FFT + DNN primitives (root locates it REQUIRED).
+if(TARGET MKL::MKL)
+    target_link_libraries(XER_ContentAI PUBLIC MKL::MKL)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_MKL=1)
+endif()
+
+# OpenBLAS: open-source BLAS/LAPACK (alternative to MKL for CPU kernels).
+find_package(OpenBLAS QUIET)
+if(TARGET OpenBLAS::OpenBLAS)
+    target_link_libraries(XER_ContentAI PUBLIC OpenBLAS::OpenBLAS)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_OPENBLAS=1)
+endif()
+
+# oneDNN (formerly MKL-DNN): deep-learning primitives for CPU.
+find_package(DNNL QUIET)
+if(TARGET DNNL::dnnl)
+    target_link_libraries(XER_ContentAI PUBLIC DNNL::dnnl)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_DNNL=1)
+endif()
+
+# FBGEMM: quantized GEMM/conv/pooling kernels (int8/fp16 paths).
+find_package(fbgemmLibrary QUIET)
+if(TARGET fbgemm)
+    target_link_libraries(XER_ContentAI PUBLIC fbgemm)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_FBGEMM=1)
+elseif(TARGET fbgemm_generic)
+    target_link_libraries(XER_ContentAI PUBLIC fbgemm_generic)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_FBGEMM=1)
+endif()
+
+# cuDNN: GPU-accelerated DNN library (host-side link; kernels need CUDA).
+find_package(CUDNN QUIET)
+if(TARGET CuDNN::CuDNN)
+    target_link_libraries(XER_ContentAI PUBLIC CuDNN::CuDNN)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_CUDNN_LIB=1)
+endif()
+
+# cuDNN frontend: modern C++ wrapper API over cuDNN.
+find_package(cudnn_frontend QUIET)
+if(TARGET cudnn_frontend)
+    target_link_libraries(XER_ContentAI PUBLIC cudnn_frontend)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_CUDNN_FRONTEND=1)
+endif()
+
+# CUDA toolkit: runtime headers/libs for host-side GPU code paths.
+# ml/cuda_ops (.cu kernels) stay excluded unless ENABLE_CUDA is set, which
+# also requires the CUDA language enabled project-wide.
+find_package(CUDAToolkit QUIET)
+if(CUDAToolkit_FOUND)
+    target_link_libraries(XER_ContentAI PUBLIC CUDA::cudart)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_CUDA_LIB=1)
+endif()
+
+# Protocol Buffers: serialization backbone for ONNX/custom op definitions.
+find_package(protobuf QUIET)
+if(TARGET protobuf::libprotobuf)
+    target_link_libraries(XER_ContentAI PUBLIC protobuf::libprotobuf)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_PROTOBUF=1)
+endif()
+
+# Tesseract OCR: text-recognition backend for document/image pipelines.
+find_package(Tesseract QUIET)
+if(TARGET Tesseract::libtesseract)
+    target_link_libraries(XER_ContentAI PUBLIC Tesseract::libtesseract)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_TESSERACT=1)
+endif()
+
+# yaml-cpp: YAML model/config parsing (complements the libxml2 loader).
+find_package(yaml-cpp QUIET)
+if(TARGET yaml-cpp::yaml-cpp)
+    target_link_libraries(XER_ContentAI PUBLIC yaml-cpp::yaml-cpp)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_YAML_CPP=1)
+elseif(TARGET yaml)
+    target_link_libraries(XER_ContentAI PUBLIC yaml)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_YAML_CPP=1)
+endif()
+
+# Blaze: C++ high-performance math library (alternative to Eigen).
+find_package(blaze QUIET)
+if(TARGET blaze::blaze)
+    target_link_libraries(XER_ContentAI PUBLIC blaze::blaze)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_BLAZE=1)
 endif()
 
 target_compile_features(XER_ContentAI PUBLIC cxx_std_23)

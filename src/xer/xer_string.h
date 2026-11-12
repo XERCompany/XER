@@ -1,7 +1,7 @@
 #pragma once
 
 #include "config.h"
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
 #include <absl/container/flat_hash_map.h>
 

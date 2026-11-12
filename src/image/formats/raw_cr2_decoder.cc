@@ -12,7 +12,7 @@ RawCr2Decoder::Decode(const std::string& path, ImageDescriptor& desc) {
     std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
     if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
         frames.empty()) {
-        flux::core::Logger().Error("RawCr2Decoder", "Decode failed: " + err);
+        XER::Flux::Core::Logger().Error("RawCr2Decoder", "Decode failed: " + err);
         return nullptr;
     }
     auto& fr = frames[0];
