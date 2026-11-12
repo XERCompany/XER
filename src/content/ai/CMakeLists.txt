@@ -48,7 +48,10 @@ target_link_libraries(XER_ContentAI
         cereal::cereal
         OpenSSL::SSL
         OpenSSL::Crypto
+<<<<<<< HEAD
         jsoncpp_lib
+=======
+>>>>>>> 6d22e124f5563919aa1743749d62d0074167bbee
         ICU::uc
         ICU::i18n
         ZLIB::ZLIB
@@ -69,6 +72,7 @@ if(TARGET ggml::ggml)
 endif()
 
 find_package(ONNX QUIET)
+<<<<<<< HEAD
 if(TARGET ONNX::onnx_proto)
     # ONNX::onnx_proto carries the protobuf-generated model definitions
     # (<onnx/onnx_pb.h>) used by the reader/vino adapters.
@@ -76,6 +80,14 @@ if(TARGET ONNX::onnx_proto)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
 elseif(TARGET ONNX::onnx)
     target_link_libraries(XER_ContentAI PUBLIC ONNX::onnx)
+=======
+if(TARGET onnxruntime OR TARGET ONNX::onnxruntime)
+    if(TARGET onnxruntime)
+        target_link_libraries(XER_ContentAI PUBLIC onnxruntime)
+    else()
+        target_link_libraries(XER_ContentAI PUBLIC ONNX::onnxruntime)
+    endif()
+>>>>>>> 6d22e124f5563919aa1743749d62d0074167bbee
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
 endif()
 
