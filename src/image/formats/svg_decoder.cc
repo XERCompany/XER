@@ -68,7 +68,7 @@ SvgDecoder::Rasterize(const std::string& path, int target_w, int target_h,
     // Read SVG file content.
     std::ifstream fin(path);
     if (!fin.is_open()) {
-        flux::core::Logger().Error("SvgDecoder", "Cannot open SVG file: " + path);
+        XER::Flux::Core::Logger().Error("SvgDecoder", "Cannot open SVG file: " + path);
         return nullptr;
     }
     std::ostringstream ss;
@@ -119,7 +119,7 @@ SvgDecoder::Rasterize(const std::string& path, int target_w, int target_h,
         }
     }
 
-    flux::core::Logger().Info("SvgDecoder",
+    XER::Flux::Core::Logger().Info("SvgDecoder",
         "Rasterised " + path +
         " intrinsic=" + std::to_string(intrinsic_w) + "x" + std::to_string(intrinsic_h) +
         " output=" + std::to_string(w) + "x" + std::to_string(h));

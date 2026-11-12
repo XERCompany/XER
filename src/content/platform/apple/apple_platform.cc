@@ -9,10 +9,10 @@
 
 namespace XER::Content::Platform {
 
-ApplePlatform::ApplePlatform() {
+NativeApplePlatform::NativeApplePlatform() {
 }
 
-std::string ApplePlatform::GetOSVersion() const {
+std::string NativeApplePlatform::GetOSVersion() const {
     char str[256];
     size_t size = sizeof(str);
     
@@ -23,7 +23,7 @@ std::string ApplePlatform::GetOSVersion() const {
     return "Unknown macOS";
 }
 
-std::string ApplePlatform::GetArchitecture() const {
+std::string NativeApplePlatform::GetArchitecture() const {
     char str[256];
     size_t size = sizeof(str);
     
@@ -34,7 +34,7 @@ std::string ApplePlatform::GetArchitecture() const {
     return "Unknown";
 }
 
-std::string ApplePlatform::GetHostname() const {
+std::string NativeApplePlatform::GetHostname() const {
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) == 0) {
         return std::string(hostname);
@@ -42,7 +42,7 @@ std::string ApplePlatform::GetHostname() const {
     return "Unknown";
 }
 
-std::string ApplePlatform::GetHomeDirectory() const {
+std::string NativeApplePlatform::GetHomeDirectory() const {
     const char* home = std::getenv("HOME");
     if (home) {
         return std::string(home);
@@ -50,7 +50,7 @@ std::string ApplePlatform::GetHomeDirectory() const {
     return "/tmp";
 }
 
-std::string ApplePlatform::GetTempDirectory() const {
+std::string NativeApplePlatform::GetTempDirectory() const {
     const char* tmp = std::getenv("TMPDIR");
     if (tmp) {
         return std::string(tmp);
@@ -58,22 +58,22 @@ std::string ApplePlatform::GetTempDirectory() const {
     return "/tmp";
 }
 
-std::string ApplePlatform::GetApplicationDataDirectory() const {
+std::string NativeApplePlatform::GetApplicationDataDirectory() const {
     std::string home = GetHomeDirectory();
     return home + "/Library/Application Support";
 }
 
-unsigned int ApplePlatform::GetCurrentProcessId() const {
+unsigned int NativeApplePlatform::GetProcessId() const {
     return getpid();
 }
 
-unsigned int ApplePlatform::GetCurrentThreadId() const {
+unsigned int NativeApplePlatform::GetThreadId() const {
     uint64_t tid;
     pthread_threadid_np(NULL, &tid);
     return static_cast<unsigned int>(tid);
 }
 
-size_t ApplePlatform::GetTotalMemory() const {
+size_t NativeApplePlatform::GetTotalMemory() const {
     int mib[2];
     int64_t physical_memory;
     size_t length;
@@ -89,7 +89,7 @@ size_t ApplePlatform::GetTotalMemory() const {
     return 0;
 }
 
-size_t ApplePlatform::GetAvailableMemory() const {
+size_t NativeApplePlatform::GetAvailableMemory() const {
     vm_size_t page_size;
     vm_statistics64_data_t vm_stats;
     mach_msg_type_number_t count = sizeof(vm_stats) / sizeof(natural_t);
@@ -104,13 +104,13 @@ size_t ApplePlatform::GetAvailableMemory() const {
     return 0;
 }
 
-uint64_t ApplePlatform::GetTimestampMs() const {
+uint64_t NativeApplePlatform::GetTimestampMs() const {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
-void ApplePlatform::SleepMs(uint32_t milliseconds) const {
+void NativeApplePlatform::SleepMs(uint32_t milliseconds) const {
     std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
 }
 

@@ -10,10 +10,10 @@
 
 namespace XER::Content::Platform {
 
-LinuxPlatform::LinuxPlatform() {
+NativeLinuxPlatform::NativeLinuxPlatform() {
 }
 
-std::string LinuxPlatform::GetOSVersion() const {
+std::string NativeLinuxPlatform::GetOSVersion() const {
     std::ifstream file("/etc/os-release");
     if (file.is_open()) {
         std::string line;
@@ -36,7 +36,7 @@ std::string LinuxPlatform::GetOSVersion() const {
     return "Unknown Linux";
 }
 
-std::string LinuxPlatform::GetArchitecture() const {
+std::string NativeLinuxPlatform::GetArchitecture() const {
     struct utsname uname_info;
     if (uname(&uname_info) == 0) {
         return std::string(uname_info.machine);
@@ -44,7 +44,7 @@ std::string LinuxPlatform::GetArchitecture() const {
     return "Unknown";
 }
 
-std::string LinuxPlatform::GetHostname() const {
+std::string NativeLinuxPlatform::GetHostname() const {
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) == 0) {
         return std::string(hostname);
@@ -52,7 +52,7 @@ std::string LinuxPlatform::GetHostname() const {
     return "Unknown";
 }
 
-std::string LinuxPlatform::GetHomeDirectory() const {
+std::string NativeLinuxPlatform::GetHomeDirectory() const {
     const char* home = std::getenv("HOME");
     if (home) {
         return std::string(home);
@@ -60,7 +60,7 @@ std::string LinuxPlatform::GetHomeDirectory() const {
     return "/tmp";
 }
 
-std::string LinuxPlatform::GetTempDirectory() const {
+std::string NativeLinuxPlatform::GetTempDirectory() const {
     const char* tmp = std::getenv("TMPDIR");
     if (tmp) {
         return std::string(tmp);
@@ -68,16 +68,16 @@ std::string LinuxPlatform::GetTempDirectory() const {
     return "/tmp";
 }
 
-std::string LinuxPlatform::GetApplicationDataDirectory() const {
+std::string NativeLinuxPlatform::GetApplicationDataDirectory() const {
     std::string home = GetHomeDirectory();
     return home + "/.local/share";
 }
 
-unsigned int LinuxPlatform::GetCurrentProcessId() const {
+unsigned int NativeLinuxPlatform::GetProcessId() const {
     return getpid();
 }
 
-unsigned int LinuxPlatform::GetCurrentThreadId() const {
+unsigned int NativeLinuxPlatform::GetThreadId() const {
 #ifdef __linux__
     return static_cast<unsigned int>(syscall(SYS_gettid));
 #else
@@ -85,7 +85,7 @@ unsigned int LinuxPlatform::GetCurrentThreadId() const {
 #endif
 }
 
-size_t LinuxPlatform::GetTotalMemory() const {
+size_t NativeLinuxPlatform::GetTotalMemory() const {
     struct sysinfo info;
     if (sysinfo(&info) == 0) {
         return static_cast<size_t>(info.totalram) * info.mem_unit;
@@ -93,7 +93,7 @@ size_t LinuxPlatform::GetTotalMemory() const {
     return 0;
 }
 
-size_t LinuxPlatform::GetAvailableMemory() const {
+size_t NativeLinuxPlatform::GetAvailableMemory() const {
     struct sysinfo info;
     if (sysinfo(&info) == 0) {
         return static_cast<size_t>(info.freeram) * info.mem_unit;
@@ -101,13 +101,13 @@ size_t LinuxPlatform::GetAvailableMemory() const {
     return 0;
 }
 
-uint64_t LinuxPlatform::GetTimestampMs() const {
+uint64_t NativeLinuxPlatform::GetTimestampMs() const {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
-void LinuxPlatform::SleepMs(uint32_t milliseconds) const {
+void NativeLinuxPlatform::SleepMs(uint32_t milliseconds) const {
     std::this_thread::sleep_for(std::chrono::milliseconds(milliseconds));
 }
 

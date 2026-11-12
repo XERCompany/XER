@@ -10,7 +10,7 @@ std::shared_ptr<ImageBuffer> ImageLoader::Load(const std::string& path,
     auto& factory = DecoderFactory::Instance();
     auto buf = factory.Decode(path, desc);
     if (!buf)
-        flux::core::Logger().Warning("ImageLoader", "Failed to load: " + path);
+        XER::Flux::Core::Logger().Warning("ImageLoader", "Failed to load: " + path);
     return buf;
 }
 

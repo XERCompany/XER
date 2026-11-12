@@ -121,6 +121,73 @@ add_subdirectory(src/helper)
 add_subdirectory(src/app)
 add_subdirectory(src/lsui)
 
+# Content subsystems — Chromium-style modular layer. Each directory owns a
+# static library; optional/heavy backends (CUDA ops, libarchive, MuPDF,
+# ggml/ONNX/OpenCV) self-gate inside their own CMakeLists.
+add_subdirectory(src/error_handler)
+add_subdirectory(src/runtime_safety)
+add_subdirectory(src/content/platform)
+add_subdirectory(src/content/process)
+add_subdirectory(src/content/archive)
+add_subdirectory(src/content/pdf)
+add_subdirectory(src/content/civitaimodels)
+add_subdirectory(src/content/openai)
+add_subdirectory(src/content/device)
+add_subdirectory(src/content/ai)
+
+# Engine bridges — thin wrappers over GPU/media SDKs. angle/cuda/cudnn/opencv
+# are availability stubs; skia links the real port when installed.
+add_subdirectory(src/wrapper/angle)
+add_subdirectory(src/wrapper/cuda)
+add_subdirectory(src/wrapper/cudnn)
+add_subdirectory(src/wrapper/opencv)
+add_subdirectory(src/wrapper/skia)
+
+# Media/content modules — image codecs/filters, video pipeline, ecosystem
+# manifests and the pxer native-plugin host.
+add_subdirectory(src/ecosystem)
+add_subdirectory(src/image)
+add_subdirectory(src/video)
+add_subdirectory(src/native)
+add_subdirectory(src/lunca)
+add_subdirectory(src/watch)
+
+# XER language implementation (lexer/compiler/runtime) and the V8-gated
+# JavaScript bridge layer.
+add_subdirectory(src/xer)
+add_subdirectory(src/javascript)
+
+# Engine-runtime support files that live at the src/ root: EngineParams,
+# AppCommand, config helpers, Feature/Provider/ResourceGuard. They back the
+# xer engine CLI (src/CMakeLists.txt) and are reused by runtime_safety/xer.
+# resource_guard.{h,cc} is V8-dependent (v8::Isolate) — it lives with the
+# other V8-gated engine sources in src/javascript/CMakeLists.txt.
+add_library(XER_EngineSupport STATIC
+    src/engine_params.cc
+    src/app_command.cc
+    src/audio_config_helper.cc
+    src/feature.cc
+    src/json_config_helper.cc
+    src/provider.cc
+)
+target_include_directories(XER_EngineSupport
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/src/..
+)
+target_link_libraries(XER_EngineSupport
+    PUBLIC
+        fmt::fmt
+        XER_Flux_Core
+        XER_Helper
+)
+target_compile_features(XER_EngineSupport PUBLIC cxx_std_23)
+if(MSVC)
+    target_compile_options(XER_EngineSupport PRIVATE /W4 /WX- /O2)
+else()
+    target_compile_options(XER_EngineSupport PRIVATE -Wall -Wextra -Wpedantic -O3)
+endif()
+
 # Standalone VST3 scanner — loads plugin DLLs, so it runs as its own
 # process away from the editor's UI/audio threads.
 add_executable(EngineScanVST3 tools/EngineScanVST3/main.cc)
@@ -206,6 +273,31 @@ target_link_libraries(SecurityFlashHello PRIVATE
 )
 set_target_properties(SecurityFlashHello PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# ArchiveManager: web-UI archive manager (libarchive + XER http_server +
+# UI password dialogs). The www/ assets are copied next to the exe.
+add_executable(ArchiveManager tools/ArchiveManager/main.cc)
+target_include_directories(ArchiveManager PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(ArchiveManager PRIVATE cxx_std_23)
+target_link_libraries(ArchiveManager PRIVATE
+    XER_Archive
+    XER_Network
+    XER_UI_Core
+    jsoncpp_lib
+    ole32
+    oleaut32
+    user32
+    gdi32
+)
+set_target_properties(ArchiveManager PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+add_custom_command(TARGET ArchiveManager POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_directory
+        "${CMAKE_CURRENT_SOURCE_DIR}/tools/ArchiveManager/www"
+        "${CMAKE_BINARY_DIR}/bin/www")
 
 include(CTest)
 if(BUILD_TESTING)

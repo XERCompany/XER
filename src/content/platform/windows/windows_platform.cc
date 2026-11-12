@@ -5,10 +5,10 @@
 
 namespace XER::Content::Platform {
 
-WindowsPlatform::WindowsPlatform() {
+NativeWindowsPlatform::NativeWindowsPlatform() {
 }
 
-std::string WindowsPlatform::GetOSVersion() const {
+std::string NativeWindowsPlatform::GetOSVersion() const {
     OSVERSIONINFOEX osvi;
     ZeroMemory(&osvi, sizeof(OSVERSIONINFOEX));
     osvi.dwOSVersionInfoSize = sizeof(OSVERSIONINFOEX);
@@ -24,7 +24,7 @@ std::string WindowsPlatform::GetOSVersion() const {
            std::to_string(osvi.dwMinorVersion);
 }
 
-std::string WindowsPlatform::GetArchitecture() const {
+std::string NativeWindowsPlatform::GetArchitecture() const {
 #ifdef _WIN64
     return "x64";
 #else
@@ -41,7 +41,7 @@ std::string WindowsPlatform::GetArchitecture() const {
 #endif
 }
 
-std::string WindowsPlatform::GetHostname() const {
+std::string NativeWindowsPlatform::GetHostname() const {
     char computerName[MAX_COMPUTERNAME_LENGTH + 1];
     DWORD size = sizeof(computerName) / sizeof(computerName[0]);
     
@@ -51,11 +51,11 @@ std::string WindowsPlatform::GetHostname() const {
     return "Unknown";
 }
 
-std::string WindowsPlatform::GetHomeDirectory() const {
+std::string NativeWindowsPlatform::GetHomeDirectory() const {
     return GetWindowsFolderPath(CSIDL_PROFILE);
 }
 
-std::string WindowsPlatform::GetTempDirectory() const {
+std::string NativeWindowsPlatform::GetTempDirectory() const {
     char tempPath[MAX_PATH + 1];
     DWORD result = GetTempPathA(MAX_PATH + 1, tempPath);
     
@@ -65,19 +65,19 @@ std::string WindowsPlatform::GetTempDirectory() const {
     return "C:\\Temp";
 }
 
-std::string WindowsPlatform::GetApplicationDataDirectory() const {
+std::string NativeWindowsPlatform::GetApplicationDataDirectory() const {
     return GetWindowsFolderPath(CSIDL_APPDATA);
 }
 
-unsigned int WindowsPlatform::GetCurrentProcessId() const {
+unsigned int NativeWindowsPlatform::GetProcessId() const {
     return ::GetCurrentProcessId();
 }
 
-unsigned int WindowsPlatform::GetCurrentThreadId() const {
+unsigned int NativeWindowsPlatform::GetThreadId() const {
     return ::GetCurrentThreadId();
 }
 
-size_t WindowsPlatform::GetTotalMemory() const {
+size_t NativeWindowsPlatform::GetTotalMemory() const {
     MEMORYSTATUSEX statex;
     statex.dwLength = sizeof(statex);
     
@@ -87,7 +87,7 @@ size_t WindowsPlatform::GetTotalMemory() const {
     return 0;
 }
 
-size_t WindowsPlatform::GetAvailableMemory() const {
+size_t NativeWindowsPlatform::GetAvailableMemory() const {
     MEMORYSTATUSEX statex;
     statex.dwLength = sizeof(statex);
     
@@ -97,17 +97,17 @@ size_t WindowsPlatform::GetAvailableMemory() const {
     return 0;
 }
 
-uint64_t WindowsPlatform::GetTimestampMs() const {
+uint64_t NativeWindowsPlatform::GetTimestampMs() const {
     auto now = std::chrono::system_clock::now();
     auto duration = now.time_since_epoch();
     return std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
 }
 
-void WindowsPlatform::SleepMs(uint32_t milliseconds) const {
+void NativeWindowsPlatform::SleepMs(uint32_t milliseconds) const {
     Sleep(milliseconds);
 }
 
-std::string WindowsPlatform::GetWindowsFolderPath(int csidl) const {
+std::string NativeWindowsPlatform::GetWindowsFolderPath(int csidl) const {
     char path[MAX_PATH];
     
     if (SHGetFolderPathA(NULL, csidl, NULL, 0, path) == S_OK) {

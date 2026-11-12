@@ -12,7 +12,7 @@ std::shared_ptr<ImageBuffer> PngDecoder::Decode(const std::string& path,
     std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
     if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
         frames.empty()) {
-        flux::core::Logger().Error("PngDecoder", "Decode failed: " + err);
+        XER::Flux::Core::Logger().Error("PngDecoder", "Decode failed: " + err);
         return nullptr;
     }
     auto& fr = frames[0];

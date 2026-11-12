@@ -134,13 +134,52 @@ ExternalLibraryAvailability DetectExternalLibraries() {
     availability.has_tensorflow = XER_AI_HAS_TENSORFLOW_HEADER == 1;
     availability.has_pthreadpool = XER_AI_HAS_PTHREADPOOL_HEADER == 1;
     availability.has_fp16 = XER_AI_HAS_FP16_HEADER == 1;
+
+    // Backends wired through CMake (XER_AI_HAS_* compile definitions set by
+    // src/content/ai/CMakeLists.txt when the vcpkg port is present).
+#ifdef XER_AI_HAS_GGML
+    availability.has_ggml = true;
+#endif
+#ifdef XER_AI_HAS_MKL
+    availability.has_mkl = true;
+#endif
+#ifdef XER_AI_HAS_OPENBLAS
+    availability.has_openblas = true;
+#endif
+#ifdef XER_AI_HAS_DNNL
+    availability.has_dnnl = true;
+#endif
+#ifdef XER_AI_HAS_FBGEMM
+    availability.has_fbgemm = true;
+#endif
+#ifdef XER_AI_HAS_CUDNN_FRONTEND
+    availability.has_cudnn_frontend = true;
+#endif
+#ifdef XER_AI_HAS_PROTOBUF
+    availability.has_protobuf = true;
+#endif
+#ifdef XER_AI_HAS_TESSERACT
+    availability.has_tesseract = true;
+#endif
+#ifdef XER_AI_HAS_YAML_CPP
+    availability.has_yaml_cpp = true;
+#endif
+#ifdef XER_AI_HAS_BLAZE
+    availability.has_blaze = true;
+#endif
+#ifdef XER_AI_HAS_CUDA_LIB
+    availability.has_cuda = true;
+#endif
+#ifdef XER_AI_HAS_CUDNN_LIB
+    availability.has_cudnn = true;
+#endif
     return availability;
 }
 
 std::string BuildRuntimeBanner() {
     const ExternalLibraryAvailability libs = DetectExternalLibraries();
 
-    const std::array<bool, 17> values = {
+    const std::array<bool, 27> values = {
         libs.has_range_v3,
         libs.has_absl,
         libs.has_zlib,
@@ -158,6 +197,16 @@ std::string BuildRuntimeBanner() {
         libs.has_tensorflow,
         libs.has_pthreadpool,
         libs.has_fp16,
+        libs.has_ggml,
+        libs.has_mkl,
+        libs.has_openblas,
+        libs.has_dnnl,
+        libs.has_fbgemm,
+        libs.has_cudnn_frontend,
+        libs.has_protobuf,
+        libs.has_tesseract,
+        libs.has_yaml_cpp,
+        libs.has_blaze,
     };
 
     size_t enabled_count = 0;

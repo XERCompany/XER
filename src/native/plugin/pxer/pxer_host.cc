@@ -350,8 +350,9 @@ bool PluginHost::Load(const std::filesystem::path& plugin_path,
 		      PluginSummary* summary_out,
 		      std::string* error_out) { 
 	const std::filesystem::path resolved_path = std::filesystem::absolute(plugin_path).lexically_normal();
+	const std::string resolved_path_str = resolved_path.string();
 	::dlerror();
-	void* library_handle = ::dlopen(resolved_path.c_str(), RTLD_NOW | RTLD_LOCAL);
+	void* library_handle = ::dlopen(resolved_path_str.c_str(), RTLD_NOW | RTLD_LOCAL);
 	if (library_handle == nullptr) {
 		if (error_out != nullptr) {
 			*error_out = DlErrorOr("dlopen failed");
@@ -976,7 +977,7 @@ uint64_t PluginHost::HostScheduleAsync(PxerPluginHandle* handle, const char* tas
 	const uint64_t instance_id = handle->instance_id;
 	const std::string task_name_copy(task_name);
 	const std::string payload_copy = SafeString(payload);
-	::IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue([instance_id, task_id, task_name_copy, payload_copy]() {
+	XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue([instance_id, task_id, task_name_copy, payload_copy]() {
 		AsyncTaskRecord completed;
 		completed.task_id = task_id;
 		completed.plugin_instance_id = instance_id;

@@ -1,9 +1,11 @@
 #include "raw_decoder.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 #include "flux/core/logger.h"
-#include <cstring>
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
-#include <unistd.h>
+#include <filesystem>
+#include <fstream>
 
 namespace image {
 
@@ -18,13 +20,13 @@ std::shared_ptr<ImageBuffer> RawDecoder::Decode(const std::string& path,
     XER::Bridge::FFmpeg::MediaInfo info;
     std::string err;
     if (!XER::Bridge::FFmpeg::ProbeMedia(path, &info, &err)) {
-        flux::core::Logger().Error("RawDecoder", "Probe failed: " + err);
+        XER::Flux::Core::Logger().Error("RawDecoder", "Probe failed: " + err);
         return nullptr;
     }
     std::vector<XER::Bridge::FFmpeg::VideoFrameInfo> frames;
     if (!XER::Bridge::FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, &err) ||
         frames.empty()) {
-        flux::core::Logger().Error("RawDecoder", "Decode failed: " + err);
+        XER::Flux::Core::Logger().Error("RawDecoder", "Decode failed: " + err);
         return nullptr;
     }
     auto& fr = frames[0];
@@ -44,25 +46,29 @@ std::shared_ptr<ImageBuffer> RawDecoder::Decode(const std::string& path,
 std::shared_ptr<ImageBuffer> RawDecoder::DecodeMemory(const uint8_t* data, std::size_t len,
                                                         ImageDescriptor& desc) {
     // Write to a temp file so the FFmpeg-backed Decode() path can handle it.
-    char tmpl[] = "/tmp/xer_raw_XXXXXX.raw";
-    const int fd = mkstemps(tmpl, 4);   // suffix length = 4 (".raw")
-    if (fd < 0) return nullptr;
+    static std::atomic<std::uint64_t> counter{0};
+    const auto tmp = std::filesystem::temp_directory_path() /
+        ("xer_raw_" + std::to_string(counter.fetch_add(1)) + "_" +
+         std::to_string(reinterpret_cast<std::uintptr_t>(data)) + ".raw");
+    const std::string tmp_str = tmp.string();
 
     bool ok = true;
-    std::size_t written = 0;
-    while (written < len) {
-        const ssize_t w = write(fd, data + written,
-                                static_cast<size_t>(len - written));
-        if (w <= 0) { ok = false; break; }
-        written += static_cast<std::size_t>(w);
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return nullptr;
+        }
+        out.write(reinterpret_cast<const char*>(data),
+                  static_cast<std::streamsize>(len));
+        ok = out.good();
     }
-    close(fd);
 
     std::shared_ptr<ImageBuffer> buf;
     if (ok) {
-        buf = Decode(std::string(tmpl), desc);
+        buf = Decode(tmp_str, desc);
     }
-    unlink(tmpl);
+    std::error_code ec;
+    std::filesystem::remove(tmp, ec);
     return buf;
 }
 

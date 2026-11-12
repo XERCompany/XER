@@ -28,7 +28,7 @@
 #include "include/effects/SkImageFilters.h"
 #include "include/core/SkFont.h"
 #include "include/core/SkTextBlob.h"
-#include "include/effects/SkGradientShader.h"
+#include "include/effects/SkGradient.h"
 #define PS_HAS_SKIA 1
 #elif __has_include(<include/core/SkBitmap.h>)
 #include <include/core/SkBitmap.h>
@@ -40,7 +40,7 @@
 #include <include/effects/SkImageFilters.h>
 #include <include/core/SkFont.h>
 #include <include/core/SkTextBlob.h>
-#include <include/effects/SkGradientShader.h>
+#include <include/effects/SkGradient.h>
 #define PS_HAS_SKIA 1
 #else
 #define PS_HAS_SKIA 0

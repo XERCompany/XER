@@ -8,7 +8,7 @@ XerSandbox::XerSandbox() = default;
 
 XerSandbox::XerSandbox(XerSandboxSettings settings) : settings_(std::move(settings)) {}
 
-XerSandbox::XerSandbox(const EngineParams& params) {
+XerSandbox::XerSandbox(const XER::EngineParams& params) {
     settings_.enabled = params.sandbox;
     settings_.root = params.module_root.empty()
         ? std::filesystem::current_path()

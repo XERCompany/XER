@@ -4,10 +4,11 @@
 
 namespace XER::Content::Platform {
 
-class LinuxPlatform : public IPlatform {
+// Native per-OS backend for IPlatform (see platform_common.h).
+class NativeLinuxPlatform : public IPlatform {
 public:
-    LinuxPlatform();
-    ~LinuxPlatform() override = default;
+    NativeLinuxPlatform();
+    ~NativeLinuxPlatform() override = default;
 
     // System information
     std::string GetOSVersion() const override;
@@ -20,8 +21,8 @@ public:
     std::string GetApplicationDataDirectory() const override;
 
     // Process/Thread
-    unsigned int GetCurrentProcessId() const;
-    unsigned int GetCurrentThreadId() const;
+    unsigned int GetProcessId() const override;
+    unsigned int GetThreadId() const override;
 
     // Memory
     size_t GetTotalMemory() const override;

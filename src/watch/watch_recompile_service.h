@@ -2,6 +2,18 @@
 
 #include <string>
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#endif
+
 class WatchRecompileService {
 public:
     WatchRecompileService();
@@ -17,5 +29,9 @@ private:
     bool SpawnChild(const std::string& script_path, std::string* error_message);
     bool StopChild(int grace_ms, std::string* error_message);
 
-    mutable int child_pid_ = -1;
+#ifdef _WIN32
+    void* child_process_ = nullptr;   // HANDLE
+#else
+    int child_pid_ = -1;
+#endif
 };

@@ -25,6 +25,16 @@ struct ExternalLibraryAvailability {
     bool has_tensorflow = false;
     bool has_pthreadpool = false;
     bool has_fp16 = false;
+    bool has_ggml = false;
+    bool has_mkl = false;
+    bool has_openblas = false;
+    bool has_dnnl = false;
+    bool has_fbgemm = false;
+    bool has_cudnn_frontend = false;
+    bool has_protobuf = false;
+    bool has_tesseract = false;
+    bool has_yaml_cpp = false;
+    bool has_blaze = false;
 };
 
 ExternalLibraryAvailability DetectExternalLibraries();
