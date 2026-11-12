@@ -69,7 +69,7 @@ public:
 
     // ── Infrastructure ───────────────────────────────────────────────────────
     // Returns a snapshot of the system memory used by device subsystems.
-    AsyncIO::IO::Hardware::MemoryStats  GetMemoryStats() const;
+    XER::AsyncIO::IO::Hardware::MemoryStats  GetMemoryStats() const;
 
     // Returns a perf report string (Bluetooth scan timing, USB enum timing…).
     std::string GetPerfReport() const;
@@ -80,8 +80,8 @@ public:
 private:
     DeviceManager() = default;
     bool initialized_ = false;
-    AsyncIO::IO::Hardware::MemoryMonitor  mem_monitor_;
-    AsyncIO::IO::LogDebug::PerformanceCounter perf_;
+    XER::AsyncIO::IO::Hardware::MemoryMonitor  mem_monitor_;
+    XER::AsyncIO::IO::LogDebug::PerformanceCounter perf_;
 };
 
 }  // namespace device

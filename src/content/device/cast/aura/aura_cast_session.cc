@@ -421,7 +421,7 @@ bool AuraCastSession::SyncToSource(const AuraCastDevice& source,
     if (state_cb_) state_cb_(AuraCastState::kStreaming, {});
 
     // Start the receive thread using the project's IOThreadPool.
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue([this]() {
+    XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue([this]() {
         constexpr size_t kBufSize = 4096;
         uint8_t buf[kBufSize];
         while (iso_fd_ >= 0 &&

@@ -72,7 +72,7 @@ bool MiraCastSession::Connect(const MiraCastDevice& sink, StateCallback cb) {
     callback_ = std::move(cb);
 
     // Use the project TcpClientSocket for the WFD RTSP control channel.
-    tcp_socket_ = std::make_unique<network::socket::TcpClientSocket>();
+    tcp_socket_ = std::make_unique<XER::Network::Socket::TcpClientSocket>();
 
     state_ = MiraCastState::kConnecting;
     if (callback_) callback_(state_, {});

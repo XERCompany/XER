@@ -7,8 +7,8 @@
 
 #include <absl/strings/string_view.h>
 
-namespace flux::core { class Logger; }
-namespace IO::AsyncIO { class IOCacheManager; }
+namespace XER::Flux::Core { class Logger; }
+namespace XER::AsyncIO::IO::Async { class IOCacheManager; }
 
 namespace XER::ML::Preprocessing {
 
@@ -34,16 +34,16 @@ public:
     virtual bool IsFitted() const = 0;
     virtual std::string Name()    const = 0;
 
-    void SetLogger(flux::core::Logger* logger) { logger_ = logger; }
-    void EnableCache(IO::AsyncIO::IOCacheManager* cache) { cache_ = cache; }
+    void SetLogger(XER::Flux::Core::Logger* logger) { logger_ = logger; }
+    void EnableCache(XER::AsyncIO::IO::Async::IOCacheManager* cache) { cache_ = cache; }
     void SetCacheTtlSeconds(std::uint64_t ttl_seconds) { cache_ttl_seconds_ = ttl_seconds; }
 
 protected:
     void LogInfo(absl::string_view msg) const;
     void LogError(absl::string_view msg) const;
 
-    flux::core::Logger* logger_ = nullptr;
-    IO::AsyncIO::IOCacheManager* cache_ = nullptr;
+    XER::Flux::Core::Logger* logger_ = nullptr;
+    XER::AsyncIO::IO::Async::IOCacheManager* cache_ = nullptr;
     std::uint64_t cache_ttl_seconds_ = 600;
 };
 

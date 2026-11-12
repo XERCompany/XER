@@ -20,7 +20,7 @@ std::future<TextAnalysisResult> OpenAITextProcessor::ProcessText(
     std::promise<TextAnalysisResult> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, params, promise = std::move(promise)]() mutable {
         TextAnalysisResult result;
@@ -75,9 +75,12 @@ std::future<std::string> OpenAITextProcessor::Summarize(
     std::promise<std::string> promise;
     auto future = promise.get_future();
 
-    result_future.then([promise = std::move(promise)](auto&& result) mutable {
-        promise.set_value(result.get().processed_text);
-    });
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
+    thread_pool.Enqueue(
+        [result_future = std::move(result_future),
+         promise = std::move(promise)]() mutable {
+            promise.set_value(result_future.get().processed_text);
+        });
 
     return future;
 }
@@ -96,9 +99,12 @@ std::future<std::string> OpenAITextProcessor::Translate(
     std::promise<std::string> promise;
     auto future = promise.get_future();
 
-    result_future.then([promise = std::move(promise)](auto&& result) mutable {
-        promise.set_value(result.get().processed_text);
-    });
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
+    thread_pool.Enqueue(
+        [result_future = std::move(result_future),
+         promise = std::move(promise)]() mutable {
+            promise.set_value(result_future.get().processed_text);
+        });
 
     return future;
 }
@@ -109,7 +115,7 @@ std::future<std::vector<std::string>> OpenAITextProcessor::ExtractEntities(
     std::promise<std::vector<std::string>> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, text, promise = std::move(promise)]() mutable {
         std::string prompt = BuildPrompt(TextOperation::kEntity, text);
@@ -154,9 +160,12 @@ std::future<std::string> OpenAITextProcessor::Rewrite(
     std::promise<std::string> promise;
     auto future = promise.get_future();
 
-    result_future.then([promise = std::move(promise)](auto&& result) mutable {
-        promise.set_value(result.get().processed_text);
-    });
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
+    thread_pool.Enqueue(
+        [result_future = std::move(result_future),
+         promise = std::move(promise)]() mutable {
+            promise.set_value(result_future.get().processed_text);
+        });
 
     return future;
 }
@@ -167,7 +176,7 @@ std::future<std::pair<float, std::string>> OpenAITextProcessor::AnalyzeSentiment
     std::promise<std::pair<float, std::string>> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, text, promise = std::move(promise)]() mutable {
         std::string prompt = BuildPrompt(TextOperation::kSentiment, text);
@@ -210,7 +219,7 @@ std::future<std::vector<TextAnalysisResult>> OpenAITextProcessor::ProcessBatch(
     std::promise<std::vector<TextAnalysisResult>> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, params_list, promise = std::move(promise)]() mutable {
         std::vector<TextAnalysisResult> results;
@@ -311,7 +320,7 @@ std::future<TextAnalysisResult> LocalTextProcessor::ProcessText(
     std::promise<TextAnalysisResult> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, params, promise = std::move(promise)]() mutable {
         TextAnalysisResult result;

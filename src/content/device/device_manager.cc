@@ -42,7 +42,7 @@ void DeviceManager::Shutdown() {
     initialized_ = false;
 }
 
-AsyncIO::IO::Hardware::MemoryStats DeviceManager::GetMemoryStats() const {
+XER::AsyncIO::IO::Hardware::MemoryStats DeviceManager::GetMemoryStats() const {
     return mem_monitor_.GetMemoryStats();
 }
 
@@ -51,7 +51,7 @@ std::string DeviceManager::GetPerfReport() const {
 }
 
 void DeviceManager::PostTask(std::function<void()> task) {
-    IO::AsyncIO::IOThreadPool::GetSharedInstance().Enqueue(std::move(task));
+    XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance().Enqueue(std::move(task));
 }
 
 }  // namespace device

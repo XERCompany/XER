@@ -1,6 +1,6 @@
 #include "feat_generator.h"
 
-// Optional cache integration via IO::AsyncIO::IOCacheManager
+// Optional cache integration via XER::AsyncIO::IO::Async::IOCacheManager
 #if __has_include("async_io/io_cache_manager.h")
 #  include "async_io/io_cache_manager.h"
 #  define HAS_IO_CACHE 1
@@ -13,7 +13,7 @@
 namespace XER::ML::Features {
 
 #if HAS_IO_CACHE
-static IO::AsyncIO::IOCacheManager g_cache(4 * 1024 * 1024);  // 4 MB feature cache
+static XER::AsyncIO::IO::Async::IOCacheManager g_cache(4 * 1024 * 1024);  // 4 MB feature cache
 #endif
 
 FeatGenerator::FeatGenerator() = default;

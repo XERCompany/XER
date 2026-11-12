@@ -75,6 +75,8 @@ public:
  */
 class JsonUtils {
 public:
+    // JSON string escaping (always available)
+    static std::string EscapeString(absl::string_view str);
 #ifdef OPENAI_JSONCPP_AVAILABLE
     // Create JSON object
     static Json::Value CreateObject();
@@ -122,7 +124,6 @@ public:
     static Json::Value GetObject(const Json::Value& root, absl::string_view key);
 #else
     // Fallback string-based JSON (simplified)
-    static std::string EscapeString(absl::string_view str);
     static std::string FormatKeyValue(absl::string_view key, absl::string_view value);
     static std::string FormatArray(const std::vector<std::string>& items);
     static std::string ExtractValue(absl::string_view json, absl::string_view key);

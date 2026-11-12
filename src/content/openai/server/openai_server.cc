@@ -10,13 +10,13 @@ class OpenAIServer::Impl {
 public:
     Impl(const ServerConfig& config)
         : config_(config),
-          thread_pool_(IO::AsyncIO::IOThreadPool::GetSharedInstance()),
+          thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()),
           is_running_(false) {
         stats_.start_time = std::chrono::system_clock::now();
     }
 
     ServerConfig config_;
-    IO::AsyncIO::IOThreadPool& thread_pool_;
+    XER::AsyncIO::IO::Async::IOThreadPool& thread_pool_;
     std::atomic<bool> is_running_;
     ServerStats stats_;
     std::shared_ptr<Client::OpenAIClient> client_;
@@ -267,7 +267,7 @@ ServerResponse OpenAIServer::HandleTextProcessing(const ServerRequest& request) 
     }
 
     // TODO: Parse request body for text processing parameters
-    TextProcessingParams params;
+    Text::TextProcessingParams params;
 
     auto result = impl_->text_processor_->ProcessText(params).get();
 

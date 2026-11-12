@@ -69,6 +69,22 @@ struct ServerStats {
     std::atomic<uint64_t> failed_requests{0};
     std::atomic<uint64_t> active_connections{0};
     std::chrono::system_clock::time_point start_time;
+
+    ServerStats() = default;
+    ServerStats(const ServerStats& other)
+        : total_requests(other.total_requests.load()),
+          successful_requests(other.successful_requests.load()),
+          failed_requests(other.failed_requests.load()),
+          active_connections(other.active_connections.load()),
+          start_time(other.start_time) {}
+    ServerStats& operator=(const ServerStats& other) {
+        total_requests.store(other.total_requests.load());
+        successful_requests.store(other.successful_requests.load());
+        failed_requests.store(other.failed_requests.load());
+        active_connections.store(other.active_connections.load());
+        start_time = other.start_time;
+        return *this;
+    }
 };
 
 // OpenAI server interface
@@ -93,6 +109,9 @@ public:
     virtual void SetClient(std::shared_ptr<Client::OpenAIClient> client) = 0;
     virtual void RegisterAgent(const std::string& name, std::shared_ptr<Agent::IAgent> agent) = 0;
     virtual void UnregisterAgent(const std::string& name) = 0;
+    virtual void SetImageProcessor(std::shared_ptr<Image::IImageProcessor> processor) = 0;
+    virtual void SetTextProcessor(std::shared_ptr<Text::ITextProcessor> processor) = 0;
+    virtual void SetSandbox(std::shared_ptr<Sandbox::ISandbox> sandbox) = 0;
 };
 
 // Main OpenAI server implementation
@@ -117,9 +136,9 @@ public:
     void UnregisterAgent(const std::string& name) override;
 
     // Additional component management
-    void SetImageProcessor(std::shared_ptr<Image::IImageProcessor> processor);
-    void SetTextProcessor(std::shared_ptr<Text::ITextProcessor> processor);
-    void SetSandbox(std::shared_ptr<Sandbox::ISandbox> sandbox);
+    void SetImageProcessor(std::shared_ptr<Image::IImageProcessor> processor) override;
+    void SetTextProcessor(std::shared_ptr<Text::ITextProcessor> processor) override;
+    void SetSandbox(std::shared_ptr<Sandbox::ISandbox> sandbox) override;
 
     // Request handling
     std::future<ServerResponse> HandleRequest(const ServerRequest& request);

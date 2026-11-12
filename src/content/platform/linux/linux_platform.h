@@ -20,8 +20,8 @@ public:
     std::string GetApplicationDataDirectory() const override;
 
     // Process/Thread
-    unsigned int GetCurrentProcessId() const override;
-    unsigned int GetCurrentThreadId() const override;
+    unsigned int GetCurrentProcessId() const;
+    unsigned int GetCurrentThreadId() const;
 
     // Memory
     size_t GetTotalMemory() const override;

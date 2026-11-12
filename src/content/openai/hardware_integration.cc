@@ -1,16 +1,19 @@
 #include "hardware_integration.h"
-#include "../../../async_io/hardware_abstraction/gpu_info.h"
-#include "../../../async_io/hardware_abstraction/cpu_info.h"
-#include "../../../async_io/hardware_abstraction/memory_monitor.h"
+#include "../../async_io/hardware_abstraction/gpu_info.h"
+#include "../../async_io/hardware_abstraction/cpu_info.h"
+#include "../../async_io/hardware_abstraction/memory_monitor.h"
 #include <algorithm>
+#include <cstdlib>
+#include <mutex>
+#include <sstream>
 
 namespace Content::OpenAI::Hardware {
 
 class HardwareManager::Impl {
 public:
     Impl()
-        : gpu_info_(std::make_unique<AsyncIO::IO::Hardware::GPUInfoProvider>()),
-          memory_monitor_(std::make_unique<AsyncIO::IO::Hardware::MemoryMonitor>()),
+        : gpu_info_(std::make_unique<XER::AsyncIO::IO::Hardware::GPUInfoProvider>()),
+          memory_monitor_(std::make_unique<XER::AsyncIO::IO::Hardware::MemoryMonitor>()),
           initialized_(false),
           gpu_acceleration_enabled_(true),
           max_memory_usage_(0.8),
@@ -19,8 +22,8 @@ public:
 
     ~Impl() = default;
 
-    std::unique_ptr<AsyncIO::IO::Hardware::GPUInfoProvider> gpu_info_;
-    std::unique_ptr<AsyncIO::IO::Hardware::MemoryMonitor> memory_monitor_;
+    std::unique_ptr<XER::AsyncIO::IO::Hardware::GPUInfoProvider> gpu_info_;
+    std::unique_ptr<XER::AsyncIO::IO::Hardware::MemoryMonitor> memory_monitor_;
     bool initialized_;
     bool gpu_acceleration_enabled_;
     double max_memory_usage_;
@@ -32,6 +35,8 @@ public:
 HardwareManager::HardwareManager()
     : impl_(std::make_unique<Impl>()) {
 }
+
+HardwareManager::~HardwareManager() = default;
 
 bool HardwareManager::Initialize() {
     std::lock_guard<std::mutex> lock(impl_->mutex_);
@@ -199,6 +204,8 @@ GPUImageProcessor::GPUImageProcessor()
     : impl_(std::make_unique<Impl>()) {
 }
 
+GPUImageProcessor::~GPUImageProcessor() = default;
+
 bool GPUImageProcessor::Initialize(std::shared_ptr<HardwareManager> hw_manager) {
     impl_->hw_manager_ = hw_manager;
     impl_->initialized_ = true;
@@ -248,6 +255,8 @@ public:
 MemoryPool::MemoryPool(size_t pool_size_mb)
     : impl_(std::make_unique<Impl>(pool_size_mb)) {
 }
+
+MemoryPool::~MemoryPool() = default;
 
 void* MemoryPool::Allocate(size_t size) {
     std::lock_guard<std::mutex> lock(impl_->mutex_);

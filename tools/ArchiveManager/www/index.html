@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XER Archive Manager</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="topbar">
+  <div class="brand">XER <span>Archive Manager</span></div>
+  <div id="status" class="status">connecting…</div>
+</header>
+
+<div id="layout">
+  <!-- File system browser -->
+  <aside id="sidebar">
+    <div class="side-head">
+      <button id="btn-up" title="Parent directory">↑</button>
+      <button id="btn-refresh-fs" title="Refresh">⟳</button>
+      <button id="btn-new-arc" title="New archive here">＋</button>
+    </div>
+    <div id="breadcrumb"></div>
+    <div id="fs-list" class="file-list"></div>
+  </aside>
+
+  <!-- Archive view -->
+  <main id="main">
+    <div id="empty-state">
+      <h2>Archive Manager</h2>
+      <p>Select an archive file on the left to browse its contents.</p>
+      <p class="hint">Supports ZIP, RAR, 7z, TAR (+gz/bz2/xz/zst), CAB,
+      ISO, APK/JAR, DEB/RPM and more. Encrypted archives will ask for a
+      password in the XER window.</p>
+    </div>
+
+    <section id="archive-view" class="hidden">
+      <div id="arc-info" class="arc-info"></div>
+      <div id="arc-toolbar" class="toolbar">
+        <button id="btn-extract-sel">Extract selected</button>
+        <button id="btn-extract-all">Extract all</button>
+        <button id="btn-download-sel">Download</button>
+        <button id="btn-delete-sel" class="danger">Delete</button>
+        <span class="sep"></span>
+        <button id="btn-upload">Add files…</button>
+        <button id="btn-refresh-arc">⟳</button>
+        <span id="sel-count" class="sel-count"></span>
+      </div>
+      <div id="arc-list" class="file-list entries"></div>
+    </section>
+  </main>
+</div>
+
+<input type="file" id="file-input" multiple class="hidden">
+<div id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>

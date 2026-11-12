@@ -103,6 +103,10 @@ std::vector<std::string> StringUtils::RegexExtract(absl::string_view text, absl:
 }
 
 // JsonUtils implementation
+std::string JsonUtils::EscapeString(absl::string_view str) {
+    return absl::Utf8SafeCEscape(str);
+}
+
 #ifdef OPENAI_JSONCPP_AVAILABLE
 Json::Value JsonUtils::CreateObject() {
     return Json::Value(Json::objectValue);
@@ -219,12 +223,6 @@ Json::Value JsonUtils::GetObject(const Json::Value& root, absl::string_view key)
 
 #else
 // Fallback string-based JSON (simplified)
-std::string JsonUtils::EscapeString(absl::string_view str) {
-    std::string escaped;
-    absl::CEscape(str, &escaped);
-    return escaped;
-}
-
 std::string JsonUtils::FormatKeyValue(absl::string_view key, absl::string_view value) {
     return absl::StrFormat("\"%s\":\"%s\"", key, EscapeString(value));
 }
@@ -374,11 +372,11 @@ std::string ValidationUtils::SanitizeInput(absl::string_view input) {
     std::string sanitized(input);
     
     // Remove potential SQL injection patterns
-    static const re2::RE2 sql_pattern(R"(\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|OR|AND)\b)", re2::RE2::CaseInsensitive);
+    static const re2::RE2 sql_pattern(R"((?i)\b(SELECT|INSERT|UPDATE|DELETE|DROP|UNION|OR|AND)\b)");
     re2::RE2::Replace(&sanitized, sql_pattern, "");
     
     // Remove script tags
-    static const re2::RE2 script_pattern(R"(<script[^>]*>.*?</script>)", re2::RE2::CaseInsensitive);
+    static const re2::RE2 script_pattern(R"((?i)<script[^>]*>.*?</script>)");
     re2::RE2::Replace(&sanitized, script_pattern, "");
     
     return sanitized;
@@ -418,7 +416,7 @@ bool ValidationUtils::ContainsMaliciousPattern(absl::string_view text) {
     };
     
     for (const auto& pattern : malicious_patterns) {
-        re2::RE2 re(pattern, re2::RE2::CaseInsensitive);
+        re2::RE2 re("(?i)" + pattern);
         if (re2::RE2::PartialMatch(text, re)) {
             return true;
         }
