@@ -9,12 +9,40 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <windows.h>
+#include <mutex>
+#include <string>
 
 #pragma comment(lib, "ws2_32.lib")
 
 namespace XER::Network {
 namespace Socket {
 namespace Platform {
+
+namespace {
+
+// Winsock must be initialized once per process before any socket call.
+// SocketPlatform::Initialize() exists for explicit lifecycle management,
+// but most callers never invoke it — ensure it lazily here so every entry
+// point works regardless of caller discipline.
+std::once_flag g_wsa_once;
+bool g_wsa_ready = false;
+std::string g_wsa_error;
+
+bool EnsureWsaStarted(std::string* error) {
+    std::call_once(g_wsa_once, [] {
+        WSADATA wsa_data;
+        const int result = WSAStartup(MAKEWORD(2, 2), &wsa_data);
+        g_wsa_ready = (result == 0);
+        if (!g_wsa_ready) {
+            g_wsa_error =
+                "WSAStartup failed with error: " + std::to_string(result);
+        }
+    });
+    if (!g_wsa_ready && error) *error = g_wsa_error;
+    return g_wsa_ready;
+}
+
+}  // namespace
 
 // SocketHandle implementation for Windows
 SocketHandle::SocketHandle() : handle_(static_cast<uintptr_t>(INVALID_SOCKET)) {}
@@ -84,6 +112,7 @@ bool SocketPlatform::ResolveAddress(const std::string& host,
                                       uint16_t port,
                                       std::vector<AddressInfo>* addresses,
                                       std::string* error) {
+    if (!EnsureWsaStarted(error)) return false;
     addrinfo hints = {};
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
@@ -119,6 +148,7 @@ bool SocketPlatform::ResolveAddress(const std::string& host,
 }
 
 SocketHandle SocketPlatform::CreateTcpSocket(bool ipv6, std::string* error) {
+    if (!EnsureWsaStarted(error)) return SocketHandle();
     SOCKET sock = ::socket(ipv6 ? AF_INET6 : AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (sock == INVALID_SOCKET) {
         if (error) *error = GetLastError();
@@ -128,6 +158,7 @@ SocketHandle SocketPlatform::CreateTcpSocket(bool ipv6, std::string* error) {
 }
 
 SocketHandle SocketPlatform::CreateUdpSocket(bool ipv6, std::string* error) {
+    if (!EnsureWsaStarted(error)) return SocketHandle();
     SOCKET sock = ::socket(ipv6 ? AF_INET6 : AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     if (sock == INVALID_SOCKET) {
         if (error) *error = GetLastError();

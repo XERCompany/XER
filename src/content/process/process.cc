@@ -26,7 +26,7 @@ Process::Process()
     : pid_(0),
       exit_callback_(nullptr),
       output_callback_(nullptr),
-      thread_pool_(&AsyncIO::IO::IOThreadPool::GetSharedInstance()) {
+      thread_pool_(&XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()) {
 #ifdef _WIN32
   process_handle_ = nullptr;
   stdin_write_ = nullptr;
@@ -467,7 +467,7 @@ ProcessOutput Process::Execute(const std::string& command, int timeout_ms) {
   Process process;
   ProcessOutput output;
   
-  if (!process.Start(command)) {
+  if (!process.Start(command, std::vector<std::string>{})) {
     output.exit_code = -1;
     return output;
   }

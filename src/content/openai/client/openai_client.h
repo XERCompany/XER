@@ -52,7 +52,7 @@ public:
 
     std::future<ImageResponse> GenerateImageAsync(
         const ImageGenerationParams& params,
-        CompletionCallback on_complete = nullptr,
+        std::function<void(const ImageResponse&)> on_complete = nullptr,
         ErrorCallback on_error = nullptr
     );
 
@@ -63,7 +63,7 @@ public:
 
     std::future<AudioTranscriptionResponse> TranscribeAudioAsync(
         const AudioTranscriptionParams& params,
-        CompletionCallback on_complete = nullptr,
+        std::function<void(const AudioTranscriptionResponse&)> on_complete = nullptr,
         ErrorCallback on_error = nullptr
     );
 

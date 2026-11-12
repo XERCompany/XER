@@ -37,7 +37,7 @@ struct HardwareResources {
 class HardwareManager {
 public:
     HardwareManager();
-    ~HardwareManager() = default;
+    ~HardwareManager();
 
     bool Initialize();
     bool IsInitialized() const;
@@ -83,7 +83,7 @@ private:
 class GPUImageProcessor {
 public:
     GPUImageProcessor();
-    ~GPUImageProcessor() = default;
+    ~GPUImageProcessor();
 
     bool Initialize(std::shared_ptr<HardwareManager> hw_manager);
     bool IsInitialized() const;
@@ -108,7 +108,7 @@ private:
 class MemoryPool {
 public:
     MemoryPool(size_t pool_size_mb);
-    ~MemoryPool() = default;
+    ~MemoryPool();
 
     void* Allocate(size_t size);
     void Free(void* ptr);

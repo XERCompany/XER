@@ -16,7 +16,7 @@
 #include "error_handler/err_capture.h"
 #include "error_handler/err_report_builder.h"
 #include "flux/terminal/terminal_output_renderer.h"
-#include "helper/string.h"
+#include "helper/string_utils.h"
 
 namespace XER::ErrorHandler {
 namespace {
@@ -48,7 +48,11 @@ std::string TimestampPrefix() {
 
 	const std::time_t now = std::time(nullptr);
 	std::tm local_time{};
+#if defined(_WIN32)
+	localtime_s(&local_time, &now);
+#else
 	localtime_r(&now, &local_time);
+#endif
 	std::ostringstream out;
 	out << std::put_time(&local_time, "%Y-%m-%d %H:%M:%S") << " ";
 	return out.str();
@@ -87,7 +91,7 @@ std::string PersistDiagnosticReport(const DiagnosticData& diagnostic) {
 	const std::string report = BuildDiagnosticReport(diagnostic);
 	auto& cache = XER::Cache::CacheManager::Instance();
 	if (!cache.WritePersistentText(XER::Cache::constants::kErrorReportScope, key, file_name, report, &error)) {
-		flux::terminal::WriteLine(flux::terminal::OutputStream::kStderr,
+		XER::Flux::Terminal::WriteLine(XER::Flux::Terminal::OutputStream::kStderr,
 			FormatLine("error", "error_handler", absl::StrCat("failed to persist diagnostic report: ", error)));
 		return std::string();
 	}
@@ -149,7 +153,7 @@ void InitializeMonitor(const MonitorConfiguration& config) {
 
 void ReportDiagnostic(const DiagnosticData& diagnostic) {
 	const DiagnosticData complete = PopulateRuntimeContext(diagnostic);
-	flux::terminal::WriteLine(flux::terminal::OutputStream::kStderr, FormatDiagnosticLine(complete));
+	XER::Flux::Terminal::WriteLine(XER::Flux::Terminal::OutputStream::kStderr, FormatDiagnosticLine(complete));
 	MutableLastReportPath() = PersistDiagnosticReport(complete);
 }
 

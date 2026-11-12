@@ -16,12 +16,12 @@ namespace {
 // Shared task queue for async weight syncs.
 // Created lazily; protected by a mutex.
 static std::mutex g_queue_mutex;
-static std::unique_ptr<IO::AsyncIO::AsyncTaskQueue> g_task_queue;
+static std::unique_ptr<XER::AsyncIO::IO::Async::AsyncTaskQueue> g_task_queue;
 
-IO::AsyncIO::AsyncTaskQueue& GetSharedQueue() {
+XER::AsyncIO::IO::Async::AsyncTaskQueue& GetSharedQueue() {
     std::lock_guard<std::mutex> lk(g_queue_mutex);
     if (!g_task_queue) {
-        g_task_queue = std::make_unique<IO::AsyncIO::AsyncTaskQueue>(256);
+        g_task_queue = std::make_unique<XER::AsyncIO::IO::Async::AsyncTaskQueue>(256);
     }
     return *g_task_queue;
 }

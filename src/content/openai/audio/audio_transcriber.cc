@@ -6,18 +6,46 @@
 
 namespace Content::OpenAI::Audio {
 
+namespace {
+
+// AudioEngine::ProcessAudio expects per-channel float* arrays while
+// AudioBuffer stores interleaved samples. Deinterleave into channel
+// buffers, feed the engine, and let the results be discarded.
+void ProcessWithEngine(XER::Audio::Core::AudioEngine* engine,
+                       const AudioBuffer& buffer) {
+    if (!engine || buffer.channels <= 0 || buffer.samples.empty()) return;
+    const size_t frames =
+        buffer.samples.size() / static_cast<size_t>(buffer.channels);
+    if (frames == 0) return;
+
+    std::vector<std::vector<float>> channels(
+        static_cast<size_t>(buffer.channels), std::vector<float>(frames));
+    for (int ch = 0; ch < buffer.channels; ++ch) {
+        for (size_t f = 0; f < frames; ++f) {
+            channels[ch][f] = buffer.samples[f * buffer.channels + ch];
+        }
+    }
+    std::vector<float*> ptrs(static_cast<size_t>(buffer.channels));
+    for (int ch = 0; ch < buffer.channels; ++ch) {
+        ptrs[ch] = channels[ch].data();
+    }
+    engine->ProcessAudio(ptrs.data(), nullptr, frames);
+}
+
+}  // namespace
+
 class WhisperTranscriber::Impl {
 public:
     Impl(std::shared_ptr<Client::OpenAIClient> client)
         : client_(client),
-          thread_pool_(IO::AsyncIO::IOThreadPool::GetSharedInstance()),
+          thread_pool_(XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance()),
           real_time_active_(false) {
     }
 
     ~Impl() = default;
 
     std::shared_ptr<Client::OpenAIClient> client_;
-    IO::AsyncIO::IOThreadPool& thread_pool_;
+    XER::AsyncIO::IO::Async::IOThreadPool& thread_pool_;
     std::atomic<bool> real_time_active_;
     RealTimeCallback real_time_callback_;
     std::vector<AudioBuffer> audio_chunks_;
@@ -161,7 +189,7 @@ std::future<TranscriptionResult> LocalWhisperTranscriber::TranscribeFile(
     std::promise<TranscriptionResult> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, file_path, options, promise = std::move(promise)]() mutable {
         TranscriptionResult result;
@@ -175,7 +203,7 @@ std::future<TranscriptionResult> LocalWhisperTranscriber::TranscribeFile(
         }
 
         // Process audio through XER audio pipeline
-        audio_engine_->ProcessAudio(nullptr, buffer.samples.data(), buffer.samples.size());
+        ProcessWithEngine(audio_engine_.get(), buffer);
 
         // Local transcription (placeholder - would use embedded Whisper)
         result.full_text = "Local transcription result from XER audio subsystem";
@@ -195,13 +223,13 @@ std::future<TranscriptionResult> LocalWhisperTranscriber::TranscribeBuffer(
     std::promise<TranscriptionResult> promise;
     auto future = promise.get_future();
 
-    auto& thread_pool = IO::AsyncIO::IOThreadPool::GetSharedInstance();
+    auto& thread_pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 
     thread_pool.Enqueue([this, buffer, options, promise = std::move(promise)]() mutable {
         TranscriptionResult result;
 
         // Process audio through XER audio engine
-        audio_engine_->ProcessAudio(nullptr, const_cast<float*>(buffer.samples.data()), buffer.samples.size());
+        ProcessWithEngine(audio_engine_.get(), buffer);
 
         result.full_text = "Local transcription from audio buffer";
         result.language = options.language.empty() ? "en" : options.language;
@@ -227,7 +255,7 @@ void LocalWhisperTranscriber::StopRealTimeTranscription() {
 
 void LocalWhisperTranscriber::FeedAudioChunk(const AudioBuffer& chunk) {
     if (real_time_active_) {
-        audio_engine_->ProcessAudio(nullptr, const_cast<float*>(chunk.samples.data()), chunk.samples.size());
+        ProcessWithEngine(audio_engine_.get(), chunk);
     }
 }
 

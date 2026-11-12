@@ -17,7 +17,7 @@ struct SyncTask {
 };
 
 // Async weight synchronization between host and device memory.
-// Uses IO::AsyncIO::AsyncTaskQueue when available; falls back to
+// Uses XER::AsyncIO::IO::Async::AsyncTaskQueue when available; falls back to
 // synchronous copy otherwise.
 class WeightSyncCuda {
 public:

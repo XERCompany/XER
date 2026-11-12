@@ -6,7 +6,15 @@
 #include "content/device/vr/vr_session.h"
 
 #include <cstring>
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
 #include <dlfcn.h>
+#endif
 
 namespace device::vr {
 
@@ -98,6 +106,14 @@ bool VrInput::TriggerHaptic(uint32_t index,
     if (!initialized_ || index >= 2) return false;
 
     // Try to trigger haptic via OpenXR if the library is loaded.
+#if defined(_WIN32)
+    HMODULE lib = LoadLibraryA("openxr_loader.dll");
+    if (!lib) return false;  // XR session not active
+
+    auto pfnApply = reinterpret_cast<PfnXrApplyHaptic>(
+        GetProcAddress(lib, "xrApplyHapticFeedback"));
+    if (!pfnApply) { FreeLibrary(lib); return false; }
+#else
     void* lib = dlopen("libopenxr_loader.so.1", RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD);
     if (!lib) lib = dlopen("libopenxr_loader.so", RTLD_LAZY | RTLD_LOCAL | RTLD_NOLOAD);
     if (!lib) return false;  // XR session not active
@@ -105,6 +121,7 @@ bool VrInput::TriggerHaptic(uint32_t index,
     auto pfnApply = reinterpret_cast<PfnXrApplyHaptic>(
         dlsym(lib, "xrApplyHapticFeedback"));
     if (!pfnApply) { dlclose(lib); return false; }
+#endif
 
     const float amp =
         intensity == HapticIntensity::kLight  ? 0.3f :
@@ -120,7 +137,11 @@ bool VrInput::TriggerHaptic(uint32_t index,
     // would store it in VrSession and retrieve it here.
     // pfnApply(session, &action_info, reinterpret_cast<const XrHapticBaseHeader*>(&vib));
 
+#if defined(_WIN32)
+    FreeLibrary(lib);
+#else
     dlclose(lib);
+#endif
     (void)vib;
     return true;
 }

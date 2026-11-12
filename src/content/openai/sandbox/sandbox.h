@@ -6,6 +6,7 @@
 #include <functional>
 #include <map>
 #include <chrono>
+#include <future>
 
 namespace Content::OpenAI::Sandbox {
 

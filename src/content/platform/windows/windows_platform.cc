@@ -74,7 +74,7 @@ unsigned int WindowsPlatform::GetCurrentProcessId() const {
 }
 
 unsigned int WindowsPlatform::GetCurrentThreadId() const {
-    return GetCurrentThreadId();
+    return ::GetCurrentThreadId();
 }
 
 size_t WindowsPlatform::GetTotalMemory() const {

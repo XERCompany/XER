@@ -4,6 +4,8 @@
  */
 #include "content/device/usb/usb_enumerator.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -15,6 +17,19 @@
 
 #if defined(__linux__)
 #include <dirent.h>
+#elif defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#include <setupapi.h>
+#include <cfgmgr32.h>
+#include <initguid.h>
+#include <usbiodef.h>
+#pragma comment(lib, "setupapi.lib")
 #endif
 
 namespace device::usb {
@@ -120,6 +135,55 @@ static UsbDevice ReadDevice(const std::string& dev_path) {
 }
 #endif  // __linux__
 
+#if defined(_WIN32)
+// ── Windows USB enumeration via SetupAPI ────────────────────────────────────
+
+std::string WideToUtf8(const WCHAR* w, DWORD chars) {
+    if (!w || chars == 0) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w, static_cast<int>(chars),
+                                      nullptr, 0, nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string out(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, static_cast<int>(chars), out.data(), n,
+                        nullptr, nullptr);
+    return out;
+}
+
+// Read a string registry property (SPDRP_*) from a device info set.
+std::string ReadDeviceStringProp(HDEVINFO set, SP_DEVINFO_DATA* data,
+                                 DWORD prop) {
+    WCHAR buf[512]{};
+    DWORD type = 0, size = 0;
+    if (!SetupDiGetDeviceRegistryPropertyW(set, data, prop, &type,
+                                           reinterpret_cast<PBYTE>(buf),
+                                           sizeof(buf), &size)) {
+        return {};
+    }
+    return WideToUtf8(buf, size / sizeof(WCHAR));
+}
+
+// Parse "VID_XXXX" / "PID_XXXX" tokens out of a USB instance ID such as
+// "USB\VID_046D&PID_C52B\6&2F4A&0&3".
+void ParseVidPid(const std::string& instance_id, uint16_t* vid,
+                 uint16_t* pid) {
+    const auto parse_hex = [](const char* p) -> uint16_t {
+        if (!p) return 0;
+        return static_cast<uint16_t>(std::strtoul(p, nullptr, 16));
+    };
+    const char* v = std::strstr(instance_id.c_str(), "VID_");
+    const char* p = std::strstr(instance_id.c_str(), "PID_");
+    if (v) *vid = parse_hex(v + 4);
+    if (p) *pid = parse_hex(p + 4);
+}
+
+// Instance path tail after the last '\\' — closest thing to sysfs "bus:dev".
+std::string InstanceTail(const std::string& instance_id) {
+    const size_t pos = instance_id.find_last_of('\\');
+    return pos == std::string::npos ? instance_id
+                                    : instance_id.substr(pos + 1);
+}
+#endif  // _WIN32
+
 }  // namespace
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -166,6 +230,56 @@ std::vector<UsbDevice> UsbEnumerator::EnumerateDevices() const {
             result.push_back(std::move(dev));
     }
     closedir(dir);
+#endif
+#if defined(_WIN32)
+    HDEVINFO set = SetupDiGetClassDevsW(
+        &GUID_DEVINTERFACE_USB_DEVICE, nullptr, nullptr,
+        DIGCF_PRESENT | DIGCF_DEVICEINTERFACE);
+    if (set == INVALID_HANDLE_VALUE) return result;
+
+    SP_DEVICE_INTERFACE_DATA if_data{};
+    if_data.cbSize = sizeof(if_data);
+    for (DWORD i = 0;
+         SetupDiEnumDeviceInterfaces(set, nullptr, &GUID_DEVINTERFACE_USB_DEVICE,
+                                     i, &if_data);
+         ++i) {
+        DWORD needed = 0;
+        SetupDiGetDeviceInterfaceDetailW(set, &if_data, nullptr, 0, &needed,
+                                         nullptr);
+        if (needed == 0) continue;
+        std::vector<BYTE> buf(needed);
+        auto* detail =
+            reinterpret_cast<SP_DEVICE_INTERFACE_DETAIL_DATA_W*>(buf.data());
+        detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+        SP_DEVINFO_DATA dev_data{};
+        dev_data.cbSize = sizeof(dev_data);
+        if (!SetupDiGetDeviceInterfaceDetailW(set, &if_data, detail, needed,
+                                              nullptr, &dev_data)) {
+            continue;
+        }
+
+        UsbDevice dev;
+        dev.sysfs_path = WideToUtf8(detail->DevicePath, MAX_PATH);
+
+        char instance_id[MAX_DEVICE_ID_LEN]{};
+        if (SetupDiGetDeviceInstanceIdA(set, &dev_data, instance_id,
+                                        sizeof(instance_id), nullptr)) {
+            const std::string id(instance_id);
+            ParseVidPid(id, &dev.vendor_id, &dev.product_id);
+            dev.busnum_devnum = InstanceTail(id);
+        }
+
+        dev.product = ReadDeviceStringProp(set, &dev_data, SPDRP_FRIENDLYNAME);
+        if (dev.product.empty()) {
+            dev.product = ReadDeviceStringProp(set, &dev_data, SPDRP_DEVICEDESC);
+        }
+        dev.manufacturer = ReadDeviceStringProp(set, &dev_data, SPDRP_MFG);
+
+        // Class/subclass/protocol and speed are only available via device
+        // descriptors (libusb/WinUSB); left at defaults on Windows.
+        if (dev.IsValid()) result.push_back(std::move(dev));
+    }
+    SetupDiDestroyDeviceInfoList(set);
 #endif
     return result;
 }
