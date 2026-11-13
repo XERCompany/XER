@@ -1,6 +1,7 @@
 #include "engine_params.h"
 
-#include <cstdlib>
+#include "helper/env_utils.h"
+
 #include <string>
 
 using XER::EngineParams;
@@ -8,18 +9,17 @@ using XER::EngineParams;
 namespace {
 
 bool EnvBool(const char* key) {
-    const char* raw = std::getenv(key);
-    if (raw == nullptr || raw[0] == '\0') {
+    const std::string raw = XER::Helper::GetEnv(key);
+    if (raw.empty()) {
         return false;
     }
 
-    const std::string v(raw);
-    return v == "1" || v == "true" || v == "TRUE" || v == "on" || v == "ON";
+    return raw == "1" || raw == "true" || raw == "TRUE" || raw == "on" || raw == "ON";
 }
 
 int EnvInt(const char* key, int default_value) {
-    const char* raw = std::getenv(key);
-    if (raw == nullptr || raw[0] == '\0') {
+    const std::string raw = XER::Helper::GetEnv(key);
+    if (raw.empty()) {
         return default_value;
     }
 
@@ -32,11 +32,8 @@ int EnvInt(const char* key, int default_value) {
 }
 
 std::string EnvStr(const char* key, const std::string& default_value = {}) {
-    const char* raw = std::getenv(key);
-    if (raw == nullptr) {
-        return default_value;
-    }
-    return std::string(raw);
+    const std::string raw = XER::Helper::GetEnv(key);
+    return raw.empty() ? default_value : raw;
 }
 
 }  // namespace

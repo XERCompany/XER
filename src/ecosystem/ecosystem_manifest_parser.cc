@@ -1,5 +1,6 @@
 #include "ecosystem/ecosystem_manifest_parser.h" 
 #include "ecosystem/ecosystem_manifest_args.h"
+#include "helper/env_utils.h"
 
 #include <json/json.h>
 #include <memory>
@@ -29,8 +30,8 @@ std::string ExpandEnvVars(const std::string& input) {
         // Append the part before this match.
         result.append(it, input.cbegin() + match.position());
         const std::string var_name = match[1].str();
-        const char* value = std::getenv(var_name.c_str());
-        if (value != nullptr) {
+        const std::string value = XER::Helper::GetEnv(var_name);
+        if (!value.empty()) {
             result.append(value);
         } else {
             // Unknown variable — preserve the original token.

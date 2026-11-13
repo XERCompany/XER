@@ -4,6 +4,8 @@
  */
 #include "content/civitaimodels/civitai_model_downloader.h"
 
+#include "helper/env_utils.h"
+
 #include <cstdlib>
 #include <sstream>
 
@@ -120,8 +122,7 @@ CivitaiClient::CivitaiClient(std::string api_key)
 }
 
 std::string CivitaiClient::ApiKeyFromEnv() {
-    const char* v = std::getenv("XER_CIVITAI_API_KEY");
-    return v ? std::string(v) : std::string{};
+    return XER::Helper::GetEnv("XER_CIVITAI_API_KEY");
 }
 
 std::optional<CivitaiModel> CivitaiClient::GetModel(

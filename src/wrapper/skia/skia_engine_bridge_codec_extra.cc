@@ -24,7 +24,7 @@ namespace XER::Bridge::Skia {
         
         SkDynamicMemoryWStream stream;
         SkWebpEncoder::Options options;
-        options.fQuality = quality;
+        options.fQuality = static_cast<float>(quality);
         
         if (SkWebpEncoder::Encode(&stream, pixmap, options)) {
             sk_sp<SkData> data = stream.detachAsData();
@@ -37,8 +37,8 @@ namespace XER::Bridge::Skia {
         return false;
     }
 
-    bool EncodeImageGIF(const std::vector<uint32_t>& pixels, int width, int height,
-                        std::vector<uint8_t>* out_bytes) {
+    bool EncodeImageGIF(const std::vector<uint32_t>&, int, int,
+                        std::vector<uint8_t>*) {
         // Skia typically doesn't have a built-in robust GIF encoder out of the box in standard deps,
         // so we return false unless we bundle giflib externally.
         return false; 

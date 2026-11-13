@@ -1,6 +1,7 @@
 #include "udp_socket.h"
 #include <thread>
 #include <stdexcept>
+#include <cstdint>
 #include <cstring>
 
 #ifdef _WIN32
@@ -83,7 +84,7 @@ public:
         sockaddr_in addr;
         std::memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
-        addr.sin_port = htons(port);
+        addr.sin_port = htons(static_cast<std::uint16_t>(port));
 
         if (address.empty() || address == "0.0.0.0" || address == "*") {
             addr.sin_addr.s_addr = INADDR_ANY;
@@ -117,7 +118,7 @@ public:
         sockaddr_in addr;
         std::memset(&addr, 0, sizeof(addr));
         addr.sin_family = AF_INET;
-        addr.sin_port = htons(port);
+        addr.sin_port = htons(static_cast<std::uint16_t>(port));
         inet_pton(AF_INET, address.c_str(), &addr.sin_addr);
 
         int sent = sendto(socket_,

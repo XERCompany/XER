@@ -1,5 +1,7 @@
 #include "openai.h"
 
+#include "helper/env_utils.h"
+
 namespace Content::OpenAI {
 
 OpenAISubsystem::OpenAISubsystem(const Config& config)
@@ -169,13 +171,13 @@ std::unique_ptr<OpenAISubsystem> OpenAIFactory::CreateDefault() {
 std::unique_ptr<OpenAISubsystem> OpenAIFactory::CreateFromEnv() {
     OpenAISubsystem::Config config;
 
-    const char* api_key = std::getenv("OPENAI_API_KEY");
-    if (api_key) {
+    const std::string api_key = XER::Helper::GetEnv("OPENAI_API_KEY");
+    if (!api_key.empty()) {
         config.api_key = api_key;
     }
 
-    const char* base_url = std::getenv("OPENAI_BASE_URL");
-    if (base_url) {
+    const std::string base_url = XER::Helper::GetEnv("OPENAI_BASE_URL");
+    if (!base_url.empty()) {
         config.base_url = base_url;
     }
 

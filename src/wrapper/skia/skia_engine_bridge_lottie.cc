@@ -71,7 +71,7 @@ namespace XER::Bridge::Skia {
         double duration = it->second->animation->duration();
         double t_normalized = (duration > 0.0) ? (fmod(time_seconds, duration) / duration) : 0.0;
 
-        it->second->animation->seek(t_normalized);
+        it->second->animation->seek(static_cast<float>(t_normalized));
         
         canvas.save();
         canvas.translate(x, y);

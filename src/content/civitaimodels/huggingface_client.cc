@@ -4,6 +4,8 @@
  */
 #include "content/civitaimodels/civitai_model_downloader.h"
 
+#include "helper/env_utils.h"
+
 #include <cstdlib>
 #include <sstream>
 
@@ -60,9 +62,9 @@ HuggingFaceClient::HuggingFaceClient(std::string token)
 }
 
 std::string HuggingFaceClient::TokenFromEnv() {
-    if (const char* v = std::getenv("XER_HF_TOKEN")) return v;
-    if (const char* v = std::getenv("HF_TOKEN")) return v;
-    return {};
+    std::string token = XER::Helper::GetEnv("XER_HF_TOKEN");
+    if (token.empty()) token = XER::Helper::GetEnv("HF_TOKEN");
+    return token;
 }
 
 std::string HuggingFaceClient::ResolveUrl(const std::string& repo_id,

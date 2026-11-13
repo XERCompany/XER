@@ -9,6 +9,7 @@
 #include <absl/strings/str_cat.h>
 #include <range/v3/algorithm/any_of.hpp>
 
+#include "helper/env_utils.h"
 #include "helper/string_utils.h"
 
 namespace XER::Cache {
@@ -24,8 +25,8 @@ std::filesystem::path DefaultCacheDirectory() {
 }
 
 bool EnvFlagEnabled(const char* key) {
-	const char* raw = std::getenv(key);
-	if (raw == nullptr || !ranges::any_of(std::string_view(raw), [](char ch) {
+	const std::string raw = XER::Helper::GetEnv(key);
+	if (raw.empty() || !ranges::any_of(std::string_view(raw), [](char ch) {
 		return !absl::ascii_isspace(static_cast<unsigned char>(ch));
 	})) {
 		return false;
@@ -42,8 +43,8 @@ bool EnvFlagEnabled(const char* key) {
 
 CacheConfiguration CacheConfigurationFromEnvironment() {
 	CacheConfiguration config;
-	if (const char* raw_directory = std::getenv("ENGINE_CACHE_DIR");
-		raw_directory != nullptr && !XER::Helper::String::IsBlank(raw_directory)) {
+	const std::string raw_directory = XER::Helper::GetEnv("ENGINE_CACHE_DIR");
+	if (!raw_directory.empty() && !XER::Helper::String::IsBlank(raw_directory)) {
 		config.directory = XER::Helper::String::NormalizeUtf8(raw_directory);
 	} else {
 		config.directory = DefaultCacheDirectory();

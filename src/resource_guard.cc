@@ -1,5 +1,7 @@
 #include "resource_guard.h"
 
+#include "helper/env_utils.h"
+
 #include <sys/resource.h>   // getrusage, setrlimit
 #include <sys/time.h>
 
@@ -20,8 +22,8 @@
 namespace {
 
 int EnvIntOrDefault(const char* key, int def) {
-    const char* raw = std::getenv(key);
-    if (raw == nullptr || raw[0] == '\0') return def;
+    const std::string raw = XER::Helper::GetEnv(key);
+    if (raw.empty()) return def;
     try {
         const int v = std::stoi(raw);
         return v > 0 ? v : def;
@@ -31,10 +33,9 @@ int EnvIntOrDefault(const char* key, int def) {
 }
 
 bool EnvBool(const char* key) {
-    const char* raw = std::getenv(key);
-    if (raw == nullptr || raw[0] == '\0') return false;
-    const std::string v(raw);
-    return v == "1" || v == "true" || v == "TRUE" || v == "on" || v == "ON";
+    const std::string raw = XER::Helper::GetEnv(key);
+    if (raw.empty()) return false;
+    return raw == "1" || raw == "true" || raw == "TRUE" || raw == "on" || raw == "ON";
 }
 
 }  // namespace

@@ -1,4 +1,5 @@
 #include "image_saver.h"
+#include "helper/string_utils.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 #include "flux/core/logger.h"
 #include <filesystem>
@@ -11,10 +12,7 @@ namespace image {
 namespace {
 
 int GuessBytesPerPixel(const std::string& pixel_format) {
-    std::string fmt = pixel_format;
-    std::transform(fmt.begin(), fmt.end(), fmt.begin(), [](unsigned char ch) {
-        return static_cast<char>(std::tolower(ch));
-    });
+    const std::string fmt = XER::Helper::String::ToLowerAscii(pixel_format);
     if (fmt == "rgba" || fmt == "bgra" || fmt == "argb" || fmt == "abgr") return 4;
     if (fmt == "rgb" || fmt == "bgr") return 3;
     if (fmt == "gray" || fmt == "gray8" || fmt == "y") return 1;
@@ -43,8 +41,8 @@ void EnsureFrameLineSizes(XER::Bridge::FFmpeg::VideoFrameInfo* frame) {
 }  // namespace
 
 bool ImageSaver::Save(const ImageBuffer& img, const std::string& path, int quality) {
-    std::string ext = std::filesystem::path(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    const std::string ext = XER::Helper::String::ToLowerAscii(
+        std::filesystem::path(path).extension().string());
     if (ext == ".jpg" || ext == ".jpeg") return SaveJpeg(img, path, quality);
     if (ext == ".raw")  return SaveRaw(img, path);
     return SavePng(img, path);  // default

@@ -1,4 +1,5 @@
 #include "openai_client.h"
+#include "../../../helper/env_utils.h"
 #include "../../../async_io/io_thread_pool.h"
 #include "../../../async_io/async_task_queue.h"
 #include "../../network/http/http_transaction.h"
@@ -119,7 +120,7 @@ std::future<CompletionResponse> OpenAIClient::CreateChatCompletionAsync(
             // Handle error
             response.id = "error";
             response.object = "chat.completion";
-            response.created = std::time(nullptr);
+            response.created = static_cast<int>(std::time(nullptr));
             response.model = options.model.empty() ? "gpt-4" : options.model;
             response.usage.prompt_tokens = 0;
             response.usage.completion_tokens = 0;
@@ -172,7 +173,7 @@ void OpenAIClient::CreateChatCompletionStream(
             CompletionResponse response;
             response.id = "chatcmpl-stream";
             response.object = "chat.completion.chunk";
-            response.created = std::time(nullptr);
+            response.created = static_cast<int>(std::time(nullptr));
             response.model = options.model;
             on_complete(response);
         }
@@ -294,12 +295,12 @@ void OpenAIClient::ResetUsageStats() {
 
 std::unique_ptr<OpenAIClient> ClientFactory::CreateFromEnv() {
     OpenAIClient::Config config;
-    const char* api_key = std::getenv("OPENAI_API_KEY");
-    if (api_key) {
+    const std::string api_key = XER::Helper::GetEnv("OPENAI_API_KEY");
+    if (!api_key.empty()) {
         config.api_key = api_key;
     }
-    const char* org_id = std::getenv("OPENAI_ORGANIZATION");
-    if (org_id) {
+    const std::string org_id = XER::Helper::GetEnv("OPENAI_ORGANIZATION");
+    if (!org_id.empty()) {
         config.organization_id = org_id;
     }
     return std::make_unique<OpenAIClient>(config);
@@ -308,6 +309,7 @@ std::unique_ptr<OpenAIClient> ClientFactory::CreateFromEnv() {
 std::unique_ptr<OpenAIClient> ClientFactory::CreateFromConfigFile(
     const std::string& config_path) {
     // TODO: Implement config file parsing
+    (void)config_path;
     OpenAIClient::Config config;
     return std::make_unique<OpenAIClient>(config);
 }
@@ -515,7 +517,7 @@ CompletionResponse OpenAIClient::Impl::ParseChatCompletionResponse(
     CompletionResponse response;
     response.id = "chatcmpl-" + std::to_string(std::time(nullptr));
     response.object = "chat.completion";
-    response.created = std::time(nullptr);
+    response.created = static_cast<int>(std::time(nullptr));
     response.model = "gpt-4";
     response.usage.prompt_tokens = 100;
     response.usage.completion_tokens = 50;

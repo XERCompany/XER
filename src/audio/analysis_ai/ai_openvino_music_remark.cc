@@ -1,3 +1,4 @@
+#include "helper/env_utils.h"
 #include "helper/string_utils.h"
 #include "ai_openvino_music_remark.h"
 
@@ -96,15 +97,15 @@ OpenVinoModelCandidate ResolveOpenVinoModel(const MusicRemarkOptions& options) {
 	if (!options.openvino_model_path.empty()) {
 		try_path(options.openvino_model_path, "request");
 	}
-	const char* env_model = std::getenv("XER_OPENVINO_MUSIC_REMARK_MODEL");
-	if (env_model != nullptr && env_model[0] != '\0') {
+	const std::string env_model = XER::Helper::GetEnv("XER_OPENVINO_MUSIC_REMARK_MODEL");
+	if (!env_model.empty()) {
 		try_path(env_model, "env:XER_OPENVINO_MUSIC_REMARK_MODEL");
 	}
 	if (result.found) return result;
 
 	std::vector<std::filesystem::path> roots;
-	const char* env_dir = std::getenv("XER_OPENVINO_MODEL_DIR");
-	if (env_dir != nullptr && env_dir[0] != '\0') roots.emplace_back(env_dir);
+	const std::string env_dir = XER::Helper::GetEnv("XER_OPENVINO_MODEL_DIR");
+	if (!env_dir.empty()) roots.emplace_back(env_dir);
 	roots.emplace_back("data/models/openvino/musicmixremark");
 	roots.emplace_back("data/models/openvino/music-remark-mix");
 	roots.emplace_back("data/models/openvino");

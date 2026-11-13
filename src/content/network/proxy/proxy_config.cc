@@ -4,6 +4,8 @@
  */
 #include "content/network/proxy/proxy_config.h"
 
+#include "helper/env_utils.h"
+
 #include <cstdlib>
 
 #include "content/network/network_util/network_util.h"
@@ -18,11 +20,11 @@ ProxyConfig ProxyConfig::Direct() {
 // static
 ProxyConfig ProxyConfig::FromEnv() {
     ProxyConfig cfg;
-    const char* proxy_env = std::getenv("https_proxy");
-    if (!proxy_env) proxy_env = std::getenv("http_proxy");
-    if (!proxy_env) return cfg;
+    std::string proxy_env = XER::Helper::GetEnv("https_proxy");
+    if (proxy_env.empty()) proxy_env = XER::Helper::GetEnv("http_proxy");
+    if (proxy_env.empty()) return cfg;
 
-    std::string url = proxy_env;
+    std::string url = std::move(proxy_env);
     // Strip scheme
     const auto sep = url.find("://");
     ProxyType type = ProxyType::kHttp;

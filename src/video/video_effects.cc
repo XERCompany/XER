@@ -88,7 +88,8 @@ void VideoEffects::BoxBlur(Frame& frame, int radius) {
                     b+=src[idx]; g+=src[idx+1]; r+=src[idx+2]; a+=src[idx+3]; ++cnt;
                 }
                 int idx=(y*w+x)*4;
-                tmp[idx]=b/cnt; tmp[idx+1]=g/cnt; tmp[idx+2]=r/cnt; tmp[idx+3]=a/cnt;
+                tmp[idx]=static_cast<uint8_t>(b/cnt); tmp[idx+1]=static_cast<uint8_t>(g/cnt);
+                tmp[idx+2]=static_cast<uint8_t>(r/cnt); tmp[idx+3]=static_cast<uint8_t>(a/cnt);
             }
         }
         std::memcpy(frame.Data(), tmp.data(), w*h*4);

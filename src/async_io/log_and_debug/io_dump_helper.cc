@@ -111,7 +111,7 @@ std::string DumpHelper::GetDataStatistics(const uint8_t* data, size_t size) {
     for (int i = 0; i < 256; ++i) {
         if (byte_freq[i] > max_freq) {
             max_freq = byte_freq[i];
-            most_common = i;
+            most_common = static_cast<uint8_t>(i);
         }
     }
     

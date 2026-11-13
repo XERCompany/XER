@@ -367,6 +367,8 @@ bool ImageComposite(std::vector<uint32_t>* dst, int dst_w, int dst_h,
 bool AdjustBrightnessContrast(std::vector<uint32_t>* pixels,
                                int width, int height,
                                int brightness, int contrast) {
+    (void)width;
+    (void)height;
     if (pixels == nullptr) return false;
     // Build LUT
     std::array<uint8_t, 256> lut{};
@@ -776,7 +778,7 @@ bool FilterRadialBlur(std::vector<uint32_t>* pixels, int width, int height,
                     sx = cx + dx / t;
                     sy = cy + dy2 / t;
                 } else {
-                    const float a = dist > 0.f ? k * static_cast<float>(amount) / (samples * dist * 360.f) * kPI2 : 0.f;
+                    const float a = dist > 0.f ? k * static_cast<float>(amount) / (samples * dist * 360.f) * static_cast<float>(kPI2) : 0.f;
                     sx = cx + dx * std::cos(a) - dy2 * std::sin(a);
                     sy = cy + dx * std::sin(a) + dy2 * std::cos(a);
                 }
@@ -1331,6 +1333,7 @@ bool RasterDrawText(std::vector<uint32_t>* pixels, int width, int height,
                     const std::string& text, float x, float y,
                     const FontOptions& font,
                     uint32_t color, const std::string& blend_mode) {
+    (void)blend_mode;
 #if PS_HAS_SKIA
     if (pixels == nullptr || text.empty()) return false;
     // Build SkBitmap from pixels (local implementation mirrors bridge)

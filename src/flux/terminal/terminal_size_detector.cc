@@ -1,7 +1,10 @@
 #include "flux/terminal/terminal_size_detector.h"
 
+#include "helper/env_utils.h"
+
 #include <algorithm>
 #include <cstdlib>
+#include <string>
 
 #if defined(__unix__) || defined(__APPLE__)
 #include <sys/ioctl.h>
@@ -12,12 +15,12 @@ namespace XER::Flux::Terminal {
 namespace {
 
 std::size_t ParsePositiveEnv(const char* key, std::size_t fallback) {
-	const char* raw = std::getenv(key);
-	if (raw == nullptr || raw[0] == '\0') {
+	const std::string raw = XER::Helper::GetEnv(key);
+	if (raw.empty()) {
 		return fallback;
 	}
 	char* end = nullptr;
-	const unsigned long parsed = std::strtoul(raw, &end, 10);
+	const unsigned long parsed = std::strtoul(raw.c_str(), &end, 10);
 	if (end == raw || parsed == 0UL) {
 		return fallback;
 	}
