@@ -1,21 +1,21 @@
 #include "flux/core/flux_config.h"
 
-#include <cstdlib>
 #include <string>
 
 #include <absl/strings/str_cat.h>
 
+#include "helper/env_utils.h"
 #include "helper/string_utils.h"
 
 namespace XER::Flux::Core {
 namespace {
 
 std::string EnvString(const char* key, const std::string& fallback = {}) {
-	const char* raw = std::getenv(key);
-	if (raw == nullptr || raw[0] == '\0') {
+	const std::string raw = XER::Helper::GetEnv(key);
+	if (raw.empty()) {
 		return fallback;
 	}
-	return std::string(raw);
+	return raw;
 }
 
 absl::string_view AsAbsl(std::string_view text) {

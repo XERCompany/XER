@@ -1,4 +1,5 @@
 #include "watch/watch_file_scanner.h"
+#include "helper/string_utils.h"
 
 #include <re2/re2.h>
 #include <range/v3/algorithm/sort.hpp>
@@ -6,17 +7,6 @@
 #include <algorithm>
 #include <cctype>
 #include <system_error>
-
-namespace {
-
-std::string ToLower(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c) {
-        return static_cast<char>(std::tolower(c));
-    });
-    return s;
-}
-
-}  // namespace
 
 WatchFileScanner::WatchFileScanner(std::filesystem::path root)
     : root_(std::move(root)) {}
@@ -73,13 +63,13 @@ std::vector<WatchFileSnapshot> WatchFileScanner::Scan() const {
 }
 
 bool WatchFileScanner::IsWatchedExtension(const std::filesystem::path& path) {
-    const std::string name = ToLower(path.filename().string());
+    const std::string name = XER::Helper::String::ToLowerAscii(path.filename().string());
     static const re2::RE2 kIgnoredPattern(R"(\.flowcache\.|\.flowcache$)");
     if (RE2::PartialMatch(name, kIgnoredPattern)) {
         return false;
     }
 
-    const std::string ext = ToLower(path.extension().string());
+    const std::string ext = XER::Helper::String::ToLowerAscii(path.extension().string());
     static const re2::RE2 kExtPattern(R"(\.(js|ts|mjs|cjs|json|xml))");
     return RE2::FullMatch(ext, kExtPattern);
 }

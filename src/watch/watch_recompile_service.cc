@@ -2,6 +2,7 @@
 
 #include "error_handler/err_capture.h"
 #include "watch/watch_lock_recovery.h"
+#include "helper/string_utils.h"
 
 #include <filesystem>
 
@@ -22,43 +23,13 @@ namespace {
 
 #ifdef _WIN32
 
-std::wstring Utf8ToWide(const std::string& utf8) {
-    if (utf8.empty()) {
-        return {};
-    }
-    const int len = MultiByteToWideChar(CP_UTF8, 0, utf8.data(),
-                                        static_cast<int>(utf8.size()), nullptr, 0);
-    if (len <= 0) {
-        return {};
-    }
-    std::wstring wide(static_cast<std::size_t>(len), L'\0');
-    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()),
-                        wide.data(), len);
-    return wide;
-}
-
-std::string WideToUtf8(const wchar_t* wide, int len) {
-    if (wide == nullptr || len <= 0) {
-        return {};
-    }
-    const int out_len = WideCharToMultiByte(CP_UTF8, 0, wide, len, nullptr, 0,
-                                            nullptr, nullptr);
-    if (out_len <= 0) {
-        return {};
-    }
-    std::string utf8(static_cast<std::size_t>(out_len), '\0');
-    WideCharToMultiByte(CP_UTF8, 0, wide, len, utf8.data(), out_len,
-                        nullptr, nullptr);
-    return utf8;
-}
-
 std::string CurrentExecutablePath() {
     wchar_t buf[MAX_PATH * 4]{};
     const DWORD n = GetModuleFileNameW(nullptr, buf, static_cast<DWORD>(std::size(buf)));
     if (n == 0) {
         return "./build-copilot/EngineBuilder";
     }
-    return WideToUtf8(buf, static_cast<int>(n));
+    return XER::Helper::String::WideToUtf8(std::wstring_view(buf, n));
 }
 
 #else
@@ -123,8 +94,8 @@ bool WatchRecompileService::SpawnChild(const std::string& script_path,
     const std::string exe = CurrentExecutablePath();
 
 #ifdef _WIN32
-    const std::wstring exe_w = Utf8ToWide(exe);
-    const std::wstring script_w = Utf8ToWide(script_path);
+    const std::wstring exe_w = XER::Helper::String::Utf8ToWide(exe);
+    const std::wstring script_w = XER::Helper::String::Utf8ToWide(script_path);
     std::wstring command = L"\"" + exe_w + L"\" run \"" + script_w + L"\"";
 
     STARTUPINFOW si{};

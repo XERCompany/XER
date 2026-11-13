@@ -1,7 +1,8 @@
 #include "io_thread_pool.h"
 
+#include "helper/env_utils.h"
+
 #include <algorithm>
-#include <cstdlib>
 #include <string>
 
 #if defined(__linux__)
@@ -16,8 +17,8 @@ namespace XER::AsyncIO::IO::Async {
 // Respects ENGINE_ASYNC_IO_WORKERS (first choice) and ENGINE_MAX_CPU_THREADS (fallback).
 static size_t ResolveSharedThreadCount() {
     auto read_env_positive = [](const char* key) -> size_t {
-        const char* raw = std::getenv(key);
-        if (raw == nullptr || raw[0] == '\0') return 0;
+        const std::string raw = XER::Helper::GetEnv(key);
+        if (raw.empty()) return 0;
         try {
             const int v = std::stoi(raw);
             return v > 0 ? static_cast<size_t>(v) : 0;

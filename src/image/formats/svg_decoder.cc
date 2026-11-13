@@ -1,6 +1,7 @@
 #include "svg_decoder.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 #include "flux/core/logger.h"
+#include "helper/tool_to.h"
 #include <fstream>
 #include <sstream>
 #include <cstring>
@@ -65,15 +66,12 @@ static void GetSvgDimensions(xmlDocPtr doc, int& w_out, int& h_out) {
 std::shared_ptr<ImageBuffer>
 SvgDecoder::Rasterize(const std::string& path, int target_w, int target_h,
                        ImageDescriptor& desc) {
-    // Read SVG file content.
-    std::ifstream fin(path);
-    if (!fin.is_open()) {
+    // Read SVG file content via the shared helper API.
+    const std::string svg_text = XER::Helper::ToolTo::ReadTextFile(path);
+    if (svg_text.empty()) {
         XER::Flux::Core::Logger().Error("SvgDecoder", "Cannot open SVG file: " + path);
         return nullptr;
     }
-    std::ostringstream ss;
-    ss << fin.rdbuf();
-    const std::string svg_text = ss.str();
 
     // Determine intrinsic dimensions from SVG markup.
     int intrinsic_w = 0, intrinsic_h = 0;

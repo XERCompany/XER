@@ -1,5 +1,6 @@
 #include "xer/xer_encode.h"
 
+#include "helper/env_utils.h"
 #include "helper/tool_to.h"
 
 #include <absl/strings/str_cat.h>
@@ -585,8 +586,8 @@ XerEncodedBlock EncodeInternal(
 XerProtectionOptions ResolveProtectionOptionsFromEnvironment(std::string* error_out) {
     XerProtectionOptions options;
 
-    const char* direct_key = std::getenv("ENGINE_XER_KEY");
-    if (direct_key != nullptr && *direct_key != '\0') {
+    const std::string direct_key = XER::Helper::GetEnv("ENGINE_XER_KEY");
+    if (!direct_key.empty()) {
         options.encryption_key = direct_key;
         if (error_out != nullptr) {
             error_out->clear();
@@ -594,8 +595,8 @@ XerProtectionOptions ResolveProtectionOptionsFromEnvironment(std::string* error_
         return options;
     }
 
-    const char* key_file_path = std::getenv("ENGINE_XER_KEY_FILE");
-    if (key_file_path != nullptr && *key_file_path != '\0') {
+    const std::string key_file_path = XER::Helper::GetEnv("ENGINE_XER_KEY_FILE");
+    if (!key_file_path.empty()) {
         std::string key_text;
         if (!ReadTextFile(key_file_path, &key_text, error_out)) {
             return options;
@@ -613,10 +614,10 @@ XerProtectionOptions ResolveProtectionOptionsFromEnvironment(std::string* error_
         return options;
     }
 
-    const char* key_env_name = std::getenv("ENGINE_XER_KEY_ENV");
-    if (key_env_name != nullptr && *key_env_name != '\0') {
-        const char* resolved_key = std::getenv(key_env_name);
-        if (resolved_key == nullptr || *resolved_key == '\0') {
+    const std::string key_env_name = XER::Helper::GetEnv("ENGINE_XER_KEY_ENV");
+    if (!key_env_name.empty()) {
+        const std::string resolved_key = XER::Helper::GetEnv(key_env_name);
+        if (resolved_key.empty()) {
             if (error_out != nullptr) {
                 *error_out = absl::StrCat("environment variable '", key_env_name, "' is not set");
             }

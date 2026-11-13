@@ -4,6 +4,8 @@
  */
 #include "content/process/process_command_parser.h"
 
+#include "helper/env_utils.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -259,8 +261,8 @@ std::string ProcessCommandParser::FindExecutableInPath(const std::string& comman
   }
   
   // Get PATH environment variable
-  const char* path_env = getenv("PATH");
-  if (!path_env) {
+  const std::string path_env = XER::Helper::GetEnv("PATH");
+  if (path_env.empty()) {
     return "";
   }
   
@@ -321,11 +323,7 @@ std::string ProcessCommandParser::FindExecutableInPath(const std::string& comman
 }
 
 std::string ProcessCommandParser::ExpandVariable(const std::string& name) {
-  const char* value = getenv(name.c_str());
-  if (value) {
-    return value;
-  }
-  return "";
+  return XER::Helper::GetEnv(name);
 }
 
 bool ProcessCommandParser::IsQuote(char c) {

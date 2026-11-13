@@ -1,5 +1,6 @@
 #include "decoder_factory.h"
 #include "magic_number_detector.h"
+#include "helper/string_utils.h"
 #include "../formats/jpeg_decoder.h"
 #include "../formats/png_decoder.h"
 #include "../formats/gif_decoder.h"
@@ -57,8 +58,8 @@ BaseDecoder* DecoderFactory::Find(const std::string& path) {
         if (d) return d;
     }
     // Fallback: extension
-    std::string ext = std::filesystem::path(path).extension().string();
-    std::transform(ext.begin(), ext.end(), ext.begin(), ::tolower);
+    std::string ext = XER::Helper::String::ToLowerAscii(
+        std::filesystem::path(path).extension().string());
     if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
     for (auto& d : decoders_) {
         for (auto& e : d->Extensions())

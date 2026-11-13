@@ -1,5 +1,7 @@
 #include "custom_effect_accel.h"
 
+#include "helper/env_utils.h"
+
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -24,19 +26,19 @@ namespace XER::Audio::FX {
 namespace {
 
 bool EnvFlagEnabled(const char* name) {
-	const char* value = std::getenv(name);
-	if (value == nullptr) {
+	const std::string value = XER::Helper::GetEnv(name);
+	if (value.empty()) {
 		return false;
 	}
-	return std::strcmp(value, "1") == 0 || std::strcmp(value, "true") == 0 || std::strcmp(value, "TRUE") == 0 || std::strcmp(value, "on") == 0;
+	return value == "1" || value == "true" || value == "TRUE" || value == "on";
 }
 
 bool EnvFlagDisabled(const char* name) {
-	const char* value = std::getenv(name);
-	if (value == nullptr) {
+	const std::string value = XER::Helper::GetEnv(name);
+	if (value.empty()) {
 		return false;
 	}
-	return std::strcmp(value, "0") == 0 || std::strcmp(value, "false") == 0 || std::strcmp(value, "FALSE") == 0 || std::strcmp(value, "off") == 0;
+	return value == "0" || value == "false" || value == "FALSE" || value == "off";
 }
 
 bool IsCudaDriverPresent() {
