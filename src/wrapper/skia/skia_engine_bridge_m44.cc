@@ -34,17 +34,17 @@ Matrix4x4 M44Scale(float x, float y, float z) {
 }
 
 Matrix4x4 M44RotateX(float degrees) {
-    float rad = degrees * (float)M_PI / 180.0f;
+    float rad = degrees * (float)PI / 180.0f;
     return SkToStd(SkM44::Rotate({1, 0, 0}, rad));
 }
 
 Matrix4x4 M44RotateY(float degrees) {
-    float rad = degrees * (float)M_PI / 180.0f;
+    float rad = degrees * (float)PI / 180.0f;
     return SkToStd(SkM44::Rotate({0, 1, 0}, rad));
 }
 
 Matrix4x4 M44RotateZ(float degrees) {
-    float rad = degrees * (float)M_PI / 180.0f;
+    float rad = degrees * (float)PI / 180.0f;
     return SkToStd(SkM44::Rotate({0, 0, 1}, rad));
 }
 

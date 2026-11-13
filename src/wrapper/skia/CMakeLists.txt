@@ -27,11 +27,7 @@ if(TARGET unofficial::skia::skia)
     )
 
     target_compile_features(XER_BridgeSkia PUBLIC cxx_std_23)
-    # NOTE: ENGINE_HAS_SKIA_BRIDGE is intentionally NOT defined — the bridge
-    # sources target an older Skia API (SkPath verbs, SkTileMode, drawBitmap)
-    # that was renamed in current Skia (SkPathBuilder, enum-class SkTileMode,
-    # drawImage). Defining it breaks the build; the bridge compiles as stubs
-    # until the sources are migrated to the new API.
+    target_compile_definitions(XER_BridgeSkia PUBLIC ENGINE_HAS_SKIA_BRIDGE=1)
 
     if(MSVC)
         target_compile_options(XER_BridgeSkia PRIVATE /W4 /WX- /O2)

@@ -4,6 +4,7 @@
 #include "include/core/SkShader.h"
 #include "include/core/SkImage.h"
 #include "include/core/SkPixmap.h"
+#include "include/core/SkTileMode.h"
 #include "include/effects/SkPerlinNoiseShader.h"
 
 #include <unordered_map>
