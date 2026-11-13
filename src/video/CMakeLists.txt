@@ -30,11 +30,16 @@ target_link_libraries(XER_Video
         XER_Cache
         XER_FFmpeg
         XER_AudioCore
-        XER_BridgeAngle
-        XER_BridgeCuda
-        XER_BridgeCudnn
         XER_Helper
 )
+
+# GPU bridges are optional — each target only exists when its backend
+# (ANGLE/CUDA/cuDNN) was found at configure time.
+foreach(_bridge IN ITEMS XER_BridgeAngle XER_BridgeCuda XER_BridgeCudnn XER_BridgeOpenCV)
+    if(TARGET ${_bridge})
+        target_link_libraries(XER_Video PUBLIC ${_bridge})
+    endif()
+endforeach()
 
 if(TARGET XER_BridgeSkia)
     target_link_libraries(XER_Video PUBLIC XER_BridgeSkia)

@@ -30,11 +30,13 @@
 #endif
 
 #if ENGINE_SKIA_NATIVE_INCLUDES
-#if __has_include("include/core/SkBitmap.h") && __has_include("include/core/SkCanvas.h") && __has_include("include/core/SkPaint.h") && __has_include("include/core/SkRect.h") && __has_include("include/core/SkImageInfo.h") && __has_include("include/core/SkPath.h")
+#if __has_include("include/core/SkBitmap.h") && __has_include("include/core/SkCanvas.h") && __has_include("include/core/SkPaint.h") && __has_include("include/core/SkRect.h") && __has_include("include/core/SkImageInfo.h") && __has_include("include/core/SkPath.h") && __has_include("include/core/SkPathBuilder.h") && __has_include("include/core/SkImage.h")
 #include "include/core/SkBitmap.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkImageInfo.h"
 #include "include/core/SkPath.h"
+#include "include/core/SkPathBuilder.h"
+#include "include/core/SkImage.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkRect.h"
 #define ENGINE_SKIA_NATIVE_RASTER 1
@@ -48,11 +50,13 @@
 #else
 #define ENGINE_SKIA_NATIVE_CODEC 0
 #endif
-#elif __has_include(<include/core/SkBitmap.h>) && __has_include(<include/core/SkCanvas.h>) && __has_include(<include/core/SkPaint.h>) && __has_include(<include/core/SkRect.h>) && __has_include(<include/core/SkImageInfo.h>) && __has_include(<include/core/SkPath.h>)
+#elif __has_include(<include/core/SkBitmap.h>) && __has_include(<include/core/SkCanvas.h>) && __has_include(<include/core/SkPaint.h>) && __has_include(<include/core/SkRect.h>) && __has_include(<include/core/SkImageInfo.h>) && __has_include(<include/core/SkPath.h>) && __has_include(<include/core/SkPathBuilder.h>) && __has_include(<include/core/SkImage.h>)
 #include <include/core/SkBitmap.h>
 #include <include/core/SkCanvas.h>
 #include <include/core/SkImageInfo.h>
 #include <include/core/SkPath.h>
+#include <include/core/SkPathBuilder.h>
+#include <include/core/SkImage.h>
 #include <include/core/SkPaint.h>
 #include <include/core/SkRect.h>
 #define ENGINE_SKIA_NATIVE_RASTER 1
@@ -66,11 +70,13 @@
 #else
 #define ENGINE_SKIA_NATIVE_CODEC 0
 #endif
-#elif __has_include(<SkBitmap.h>) && __has_include(<SkCanvas.h>) && __has_include(<SkPaint.h>) && __has_include(<SkRect.h>) && __has_include(<SkImageInfo.h>) && __has_include(<SkPath.h>)
+#elif __has_include(<SkBitmap.h>) && __has_include(<SkCanvas.h>) && __has_include(<SkPaint.h>) && __has_include(<SkRect.h>) && __has_include(<SkImageInfo.h>) && __has_include(<SkPath.h>) && __has_include(<SkPathBuilder.h>) && __has_include(<SkImage.h>)
 #include <SkBitmap.h>
 #include <SkCanvas.h>
 #include <SkImageInfo.h>
 #include <SkPath.h>
+#include <SkPathBuilder.h>
+#include <SkImage.h>
 #include <SkPaint.h>
 #include <SkRect.h>
 #define ENGINE_SKIA_NATIVE_RASTER 1
@@ -203,7 +209,7 @@ bool BuildBitmapFromPixels(const std::vector<uint32_t>& pixels,
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             const size_t idx = static_cast<size_t>(y) * static_cast<size_t>(width) + static_cast<size_t>(x);
-            bitmap.setColor(x, y, ToSkColor(pixels[idx]));
+            *bitmap.getAddr32(x, y) = ToSkColor(pixels[idx]);
         }
     }
 
@@ -860,11 +866,12 @@ bool RasterDrawTriangle(std::vector<uint32_t>* pixels,
     if (!BuildBitmapFromPixels(*pixels, width, height, &bitmap)) {
         return false;
     }
-    SkPath path;
-    path.moveTo(static_cast<SkScalar>(x1), static_cast<SkScalar>(y1));
-    path.lineTo(static_cast<SkScalar>(x2), static_cast<SkScalar>(y2));
-    path.lineTo(static_cast<SkScalar>(x3), static_cast<SkScalar>(y3));
-    path.close();
+    SkPathBuilder builder;
+    builder.moveTo(static_cast<SkScalar>(x1), static_cast<SkScalar>(y1));
+    builder.lineTo(static_cast<SkScalar>(x2), static_cast<SkScalar>(y2));
+    builder.lineTo(static_cast<SkScalar>(x3), static_cast<SkScalar>(y3));
+    builder.close();
+    const SkPath path = builder.detach();
     if (!DrawPathOnBitmap(&bitmap, path, color, blend_mode, filled)) {
         return false;
     }
@@ -902,14 +909,15 @@ bool RasterDrawPolyline(std::vector<uint32_t>* pixels,
     if (!BuildBitmapFromPixels(*pixels, width, height, &bitmap)) {
         return false;
     }
-    SkPath path;
-    path.moveTo(static_cast<SkScalar>(points[0].first), static_cast<SkScalar>(points[0].second));
+    SkPathBuilder builder;
+    builder.moveTo(static_cast<SkScalar>(points[0].first), static_cast<SkScalar>(points[0].second));
     for (size_t i = 1; i < points.size(); ++i) {
-        path.lineTo(static_cast<SkScalar>(points[i].first), static_cast<SkScalar>(points[i].second));
+        builder.lineTo(static_cast<SkScalar>(points[i].first), static_cast<SkScalar>(points[i].second));
     }
     if (closed) {
-        path.close();
+        builder.close();
     }
+    const SkPath path = builder.detach();
     if (!DrawPathOnBitmap(&bitmap, path, color, blend_mode, false)) {
         return false;
     }
@@ -941,12 +949,13 @@ bool RasterFillPolygon(std::vector<uint32_t>* pixels,
     if (!BuildBitmapFromPixels(*pixels, width, height, &bitmap)) {
         return false;
     }
-    SkPath path;
-    path.moveTo(static_cast<SkScalar>(points[0].first), static_cast<SkScalar>(points[0].second));
+    SkPathBuilder builder;
+    builder.moveTo(static_cast<SkScalar>(points[0].first), static_cast<SkScalar>(points[0].second));
     for (size_t i = 1; i < points.size(); ++i) {
-        path.lineTo(static_cast<SkScalar>(points[i].first), static_cast<SkScalar>(points[i].second));
+        builder.lineTo(static_cast<SkScalar>(points[i].first), static_cast<SkScalar>(points[i].second));
     }
-    path.close();
+    builder.close();
+    const SkPath path = builder.detach();
     if (!DrawPathOnBitmap(&bitmap, path, color, blend_mode, true)) {
         return false;
     }
@@ -992,7 +1001,11 @@ bool RasterDrawImage(std::vector<uint32_t>* dst_pixels,
     }
 
     SkCanvas canvas(dst_bitmap);
-    canvas.drawBitmap(src_bitmap, static_cast<SkScalar>(dx), static_cast<SkScalar>(dy), &paint);
+    const sk_sp<SkImage> src_image = src_bitmap.asImage();
+    if (src_image != nullptr) {
+        canvas.drawImage(src_image.get(), static_cast<SkScalar>(dx), static_cast<SkScalar>(dy),
+                         SkSamplingOptions(), &paint);
+    }
     ExtractPixelsFromBitmap(dst_bitmap, dst_pixels);
     return true;
 #else
@@ -1025,32 +1038,32 @@ bool RasterDrawPath(std::vector<uint32_t>* pixels,
         return false;
     }
 
-    SkPath sk_path;
+    SkPathBuilder sk_path_builder;
     for (const auto& cmd : path) {
         switch (cmd.verb) {
             case PathVerb::kMove:
                 if (cmd.pts.size() >= 2) {
-                    sk_path.moveTo(cmd.pts[0], cmd.pts[1]);
+                    sk_path_builder.moveTo(cmd.pts[0], cmd.pts[1]);
                 }
                 break;
             case PathVerb::kLine:
                 if (cmd.pts.size() >= 2) {
-                    sk_path.lineTo(cmd.pts[0], cmd.pts[1]);
+                    sk_path_builder.lineTo(cmd.pts[0], cmd.pts[1]);
                 }
                 break;
             case PathVerb::kQuad:
                 if (cmd.pts.size() >= 4) {
-                    sk_path.quadTo(cmd.pts[0], cmd.pts[1], cmd.pts[2], cmd.pts[3]);
+                    sk_path_builder.quadTo(cmd.pts[0], cmd.pts[1], cmd.pts[2], cmd.pts[3]);
                 }
                 break;
             case PathVerb::kConic:
                 if (cmd.pts.size() >= 5) {
-                    sk_path.conicTo(cmd.pts[0], cmd.pts[1], cmd.pts[2], cmd.pts[3], cmd.pts[4]);
+                    sk_path_builder.conicTo(cmd.pts[0], cmd.pts[1], cmd.pts[2], cmd.pts[3], cmd.pts[4]);
                 }
                 break;
             case PathVerb::kCubic:
                 if (cmd.pts.size() >= 6) {
-                    sk_path.cubicTo(cmd.pts[0], cmd.pts[1],
+                    sk_path_builder.cubicTo(cmd.pts[0], cmd.pts[1],
                                     cmd.pts[2], cmd.pts[3],
                                     cmd.pts[4], cmd.pts[5]);
                 }
@@ -1058,24 +1071,25 @@ bool RasterDrawPath(std::vector<uint32_t>* pixels,
             case PathVerb::kArcTo:
                 if (cmd.pts.size() >= 7) {
                     // pts: rx ry xRotDeg largeArc(0/1) sweep(0/1) x y
-                    SkPath::ArcSize arc_size = (cmd.pts[3] != 0.f)
-                        ? SkPath::kLarge_ArcSize
-                        : SkPath::kSmall_ArcSize;
-                    SkPathDirection direction = (cmd.pts[4] != 0.f)
+                    const SkPathBuilder::ArcSize arc_size = (cmd.pts[3] != 0.f)
+                        ? SkPathBuilder::kLarge_ArcSize
+                        : SkPathBuilder::kSmall_ArcSize;
+                    const SkPathDirection direction = (cmd.pts[4] != 0.f)
                         ? SkPathDirection::kCW
                         : SkPathDirection::kCCW;
-                    sk_path.arcTo(cmd.pts[0], cmd.pts[1],
+                    sk_path_builder.arcTo(SkPoint::Make(cmd.pts[0], cmd.pts[1]),
                                   cmd.pts[2],
                                   arc_size,
                                   direction,
-                                  cmd.pts[5], cmd.pts[6]);
+                                  SkPoint::Make(cmd.pts[5], cmd.pts[6]));
                 }
                 break;
             case PathVerb::kClose:
-                sk_path.close();
+                sk_path_builder.close();
                 break;
         }
     }
+    const SkPath sk_path = sk_path_builder.detach();
 
     if (!DrawPathOnBitmap(&bitmap, sk_path, color, blend_mode, filled)) {
         return false;
