@@ -102,7 +102,7 @@ jobs:
           PACKAGES="cereal[*] boost-accumulators icu zlib \
             ffmpeg[$FFMPEG_FEATURES] libuv abseil fmt jsoncpp re2 tiff[*] \
             sqlite3[*] zstd brotli openssl curl pthreadpool fxdiv eigen3 \
-            range-v3 mimalloc ggml folly boost-headers fftw3[*] pugixml \
+            range-v3 mimalloc ggml folly boost-headers fftw3 pugixml \
             mp3lame libraw[*] skia[$SKIA_FEATURES] intel-mkl dlfcn-win32"
           # Ports consumed via find_package across src/ that the base set
           # above does not cover. unofficial-* config names are provided
