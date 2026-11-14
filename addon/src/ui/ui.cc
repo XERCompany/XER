@@ -9,6 +9,7 @@ void InitUI(v8::Local<v8::Object> exports) {
     ui::RegisterControls(exports);
     ui::RegisterDisplay(exports);
     ui::RegisterNav(exports);
+    ui::RegisterKit(exports);
     ui::RegisterWindow(exports);
     ui::RegisterApplication(exports);
 }

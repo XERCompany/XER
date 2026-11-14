@@ -52,6 +52,12 @@ enum class KeyCode {
     Z
 };
 
+enum class TextDirection {
+    Inherit,
+    Ltr,
+    Rtl
+};
+
 enum class MouseButton {
     None,
     Left,
@@ -131,6 +137,13 @@ public:
     // string disables the tooltip for this widget.
     void SetTooltip(std::string text);
     const std::string& GetTooltip() const { return tooltip_text_; }
+
+    // Text direction for this widget and (through EffectiveTextDirection)
+    // its descendants. Inherit resolves to the nearest ancestor's
+    // direction, defaulting to Ltr at the root.
+    void SetTextDirection(TextDirection direction);
+    TextDirection GetTextDirection() const { return text_direction_; }
+    TextDirection EffectiveTextDirection() const;
 
     // True when this widget and every ancestor are visible. Animators use
     // this to sleep while their subtree is hidden (e.g. inactive tabs).
@@ -228,6 +241,7 @@ private:
     bool clips_children_ = false;
     Layout::Rect visible_rect_{};
     bool has_visible_rect_ = false;
+    TextDirection text_direction_ = TextDirection::Inherit;
 
     std::weak_ptr<Widget> parent_;
     std::vector<std::shared_ptr<Widget>> children_;

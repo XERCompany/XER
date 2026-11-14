@@ -91,6 +91,22 @@ void Widget::SetTooltip(std::string text) {
     // If this widget is being hovered, the tree re-evaluates on next Tick.
 }
 
+void Widget::SetTextDirection(TextDirection direction) {
+    text_direction_ = direction;
+}
+
+TextDirection Widget::EffectiveTextDirection() const {
+    // Each lock() keeps that ancestor alive for the duration of its check.
+    for (const Widget* w = this; w != nullptr;) {
+        if (w->text_direction_ != TextDirection::Inherit) {
+            return w->text_direction_;
+        }
+        const auto parent = w->parent_.lock();
+        w = parent.get();
+    }
+    return TextDirection::Ltr;
+}
+
 bool Widget::IsEffectivelyVisible() const {
     if (!visible_) {
         return false;

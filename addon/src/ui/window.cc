@@ -20,7 +20,16 @@ class WindowWrap : public Nan::ObjectWrap {
 public:
     WindowWrap() : window_(std::make_shared<UICore::Window>()),
                    callbacks_(std::make_shared<CallbackStore>()) {}
-    ~WindowWrap() override { callbacks_->Clear(); }
+    ~WindowWrap() override {
+        // Same teardown hazard as WidgetWrap: ~Window / Nan::Persistent::Reset
+        // are unsafe once the isolate is disposing. Leak both.
+        static auto* leaked_windows =
+            new std::vector<std::shared_ptr<UICore::Window>>();
+        static auto* leaked_stores =
+            new std::vector<std::shared_ptr<CallbackStore>>();
+        leaked_windows->push_back(std::move(window_));
+        leaked_stores->push_back(std::move(callbacks_));
+    }
 
     static void New(const Nan::FunctionCallbackInfo<v8::Value>& info);
     std::shared_ptr<UICore::Window> Get() const { return window_; }

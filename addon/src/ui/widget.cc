@@ -1,6 +1,7 @@
 // xer.XER.Widget / xer.XER.Label — widget base class and Label widget.
 
 #include "widget.h"
+#include "../convert.h"
 
 #include <string>
 
@@ -148,6 +149,176 @@ NAN_METHOD(WidgetHideOverlay) {
     if (self) self->Get()->HideOverlay();
 }
 
+// --- remaining Widget public API ---------------------------------------------
+
+namespace {
+
+bool BoolArg0(const Nan::FunctionCallbackInfo<v8::Value>& info,
+              bool fallback) {
+    return info.Length() > 0 && info[0]->IsBoolean()
+               ? info[0].As<v8::Boolean>()->Value()
+               : fallback;
+}
+
+NAN_METHOD(WidgetIsEnabled) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(Nan::New(self && self->Get()->IsEnabled()));
+}
+
+NAN_METHOD(WidgetSetFocusable) {
+    auto* self = UnwrapWidget(info.This());
+    if (self) self->Get()->SetFocusable(BoolArg0(info, true));
+}
+
+NAN_METHOD(WidgetIsFocusable) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(Nan::New(self && self->Get()->IsFocusable()));
+}
+
+NAN_METHOD(WidgetSetFocused) {
+    auto* self = UnwrapWidget(info.This());
+    if (self) self->Get()->SetFocused(BoolArg0(info, true));
+}
+
+NAN_METHOD(WidgetIsFocused) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(Nan::New(self && self->Get()->IsFocused()));
+}
+
+NAN_METHOD(WidgetSetHovered) {
+    auto* self = UnwrapWidget(info.This());
+    if (self) self->Get()->SetHovered(BoolArg0(info, true));
+}
+
+NAN_METHOD(WidgetIsHovered) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(Nan::New(self && self->Get()->IsHovered()));
+}
+
+NAN_METHOD(WidgetIsEffectivelyVisible) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(
+        Nan::New(self && self->Get()->IsEffectivelyVisible()));
+}
+
+NAN_METHOD(WidgetSetClipsChildren) {
+    auto* self = UnwrapWidget(info.This());
+    if (self) self->Get()->SetClipsChildren(BoolArg0(info, true));
+}
+
+NAN_METHOD(WidgetClipsChildren) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(Nan::New(self && self->Get()->ClipsChildren()));
+}
+
+NAN_METHOD(WidgetSetVisibleRect) {
+    auto* self = UnwrapWidget(info.This());
+    if (!self) return;
+    self->Get()->SetVisibleRect(xer::addon::RectFromJS(
+        info.Length() > 0 ? info[0] : v8::Local<v8::Value>()));
+}
+
+NAN_METHOD(WidgetGetVisibleRect) {
+    auto* self = UnwrapWidget(info.This());
+    if (!self) {
+        info.GetReturnValue().Set(Nan::Undefined());
+        return;
+    }
+    const UIL::Rect r = self->Get()->GetVisibleRect();
+    v8::Local<v8::Object> obj = Nan::New<v8::Object>();
+    Nan::Set(obj, Nan::New("x").ToLocalChecked(), Nan::New(r.x));
+    Nan::Set(obj, Nan::New("y").ToLocalChecked(), Nan::New(r.y));
+    Nan::Set(obj, Nan::New("width").ToLocalChecked(), Nan::New(r.width));
+    Nan::Set(obj, Nan::New("height").ToLocalChecked(), Nan::New(r.height));
+    info.GetReturnValue().Set(obj);
+}
+
+NAN_METHOD(WidgetSetParent) {
+    auto parent = WidgetFromArg(info, 0);
+    auto* self = UnwrapWidget(info.This());
+    if (!self) return;
+    self->Get()->SetParent(parent);
+}
+
+NAN_METHOD(WidgetGetParent) {
+    auto* self = UnwrapWidget(info.This());
+    if (!self || !self->Get()->GetParent()) {
+        info.GetReturnValue().Set(Nan::Undefined());
+        return;
+    }
+    info.GetReturnValue().Set(
+        WidgetWrap::ToJS(self->Get()->GetParent()));
+}
+
+NAN_METHOD(WidgetGetChildren) {
+    auto* self = UnwrapWidget(info.This());
+    v8::Local<v8::Array> arr = Nan::New<v8::Array>();
+    if (!self) {
+        info.GetReturnValue().Set(arr);
+        return;
+    }
+    const auto& children = self->Get()->GetChildren();
+    for (std::size_t i = 0; i < children.size(); ++i)
+        Nan::Set(arr, static_cast<uint32_t>(i),
+                 WidgetWrap::ToJS(children[i]));
+    info.GetReturnValue().Set(arr);
+}
+
+NAN_METHOD(WidgetTick) {
+    auto* self = UnwrapWidget(info.This());
+    if (!self) return;
+    const double dt = info.Length() > 0 && info[0]->IsNumber()
+                          ? info[0].As<v8::Number>()->Value()
+                          : 0.016;
+    self->Get()->Tick(dt);
+}
+
+NAN_METHOD(WidgetTickTree) {
+    auto* self = UnwrapWidget(info.This());
+    if (!self) return;
+    const double dt = info.Length() > 0 && info[0]->IsNumber()
+                          ? info[0].As<v8::Number>()->Value()
+                          : 0.016;
+    self->Get()->TickTree(dt);
+}
+
+NAN_METHOD(WidgetGetContentHeight) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(
+        Nan::New(self ? self->Get()->GetContentHeight() : 0.0));
+}
+
+namespace {
+
+v8::Local<v8::Value> SizeToJS(const UIL::Size& s) {
+    v8::Local<v8::Object> obj = Nan::New<v8::Object>();
+    Nan::Set(obj, Nan::New("width").ToLocalChecked(), Nan::New(s.width));
+    Nan::Set(obj, Nan::New("height").ToLocalChecked(), Nan::New(s.height));
+    return obj;
+}
+
+}  // namespace
+
+NAN_METHOD(WidgetGetMinSize) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(
+        self ? SizeToJS(self->Get()->GetMinSize()) : Nan::Undefined());
+}
+
+NAN_METHOD(WidgetGetPreferredSize) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(
+        self ? SizeToJS(self->Get()->GetPreferredSize()) : Nan::Undefined());
+}
+
+NAN_METHOD(WidgetGetMaxSize) {
+    auto* self = UnwrapWidget(info.This());
+    info.GetReturnValue().Set(
+        self ? SizeToJS(self->Get()->GetMaxSize()) : Nan::Undefined());
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // Label text accessors (reachable only on Label instances)
 // ---------------------------------------------------------------------------
@@ -179,8 +350,6 @@ NAN_METHOD(LabelGetText) {
 }
 
 void AddProtoMethods(v8::Local<v8::FunctionTemplate> tpl) {
-    Nan::SetMethod(tpl->PrototypeTemplate(), "addChild", WidgetAddChild);
-    Nan::SetMethod(tpl->PrototypeTemplate(), "removeChild", WidgetRemoveChild);
     Nan::SetMethod(tpl->PrototypeTemplate(), "SetPosition", WidgetSetPosition);
     Nan::SetMethod(tpl->PrototypeTemplate(), "SetSize", WidgetSetSize);
     Nan::SetMethod(tpl->PrototypeTemplate(), "SetBounds", WidgetSetBounds);
@@ -193,6 +362,37 @@ void AddProtoMethods(v8::Local<v8::FunctionTemplate> tpl) {
     Nan::SetMethod(tpl->PrototypeTemplate(), "ShowOverlay", WidgetShowOverlay);
     Nan::SetMethod(tpl->PrototypeTemplate(), "HideOverlay", WidgetHideOverlay);
     Nan::SetMethod(tpl->PrototypeTemplate(), "Invalidate", WidgetInvalidate);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "IsEnabled", WidgetIsEnabled);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "SetFocusable", WidgetSetFocusable);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "IsFocusable", WidgetIsFocusable);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "SetFocused", WidgetSetFocused);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "IsFocused", WidgetIsFocused);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "SetHovered", WidgetSetHovered);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "IsHovered", WidgetIsHovered);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "IsEffectivelyVisible",
+                   WidgetIsEffectivelyVisible);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "SetClipsChildren",
+                   WidgetSetClipsChildren);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "ClipsChildren",
+                   WidgetClipsChildren);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "SetVisibleRect",
+                   WidgetSetVisibleRect);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "GetVisibleRect",
+                   WidgetGetVisibleRect);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "SetParent", WidgetSetParent);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "GetParent", WidgetGetParent);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "GetChildren", WidgetGetChildren);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "Tick", WidgetTick);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "TickTree", WidgetTickTree);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "GetContentHeight",
+                   WidgetGetContentHeight);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "GetMinSize", WidgetGetMinSize);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "GetPreferredSize",
+                   WidgetGetPreferredSize);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "GetMaxSize", WidgetGetMaxSize);
+    // PascalCase aliases for the addChild/removeChild convenience pair.
+    Nan::SetMethod(tpl->PrototypeTemplate(), "AddChild", WidgetAddChild);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "RemoveChild", WidgetRemoveChild);
 }
 
 }  // namespace
@@ -209,7 +409,19 @@ WidgetWrap::WidgetWrap(std::shared_ptr<XER::UI::Widgets::Widget> w,
       callbacks_(callbacks ? std::move(callbacks)
                            : std::make_shared<CallbackStore>()) {}
 
-WidgetWrap::~WidgetWrap() { callbacks_->Clear(); }
+WidgetWrap::~WidgetWrap() {
+    // Runs during V8 isolate teardown for widgets still referenced at exit.
+    // Two hazards there: ~Widget() may touch already-destroyed UI singletons,
+    // and Nan::Persistent::Reset() (via CallbackStore::Clear / ~CallbackStore)
+    // is unsafe once the isolate is disposing. Leak both — the JS object is
+    // dead anyway and the process is exiting.
+    static auto* leaked_widgets =
+        new std::vector<std::shared_ptr<XER::UI::Widgets::Widget>>();
+    static auto* leaked_stores =
+        new std::vector<std::shared_ptr<CallbackStore>>();
+    leaked_widgets->push_back(std::move(widget_));
+    leaked_stores->push_back(std::move(callbacks_));
+}
 
 std::shared_ptr<XER::UI::Widgets::Widget> WidgetWrap::Get() const {
     return widget_;
@@ -255,8 +467,10 @@ WidgetWrap* UnwrapWidget(v8::Local<v8::Value> v) {
 
 namespace {
 v8::Global<v8::FunctionTemplate>& WidgetBaseTemplateStore() {
-    static v8::Global<v8::FunctionTemplate> tpl;
-    return tpl;
+    // Heap-allocated on purpose: a v8::Global destroyed during/after isolate
+    // teardown calls DisposeGlobal on a dead isolate -> segfault at exit.
+    static auto* tpl = new v8::Global<v8::FunctionTemplate>();
+    return *tpl;
 }
 }  // namespace
 
