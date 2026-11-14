@@ -1,13 +1,21 @@
 name: Build & Package
 
-# CI/CD: static vcpkg build (Debug + Release) for Windows / Linux / macOS.
-# Output: xer-editor-<platform>.zip containing include/, bin/{Debug,Release},
-# lib/{Debug,Release} — project headers + vcpkg headers, all binaries,
-# project libs + all static vcpkg libs.
+# CI/CD: full Editor build (Debug + Release) for Windows / Linux / macOS.
 #
-# NOTE: the codebase is Win32-native (HWND, Direct2D/D3D12, WASAPI).
-# Linux/macOS jobs are marked experimental (continue-on-error) until the
-# platform layer is ported — they will fail at compile time today.
+# Dependency strategy (hybrid):
+#   * Windows  — ALL dependencies via vcpkg (single toolchain, static triplet).
+#   * Linux    — OS packages via apt for everything apt provides; a *partial*
+#                vcpkg install (x64-linux) only for ports with no apt
+#                equivalent (skia, ggml, folly, cudnn, onnxruntime, ...).
+#                cmake/deps/system_deps.cmake maps vcpkg names onto system
+#                packages; cmake/platforms/linux-x64.cmake is the toolchain.
+#   * macOS    — Homebrew for system deps + the same partial-vcpkg subset
+#                (arm64-osx on macos-latest, x64-osx on macos-13).
+#                cmake/platforms/macos-{arm64,x64}.cmake are the toolchains.
+#
+# Output: xer-editor-<platform>.zip containing include/, bin/{Debug,Release},
+# lib/{Debug,Release} — project headers + dependency headers, all binaries,
+# project libs + packaged dependency libs.
 
 on:
   push:
@@ -22,7 +30,6 @@ jobs:
   build:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
       matrix:
@@ -30,15 +37,23 @@ jobs:
           - os: windows-latest
             name: windows-x64
             triplet: x64-windows-static
-            experimental: false 
+            toolchain: vcpkg
+            preset: ''
           - os: ubuntu-latest
             name: linux-x64
             triplet: x64-linux
-            experimental: true
+            toolchain: system
+            preset: linux-release
           - os: macos-latest
+            name: macos-arm64
+            triplet: arm64-osx
+            toolchain: system
+            preset: macos-arm64
+          - os: macos-13
             name: macos-x64
             triplet: x64-osx
-            experimental: true
+            toolchain: system
+            preset: macos-x64
 
     env:
       VCPKG_ROOT: ${{ github.workspace }}/vcpkg
@@ -61,86 +76,155 @@ jobs:
             "$VCPKG_ROOT/bootstrap-vcpkg.sh" -disableMetrics
           fi
 
-      - name: Install build tools
+      # ------------------------------------------------------------------
+      # Windows: every project dependency comes from vcpkg.
+      # ------------------------------------------------------------------
+      - name: Install build tools (Windows)
+        if: matrix.toolchain == 'vcpkg'
         shell: bash
-        run: |
-          # ffmpeg requires nasm on x86/x64 for all platforms.
-          # gperf (skia dep chain) runs autoreconf -> needs autotools on
-          # Linux and macOS.
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            choco install nasm -y --no-progress
-          elif [ "$RUNNER_OS" = "macOS" ]; then
-            brew install nasm autoconf autoconf-archive automake libtool
-          else
-            sudo apt-get update
-            sudo apt-get install -y nasm autoconf autoconf-archive automake libtool libltdl-dev
-          fi
+        run: choco install nasm -y --no-progress
 
-      - name: Setup CUDA (Windows GPU only)
-        if: matrix.name == 'windows-x64-gpu'
-        uses: Jimver/cuda-toolkit@v0.2.16
-        with:
-          cuda: '12.2.0'
-          method: 'network'
-          sub-packages: '["nvcc", "cudart", "cufft", "cublas", "curand"]'
-
-      - name: Install dependencies (vcpkg ${{ matrix.triplet }})
+      - name: Install dependencies (vcpkg — full set, Windows)
+        if: matrix.toolchain == 'vcpkg'
         shell: bash
         run: |
           set -e
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            VCPKG_BIN="$VCPKG_ROOT/vcpkg.exe"
-          else
-            VCPKG_BIN="$VCPKG_ROOT/vcpkg"
-          fi
-          # Feature availability differs per OS:
+          VCPKG_BIN="$VCPKG_ROOT/vcpkg.exe"
+          # Feature availability differs per OS (see original notes):
           #  - ffmpeg[core] / skia[core] do not exist as features
           #  - ffmpeg[tesseract] is !static -> excluded on x64-windows-static
-          #  - ffmpeg[amf,nvcodec,qsv] need amd-amf/ffnvcodec/libvpl -> unsupported on macOS
-          #  - skia[dawn] pulls the dawn port which fails to build on Linux/macOS
-          #    (WebGPU backend is not used by the 2D canvas)
+          #  - ffmpeg[amf,nvcodec,qsv] need amd-amf/ffnvcodec/libvpl
+          #  - skia[dawn] pulls the dawn port which fails on Linux/macOS
           FFMPEG_BASE="aom,ass,avcodec,avdevice,avfilter,avformat,bzip2,lzma,mp3lame,openh264,openjpeg,openmpt,opus,swresample,swscale,vpx,webp,xml2,zlib,x265,x264"
           SKIA_BASE="avif,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp"
-          case "$RUNNER_OS" in
-            Windows) FFMPEG_HW="amf,nvcodec,qsv";   SKIA_HW="direct3d"; PACKAGES_EXTRA="dlfcn-win32 intel-mkl" ;;
-            Linux)   FFMPEG_HW="amf,nvcodec,qsv";   SKIA_HW="";         PACKAGES_EXTRA="" ;;
-            macOS)   FFMPEG_HW="";                  SKIA_HW="";         PACKAGES_EXTRA="" ;;
-          esac
-          FFMPEG_FEATURES="$FFMPEG_BASE"
-          [ -n "$FFMPEG_HW" ] && FFMPEG_FEATURES="$FFMPEG_FEATURES,$FFMPEG_HW"
-          SKIA_FEATURES="$SKIA_BASE"
-          [ -n "$SKIA_HW" ] && SKIA_FEATURES="$SKIA_FEATURES,$SKIA_HW"
-          PACKAGES="cereal[*] boost-accumulators icu zlib ffmpeg[$FFMPEG_FEATURES] libuv abseil fmt jsoncpp re2 tiff[*] sqlite3[*] zstd brotli \
-            openssl curl pthreadpool fxdiv eigen3 range-v3 mimalloc ggml \
-            folly boost-headers cereal fftw3 pugixml mp3lame libraw[*] skia[$SKIA_FEATURES] $PACKAGES_EXTRA"
-          # Add ggml-cuda for Windows GPU build
-          if [ "${{ matrix.name }}" = "windows-x64-gpu" ]; then
-            PACKAGES="$PACKAGES ggml-cuda"
-          fi
+          FFMPEG_FEATURES="$FFMPEG_BASE,amf,nvcodec,qsv"
+          SKIA_FEATURES="$SKIA_BASE,direct3d"
+          PACKAGES="cereal[*] boost-accumulators icu zlib \
+            ffmpeg[$FFMPEG_FEATURES] libuv abseil fmt jsoncpp re2 tiff[*] \
+            sqlite3[*] zstd brotli openssl curl pthreadpool fxdiv eigen3 \
+            range-v3 mimalloc ggml folly boost-headers fftw3[*] pugixml \
+            mp3lame libraw[*] skia[$SKIA_FEATURES] intel-mkl dlfcn-win32"
+          # Ports consumed via find_package across src/ that the base set
+          # above does not cover. unofficial-* config names are provided
+          # automatically by the underlying ports.
+          PACKAGES="$PACKAGES \
+            libmupdf libarchive assimp opencv4 protobuf yaml-cpp \
+            glslang shaderc spirv-tools vulkan-headers vulkan-loader \
+            vulkan-memory-allocator vulkan-utility-libraries asmjit \
+            nlohmann-json rapidjson tinyxml2 date lz4 snappy leptonica \
+            libxml2 openblas libyuv libavif tesseract xnnpack fp16 libffi \
+            pffft tinyexr onnx onnxruntime opencl cudnn cudnn-frontend"
           "$VCPKG_BIN" install --triplet="$TRIPLET" --clean-after-build $PACKAGES
 
+      # ------------------------------------------------------------------
+      # Linux: apt for everything available; partial vcpkg for the rest.
+      # ------------------------------------------------------------------
+      - name: Install build tools + system dependencies (apt, Linux)
+        if: matrix.toolchain == 'system' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential ninja-build pkg-config cmake nasm \
+            autoconf autoconf-archive automake libtool libltdl-dev \
+            git ca-certificates \
+            libicu-dev zlib1g-dev libssl-dev libcurl4-openssl-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev \
+            libavdevice-dev libswscale-dev libswresample-dev \
+            libuv1-dev libabsl-dev libfmt-dev libjsoncpp-dev libre2-dev \
+            libsqlite3-dev libzstd-dev libbrotli-dev \
+            libeigen3-dev libcereal-dev libfftw3-dev libboost-all-dev \
+            intel-mkl libarchive-dev libpugixml-dev \
+            libopencv-dev libassimp-dev libprotobuf-dev protobuf-compiler \
+            libyaml-cpp-dev nlohmann-json3-dev rapidjson-dev libtinyxml2-dev \
+            liblz4-dev libsnappy-dev libleptonica-dev libtesseract-dev \
+            libxml2-dev libopenblas-dev libraw-dev libavif-dev libyuv-dev \
+            libffi-dev librange-v3-dev libflatbuffers-dev libxnnpack-dev \
+            libasmjit-dev libmimalloc-dev libmupdf-dev libdnnl-dev \
+            libglfw3-dev libsdl2-dev libx11-dev libxext-dev libxrandr-dev \
+            libxi-dev libxcursor-dev libxinerama-dev libxrender-dev \
+            libgl1-mesa-dev libegl1-mesa-dev libgles2-mesa-dev \
+            libvulkan-dev libxkbcommon-dev libva-dev libvpx-dev libwebp-dev \
+            libaom-dev librubberband-dev libsoxr-dev libflac-dev libopus-dev \
+            libvorbis-dev libmpg123-dev libmp3lame-dev libx264-dev libx265-dev \
+            liblerc-dev libsndfile-dev libsamplerate-dev
+
+      # ------------------------------------------------------------------
+      # macOS: Homebrew for system deps; partial vcpkg for the rest.
+      # ------------------------------------------------------------------
+      - name: Install build tools + system dependencies (brew, macOS)
+        if: matrix.toolchain == 'system' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -e
+          brew install nasm autoconf automake libtool pkg-config cmake ninja
+          # Core deps — REQUIRED by find_package, must exist.
+          brew install \
+            abseil fmt jsoncpp re2 sqlite ffmpeg eigen cereal fftw \
+            libarchive pugixml opencv assimp protobuf yaml-cpp \
+            nlohmann-json rapidjson tinyxml2 lz4 snappy leptonica libxml2 \
+            openblas tesseract libraw libavif libyuv libffi range-v3 \
+            flatbuffers mimalloc sdl2 vulkan-headers vulkan-loader \
+            glslang shaderc spirv-tools asmjit openssl@3 curl zlib
+          # Extended/optional deps — tolerate missing formulae; CMake
+          # self-gates whatever brew could not provide.
+          for f in libsndfile libsamplerate rubberband soxr flac opus \
+                   vorbis mpg123 lame x264 x265 leptonica libde265 libheif \
+                   libjxl openexr imagemagick graphviz pkgconf; do
+            brew install "$f" || echo "brew: skipping unavailable formula $f"
+          done
+
+      # ------------------------------------------------------------------
+      # Partial vcpkg: only ports with NO system package equivalent.
+      # Everything else resolves via cmake/deps shims / system configs.
+      # ------------------------------------------------------------------
+      - name: Install heavy dependencies (partial vcpkg, Linux/macOS)
+        if: matrix.toolchain == 'system'
+        shell: bash
+        run: |
+          set -e
+          VCPKG_BIN="$VCPKG_ROOT/vcpkg"
+          # skia features mirror the Windows set minus direct3d; on macOS the
+          # Metal backend replaces gl/vulkan where supported.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            SKIA_HW=""
+            EXTRA_PORTS="cudnn"
+          else
+            SKIA_HW="metal"
+            EXTRA_PORTS=""
+          fi
+          SKIA_FEATURES="avif,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp${SKIA_HW:+,$SKIA_HW}"
+          # On macOS drop gl/vulkan if the port rejects them — keep list
+          # conservative: gl is deprecated but still builds; vulkan needs
+          # molten-vk which vcpkg provides for osx.
+          "$VCPKG_BIN" install --triplet="$TRIPLET" --clean-after-build \
+            "skia[$SKIA_FEATURES]" ggml folly pthreadpool fxdiv fp16 \
+            date pffft tinyexr onnx onnxruntime $EXTRA_PORTS
+
+      # ------------------------------------------------------------------
+      # Configure & build
+      # ------------------------------------------------------------------
       - name: Configure & Build — Debug
         shell: bash
         run: |
           set -e
-          CMAKE_ARGS=(
-            -S . -B build-debug
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-            -DVCPKG_TARGET_TRIPLET="$TRIPLET"
-            -DVCPKG_MANIFEST_MODE=OFF
-          )
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            CMAKE_ARGS+=(-G "Visual Studio 17 2022" -A x64 -DENABLE_AI=ON)
-            if [ "${{ matrix.name }}" = "windows-x64-gpu" ]; then
-              CMAKE_ARGS+=(-DENABLE_CUDA=ON)
-            fi
-          else
-            CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Debug)
-          fi
-          cmake "${CMAKE_ARGS[@]}"
-          if [ "$RUNNER_OS" = "Windows" ]; then
+          if [ "${{ matrix.toolchain }}" = "vcpkg" ]; then
+            cmake -S . -B build-debug \
+              -G "Visual Studio 17 2022" -A x64 \
+              -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+              -DVCPKG_TARGET_TRIPLET="$TRIPLET" \
+              -DVCPKG_MANIFEST_MODE=OFF \
+              -DENABLE_AI=ON
             cmake --build build-debug --config Debug --parallel
           else
+            cmake -S . -B build-debug \
+              -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE="cmake/platforms/${{ matrix.preset }}.cmake" \
+              -DCMAKE_BUILD_TYPE=Debug \
+              -DXER_VCPKG_ROOT="$VCPKG_ROOT" \
+              -DXER_VCPKG_TRIPLET="$TRIPLET" \
+              -DENABLE_AI=ON
             cmake --build build-debug --parallel
           fi
 
@@ -148,27 +232,28 @@ jobs:
         shell: bash
         run: |
           set -e
-          CMAKE_ARGS=(
-            -S . -B build-release
-            -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
-            -DVCPKG_TARGET_TRIPLET="$TRIPLET"
-            -DVCPKG_MANIFEST_MODE=OFF
-          )
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            CMAKE_ARGS+=(-DENABLE_AI=ON)
-            if [ "${{ matrix.name }}" = "windows-x64-gpu" ]; then
-              CMAKE_ARGS+=(-DENABLE_CUDA=ON)
-            fi
-          else
-            CMAKE_ARGS+=(-DCMAKE_BUILD_TYPE=Release)
-          fi
-          cmake "${CMAKE_ARGS[@]}"
-          if [ "$RUNNER_OS" = "Windows" ]; then
+          if [ "${{ matrix.toolchain }}" = "vcpkg" ]; then
+            cmake -S . -B build-release \
+              -G "Visual Studio 17 2022" -A x64 \
+              -DCMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake" \
+              -DVCPKG_TARGET_TRIPLET="$TRIPLET" \
+              -DVCPKG_MANIFEST_MODE=OFF \
+              -DENABLE_AI=ON
             cmake --build build-release --config Release --parallel
           else
+            cmake -S . -B build-release \
+              -G Ninja \
+              -DCMAKE_TOOLCHAIN_FILE="cmake/platforms/${{ matrix.preset }}.cmake" \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DXER_VCPKG_ROOT="$VCPKG_ROOT" \
+              -DXER_VCPKG_TRIPLET="$TRIPLET" \
+              -DENABLE_AI=ON
             cmake --build build-release --parallel
           fi
 
+      # ------------------------------------------------------------------
+      # Package
+      # ------------------------------------------------------------------
       - name: Package — include / bin / lib
         shell: bash
         run: |
@@ -184,21 +269,29 @@ jobs:
           for f in ./*.h ./*.hpp; do
             [ -e "$f" ] && cp "$f" "$PKG/include/"
           done
-          # third-party headers from vcpkg (static redistributable)
+          # third-party headers from the vcpkg install (full on Windows,
+          # partial heavy-deps subset on Linux/macOS — system headers are
+          # provided by the OS and not redistributed).
           cp -r "$VCPKG_ROOT/installed/$TRIPLET/include/." "$PKG/include/" 2>/dev/null || true
 
-          # --- bin/: executables (Editor, tests, lsui, EngineScanVST3, ...) ---
-          cp build-debug/bin/* "$PKG/bin/Debug/" 2>/dev/null || true
-          cp build-release/bin/* "$PKG/bin/Release/" 2>/dev/null || true
+          # --- bin/: executables (Editor, tests, EngineScanVST3, ...) ---
+          for cfg in debug release; do
+            cap="${cfg^}"
+            cp "build-$cfg/bin/"* "$PKG/bin/$cap/" 2>/dev/null || true
+            # Windows multi-config also drops DLLs next to exes.
+            cp "build-$cfg/"*.dll "$PKG/bin/$cap/" 2>/dev/null || true
+          done
 
-          # --- lib/: project libs + all static vcpkg libs ---
-          cp -r build-debug/lib/. "$PKG/lib/Debug/" 2>/dev/null || true
-          cp -r build-release/lib/. "$PKG/lib/Release/" 2>/dev/null || true
-          cp -r "$VCPKG_ROOT/installed/$TRIPLET/lib/." "$PKG/lib/Release/" 2>/dev/null || true
-          if [ -d "$VCPKG_ROOT/installed/$TRIPLET/debug/lib" ]; then
-            cp -r "$VCPKG_ROOT/installed/$TRIPLET/debug/lib/." "$PKG/lib/Debug/" 2>/dev/null || true
-          fi
-          # runtime shared objects, if any port produced them
+          # --- lib/: project libs + packaged dependency libs ---
+          for cfg in debug release; do
+            cap="${cfg^}"
+            cp -r "build-$cfg/lib/." "$PKG/lib/$cap/" 2>/dev/null || true
+            cp -r "$VCPKG_ROOT/installed/$TRIPLET/lib/." "$PKG/lib/$cap/" 2>/dev/null || true
+            if [ -d "$VCPKG_ROOT/installed/$TRIPLET/debug/lib" ]; then
+              cp -r "$VCPKG_ROOT/installed/$TRIPLET/debug/lib/." "$PKG/lib/Debug/" 2>/dev/null || true
+            fi
+          done
+          # runtime shared objects from the vcpkg install, if any
           for cfg in Debug Release; do
             vdir="$VCPKG_ROOT/installed/$TRIPLET"
             [ "$cfg" = "Debug" ] && vdir="$vdir/debug"

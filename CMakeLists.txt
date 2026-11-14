@@ -19,21 +19,30 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
 endforeach()
 
-# vcpkg integration
-if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
-endif()
- 
-if(WIN32 AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
-    set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+# vcpkg integration (Windows only — Linux/macOS use system packages via
+# cmake/deps/system_deps.cmake plus a partial vcpkg install for the few ports
+# that have no system equivalent).
+if(WIN32)
+    if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+        set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+    endif()
+
+    if(NOT DEFINED CMAKE_TOOLCHAIN_FILE)
+        set(CMAKE_TOOLCHAIN_FILE "C:/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
+    endif()
+
+    # Set vcpkg triplet to x64-windows-release
+    set(VCPKG_TARGET_TRIPLET "x64-windows-release" CACHE STRING "Vcpkg target triplet")
+    set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Use preinstalled vcpkg packages")
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
+else()
+    option(XER_USE_SYSTEM_DEPS "Resolve dependencies from OS packages (apt/brew) + partial vcpkg" ON)
+    if(XER_USE_SYSTEM_DEPS)
+        include(cmake/deps/system_deps.cmake)
+    endif()
 endif()
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-
-# Set vcpkg triplet to x64-windows-release
-set(VCPKG_TARGET_TRIPLET "x64-windows-release" CACHE STRING "Vcpkg target triplet")
-set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Use preinstalled vcpkg packages")
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
 
 set(SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cc)
 file(GLOB HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/main.h)
@@ -53,47 +62,33 @@ find_package(OpenSSL REQUIRED)
 find_package(CURL REQUIRED)
 find_package(unofficial-pthreadpool CONFIG REQUIRED)
 find_package(unofficial-fxdiv CONFIG REQUIRED) 
-find_package(CUDNN REQUIRED)
+find_package(CUDNN QUIET)
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(range-v3 CONFIG REQUIRED)
 find_package(mimalloc CONFIG REQUIRED)
 find_package(ggml CONFIG REQUIRED)
 find_package(folly CONFIG REQUIRED)
-find_package(MKL CONFIG REQUIRED)
-# Intel MKL available project-wide (e.g. ENGINE_HAS_MKL gates the DFTI
-# backend in FFTEngine and other MKL-accelerated DSP paths).
-add_compile_definitions(ENGINE_HAS_MKL=1)
+# Intel MKL: required where available (vcpkg on Windows, apt intel-mkl on
+# Linux); absent on macOS where MKL has no arm64 build — all MKL code paths
+# are gated on the ENGINE_HAS_MKL define / MKL::MKL target.
+if(APPLE)
+    find_package(MKL CONFIG QUIET)
+else()
+    find_package(MKL CONFIG REQUIRED)
+endif()
+if(TARGET MKL::MKL)
+    # Intel MKL available project-wide (e.g. ENGINE_HAS_MKL gates the DFTI
+    # backend in FFTEngine and other MKL-accelerated DSP paths).
+    add_compile_definitions(ENGINE_HAS_MKL=1)
+endif()
 find_package(Boost CONFIG REQUIRED)
 find_package(cereal CONFIG REQUIRED)
 find_package(FFTW3f CONFIG REQUIRED)
 
-# VST3 SDK (vcpkg port "vst3sdk", no cmake-config -> wire manually)
-if(DEFINED VCPKG_INSTALLED_DIR AND DEFINED VCPKG_TARGET_TRIPLET)
-    set(XER_VST3SDK_ROOT "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}")
-else()
-    set(XER_VST3SDK_ROOT "C:/vcpkg/installed/x64-windows-release")
-endif()
-set(XER_VST3SDK_INCLUDE_DIR "${XER_VST3SDK_ROOT}/include/vst3sdk")
-set(XER_VST3SDK_LIB_DIR "${XER_VST3SDK_ROOT}/lib/vst3sdk")
-foreach(_vst3sdk_file IN ITEMS
-    "${XER_VST3SDK_INCLUDE_DIR}/pluginterfaces/base/funknown.h"
-    "${XER_VST3SDK_LIB_DIR}/sdk_hosting.lib"
-    "${XER_VST3SDK_LIB_DIR}/sdk.lib"
-    "${XER_VST3SDK_LIB_DIR}/sdk_common.lib"
-    "${XER_VST3SDK_LIB_DIR}/pluginterfaces.lib"
-    "${XER_VST3SDK_LIB_DIR}/base.lib")
-    if(NOT EXISTS "${_vst3sdk_file}")
-        message(FATAL_ERROR "VST3 SDK file missing: ${_vst3sdk_file} — install vcpkg port vst3sdk for ${VCPKG_TARGET_TRIPLET}")
-    endif()
-endforeach()
-add_library(XER_VST3SDK INTERFACE)
-target_include_directories(XER_VST3SDK INTERFACE "${XER_VST3SDK_INCLUDE_DIR}")
-target_link_libraries(XER_VST3SDK INTERFACE
-    "${XER_VST3SDK_LIB_DIR}/sdk_hosting.lib"
-    "${XER_VST3SDK_LIB_DIR}/sdk.lib"
-    "${XER_VST3SDK_LIB_DIR}/sdk_common.lib"
-    "${XER_VST3SDK_LIB_DIR}/pluginterfaces.lib"
-    "${XER_VST3SDK_LIB_DIR}/base.lib")
+# VST3 SDK (vcpkg copy when installed, otherwise fetched + built from source;
+# see cmake/vst3sdk.cmake — portable across Windows/Linux/macOS).
+set(XER_VST3SDK_USE_VCPKG ON)
+include(cmake/vst3sdk.cmake)
 
 add_subdirectory(src/flux)
 add_subdirectory(src/cache)
@@ -119,7 +114,10 @@ add_subdirectory(src/content/dawn)
 add_subdirectory(src/content/s3)
 add_subdirectory(src/helper)
 add_subdirectory(src/app)
-add_subdirectory(src/lsui)
+if(WIN32)
+    # lsui (Lua-scripted UI host) uses Win32 APIs directly — Windows only.
+    add_subdirectory(src/lsui)
+endif()
 
 # Content subsystems — Chromium-style modular layer. Each directory owns a
 # static library; optional/heavy backends (CUDA ops, libarchive, MuPDF,
@@ -200,6 +198,7 @@ target_link_libraries(EngineScanVST3 PRIVATE XER_AudioCore XER_Helper)
 set_target_properties(EngineScanVST3 PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+if(WIN32)
 # Windows service monitoring removable media for SecurityFlash tokens.
 # The service itself only detects token presence; decryption stays with
 # the interactive unlock flow that holds the passphrase.
@@ -246,8 +245,10 @@ target_link_libraries(ServerAudio PRIVATE
     XER_Network
     XER_Cache
     XER_Helper
-    ole32
 )
+if(WIN32)
+    target_link_libraries(ServerAudio PRIVATE ole32)
+endif()
 set_target_properties(ServerAudio PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
@@ -273,6 +274,7 @@ target_link_libraries(SecurityFlashHello PRIVATE
 )
 set_target_properties(SecurityFlashHello PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+endif() # WIN32 — SecurityFlash service/GUI/credential provider
 
 # ArchiveManager: web-UI archive manager (libarchive + XER http_server +
 # UI password dialogs). The www/ assets are copied next to the exe.
@@ -287,11 +289,10 @@ target_link_libraries(ArchiveManager PRIVATE
     XER_Network
     XER_UI_Core
     jsoncpp_lib
-    ole32
-    oleaut32
-    user32
-    gdi32
 )
+if(WIN32)
+    target_link_libraries(ArchiveManager PRIVATE ole32 oleaut32 user32 gdi32)
+endif()
 set_target_properties(ArchiveManager PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 add_custom_command(TARGET ArchiveManager POST_BUILD
@@ -406,8 +407,10 @@ target_link_libraries(audioplayer PRIVATE
     XER_App
     XER_Flux_Core
     XER_Helper
-    winmm
 )
+if(WIN32)
+    target_link_libraries(audioplayer PRIVATE winmm)
+endif()
 set_target_properties(audioplayer PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
@@ -466,20 +469,6 @@ target_link_libraries(Editor
         ICU::i18n
         OpenSSL::SSL
         OpenSSL::Crypto
-        Comctl32
-        dbghelp
-        shlwapi
-        winmm
-        psapi
-        advapi32
-        userenv
-        shell32
-        version
-        ole32
-        ws2_32
-        crypt32
-        windowsapp
-        wbemuuid
         XER_Helper
         XER_UI_Core
         XER_UI_Flux
@@ -490,6 +479,12 @@ target_link_libraries(Editor
         XER_ContentAudio
         XER_App
 )
+
+if(WIN32)
+    target_link_libraries(Editor
+        Comctl32 dbghelp shlwapi winmm psapi advapi32 userenv shell32
+        version ole32 ws2_32 crypt32 windowsapp wbemuuid)
+endif()
 
 target_include_directories(Editor PRIVATE ${FFMPEG_INCLUDE_DIRS})
 target_link_directories(Editor PRIVATE ${FFMPEG_LIBRARY_DIRS})
