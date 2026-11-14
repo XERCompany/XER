@@ -95,16 +95,23 @@ public:
                 // shadcn select: accent check on the left of the chosen item.
                 const Rendering::TextStyle check_style{FA(tokens.accent),
                                                        tokens.font_body, 600};
+                const float check_h = renderer.MeasureText("✓", check_style).height;
                 renderer.DrawText("✓",
                                   Layout::Rect{row.x + tokens.spacing_small,
-                                               row.y, 16.0f, kRowHeight},
+                                               row.y + std::max(0.0f, (kRowHeight - check_h) * 0.5f),
+                                               16.0f, check_h + 1.0f},
                                   check_style);
             }
+            const auto opt_sample = options_[i].empty()
+                ? std::string_view("Ag")
+                : std::string_view(options_[i]);
+            const float opt_h = renderer.MeasureText(opt_sample, style).height;
             renderer.DrawText(
                 options_[i],
-                Layout::Rect{text_x, row.y,
-                             row.x + row.width - text_x - tokens.spacing_medium,
-                             kRowHeight},
+                Layout::Rect{text_x,
+                             row.y + std::max(0.0f, (kRowHeight - opt_h) * 0.5f),
+                             std::max(0.0f, row.x + row.width - text_x - tokens.spacing_medium),
+                             opt_h + 1.0f},
                 style
             );
         }
@@ -395,16 +402,17 @@ void Select::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
         400
     };
     const std::string& label = has_value ? options_[static_cast<std::size_t>(selected_index_)] : placeholder_;
-    const float text_h = renderer.MeasureText(label, text_style).height;
+    const auto sample = label.empty() ? std::string_view("Ag") : std::string_view(label);
+    const float text_h = renderer.MeasureText(sample, text_style).height;
     // Clip the label to the field so long options don't paint over the chevron.
     renderer.PushClip(bounds);
     renderer.DrawText(
         label,
         Layout::Rect{
-            bounds.x + tokens.spacing_medium,
-            bounds.y + (bounds.height - text_h) * 0.5f,
-            bounds.width - 40.0f,
-            text_h
+            bounds.x + 12.0f,
+            bounds.y + std::max(0.0f, (bounds.height - text_h) * 0.5f),
+            std::max(0.0f, bounds.width - 34.0f),
+            text_h + 1.0f
         },
         text_style
     );

@@ -137,3 +137,52 @@ XER_UI_TEST(FlexDistributeRowExtremeNarrowStillNonNegative) {
         XER_UI_EXPECT_TRUE(r.x >= c.x - 0.01f);
     }
 }
+
+XER_UI_TEST(FlexDistributeRowPreservesInterItemGap) {
+    const Rect c{0.0f, 0.0f, 500.0f, 34.0f};
+    const auto rects = XER::UI::Layout::DistributeRow(
+        c, {100.0f, 80.0f, 80.0f}, {1.0f, 0.0f, 0.0f}, 8.0f, FlexAlign::Start);
+    XER_UI_EXPECT_EQ(3u, rects.size());
+    XER_UI_EXPECT_EQ(80.0f, rects[1].width);
+    XER_UI_EXPECT_EQ(80.0f, rects[2].width);
+    XER_UI_EXPECT_TRUE(rects[1].x - rects[0].Right() >= 7.5f);
+    XER_UI_EXPECT_TRUE(rects[2].x - rects[1].Right() >= 7.5f);
+}
+
+namespace {
+
+class ZeroEmptyMeasureRenderer final : public XER::UI::Rendering::Renderer {
+public:
+    void BeginFrame(Rect) override {}
+    void EndFrame() override {}
+    void FillRect(Rect, XER::UI::Theme::Color, float) override {}
+    void StrokeRect(Rect, XER::UI::Theme::Color, float, float) override {}
+    void DrawLine(XER::UI::Layout::Point, XER::UI::Layout::Point,
+                  XER::UI::Theme::Color, float) override {}
+    void DrawText(std::string_view, Rect, XER::UI::Rendering::TextStyle) override {}
+    XER::UI::Layout::Size MeasureText(
+        std::string_view text,
+        XER::UI::Rendering::TextStyle style) const override {
+        if (text.empty()) return {};
+        return {static_cast<float>(text.size()) * 7.0f, style.size + 4.0f};
+    }
+};
+
+} // namespace
+
+XER_UI_TEST(FlexCenteredTextRectHonorsHorizontalCenterWithPaddingAndEmptyText) {
+    ZeroEmptyMeasureRenderer r;
+    const XER::UI::Rendering::TextStyle style{{1, 1, 1, 1}, 12.0f, 600};
+    const Rect box{10.0f, 20.0f, 100.0f, 30.0f};
+
+    // "Grid" = 4 * 7 = 28px wide; with h_padding = 4, centered x = 10 + 4 + (92 - 28)/2 = 46.
+    const Rect centered = XER::UI::Layout::CenteredTextRect(
+        r, "Grid", style, box, 4.0f, true);
+    XER_UI_EXPECT_TRUE(std::abs(centered.x - 46.0f) < 0.01f);
+    XER_UI_EXPECT_TRUE(centered.y > box.y);
+
+    // Empty string must still get non-zero line height (like Direct2DRenderer).
+    const Rect empty_r = XER::UI::Layout::CenteredTextRect(
+        r, "", style, box, 8.0f, false);
+    XER_UI_EXPECT_TRUE(empty_r.height >= 12.0f);
+}

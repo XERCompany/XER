@@ -308,7 +308,8 @@ Layout::Rect Widget::CenteredTextRect(
 ) const {
     const auto bounds = GetBounds();
     const float width = std::max(0.0f, bounds.width - 2.0f * horizontal_padding);
-    const float text_height = renderer.MeasureText(text, style).height;
+    const auto sample = text.empty() ? std::string_view("Ag") : text;
+    const float text_height = renderer.MeasureText(sample, style).height;
     const float y = bounds.y + std::max(0.0f, (bounds.height - text_height) * 0.5f);
     return Layout::Rect{bounds.x + horizontal_padding, y, width, text_height};
 }

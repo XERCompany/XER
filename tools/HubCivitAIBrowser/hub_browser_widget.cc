@@ -85,6 +85,8 @@ HubBrowserWidget::HubBrowserWidget() {
     AddChild(copy_id_btn_);
     AddChild(progress_);
 
+    SyncInspectorVisibility();
+
     // Kick off an initial browse of popular models.
     RunSearch();
 }
@@ -132,7 +134,9 @@ void HubBrowserWidget::BuildTitleBar() {
         {"Checkpoints Only", "", [this]() { active_category_ = 1; types_ = "Checkpoint"; RunSearch(); }},
         {"LoRA Only", "", [this]() { active_category_ = 2; types_ = "LORA"; RunSearch(); }},
         {"NSFW Toggle", "", [this]() {
-            nsfw_ = !nsfw_; SetStatus(nsfw_ ? "NSFW content enabled." : "NSFW content hidden.");
+            auto* sw = static_cast<Switch*>(nsfw_switch_.get());
+            sw->SetChecked(!sw->IsChecked());
+            SetStatus(nsfw_ ? "NSFW content enabled." : "NSFW content hidden.");
         }, true, nsfw_},
     });
     add_menu("Sort", {
@@ -158,7 +162,7 @@ void HubBrowserWidget::BuildTitleBar() {
     });
     tb->SetMenus(std::move(menus));
 
-    tb->SetCenterCommand("Search Civitai models...  (Ctrl+K)",
+    tb->SetCenterCommand("Search Civitai models...",
                         [this]() {
                             auto* ti = static_cast<TextInput*>(search_input_.get());
                             ti->SetFocused(true);
@@ -339,7 +343,7 @@ void HubBrowserWidget::SelectRow(int index) {
     if (opts.empty()) opts.push_back("-");
     vs->SetOptions(opts);
     vs->SetSelectedIndex(0);
-    scroll_ = 0.0f;
+    SyncInspectorVisibility();
     RecomputeHitRects();
     Invalidate();
 }
@@ -447,6 +451,9 @@ void HubBrowserWidget::SetViewMode(ViewMode mode) {
 
 void HubBrowserWidget::SetLeftPanelVisible(bool visible) {
     left_panel_visible_ = visible;
+    title_bar_->SetLeftPanelToggle(true, left_panel_visible_, [this]() {
+        SetLeftPanelVisible(!left_panel_visible_);
+    });
     RecomputeHitRects();
     RequestLayout();
     Invalidate();
@@ -454,9 +461,23 @@ void HubBrowserWidget::SetLeftPanelVisible(bool visible) {
 
 void HubBrowserWidget::SetRightPanelVisible(bool visible) {
     right_panel_visible_ = visible;
+    title_bar_->SetRightPanelToggle(true, right_panel_visible_, [this]() {
+        SetRightPanelVisible(!right_panel_visible_);
+    });
+    SyncInspectorVisibility();
     RecomputeHitRects();
     RequestLayout();
     Invalidate();
+}
+
+void HubBrowserWidget::SyncInspectorVisibility() {
+    const bool show = right_panel_visible_ &&
+                      selected_ >= 0 &&
+                      selected_ < static_cast<int>(results_.size());
+    version_select_->SetVisible(show);
+    download_btn_->SetVisible(show);
+    copy_id_btn_->SetVisible(show);
+    progress_->SetVisible(show);
 }
 
 // ---------------------------------------------------------------------------
@@ -474,6 +495,7 @@ void HubBrowserWidget::Tick(double) {
         selected_ = -1;
         selected_file_ = -1;
         scroll_ = 0.0f;
+        SyncInspectorVisibility();
 
         if (query_.empty()) {
             has_next_ = static_cast<int>(results_.size()) >= limit_;
@@ -570,35 +592,55 @@ void HubBrowserWidget::LayoutChildren(const Layout::Rect& b,
     sidebar_rect_ = {b.x, iy, side_w, sy - iy};
     inspector_rect_ = {b.Right() - insp_w, iy, insp_w, sy - iy};
     center_rect_ = {b.x + side_w, iy,
-                    b.width - side_w - insp_w, sy - iy};
+                    std::max(0.0f, b.width - side_w - insp_w),
+                    std::max(0.0f, sy - iy)};
     statusbar_rect_ = {b.x, sy, b.width, kStatusH};
-    list_rect_ = {center_rect_.x + 10.0f, center_rect_.y + 10.0f,
-                  center_rect_.width - 20.0f,
-                  center_rect_.height - 20.0f};
-    scrollbar_rect_ = {list_rect_.Right() - 8.0f, list_rect_.y,
-                       8.0f, list_rect_.height};
 
-    // Toolbar children
-    const float cx = toolbar_rect_.x + 10.0f;
+    // Dedicated 30px results header above the scrollable card viewport so
+    // the model count and active filters never collide with the first card.
+    results_header_rect_ = {center_rect_.x + 12.0f, center_rect_.y + 6.0f,
+                            std::max(0.0f, center_rect_.width - 24.0f), 24.0f};
+    list_rect_ = {center_rect_.x + 12.0f, center_rect_.y + 34.0f,
+                  std::max(0.0f, center_rect_.width - 24.0f),
+                  std::max(0.0f, center_rect_.height - 42.0f)};
+    scrollbar_rect_ = {list_rect_.Right() - 6.0f, list_rect_.y,
+                       6.0f, list_rect_.height};
+
+    // Toolbar layout: right-anchor [List | Grid] and [Switch + NSFW], then
+    // distribute the left/middle filter controls across the remaining span
+    // with search_input_ flexing to fill available width.
     const float cy = toolbar_rect_.y + (kToolbarH - 34.0f) * 0.5f;
-    float wx = cx;
-    auto place = [&](Widget* w, float wpx) {
-        w->Layout({wx, cy, wpx, 34.0f}, tokens);
-        wx += wpx + 8.0f;
-    };
-    place(search_input_.get(), 280.0f);
-    place(search_btn_.get(), 84.0f);
-    place(refresh_btn_.get(), 76.0f);
-    place(type_select_.get(), 160.0f);
-    place(sort_select_.get(), 150.0f);
-    nsfw_switch_->Layout({wx, cy + 7.0f, 34.0f, 20.0f}, tokens);
-    nsfw_switch_rect_ = {wx, cy + 7.0f, 34.0f, 20.0f};
-    wx += 42.0f;
+    constexpr float kSegW = 132.0f;
+    constexpr float kNsfwSwitchW = 36.0f;
+    constexpr float kNsfwLabelW = 46.0f;
+    constexpr float kNsfwClusterW = kNsfwSwitchW + 6.0f + kNsfwLabelW;
 
-    // View toggle segmented control (manual hit zones)
-    view_list_rect_ = {wx, cy, 64.0f, 34.0f};
-    view_grid_rect_ = {wx + 66.0f, cy, 64.0f, 34.0f};
-    wx += 136.0f;
+    const float right_edge = toolbar_rect_.Right() - 12.0f;
+    const float seg_x = right_edge - kSegW;
+    view_seg_rect_ = {seg_x, cy, kSegW, 34.0f};
+    view_list_rect_ = {seg_x + 3.0f, cy + 3.0f, 61.0f, 28.0f};
+    view_grid_rect_ = {seg_x + 68.0f, cy + 3.0f, 61.0f, 28.0f};
+
+    const float nsfw_x = seg_x - 14.0f - kNsfwClusterW;
+    nsfw_switch_rect_ = {nsfw_x, cy + 7.0f, kNsfwSwitchW, 20.0f};
+    nsfw_switch_->Layout(nsfw_switch_rect_, tokens);
+    nsfw_label_rect_ = {nsfw_x + kNsfwSwitchW + 6.0f, cy, kNsfwLabelW, 34.0f};
+
+    const float left_x = toolbar_rect_.x + 12.0f;
+    const float left_span = std::max(200.0f, nsfw_x - 14.0f - left_x);
+    const auto toolbar_slots = Layout::DistributeRow(
+        Layout::Rect{left_x, cy, left_span, 34.0f},
+        {260.0f, 88.0f, 88.0f, 164.0f, 158.0f},
+        {1.0f, 0.0f, 0.0f, 0.0f, 0.0f},
+        8.0f,
+        Layout::FlexAlign::Start);
+    if (toolbar_slots.size() == 5) {
+        search_input_->Layout(toolbar_slots[0], tokens);
+        search_btn_->Layout(toolbar_slots[1], tokens);
+        refresh_btn_->Layout(toolbar_slots[2], tokens);
+        type_select_->Layout(toolbar_slots[3], tokens);
+        sort_select_->Layout(toolbar_slots[4], tokens);
+    }
 
     // Status bar buttons (right aligned)
     const float syy = statusbar_rect_.y + (kStatusH - 22.0f) * 0.5f;
@@ -882,11 +924,32 @@ bool HubBrowserWidget::HandleEvent(const Event& event) {
         event.mouse_button == MouseButton::Left) {
         const Layout::Point p = event.position;
 
+        // Clicking the "NSFW" text label toggles the adjacent switch.
+        if (nsfw_label_rect_.Contains(p)) {
+            auto* sw = static_cast<Switch*>(nsfw_switch_.get());
+            sw->SetChecked(!sw->IsChecked());
+            return true;
+        }
+
         // view mode segmented toggle
         if (view_list_rect_.Contains(p)) { SetViewMode(ViewMode::List); return true; }
         if (view_grid_rect_.Contains(p)) { SetViewMode(ViewMode::Grid); return true; }
 
         return false;
+    }
+
+    if (event.type == Event::Type::KeyDown) {
+        if (event.key == Widgets::KeyCode::F5) {
+            RunSearch();
+            return true;
+        }
+        if (event.is_ctrl && !event.is_alt &&
+            (event.key == Widgets::KeyCode::K ||
+             event.key == Widgets::KeyCode::F ||
+             event.key == Widgets::KeyCode::P)) {
+            static_cast<TextInput*>(search_input_.get())->SetFocused(true);
+            return true;
+        }
     }
 
     return false;
@@ -901,24 +964,45 @@ void HubBrowserWidget::Render(Rendering::Renderer& r,
     const auto b = GetBounds();
     r.FillRect(b, tokens.background, 0.0f);
 
+    DrawToolbar(r, tokens);
     DrawCategorySidebar(r, tokens);
     DrawResults(r, tokens);
     DrawInspector(r, tokens);
     DrawStatusBar(r, tokens);
 
-    // Toolbar separator line
+    // Toolbar & status bar separator hairlines
     r.DrawLine({b.x, toolbar_rect_.Bottom()}, {b.Right(), toolbar_rect_.Bottom()},
                tokens.border, 1.0f);
     r.DrawLine({b.x, statusbar_rect_.y}, {b.Right(), statusbar_rect_.y},
                tokens.border, 1.0f);
+}
 
-    // NSFW label next to switch
-    const Rendering::TextStyle nsfw_style{tokens.muted, 11.5f, 500};
+void HubBrowserWidget::DrawToolbar(Rendering::Renderer& r,
+                                   const Theme::Tokens& tokens) {
+    // NSFW label vertically centered next to the switch
+    const Rendering::TextStyle nsfw_style{
+        nsfw_ ? tokens.foreground : tokens.muted, 12.0f, 500};
     const auto nsfw_txt = Layout::CenteredTextRect(
-        r, "NSFW", nsfw_style,
-        {nsfw_switch_rect_.Right() + 4.0f, toolbar_rect_.y + 8.0f,
-         60.0f, 18.0f}, 0.0f, false);
+        r, "NSFW", nsfw_style, nsfw_label_rect_, 0.0f, false);
     r.DrawText("NSFW", nsfw_txt, nsfw_style);
+
+    // Segmented view toggle [List | Grid]
+    r.FillRect(view_seg_rect_, tokens.surface, tokens.radius_medium);
+    r.StrokeRect(view_seg_rect_, tokens.border, 1.0f, tokens.radius_medium);
+    auto draw_seg = [&](const Layout::Rect& rect, const char* label,
+                        bool active) {
+        if (active) {
+            r.FillRect(rect, tokens.accent, tokens.radius_small);
+        }
+        const Rendering::TextStyle st{
+            active ? tokens.accent_foreground : tokens.muted,
+            11.5f, active ? 600 : 500};
+        const auto tr = Layout::CenteredTextRect(
+            r, label, st, rect, 2.0f, true);
+        r.DrawText(label, tr, st);
+    };
+    draw_seg(view_list_rect_, "List", view_mode_ == ViewMode::List);
+    draw_seg(view_grid_rect_, "Grid", view_mode_ == ViewMode::Grid);
 }
 
 void HubBrowserWidget::DrawBadge(Rendering::Renderer& r,
@@ -1019,35 +1103,21 @@ void HubBrowserWidget::DrawResults(Rendering::Renderer& r,
     const auto cr = center_rect_;
     if (cr.width <= 0.0f || cr.height <= 0.0f) return;
 
-    // Results header: count + view toggle
-    const Rendering::TextStyle count_style{tokens.muted, 11.5f, 500};
+    // Dedicated results header band (above list_rect_, never overlapped).
+    const Rendering::TextStyle count_style{tokens.muted, 11.5f, 600};
     std::string count_txt = searching_
         ? "Searching..."
-        : (results_.empty() ? "No models" : std::to_string(results_.size()) + " models");
+        : (results_.empty() ? "No models"
+                            : std::to_string(results_.size()) + " models");
+    const std::string& cat_label =
+        (active_category_ >= 0 &&
+         active_category_ < static_cast<int>(Categories().size()))
+            ? Categories()[active_category_].label
+            : Categories()[0].label;
+    count_txt += "  •  " + cat_label + "  •  " + sort_;
     const auto count_r = Layout::CenteredTextRect(
-        r, count_txt, count_style, {cr.x + 12.0f, cr.y + 2.0f, 200.0f, 18.0f},
-        0.0f, false);
+        r, count_txt, count_style, results_header_rect_, 2.0f, false);
     r.DrawText(count_txt, count_r, count_style);
-
-    // Segmented view toggle (List | Grid)
-    auto draw_seg = [&](const Layout::Rect& rect, const char* label,
-                        ViewMode mode, bool active) {
-        if (active) r.FillRect(rect, tokens.secondary, tokens.radius_small);
-        const Rendering::TextStyle st{active ? tokens.foreground : tokens.muted,
-                                      11.0f, active ? 600 : 450};
-        const auto tr = Layout::CenteredTextRect(r, label, st, rect, 4.0f,
-                                                 true);
-        r.DrawText(label, tr, st);
-    };
-    draw_seg(view_list_rect_, "List", ViewMode::List,
-             view_mode_ == ViewMode::List);
-    draw_seg(view_grid_rect_, "Grid", ViewMode::Grid,
-             view_mode_ == ViewMode::Grid);
-    // segment container outline
-    r.StrokeRect({view_list_rect_.x - 2.0f, view_list_rect_.y - 2.0f,
-                  view_grid_rect_.Right() - view_list_rect_.x + 4.0f,
-                  view_list_rect_.height + 4.0f},
-                 tokens.border, 1.0f, tokens.radius_small + 2.0f);
 
     if (searching_ && results_.empty()) {
         const Rendering::TextStyle st{tokens.muted, 13.0f, 400};
@@ -1139,11 +1209,14 @@ void HubBrowserWidget::DrawResults(Rendering::Renderer& r,
             }
 
             // Line 3: stats
-            const Rendering::TextStyle st{tokens.muted, 11.0f, 450};
-            std::string stats = "★ " +
-                (m.rating > 0 ? std::to_string(m.rating).substr(0, 4) : "-") +
-                "   ↓ " + FmtCount(m.download_count) +
-                "   ♥ " + FmtCount(m.thumbs_up_count);
+            const Rendering::TextStyle st{
+                sel ? tokens.accent_foreground : tokens.muted, 11.0f, 450};
+            std::string stats;
+            if (m.rating > 0.0) {
+                stats += "★ " + std::to_string(m.rating).substr(0, 4) + "   ";
+            }
+            stats += "↓ " + FmtCount(m.download_count) +
+                     "   ♥ " + FmtCount(m.thumbs_up_count);
             uint64_t sz = 0;
             if (!m.versions.empty()) {
                 for (const auto& f : m.versions[0].files) {
@@ -1225,10 +1298,14 @@ void HubBrowserWidget::DrawResults(Rendering::Renderer& r,
                     0.0f, false);
                 r.DrawText(n2, nr2, name_style);
             }
-            const Rendering::TextStyle st{tokens.muted, 10.5f, 450};
-            std::string stats = "★ " +
-                (m.rating > 0 ? std::to_string(m.rating).substr(0, 4) : "-") +
-                "  ↓ " + FmtCount(m.download_count);
+            const Rendering::TextStyle st{
+                sel ? tokens.accent_foreground : tokens.muted, 10.5f, 450};
+            std::string stats;
+            if (m.rating > 0.0) {
+                stats += "★ " + std::to_string(m.rating).substr(0, 4) + "  ";
+            }
+            stats += "↓ " + FmtCount(m.download_count) +
+                     "  ♥ " + FmtCount(m.thumbs_up_count);
             if (!m.versions.empty() && !m.versions[0].base_model.empty()) {
                 stats += "  " + m.versions[0].base_model;
             }
@@ -1316,9 +1393,15 @@ void HubBrowserWidget::DrawInspector(Rendering::Renderer& r,
     // Stats grid (2x2)
     const float sy = ir.y + 84.0f;
     const float col_w = iw * 0.5f;
-    const char* labels[4] = {"Rating", "Downloads", "Likes", "Model ID"};
+    const std::string base_model =
+        (!m.versions.empty() && !m.versions[0].base_model.empty())
+            ? m.versions[0].base_model
+            : "-";
+    const char* labels[4] = {
+        m.rating > 0.0 ? "Rating" : "Base Model",
+        "Downloads", "Likes", "Model ID"};
     std::string values[4] = {
-        m.rating > 0 ? std::to_string(m.rating).substr(0, 4) : "-",
+        m.rating > 0.0 ? std::to_string(m.rating).substr(0, 4) : base_model,
         FmtCount(m.download_count),
         FmtCount(m.thumbs_up_count),
         m.id.size() > 12 ? m.id.substr(0, 10) + "..." : m.id,
@@ -1403,12 +1486,17 @@ void HubBrowserWidget::DrawInspector(Rendering::Renderer& r,
         }
     }
 
+    // "Version" header above version_select_
+    const float fb = ir.Bottom() - 150.0f;
+    const auto ver_hdr_r = Layout::CenteredTextRect(
+        r, "VERSION", sec, {ix, fb + 14.0f, iw, 16.0f}, 0.0f, false);
+    r.DrawText("VERSION", ver_hdr_r, sec);
+
     // Download status / progress text between version select and progress bar
     if (downloading_) {
         const Rendering::TextStyle dst{tokens.accent, 10.5f, 600};
         const std::string dt = "Downloading... " +
             std::to_string(static_cast<int>(dl_progress_.load() * 100.0f)) + "%";
-        const float fb = ir.Bottom() - 150.0f;
         const auto dtr = Layout::CenteredTextRect(
             r, dt, dst, {ix, fb + 64.0f, iw, 10.0f}, 0.0f, false);
         r.DrawText(dt, dtr, dst);

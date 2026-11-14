@@ -36,9 +36,14 @@ enum class KeyCode {
     PageUp,
     PageDown,
     Escape,
-    // Letter keys are reported only while Ctrl is held (editing shortcuts).
+    F5,
+    // Letter keys are reported only while Ctrl is held (editing/app shortcuts).
     A,
     C,
+    F,
+    K,
+    N,
+    P,
     V,
     X,
     Y,

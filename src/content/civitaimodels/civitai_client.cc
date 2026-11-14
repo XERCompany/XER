@@ -82,7 +82,10 @@ CivitaiModel ParseModel(const Json::Value& m) {
     const Json::Value& stats = m["stats"];
     if (stats.isObject()) {
         out.download_count = JsonUint(stats, "downloadCount");
-        out.thumbs_up_count = JsonUint(stats, "thumbsupCount");
+        out.thumbs_up_count = JsonUint(stats, "thumbsUpCount");
+        if (out.thumbs_up_count == 0) {
+            out.thumbs_up_count = JsonUint(stats, "thumbsupCount");
+        }
         const Json::Value& rating = stats["rating"];
         if (rating.isDouble() || rating.isInt() || rating.isUInt()) {
             out.rating = rating.asDouble();

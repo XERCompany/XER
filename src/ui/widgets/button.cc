@@ -161,15 +161,29 @@ void Button::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
     }
 
     const Rendering::TextStyle style{text_color, tokens.font_body, 500};
-    // Loading shifts the label right so it clears the spinner; the preferred
-    // size is unchanged, so the button never resizes.
-    const float text_pad = tokens.spacing_medium + (loading_ ? 16.0f : 0.0f);
-    Layout::Rect text_rect = CenteredTextRect(renderer, text_, style, text_pad);
     if (loading_) {
+        // Loading shifts the label right so it clears the spinner; the preferred
+        // size is unchanged, so the button never resizes.
+        const float text_pad = tokens.spacing_medium + 16.0f;
+        Layout::Rect text_rect = CenteredTextRect(renderer, text_, style, text_pad);
         text_rect.x += 8.0f;
         text_rect.width = std::max(0.0f, text_rect.width - 16.0f);
+        renderer.DrawText(text_, text_rect, style);
+    } else {
+        const auto sample = text_.empty() ? std::string_view("Ag") : std::string_view(text_);
+        const auto measured = renderer.MeasureText(sample, style);
+        const float text_w = text_.empty() ? 0.0f : measured.width;
+        const float text_h = measured.height;
+        constexpr float kMinPad = 8.0f;
+        const float avail_w = std::max(0.0f, surface.width - 2.0f * kMinPad);
+        const float x = (text_w < avail_w)
+            ? (surface.x + kMinPad + (avail_w - text_w) * 0.5f)
+            : (surface.x + kMinPad);
+        const float max_w = std::max(0.0f, surface.Right() - kMinPad - x);
+        const float draw_w = (text_w < avail_w) ? std::min(max_w, text_w + 2.0f) : avail_w;
+        const float y = surface.y + std::max(0.0f, (surface.height - text_h) * 0.5f);
+        renderer.DrawText(text_, Layout::Rect{x, y, draw_w, text_h}, style);
     }
-    renderer.DrawText(text_, text_rect, style);
 
     if (loading_) {
         // 8-spoke arc spinner, same visual language as the Spinner widget.

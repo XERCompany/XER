@@ -30,9 +30,9 @@ Rect SnapRect(const Rect& rect, float scale = 1.0f) noexcept;
 Rect CenteredRect(const Rect& container, const Size& size,
                   float h_padding = 0.0f, float v_padding = 0.0f) noexcept;
 
-// Returns a Rect centered vertically inside `container` (with horizontal
-// padding `h_padding` applied from the left edge). When `center_horizontal`
-// is true and `h_padding <= 0`, the text is also centered horizontally.
+// Returns a Rect centered vertically inside `container` with horizontal
+// padding `h_padding`. When `center_horizontal` is true, the text is also
+// centered horizontally within the padded container span.
 Rect CenteredTextRect(Rendering::Renderer& renderer,
                       std::string_view text,
                       const Rendering::TextStyle& style,

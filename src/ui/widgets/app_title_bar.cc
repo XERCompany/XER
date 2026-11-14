@@ -14,13 +14,12 @@ namespace XER::UI::Widgets {
 namespace {
 
 constexpr float kBarHPad = 8.0f;
-constexpr float kControlH = 30.0f;
-constexpr float kControlW = 30.0f;
-constexpr float kWindowBtnW = 44.0f;
-constexpr float kCenterBarH = 30.0f;
-constexpr float kCenterBarMaxW = 520.0f;
-constexpr float kAvatarSize = 28.0f;
-constexpr float kItemGap = 2.0f;
+constexpr float kControlH = 28.0f;
+constexpr float kControlW = 28.0f;
+constexpr float kWindowBtnW = 46.0f;
+constexpr float kCenterBarH = 28.0f;
+constexpr float kCenterBarMaxW = 480.0f;
+constexpr float kAvatarSize = 24.0f;
 
 std::string ToUpperAscii(std::string text) {
     for (char& c : text) {
@@ -373,7 +372,7 @@ void AppTitleBar::Render(Rendering::Renderer& r,
     {
         const Rendering::TextStyle label_style{tokens.foreground, 12.5f, 600};
         const float label_w = r.MeasureText(workspace_label_, label_style).width;
-        const float w_width = 22.0f + 6.0f + label_w + 18.0f + 10.0f;
+        const float w_width = 5.0f + 20.0f + 7.0f + label_w + 6.0f + 12.0f + 6.0f;
         workspace_rect_ = Layout::Rect{x, item_y, w_width, kControlH};
         x += w_width + 6.0f;
     }
@@ -404,24 +403,24 @@ void AppTitleBar::Render(Rendering::Renderer& r,
         x += mw + 2.0f;
     }
 
-    // Right cluster walk (from right edge inward)
-    float right_cursor = b.Right() - kBarHPad;
-    close_rect_ = Layout::Rect{right_cursor - kWindowBtnW, item_y,
-                               kWindowBtnW, kControlH};
+    // Right cluster walk (flush Windows 11 caption buttons on the right edge)
+    float right_cursor = b.Right();
+    close_rect_ = Layout::Rect{right_cursor - kWindowBtnW, b.y,
+                               kWindowBtnW, b.height};
     right_cursor -= kWindowBtnW;
-    maximize_rect_ = Layout::Rect{right_cursor - kWindowBtnW, item_y,
-                                  kWindowBtnW, kControlH};
+    maximize_rect_ = Layout::Rect{right_cursor - kWindowBtnW, b.y,
+                                  kWindowBtnW, b.height};
     right_cursor -= kWindowBtnW;
-    minimize_rect_ = Layout::Rect{right_cursor - kWindowBtnW, item_y,
-                                  kWindowBtnW, kControlH};
-    right_cursor -= kWindowBtnW + 6.0f;
+    minimize_rect_ = Layout::Rect{right_cursor - kWindowBtnW, b.y,
+                                  kWindowBtnW, b.height};
+    right_cursor -= kWindowBtnW + 8.0f;
 
     if (!action_pill_text_.empty() && on_action_pill_) {
         const Rendering::TextStyle pill_text_style{tokens.accent_foreground,
                                                    12.0f, 600};
         const float tw =
             r.MeasureText(action_pill_text_, pill_text_style).width;
-        const float pw = tw + 30.0f;
+        const float pw = tw + 40.0f;
         action_pill_rect_ = Layout::Rect{right_cursor - pw, item_y, pw,
                                          kControlH};
         right_cursor -= pw + 8.0f;
@@ -429,7 +428,7 @@ void AppTitleBar::Render(Rendering::Renderer& r,
         action_pill_rect_ = Layout::Rect{};
     }
 
-    avatar_rect_ = Layout::Rect{right_cursor - kAvatarSize - 20.0f, item_y,
+    avatar_rect_ = Layout::Rect{right_cursor - (kAvatarSize + 20.0f), item_y,
                                 kAvatarSize + 20.0f, kControlH};
     right_cursor -= kAvatarSize + 20.0f + 6.0f;
 
@@ -505,24 +504,31 @@ void AppTitleBar::Render(Rendering::Renderer& r,
     // ---- Pass 3: content (icons + text) -----------------------------------
     // Workspace glyph + label + chevron
     {
-        r.FillRect({workspace_rect_.x + 4.0f, item_y + 5.0f, 20.0f, 20.0f},
-                   tokens.accent, 5.0f);
-        r.DrawText(ToUpperAscii(workspace_label_).substr(0, 1),
-                   Layout::Rect{workspace_rect_.x + 4.0f, item_y + 5.0f,
-                                20.0f, 20.0f},
-                   {tokens.accent_foreground, 11.0f, 700});
+        const Layout::Rect glyph_box{workspace_rect_.x + 5.0f,
+                                     item_y + (kControlH - 20.0f) * 0.5f,
+                                     20.0f, 20.0f};
+        r.FillRect(glyph_box, tokens.accent, 5.0f);
+        const std::string glyph_letter =
+            ToUpperAscii(workspace_label_).substr(0, 1);
+        const Rendering::TextStyle glyph_style{tokens.accent_foreground,
+                                               11.5f, 700};
+        const auto glyph_tr = Layout::CenteredTextRect(
+            r, glyph_letter, glyph_style, glyph_box, 0.0f, true);
+        r.DrawText(glyph_letter, glyph_tr, glyph_style);
+
         const Rendering::TextStyle label_style{tokens.foreground, 12.5f, 600};
         const float label_w =
             r.MeasureText(workspace_label_, label_style).width;
         const auto label_rect = Layout::CenteredTextRect(
             r, workspace_label_, label_style,
-            Layout::Rect{workspace_rect_.x + 28.0f, item_y,
+            Layout::Rect{workspace_rect_.x + 32.0f, item_y,
                          label_w + 4.0f, kControlH},
             0.0f, false);
         r.DrawText(workspace_label_, label_rect, label_style);
         DrawVectorIcon(r, tokens, "chevron_down",
-                       {workspace_rect_.x + 32.0f + label_w, item_y + 8.0f,
-                        14.0f, 14.0f},
+                       {workspace_rect_.x + 38.0f + label_w,
+                        item_y + (kControlH - 12.0f) * 0.5f,
+                        12.0f, 12.0f},
                        tokens.muted, ws_hot);
     }
 
@@ -576,17 +582,17 @@ void AppTitleBar::Render(Rendering::Renderer& r,
             r, shown_text, center_style, text_rect, 0.0f, false);
         r.DrawText(shown_text, tr, center_style);
     }
-    if (show_center_shortcuts_) {
-        const Rendering::TextStyle key_style{tokens.muted, 10.5f, 600};
+    if (show_center_shortcuts_ && center_bar_rect_.width >= 240.0f) {
+        const Rendering::TextStyle key_style{tokens.muted, 10.0f, 600};
         const char* k1 = "Ctrl";
-        const char* k2 = "P";
+        const char* k2 = "K";
         const float k1_w = r.MeasureText(k1, key_style).width + 10.0f;
         const float k2_w = r.MeasureText(k2, key_style).width + 10.0f;
         const float keys_total = k1_w + k2_w + 4.0f;
-        float kx = center_bar_rect_.Right() - 10.0f - keys_total;
+        float kx = center_bar_rect_.Right() - 8.0f - keys_total;
         const float ky = center_bar_rect_.y + (kCenterBarH - 18.0f) * 0.5f;
         auto draw_key = [&](const char* label, float kw) {
-            r.FillRect({kx, ky, kw, 18.0f}, tokens.secondary, 4.0f);
+            r.FillRect({kx, ky, kw, 18.0f}, tokens.background, 4.0f);
             r.StrokeRect({kx, ky, kw, 18.0f}, tokens.border, 0.8f, 4.0f);
             const auto tr = Layout::CenteredTextRect(
                 r, label, key_style, Layout::Rect{kx, ky, kw, 18.0f},
@@ -614,17 +620,19 @@ void AppTitleBar::Render(Rendering::Renderer& r,
     // Avatar circle + initials + chevron
     {
         const float av_d = kAvatarSize;
-        const float av_x = avatar_rect_.x;
+        const float av_x = avatar_rect_.x + 3.0f;
         const float av_y = avatar_rect_.y + (kControlH - av_d) * 0.5f;
         r.FillRect({av_x, av_y, av_d, av_d}, tokens.accent, av_d * 0.5f);
         const Rendering::TextStyle init_style{tokens.accent_foreground,
-                                              11.5f, 700};
+                                              10.5f, 700};
         const auto init_rect = Layout::CenteredTextRect(
             r, avatar_initials_, init_style,
             Layout::Rect{av_x, av_y, av_d, av_d}, 0.0f, true);
         r.DrawText(avatar_initials_, init_rect, init_style);
         DrawVectorIcon(r, tokens, "chevron_down",
-                       {av_x + av_d + 2.0f, av_y + 4.0f, 16.0f, 16.0f},
+                       {av_x + av_d + 3.0f,
+                        avatar_rect_.y + (kControlH - 12.0f) * 0.5f,
+                        12.0f, 12.0f},
                        av_hot ? tokens.foreground : tokens.muted, av_hot);
     }
 
@@ -639,13 +647,18 @@ void AppTitleBar::Render(Rendering::Renderer& r,
         r.FillRect(action_pill_rect_, pill_bg_hover, kControlH * 0.5f);
         const Rendering::TextStyle pill_style{tokens.accent_foreground,
                                               12.0f, 600};
+        const float tw =
+            r.MeasureText(action_pill_text_, pill_style).width;
         const auto tr = Layout::CenteredTextRect(
-            r, action_pill_text_, pill_style, action_pill_rect_, 14.0f,
-            false);
+            r, action_pill_text_, pill_style,
+            Layout::Rect{action_pill_rect_.x + 14.0f, action_pill_rect_.y,
+                         tw + 4.0f, kControlH},
+            0.0f, false);
         r.DrawText(action_pill_text_, tr, pill_style);
         DrawVectorIcon(r, tokens, "chevron_right",
-                       {action_pill_rect_.Right() - 22.0f,
-                        action_pill_rect_.y + 8.0f, 14.0f, 14.0f},
+                       {action_pill_rect_.Right() - 20.0f,
+                        action_pill_rect_.y + (kControlH - 12.0f) * 0.5f,
+                        12.0f, 12.0f},
                        tokens.accent_foreground, false);
     }
 
@@ -662,6 +675,10 @@ void AppTitleBar::Render(Rendering::Renderer& r,
                  GetMaximized() ? "restore" : "maximize",
                  HitZone::Maximize, false);
     draw_win_btn(close_rect_, "close", HitZone::Close, true);
+
+    // Subtle bottom hairline separating titlebar chrome from content below.
+    r.DrawLine({b.x, b.Bottom() - 0.5f}, {b.Right(), b.Bottom() - 0.5f},
+               tokens.border, 1.0f);
 }
 
 void AppTitleBar::Layout(const Layout::Rect& bounds) {

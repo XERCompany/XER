@@ -61,6 +61,7 @@ private:
     void SetViewMode(ViewMode mode);
     void SetLeftPanelVisible(bool visible);
     void SetRightPanelVisible(bool visible);
+    void SyncInspectorVisibility();
 
     // Hit zones computed during Layout (no renderer needed).
     int CategoryAt(float y) const;
@@ -74,6 +75,8 @@ private:
     void RecomputeHitRects();
 
     // Drawing helpers
+    void DrawToolbar(XER::UI::Rendering::Renderer& r,
+                     const XER::UI::Theme::Tokens& tokens);
     void DrawCategorySidebar(XER::UI::Rendering::Renderer& r,
                              const XER::UI::Theme::Tokens& tokens);
     void DrawResults(XER::UI::Rendering::Renderer& r,
@@ -132,6 +135,7 @@ private:
     XER::UI::Layout::Rect toolbar_rect_;
     XER::UI::Layout::Rect sidebar_rect_;
     XER::UI::Layout::Rect center_rect_;
+    XER::UI::Layout::Rect results_header_rect_;
     XER::UI::Layout::Rect inspector_rect_;
     XER::UI::Layout::Rect statusbar_rect_;
     XER::UI::Layout::Rect list_rect_;
@@ -143,8 +147,10 @@ private:
     std::vector<XER::UI::Layout::Rect> file_rects_;
     int grid_start_idx_ = 0;
     XER::UI::Layout::Rect nsfw_switch_rect_;
+    XER::UI::Layout::Rect nsfw_label_rect_;
     XER::UI::Layout::Rect prev_rect_;
     XER::UI::Layout::Rect next_rect_;
+    XER::UI::Layout::Rect view_seg_rect_;
     XER::UI::Layout::Rect view_list_rect_;
     XER::UI::Layout::Rect view_grid_rect_;
 
