@@ -45,14 +45,16 @@ foreach(_comp IN LISTS FFmpeg_FIND_COMPONENTS)
     endif()
 endforeach()
 
-list(REMOVE_DUPLICATES FFMPEG_LIBRARIES FFMPEG_INCLUDE_DIRS FFMPEG_LIBRARY_DIRS)
+list(REMOVE_DUPLICATES FFMPEG_LIBRARIES)
+list(REMOVE_DUPLICATES FFMPEG_INCLUDE_DIRS)
+list(REMOVE_DUPLICATES FFMPEG_LIBRARY_DIRS)
 
 include(FindPackageHandleStandardArgs)
 find_package_handle_standard_args(FFMPEG
     FOUND_VAR FFMPEG_FOUND
     REQUIRED_VARS FFMPEG_LIBRARIES FFMPEG_INCLUDE_DIRS
     VERSION_VAR FFMPEG_VERSION
-    FAIL_MESSAGE "Could not find FFmpeg via pkg-config. Install the FFmpeg development package (apt: libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libswscale-dev libswresample-dev; brew: ffmpeg).")
+    FAIL_MESSAGE "Could not find FFmpeg via pkg-config - install the FFmpeg development package (apt libavcodec-dev et al, brew ffmpeg).")
 
 if(NOT FFMPEG_FOUND AND _FFMPEG_MISSING)
     message(STATUS "FFMPEG: missing pkg-config modules: ${_FFMPEG_MISSING}")
