@@ -71,6 +71,16 @@ public:
     using BlockProcessor = std::function<void(std::vector<float>&)>;
     void SetBlockProcessor(BlockProcessor processor) { block_processor_ = std::move(processor); }
 
+    // Linear fade in/out around track boundaries: gain ramps 0->1 over the
+    // first fade_in_seconds and 1->0 over the last fade_out_seconds.
+    // 0 disables a side. Each fade is clamped to half the track duration so
+    // the two can't overlap into a silent middle on short files.
+    // Call before Play() for deterministic behaviour.
+    void SetFadeInOut(double fade_in_seconds, double fade_out_seconds) {
+        fade_in_seconds_ = fade_in_seconds;
+        fade_out_seconds_ = fade_out_seconds;
+    }
+
     int GetSampleRate() const { return sample_rate_; }
     int GetChannelCount() const { return channel_count_; }
 
@@ -93,6 +103,12 @@ private:
     // Rewrites audio_buffer_ in place when the new endpoint's mix format
     // differs (rate and/or channel count).
     bool ReformatBufferForDevice(int old_rate, int old_channels);
+    // Converts a fade duration in seconds to a frame count, clamped to
+    // half the loaded track (0 when fading is off or nothing is loaded).
+    uint64_t FadeFrames(double seconds) const;
+    // Starts the render client and spawns the feed thread. Caller must
+    // hold control_mutex_. Does NOT check IsLoaded/state — Play() does.
+    bool StartRendering();
     void UpdateState(PlaybackState new_state);
 
     // WASAPI handles
@@ -114,6 +130,8 @@ private:
     std::atomic<PlaybackState> state_;
     double current_time_;
     float volume_;
+    double fade_in_seconds_;
+    double fade_out_seconds_;
     bool initialized_;
 
     // Threading

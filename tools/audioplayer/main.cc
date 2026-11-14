@@ -1,6 +1,7 @@
 // audioplayer.exe — Audio player with folder playlist using XER AudioPlayer
 //
-// Usage: audioplayer.exe [--loop={track,playlist,none}] <audio_file>
+// Usage: audioplayer.exe [--loop={track,playlist,none}] [--fade[=SEC]]
+//                        [--fade-in=SEC] [--fade-out=SEC] <audio_file>
 //
 // On start the player scans the folder containing <audio_file> for supported
 // audio files and plays them as a playlist (sorted by name). The opened file
@@ -10,6 +11,10 @@
 //   --loop=track     repeat the current track forever
 //   --loop=playlist  repeat the whole folder playlist (default: none)
 //   --loop=none      play the playlist once, then exit
+//
+// Fades (linear curve, default 5s in / 5s out):
+//   --fade=SEC       set both fade-in and fade-out (--fade=0 disables)
+//   --fade-in=SEC    fade-in only   --fade-out=SEC   fade-out only
 //
 // Controls:
 //   Space      pause / resume
@@ -31,6 +36,7 @@
 #include <filesystem>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 #include <future>
 #include <system_error>
 
@@ -45,6 +51,10 @@
 #include "flux/terminal/terminal_extended.h"
 #include "helper/string_utils.h"
 
+#ifdef ENGINE_HAS_FFMPEG_BRIDGE
+#include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
+#endif
+
 #if defined(_WIN32)
 #include <conio.h>
 #define XER_PLAYER_HAS_CONSOLE_KEYS 1
@@ -56,8 +66,23 @@ using XER::Flux::Terminal::OutputStream;
 using XER::Flux::Terminal::TerminalColor;
 using XER::Content::Audio::PlaybackState;
 
+// Parses a non-negative fade duration; false on malformed/negative input.
+bool ParseFadeSeconds(const std::string& text, double* out) {
+    if (text.empty()) {
+        return false;
+    }
+    char* end = nullptr;
+    const double value = std::strtod(text.c_str(), &end);
+    if (end == text.c_str() || *end != '\0' || value < 0.0) {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
 void PrintUsage() {
-    std::cout << "Usage: audioplayer.exe [--loop={track,playlist,none}] <audio_file>\n";
+    std::cout << "Usage: audioplayer.exe [--loop={track,playlist,none}] "
+                 "[--fade[=SEC]] [--fade-in=SEC] [--fade-out=SEC] <audio_file>\n";
     std::cout << "\nScans the file's folder and plays all audio files as a playlist.\n";
     std::cout << "Loop: track=repeat current, playlist=repeat folder, none=play once (default)\n";
     std::cout << "\nControls: Space=pause/resume  Left/Right=seek 5s  Up/Down=volume  "
@@ -430,16 +455,47 @@ void PrintNowPlaying(std::size_t index, std::size_t total,
 }  // namespace
 
 int main(int argc, char** argv) {
-    // Parse --loop={track,playlist,none} (also accepts "--loop X").
+    // Keep FFmpeg's banner/stream-info spam off the terminal; genuine
+    // decode errors still surface through LoadFromFile's error string.
+#ifdef ENGINE_HAS_FFMPEG_BRIDGE
+    XER::Bridge::FFmpeg::SetLogLevel(XER::Bridge::FFmpeg::LogLevel::kError);
+#endif
+
+    // Parse --loop={track,playlist,none} (also accepts "--loop X") and the
+    // fade options. -1 marks "not specified" so --fade-in/--fade-out can
+    // override --fade regardless of argument order.
     LoopMode loop_mode = LoopMode::kNone;
+    double fade_both = -1.0;
+    double fade_in_opt = -1.0;
+    double fade_out_opt = -1.0;
     std::string input_path;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         std::string value;
+        bool is_fade = false;
+        double* fade_target = nullptr;
         if (arg.rfind("--loop=", 0) == 0) {
             value = arg.substr(7);
         } else if (arg == "--loop" && i + 1 < argc) {
             value = argv[++i];
+        } else if (arg.rfind("--fade=", 0) == 0) {
+            is_fade = true;
+            fade_target = &fade_both;
+            value = arg.substr(7);
+        } else if (arg == "--fade") {
+            fade_both = 5.0;  // bare flag: enable with the default length
+        } else if (arg.rfind("--fade-in=", 0) == 0) {
+            is_fade = true;
+            fade_target = &fade_in_opt;
+            value = arg.substr(10);
+        } else if (arg == "--fade-in") {
+            fade_in_opt = 5.0;
+        } else if (arg.rfind("--fade-out=", 0) == 0) {
+            is_fade = true;
+            fade_target = &fade_out_opt;
+            value = arg.substr(11);
+        } else if (arg == "--fade-out") {
+            fade_out_opt = 5.0;
         } else if (!arg.empty() && arg[0] == '-' && arg != "-") {
             std::cerr << "Error: unknown option '" << arg << "'\n";
             PrintUsage();
@@ -451,7 +507,12 @@ int main(int argc, char** argv) {
             PrintUsage();
             return 1;
         }
-        if (!value.empty()) {
+        if (is_fade) {
+            if (!ParseFadeSeconds(value, fade_target)) {
+                std::cerr << "Error: invalid fade value '" << value << "'\n";
+                return 1;
+            }
+        } else if (!value.empty()) {
             if (value == "track") {
                 loop_mode = LoopMode::kTrack;
             } else if (value == "playlist") {
@@ -470,6 +531,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
+    // Fade resolution: default 5s in / 5s out; --fade sets both sides,
+    // --fade-in/--fade-out override their side regardless of order.
+    const double fade_in = fade_in_opt >= 0.0 ? fade_in_opt
+        : (fade_both >= 0.0 ? fade_both : 5.0);
+    const double fade_out = fade_out_opt >= 0.0 ? fade_out_opt
+        : (fade_both >= 0.0 ? fade_both : 5.0);
+
     XER::Flux::Terminal::WriteLine(
         OutputStream::kStdout,
         absl::StrCat(
@@ -486,6 +554,7 @@ int main(int argc, char** argv) {
         std::cerr << "Error: Failed to initialize audio controller\n";
         return 1;
     }
+    controller.SetFadeInOut(fade_in, fade_out);
 
     // Scan the file's folder into a playlist.
     FolderPlaylist playlist = ScanFolderPlaylist(input_path);
