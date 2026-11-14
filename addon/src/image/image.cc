@@ -1,6 +1,6 @@
 // xer.image.* — image decode/info/save bindings (XER_Image).
 
-#include "xer_bind.h"
+#include "util.h"
 
 #include <cstring>
 #include <map>

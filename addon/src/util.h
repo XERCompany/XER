@@ -29,9 +29,10 @@
 
 namespace xer::addon {
 
-// Declarations implemented in the bind_*.cc files.
+// Declarations implemented in the per-area sources.
 void InitImage(v8::Local<v8::Object> exports);
 void InitAudio(v8::Local<v8::Object> exports);
+void InitUI(v8::Local<v8::Object> exports);
 
 // Returns true and fills `out` when info[index] is a string.
 inline bool ArgUtf8(const Nan::FunctionCallbackInfo<v8::Value>& info,

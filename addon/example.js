@@ -1,3 +1,4 @@
+require('./index.js'); // loads xer.node and exposes the XER global
 
 class ContentWidget extends XER.Widget {
     constructor() {

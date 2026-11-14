@@ -9,12 +9,16 @@
 //   xer.image.save({ data, width, height, format: 'rgba8' }, 'out.png');
 //   xer.audio.info('song.mp3');
 //   xer.audio.convert('in.wav', 'out.flac', { sampleRate: 48000 });
+//
+// UI toolkit (see example.js): the XER namespace is also exposed as a
+// global so scripts can write `class W extends XER.Widget` directly.
 
 const path = require('path');
 const fs = require('fs');
 
 const candidates = [
-  // CMake build output (repo layout: <repo>/build/bin/xer.node)
+  // CMake MODULE output (single-config generators place it in lib/)
+  path.join(__dirname, '..', 'build', 'lib', 'xer.node'),
   path.join(__dirname, '..', 'build', 'bin', 'xer.node'),
   // Multi-config generators may place it under a config dir
   path.join(__dirname, '..', 'build', 'Release', 'xer.node'),
@@ -44,6 +48,11 @@ if (addon === null) {
       'Searched:\n' + searched +
       (lastError ? `\nLoad error: ${lastError.message}` : '')
   );
+}
+
+// example.js-style scripts reference a bare `XER` global.
+if (addon.XER && globalThis.XER === undefined) {
+  globalThis.XER = addon.XER;
 }
 
 module.exports = addon;
