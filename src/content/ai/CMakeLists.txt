@@ -61,6 +61,14 @@ target_link_libraries(XER_ContentAI
         XER_Helper
 )
 
+# GPU/CV availability bridges probed by sd_gpu_dispatch capability detection.
+# Targets may be defined after this directory in some configure orders.
+foreach(_bridge IN ITEMS XER_BridgeCuda XER_BridgeOpenCV)
+    if(TARGET ${_bridge})
+        target_link_libraries(XER_ContentAI PUBLIC ${_bridge})
+    endif()
+endforeach()
+
 # Optional numeric backends (installed in vcpkg x64-windows-release).
 find_package(ggml CONFIG QUIET)
 if(TARGET ggml::ggml)

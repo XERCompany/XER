@@ -12,6 +12,19 @@ bool SdModelRuntime::Exists(const std::string& path) {
     return !path.empty() && std::filesystem::exists(std::filesystem::path(path));
 }
 
+namespace {
+
+bool HasSuffixCI(const std::string& s, const std::string& suf) {
+    if (s.size() < suf.size()) return false;
+    return std::equal(suf.rbegin(), suf.rend(), s.rbegin(),
+                      [](char a, char b) {
+                          return std::tolower(static_cast<unsigned char>(a)) ==
+                                 std::tolower(static_cast<unsigned char>(b));
+                      });
+}
+
+}  // namespace
+
 bool SdModelRuntime::Load(const SdBaseConfig& config,
                           const SdGenerationRequest& request,
                           const SdRuntimeCapabilities&,
@@ -36,6 +49,25 @@ bool SdModelRuntime::Load(const SdBaseConfig& config,
     loaded_.controlnet_loaded = Exists(controlnet);
     loaded_.sdxl_branch_loaded = Exists(sdxl_text2) && Exists(sdxl_refiner);
 
+    latent_h_ = static_cast<int>(std::max<uint32_t>(1, request.height / 8));
+    latent_w_ = static_cast<int>(std::max<uint32_t>(1, request.width / 8));
+    unet_real_ = false;
+
+    // Real UNet weights: safetensors checkpoints load directly; .ckpt/.pth/.gguf
+    // need conversion first (kept as existence-check only for now).
+    if (!unet.empty() && HasSuffixCI(unet, ".safetensors")) {
+        std::string wt_err;
+        if (unet_.Load(unet, &wt_err)) {
+            unet_real_ = unet_.IsLoaded();
+            // Derive cross-attention context dim from attn2.to_k weight.
+            if (const auto* tk = unet_.Weights().FindModel(
+                    "mid_block.attentions.0.transformer_blocks.0."
+                    "attn2.to_k.weight")) {
+                if (tk->shape.size() >= 2) ctx_dim_ = static_cast<int>(tk->shape[1]);
+            }
+        }
+    }
+
     const bool strict = request.strict_model_loading || config.strict_model_loading;
     if (strict && (!loaded_.text_encoder_loaded || !loaded_.unet_loaded || !loaded_.vae_loaded)) {
         if (error_out != nullptr) {
@@ -55,6 +87,29 @@ bool SdModelRuntime::Load(const SdBaseConfig& config,
 }
 
 std::vector<float> SdModelRuntime::EncodeText(const std::string& prompt, uint32_t dim) const {
+    if (unet_real_) {
+        // Context-token layout expected by UNet cross-attention:
+        // [ctx_len_, ctx_dim_] row-major (token-major). Deterministic
+        // pseudo-embedding until a real text encoder is wired in.
+        const size_t n = static_cast<size_t>(ctx_len_) * ctx_dim_;
+        std::vector<float> emb(n, 0.0f);
+        if (prompt.empty()) return emb;
+
+        const uint64_t h = std::hash<std::string>{}(prompt);
+        for (int tok = 0; tok < ctx_len_; ++tok) {
+            const uint64_t th = h ^ (static_cast<uint64_t>(tok) *
+                                     0x9E3779B97F4A7C15ULL);
+            for (int d = 0; d < ctx_dim_; ++d) {
+                const uint64_t bits = (th >> ((d + tok) % 32)) ^
+                                      (static_cast<uint64_t>(d) *
+                                       0xBF58476D1CE4E5B9ULL);
+                const float v = static_cast<float>(bits & 0xFFFFu) / 65535.0f;
+                emb[static_cast<size_t>(tok) * ctx_dim_ + d] = 2.0f * v - 1.0f;
+            }
+        }
+        return emb;
+    }
+
     const uint32_t safe_dim = std::max<uint32_t>(8, dim);
     std::vector<float> embedding(safe_dim, 0.0f);
     if (prompt.empty()) return embedding;
@@ -74,9 +129,64 @@ void SdModelRuntime::PredictNoise(const std::vector<float>& text_embedding,
                                   uint32_t timestep,
                                   float sigma,
                                   float guidance) const {
-    if (latent == nullptr || element_count == 0) return;
-    if (text_embedding.empty()) return;
+    PredictNoiseCfg(text_embedding, text_embedding, latent, element_count,
+                    timestep, sigma, guidance);
+}
 
+void SdModelRuntime::PredictNoiseCfg(
+    const std::vector<float>& cond_embedding,
+    const std::vector<float>& uncond_embedding,
+    float* latent,
+    uint64_t element_count,
+    uint32_t timestep,
+    float sigma,
+    float guidance) const {
+    if (latent == nullptr || element_count == 0) return;
+    if (cond_embedding.empty()) return;
+
+    if (!unet_real_) {
+        PredictNoiseSynthetic(cond_embedding, latent, element_count,
+                              timestep, sigma, guidance);
+        return;
+    }
+
+    // Real UNet forward. `latent` buffer holds x_t on entry (pipeline copies
+    // latent -> eps buffer); we overwrite it with the CFG-combined eps.
+    const int h = latent_h_ > 0 ? latent_h_ : 64;
+    const int w = latent_w_ > 0 ? latent_w_ : 64;
+    const size_t need = static_cast<size_t>(4) * h * w;
+    if (element_count < need) return;
+
+    const float t_float = std::clamp(sigma, 0.0f, 1.0f) * 999.0f;
+    const float g = std::clamp(guidance, 0.0f, 30.0f);
+
+    std::vector<float> eps_cond(need, 0.0f);
+    std::vector<float> eps_uncond(need, 0.0f);
+
+    const float* ctx_c = cond_embedding.data();
+    const float* ctx_u = uncond_embedding.empty() ? nullptr
+                                                  : uncond_embedding.data();
+    const int ctx_len = ctx_len_;
+    const int ctx_dim = ctx_dim_;
+
+    unet_.Forward(latent, h, w, ctx_c, ctx_len, ctx_dim, t_float,
+                  eps_cond.data());
+    unet_.Forward(latent, h, w, ctx_u, ctx_len, ctx_dim, t_float,
+                  eps_uncond.data());
+
+    for (size_t i = 0; i < need; ++i) {
+        latent[i] = eps_uncond[i] + g * (eps_cond[i] - eps_uncond[i]);
+    }
+    (void)timestep;
+}
+
+void SdModelRuntime::PredictNoiseSynthetic(
+    const std::vector<float>& text_embedding,
+    float* latent,
+    uint64_t element_count,
+    uint32_t timestep,
+    float sigma,
+    float guidance) const {
     float emb_mean = 0.0f;
     for (float v : text_embedding) emb_mean += v;
     emb_mean /= static_cast<float>(text_embedding.size());
