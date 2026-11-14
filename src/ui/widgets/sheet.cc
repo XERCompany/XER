@@ -136,6 +136,7 @@ void Sheet::Render(Rendering::Renderer& renderer,
 
     // Content is a real child — RenderSubtree draws it; Layout() assigns
     // its rect below the header.
+    rendered_ = true;
 }
 
 void Sheet::Layout(const Layout::Rect& bounds) {
