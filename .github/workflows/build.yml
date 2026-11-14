@@ -176,6 +176,24 @@ jobs:
           done
 
       # ------------------------------------------------------------------
+      # Linux: NVIDIA CUDA toolkit — required by the vcpkg cuda/cudnn ports
+      # (they do NOT self-download the toolkit on Linux like on Windows).
+      # No GPU is needed: this only provides nvcc + headers/libs to build.
+      # ------------------------------------------------------------------
+      - name: Install CUDA toolkit (Linux, for cudnn via vcpkg)
+        if: matrix.toolchain == 'system' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -e
+          # Ubuntu 24.04 + CUDA 12.6 (compatible with current cudnn 9.x ports)
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cuda-toolkit-12-6
+          echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
+          /usr/local/cuda/bin/nvcc --version | tail -2
+
+      # ------------------------------------------------------------------
       # Partial vcpkg: only ports with NO system package equivalent.
       # Everything else resolves via cmake/deps shims / system configs.
       # ------------------------------------------------------------------
@@ -189,7 +207,11 @@ jobs:
           # Metal backend replaces gl/vulkan where supported.
           if [ "$RUNNER_OS" = "Linux" ]; then
             SKIA_HW=""
-            EXTRA_PORTS="cudnn"
+            # cudnn/cudnn-frontend need the vcpkg "cuda" port, which on Linux
+            # requires a real CUDA toolkit (nvcc) — installed by the
+            # "Install CUDA toolkit" step above. On Windows vcpkg downloads
+            # the toolkit binaries itself, so no extra step is needed there.
+            EXTRA_PORTS="cudnn cudnn-frontend"
           else
             SKIA_HW="metal"
             EXTRA_PORTS=""
