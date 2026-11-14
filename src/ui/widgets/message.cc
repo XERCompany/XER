@@ -163,10 +163,6 @@ void Message::Layout(const Layout::Rect& bounds) {
     SetBounds(bounds);
 }
 
-bool Message::HandleEvent(const Event&) {
-    return false;
-}
-
 Layout::Size Message::GetMinSize() const {
     return {200.0f, 64.0f};
 }
