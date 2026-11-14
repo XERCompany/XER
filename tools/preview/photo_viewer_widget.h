@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,6 +11,7 @@
 #include "thumb_cache.h"
 
 namespace XER::UI::Widgets {
+class AppTitleBar;
 class Button;
 class Slider;
 class Label;
@@ -30,6 +32,13 @@ public:
     explicit PhotoViewerWidget(PhotoBrowser* browser,
                                XER::UI::Core::Window* window = nullptr);
 
+    /// Frameless-window title bar with File/Info menus (AppTitleBar).
+    XER::UI::Widgets::AppTitleBar* TitleBar() const { return title_bar_.get(); }
+    /// Called by the File > Quit menu item; wire to Window::Close in main.
+    void SetOnQuitRequest(std::function<void()> callback) {
+        on_quit_ = std::move(callback);
+    }
+
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
     void Layout(const XER::UI::Layout::Rect& bounds) override;
@@ -47,6 +56,13 @@ private:
     using Button = XER::UI::Widgets::Button;
     using Slider = XER::UI::Widgets::Slider;
     using Label = XER::UI::Widgets::Label;
+
+    // App title bar (menus, avatar, window controls).
+    void BuildTitleBar();
+    void ShowAboutDialog();
+    void ShowImageInfoDialog();
+    void ShowShortcutsDialog();
+    void OpenImageDialog();
 
     void PositionChildren(const Rect& bounds,
                           const XER::UI::Theme::Tokens& tokens);
@@ -69,13 +85,17 @@ private:
     // Filmstrip.
     void EnsureStripRequests();
     void ScrollStripToCurrent();
+    float StripMaxScroll() const;
     Rect StripCellRect(std::size_t index) const;
     int StripIndexAt(Point p) const;
-    void RenderFilmstrip(XER::UI::Rendering::Renderer& renderer);
+    void RenderFilmstrip(XER::UI::Rendering::Renderer& renderer,
+                         const XER::UI::Theme::Tokens& tokens);
 
     PhotoBrowser* browser_;
     XER::UI::Core::Window* window_ = nullptr;
     std::unique_ptr<ThumbCache> thumbs_;
+    std::shared_ptr<XER::UI::Widgets::AppTitleBar> title_bar_;
+    std::function<void()> on_quit_;
 
     // Child widgets.
     std::shared_ptr<Button> btn_prev_, btn_next_, btn_rot_cw_, btn_rot_ccw_;
@@ -86,8 +106,12 @@ private:
     std::shared_ptr<Label> label_bright_, label_contrast_;
 
     Rect bounds_{};
+    Rect toolbar_panel_{};
+    Rect editbar_panel_{};
     Rect viewport_{};
     Rect strip_{};
+    // X positions of toolbar group separators (computed during layout).
+    float sep_xs_[2] = {0.0f, 0.0f};
 
     // View transform: image pixels -> widget coords via dest rect.
     float zoom_ = 1.0f;   // multiplier on fit scale

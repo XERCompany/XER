@@ -36,7 +36,9 @@ Widgets::KeyCode TranslateShortcutKey(WPARAM key) {
     case 'F': return Widgets::KeyCode::F;
     case 'K': return Widgets::KeyCode::K;
     case 'N': return Widgets::KeyCode::N;
+    case 'O': return Widgets::KeyCode::O;
     case 'P': return Widgets::KeyCode::P;
+    case 'S': return Widgets::KeyCode::S;
     case 'V': return Widgets::KeyCode::V;
     case 'X': return Widgets::KeyCode::X;
     case 'Y': return Widgets::KeyCode::Y;
