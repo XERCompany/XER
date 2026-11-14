@@ -31,6 +31,12 @@
 #include "widgets/drawer.h"
 #include "widgets/resizable.h"
 #include "widgets/carousel.h"
+#include "widgets/table.h"
+#include "widgets/combobox.h"
+#include "widgets/command.h"
+#include "widgets/calendar.h"
+#include "widgets/chart.h"
+#include "widgets/sidebar.h"
 
 namespace {
 
@@ -934,6 +940,472 @@ NAN_METHOD(CarouselSetOnIndexChanged) {
                        });
 }
 
+// --- Table -------------------------------------------------------------------
+
+void NewTable(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    WidgetWrap::Adopt(info, UIW::Table::Create());
+}
+
+// JS column: {header, width?, sortable?}
+NAN_METHOD(TableSetColumns) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (!w || !HasArg(info, 0) || !info[0]->IsArray()) return;
+    v8::Local<v8::Array> arr = info[0].As<v8::Array>();
+    const uint32_t n = arr->Length();
+    std::vector<UIW::Table::Column> cols;
+    cols.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        if (el.IsEmpty() || !el->IsObject()) continue;
+        v8::Local<v8::Object> o = el.As<v8::Object>();
+        UIW::Table::Column c;
+        c.header = xer::addon::StrProp(o, "header");
+        c.width = static_cast<float>(xer::addon::NumberOr(
+            xer::addon::GetProp(o, "width"), 0.0));
+        c.sortable = xer::addon::BoolProp(o, "sortable", false);
+        cols.push_back(std::move(c));
+    }
+    w->SetColumns(std::move(cols));
+}
+
+// JS rows: [["a","b"], ["c","d"]] — array of string arrays.
+NAN_METHOD(TableSetRows) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (!w || !HasArg(info, 0) || !info[0]->IsArray()) return;
+    v8::Local<v8::Array> arr = info[0].As<v8::Array>();
+    const uint32_t n = arr->Length();
+    std::vector<std::vector<std::string>> rows;
+    rows.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        v8::Local<v8::Value> row;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&row);
+        std::vector<std::string> cells;
+        if (!row.IsEmpty() && row->IsArray()) {
+            v8::Local<v8::Array> ca = row.As<v8::Array>();
+            for (uint32_t j = 0; j < ca->Length(); ++j) {
+                v8::Local<v8::Value> cell;
+                ca->Get(Nan::GetCurrentContext(), j).ToLocal(&cell);
+                std::string s;
+                if (!cell.IsEmpty() && cell->IsString()) {
+                    Nan::Utf8String u(cell);
+                    if (u.length() >= 0)
+                        s = std::string(*u,
+                                        static_cast<std::size_t>(u.length()));
+                }
+                cells.push_back(std::move(s));
+            }
+        }
+        rows.push_back(std::move(cells));
+    }
+    w->SetRows(std::move(rows));
+}
+
+NAN_METHOD(TableSetHeader) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (w) w->SetHeader(BoolOr(info[0], true));
+}
+
+NAN_METHOD(TableSetRowHeight) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (w) w->SetRowHeight(static_cast<float>(NumArg(info, 0, 30.0)));
+}
+
+NAN_METHOD(TableSetSelectedRow) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (w) w->SetSelectedRow(static_cast<int>(NumArg(info, 0, -1)));
+}
+
+NAN_METHOD(TableGetSelectedRow) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    info.GetReturnValue().Set(Nan::New(w ? w->GetSelectedRow() : -1));
+}
+
+NAN_METHOD(TableScrollTo) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (w) w->ScrollTo(static_cast<int>(NumArg(info, 0, 0)));
+}
+
+NAN_METHOD(TableSetOnRowClick) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (!w) return;
+    BindWidgetCallback(info.This(), info, 0, "rowClick",
+                       [&](std::shared_ptr<CallbackStore> store) {
+                           w->SetOnRowClick(
+                               EmitFn<void, int>(store, "rowClick"));
+                       });
+}
+
+NAN_METHOD(TableSetOnCellClick) {
+    auto* w = CastWidget<UIW::Table>(info.This());
+    if (!w) return;
+    BindWidgetCallback(info.This(), info, 0, "cellClick",
+                       [&](std::shared_ptr<CallbackStore> store) {
+                           // (row, col) → emit as {row, col} object.
+                           w->SetOnCellClick(
+                               [store](int row, int col) {
+                                   v8::Local<v8::Object> o =
+                                       Nan::New<v8::Object>();
+                                   Nan::Set(o, Nan::New("row").ToLocalChecked(),
+                                            Nan::New(row));
+                                   Nan::Set(o, Nan::New("col").ToLocalChecked(),
+                                            Nan::New(col));
+                                   store->Emit("cellClick", o);
+                               });
+                       });
+}
+
+// --- Combobox ----------------------------------------------------------------
+
+void NewCombobox(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    WidgetWrap::Adopt(info, UIW::Combobox::Create());
+}
+
+NAN_METHOD(ComboboxSetOptions) {
+    auto* w = CastWidget<UIW::Combobox>(info.This());
+    if (!w || !HasArg(info, 0) || !info[0]->IsArray()) return;
+    v8::Local<v8::Array> arr = info[0].As<v8::Array>();
+    const uint32_t n = arr->Length();
+    std::vector<UIW::Combobox::Option> opts;
+    opts.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        UIW::Combobox::Option o;
+        if (!el.IsEmpty() && el->IsObject()) {
+            v8::Local<v8::Object> obj = el.As<v8::Object>();
+            o.label = xer::addon::StrProp(obj, "label");
+            o.value = xer::addon::StrProp(obj, "value");
+        } else if (!el.IsEmpty() && el->IsString()) {
+            Nan::Utf8String u(el);
+            if (u.length() >= 0)
+                o.label = std::string(*u,
+                                      static_cast<std::size_t>(u.length()));
+        }
+        opts.push_back(std::move(o));
+    }
+    w->SetOptions(std::move(opts));
+}
+
+NAN_METHOD(ComboboxSetValue) {
+    auto* w = CastWidget<UIW::Combobox>(info.This());
+    std::string v;
+    if (w && ArgUtf8(info, 0, &v)) w->SetValue(std::move(v));
+}
+
+NAN_METHOD(ComboboxGetValue) {
+    auto* w = CastWidget<UIW::Combobox>(info.This());
+    info.GetReturnValue().Set(
+        w ? Nan::New(w->GetValue()).ToLocalChecked()
+          : Nan::New("").ToLocalChecked());
+}
+
+NAN_METHOD(ComboboxSetPlaceholder) {
+    auto* w = CastWidget<UIW::Combobox>(info.This());
+    std::string v;
+    if (w && ArgUtf8(info, 0, &v)) w->SetPlaceholder(std::move(v));
+}
+
+NAN_METHOD(ComboboxSetOnChange) {
+    auto* w = CastWidget<UIW::Combobox>(info.This());
+    if (!w) return;
+    BindWidgetCallback(info.This(), info, 0, "change",
+                       [&](std::shared_ptr<CallbackStore> store) {
+                           w->SetOnChange(
+                               EmitFn<void, const std::string&>(
+                                   store, "change"));
+                       });
+}
+
+// --- Command -----------------------------------------------------------------
+
+void NewCommand(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    WidgetWrap::Adopt(info,
+                      UIW::Command::Create(StrArg(info, 0)));
+}
+
+NAN_METHOD(CommandSetItems) {
+    auto* w = CastWidget<UIW::Command>(info.This());
+    if (!w || !HasArg(info, 0) || !info[0]->IsArray()) return;
+    auto store = xer::addon::ui::CallbacksOf(info.This());
+    if (!store) return;
+    v8::Local<v8::Array> arr = info[0].As<v8::Array>();
+    const uint32_t n = arr->Length();
+    std::vector<UIW::Command::Item> items;
+    items.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        if (el.IsEmpty() || !el->IsObject()) continue;
+        v8::Local<v8::Object> o = el.As<v8::Object>();
+        UIW::Command::Item item;
+        item.label = xer::addon::StrProp(o, "label");
+        item.hint = xer::addon::StrProp(o, "hint");
+        item.enabled = xer::addon::BoolProp(o, "enabled", true);
+        v8::Local<v8::Value> action = xer::addon::GetProp(o, "action");
+        if (action->IsFunction()) {
+            const std::string key = store->Unique("cmd");
+            store->Set(key.c_str(), action.As<v8::Function>());
+            item.action = [store, key]() { store->Emit(key.c_str()); };
+        }
+        items.push_back(std::move(item));
+    }
+    w->SetItems(std::move(items));
+}
+
+NAN_METHOD(CommandSetPlaceholder) {
+    auto* w = CastWidget<UIW::Command>(info.This());
+    std::string v;
+    if (w && ArgUtf8(info, 0, &v)) w->SetPlaceholder(std::move(v));
+}
+
+NAN_METHOD(CommandOpen) {
+    auto* w = CastWidget<UIW::Command>(info.This());
+    if (w) w->Open();
+}
+
+NAN_METHOD(CommandClose) {
+    auto* w = CastWidget<UIW::Command>(info.This());
+    if (w) w->Close();
+}
+
+NAN_METHOD(CommandIsOpen) {
+    auto* w = CastWidget<UIW::Command>(info.This());
+    info.GetReturnValue().Set(Nan::New(w && w->IsOpen()));
+}
+
+NAN_METHOD(CommandSetOnOpenChange) {
+    auto* w = CastWidget<UIW::Command>(info.This());
+    if (!w) return;
+    BindWidgetCallback(info.This(), info, 0, "openChange",
+                       [&](std::shared_ptr<CallbackStore> store) {
+                           w->SetOnOpenChange(
+                               EmitFn<void, bool>(store, "openChange"));
+                       });
+}
+
+// --- Calendar ----------------------------------------------------------------
+
+void NewCalendar(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    WidgetWrap::Adopt(info, UIW::Calendar::Create());
+}
+
+UIW::Calendar::Date CalDateArg(
+    const Nan::FunctionCallbackInfo<v8::Value>& info, int index,
+    UIW::Calendar::Date fallback) {
+    UIW::Calendar::Date d = fallback;
+    if (HasArg(info, index) && info[index]->IsObject()) {
+        v8::Local<v8::Object> o = info[index].As<v8::Object>();
+        d.year = static_cast<int>(xer::addon::NumberOr(
+            xer::addon::GetProp(o, "year"), d.year));
+        d.month = static_cast<int>(xer::addon::NumberOr(
+            xer::addon::GetProp(o, "month"), d.month));
+        d.day = static_cast<int>(xer::addon::NumberOr(
+            xer::addon::GetProp(o, "day"), d.day));
+    }
+    return d;
+}
+
+NAN_METHOD(CalendarSetDate) {
+    auto* w = CastWidget<UIW::Calendar>(info.This());
+    if (w) w->SetDate(CalDateArg(info, 0, w->GetDate()));
+}
+
+NAN_METHOD(CalendarGetDate) {
+    auto* w = CastWidget<UIW::Calendar>(info.This());
+    const auto d = w ? w->GetDate() : UIW::Calendar::Date{};
+    v8::Local<v8::Object> o = Nan::New<v8::Object>();
+    Nan::Set(o, Nan::New("year").ToLocalChecked(), Nan::New(d.year));
+    Nan::Set(o, Nan::New("month").ToLocalChecked(), Nan::New(d.month));
+    Nan::Set(o, Nan::New("day").ToLocalChecked(), Nan::New(d.day));
+    info.GetReturnValue().Set(o);
+}
+
+NAN_METHOD(CalendarGoToMonth) {
+    auto* w = CastWidget<UIW::Calendar>(info.This());
+    if (w) {
+        w->GoToMonth(static_cast<int>(NumArg(info, 0, 1970)),
+                     static_cast<int>(NumArg(info, 1, 1)));
+    }
+}
+
+NAN_METHOD(CalendarSetMinDate) {
+    auto* w = CastWidget<UIW::Calendar>(info.This());
+    if (w) w->SetMinDate(CalDateArg(info, 0, {}));
+}
+
+NAN_METHOD(CalendarSetMaxDate) {
+    auto* w = CastWidget<UIW::Calendar>(info.This());
+    if (w) w->SetMaxDate(CalDateArg(info, 0, {}));
+}
+
+NAN_METHOD(CalendarSetOnSelect) {
+    auto* w = CastWidget<UIW::Calendar>(info.This());
+    if (!w) return;
+    BindWidgetCallback(info.This(), info, 0, "select",
+                       [&](std::shared_ptr<CallbackStore> store) {
+                           w->SetOnSelect(
+                               [store](UIW::Calendar::Date d) {
+                                   v8::Local<v8::Object> o =
+                                       Nan::New<v8::Object>();
+                                   Nan::Set(o, Nan::New("year").ToLocalChecked(),
+                                            Nan::New(d.year));
+                                   Nan::Set(o, Nan::New("month").ToLocalChecked(),
+                                            Nan::New(d.month));
+                                   Nan::Set(o, Nan::New("day").ToLocalChecked(),
+                                            Nan::New(d.day));
+                                   store->Emit("select", o);
+                               });
+                       });
+}
+
+// --- Chart -------------------------------------------------------------------
+
+using ChartType = UIW::Chart::Type;
+
+ChartType ChartTypeArg(const Nan::FunctionCallbackInfo<v8::Value>& info,
+                       int index) {
+    return EnumArg(info, index, ChartType::Line,
+                   {{"Line", ChartType::Line}, {"Area", ChartType::Area},
+                    {"Bar", ChartType::Bar}});
+}
+
+void NewChart(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    WidgetWrap::Adopt(info, UIW::Chart::Create(ChartTypeArg(info, 0)));
+}
+
+NAN_METHOD(ChartSetType) {
+    auto* w = CastWidget<UIW::Chart>(info.This());
+    if (w) w->SetType(ChartTypeArg(info, 0));
+}
+
+NAN_METHOD(ChartSetSeries) {
+    auto* w = CastWidget<UIW::Chart>(info.This());
+    if (!w || !HasArg(info, 0) || !info[0]->IsArray()) return;
+    v8::Local<v8::Array> arr = info[0].As<v8::Array>();
+    const uint32_t n = arr->Length();
+    std::vector<UIW::Chart::Series> out;
+    out.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        if (el.IsEmpty() || !el->IsObject()) continue;
+        v8::Local<v8::Object> o = el.As<v8::Object>();
+        UIW::Chart::Series s;
+        s.label = xer::addon::StrProp(o, "label");
+        v8::Local<v8::Value> vals = xer::addon::GetProp(o, "values");
+        if (!vals.IsEmpty() && vals->IsArray()) {
+            v8::Local<v8::Array> va = vals.As<v8::Array>();
+            s.values.reserve(va->Length());
+            for (uint32_t j = 0; j < va->Length(); ++j) {
+                v8::Local<v8::Value> v;
+                va->Get(Nan::GetCurrentContext(), j).ToLocal(&v);
+                if (!v.IsEmpty()) {
+                    s.values.push_back(
+                        static_cast<float>(xer::addon::NumberOr(v, 0.0)));
+                }
+            }
+        }
+        out.push_back(std::move(s));
+    }
+    w->SetSeries(std::move(out));
+}
+
+NAN_METHOD(ChartSetTitle) {
+    auto* w = CastWidget<UIW::Chart>(info.This());
+    std::string v;
+    if (w && ArgUtf8(info, 0, &v)) w->SetTitle(std::move(v));
+}
+
+NAN_METHOD(ChartSetShowGrid) {
+    auto* w = CastWidget<UIW::Chart>(info.This());
+    if (w) w->SetShowGrid(BoolOr(info[0], true));
+}
+
+NAN_METHOD(ChartSetShowLegend) {
+    auto* w = CastWidget<UIW::Chart>(info.This());
+    if (w) w->SetShowLegend(BoolOr(info[0], true));
+}
+
+NAN_METHOD(ChartSetOnPointClick) {
+    auto* w = CastWidget<UIW::Chart>(info.This());
+    if (!w) return;
+    BindWidgetCallback(info.This(), info, 0, "pointClick",
+                       [&](std::shared_ptr<CallbackStore> store) {
+                           w->SetOnPointClick(
+                               [store](int si, int idx) {
+                                   v8::Local<v8::Object> o =
+                                       Nan::New<v8::Object>();
+                                   Nan::Set(o, Nan::New("series").ToLocalChecked(),
+                                            Nan::New(si));
+                                   Nan::Set(o, Nan::New("index").ToLocalChecked(),
+                                            Nan::New(idx));
+                                   store->Emit("pointClick", o);
+                               });
+                       });
+}
+
+// --- Sidebar -----------------------------------------------------------------
+
+void NewSidebar(const Nan::FunctionCallbackInfo<v8::Value>& info) {
+    WidgetWrap::Adopt(info, UIW::Sidebar::Create(StrArg(info, 0)));
+}
+
+NAN_METHOD(SidebarSetHeader) {
+    auto* w = CastWidget<UIW::Sidebar>(info.This());
+    std::string v;
+    if (w && ArgUtf8(info, 0, &v)) w->SetHeader(std::move(v));
+}
+
+NAN_METHOD(SidebarSetItems) {
+    auto* w = CastWidget<UIW::Sidebar>(info.This());
+    if (!w || !HasArg(info, 0) || !info[0]->IsArray()) return;
+    v8::Local<v8::Array> arr = info[0].As<v8::Array>();
+    const uint32_t n = arr->Length();
+    std::vector<UIW::Sidebar::Item> items;
+    items.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        if (el.IsEmpty() || !el->IsObject()) continue;
+        v8::Local<v8::Object> o = el.As<v8::Object>();
+        UIW::Sidebar::Item item;
+        item.label = xer::addon::StrProp(o, "label");
+        item.icon = xer::addon::StrProp(o, "icon");
+        item.enabled = xer::addon::BoolProp(o, "enabled", true);
+        item.separator_before = xer::addon::BoolProp(
+            o, "separatorBefore",
+            xer::addon::BoolProp(o, "separator_before", false));
+        items.push_back(std::move(item));
+    }
+    w->SetItems(std::move(items));
+}
+
+NAN_METHOD(SidebarSetActiveIndex) {
+    auto* w = CastWidget<UIW::Sidebar>(info.This());
+    if (w) w->SetActiveIndex(static_cast<int>(NumArg(info, 0, -1)));
+}
+
+NAN_METHOD(SidebarGetActiveIndex) {
+    auto* w = CastWidget<UIW::Sidebar>(info.This());
+    info.GetReturnValue().Set(Nan::New(w ? w->GetActiveIndex() : -1));
+}
+
+NAN_METHOD(SidebarSetCollapsed) {
+    auto* w = CastWidget<UIW::Sidebar>(info.This());
+    if (w) w->SetCollapsed(BoolOr(info[0], false));
+}
+
+NAN_METHOD(SidebarSetOnSelect) {
+    auto* w = CastWidget<UIW::Sidebar>(info.This());
+    if (!w) return;
+    BindWidgetCallback(info.This(), info, 0, "select",
+                       [&](std::shared_ptr<CallbackStore> store) {
+                           w->SetOnSelect(
+                               EmitFn<void, int>(store, "select"));
+                       });
+}
+
 } // namespace
 
 namespace xer::addon::ui {
@@ -1100,6 +1572,56 @@ void RegisterKit(v8::Local<v8::Object> xer) {
          {"Next", CarouselNext},
          {"Prev", CarouselPrev},
          {"SetOnIndexChanged", CarouselSetOnIndexChanged}});
+    RegisterWidgetClass(
+        xer, "Table", NewTable,
+        {{"SetColumns", TableSetColumns},
+         {"SetRows", TableSetRows},
+         {"SetHeader", TableSetHeader},
+         {"SetRowHeight", TableSetRowHeight},
+         {"SetSelectedRow", TableSetSelectedRow},
+         {"GetSelectedRow", TableGetSelectedRow},
+         {"ScrollTo", TableScrollTo},
+         {"SetOnRowClick", TableSetOnRowClick},
+         {"SetOnCellClick", TableSetOnCellClick}});
+    RegisterWidgetClass(
+        xer, "Combobox", NewCombobox,
+        {{"SetOptions", ComboboxSetOptions},
+         {"SetValue", ComboboxSetValue},
+         {"GetValue", ComboboxGetValue},
+         {"SetPlaceholder", ComboboxSetPlaceholder},
+         {"SetOnChange", ComboboxSetOnChange}});
+    RegisterWidgetClass(
+        xer, "Command", NewCommand,
+        {{"SetItems", CommandSetItems},
+         {"SetPlaceholder", CommandSetPlaceholder},
+         {"Open", CommandOpen},
+         {"Close", CommandClose},
+         {"IsOpen", CommandIsOpen},
+         {"SetOnOpenChange", CommandSetOnOpenChange}});
+    RegisterWidgetClass(
+        xer, "Calendar", NewCalendar,
+        {{"SetDate", CalendarSetDate},
+         {"GetDate", CalendarGetDate},
+         {"GoToMonth", CalendarGoToMonth},
+         {"SetMinDate", CalendarSetMinDate},
+         {"SetMaxDate", CalendarSetMaxDate},
+         {"SetOnSelect", CalendarSetOnSelect}});
+    RegisterWidgetClass(
+        xer, "Chart", NewChart,
+        {{"SetType", ChartSetType},
+         {"SetSeries", ChartSetSeries},
+         {"SetTitle", ChartSetTitle},
+         {"SetShowGrid", ChartSetShowGrid},
+         {"SetShowLegend", ChartSetShowLegend},
+         {"SetOnPointClick", ChartSetOnPointClick}});
+    RegisterWidgetClass(
+        xer, "Sidebar", NewSidebar,
+        {{"SetHeader", SidebarSetHeader},
+         {"SetItems", SidebarSetItems},
+         {"SetActiveIndex", SidebarSetActiveIndex},
+         {"GetActiveIndex", SidebarGetActiveIndex},
+         {"SetCollapsed", SidebarSetCollapsed},
+         {"SetOnSelect", SidebarSetOnSelect}});
 }
 
 } // namespace xer::addon::ui

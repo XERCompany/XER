@@ -59,7 +59,9 @@ Makefile
 *.out
 *.app
 EngineBuilder
-Flux*
+# Root-level Flux* build artifacts only — do NOT ignore src/flux/,
+# src/ui/backends/flux/, or tests/ui/flux_* sources.
+/Flux*
 
 # Dependencies
 /vendor/

@@ -77,6 +77,9 @@ inline v8::Local<v8::Value> ToV8(const UIL::Rect& r) {
 inline v8::Local<v8::Value> ToV8(std::nullptr_t) {
     return Nan::Undefined();
 }
+// Passthrough for pre-built JS values (objects/arrays created by the
+// binding itself before Emit).
+inline v8::Local<v8::Value> ToV8(v8::Local<v8::Value> v) { return v; }
 
 class CallbackStore {
 public:
