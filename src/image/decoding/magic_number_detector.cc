@@ -1,4 +1,5 @@
 #include "magic_number_detector.h"
+#include "helper/path_utils.h"
 #include <fstream>
 #include <cstring>
 
@@ -36,7 +37,9 @@ std::string MagicNumberDetector::Detect(const uint8_t* h, std::size_t len) {
 }
 
 std::string MagicNumberDetector::DetectFile(const std::string& path) {
-    std::ifstream f(path, std::ios::binary);
+    const auto fs_path = XER::Helper::Path::FromUtf8(
+        XER::Helper::Path::NormalizeUtf8Path(path));
+    std::ifstream f(fs_path, std::ios::binary);
     if (!f) return "";
     uint8_t buf[16] = {};
     f.read(reinterpret_cast<char*>(buf), sizeof(buf));

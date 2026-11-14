@@ -9,9 +9,11 @@
 #include "image/io/image_loader.h"
 #include "image/io/image_saver.h"
 #include "image/tools/crop_tool.h"
+#include "helper/path_utils.h"
 
 namespace preview {
 namespace fs = std::filesystem;
+namespace Path = XER::Helper::Path;
 
 namespace {
 
@@ -22,14 +24,14 @@ constexpr std::string_view kExtensions[] = {
 };
 
 std::string LowerExt(const fs::path& p) {
-    std::string ext = p.extension().string();
+    std::string ext = Path::ToUtf8(p.extension());
     std::transform(ext.begin(), ext.end(), ext.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return ext;
 }
 
 std::string FileKey(const fs::path& p) {
-    std::string s = p.filename().string();
+    std::string s = Path::ToUtf8(p.filename());
     std::transform(s.begin(), s.end(), s.begin(),
                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
     return s;
@@ -50,7 +52,7 @@ bool IsImageFile(const fs::directory_entry& e) {
 }  // namespace
 
 bool IsSupportedImageExtension(const std::string& path) {
-    return HasExtension(fs::path(path));
+    return HasExtension(Path::FromUtf8(path));
 }
 
 bool NormalizeToRGBA8(const image::ImageBuffer& src, image::ImageBuffer& dst) {
@@ -123,20 +125,20 @@ bool PhotoBrowser::Open(const std::string& path) {
     status_message_.clear();
 
     std::error_code ec;
-    const fs::path input = fs::weakly_canonical(fs::path(path), ec);
+    const fs::path input = fs::weakly_canonical(Path::FromUtf8(path), ec);
     if (ec || !fs::is_regular_file(input)) {
         status_message_ = "Cannot open: " + path;
         return false;
     }
-    if (!IsSupportedImageExtension(input.string())) {
-        status_message_ = "Unsupported image format: " + input.extension().string();
+    if (!IsSupportedImageExtension(Path::ToUtf8(input))) {
+        status_message_ = "Unsupported image format: " + Path::ToUtf8(input.extension());
         return false;
     }
 
     const fs::path dir = input.parent_path();
     for (const auto& entry : fs::directory_iterator(dir, ec)) {
         if (IsImageFile(entry)) {
-            files_.push_back(entry.path().lexically_normal().string());
+            files_.push_back(Path::ToUtf8(entry.path().lexically_normal()));
         }
     }
     if (files_.empty()) {
@@ -145,13 +147,13 @@ bool PhotoBrowser::Open(const std::string& path) {
     }
     std::sort(files_.begin(), files_.end(),
               [](const std::string& a, const std::string& b) {
-                  return FileKey(fs::path(a)) < FileKey(fs::path(b));
+                  return FileKey(Path::FromUtf8(a)) < FileKey(Path::FromUtf8(b));
               });
 
     const std::string wanted = FileKey(input);
     const auto it = std::find_if(files_.begin(), files_.end(),
                                  [&](const std::string& f) {
-                                     return FileKey(fs::path(f)) == wanted;
+                                     return FileKey(Path::FromUtf8(f)) == wanted;
                                  });
     current_ = (it != files_.end())
                    ? static_cast<std::size_t>(it - files_.begin())
@@ -334,7 +336,7 @@ bool PhotoBrowser::Save() {
         status_message_.clear();
         return true;
     }
-    status_message_ = "Save failed for " + fs::path(files_[current_]).extension().string() +
+    status_message_ = "Save failed for " + Path::ToUtf8(Path::FromUtf8(files_[current_]).extension()) +
                       " - use Export PNG";
     return false;
 }
@@ -344,20 +346,21 @@ bool PhotoBrowser::ExportPng(std::string* out_path) {
         status_message_ = "Nothing to export";
         return false;
     }
-    fs::path src(files_[current_]);
-    fs::path dst = src.parent_path() / (src.stem().string() + ".png");
+    const fs::path src = Path::FromUtf8(files_[current_]);
+    fs::path dst = src.parent_path() / (Path::ToUtf8(src.stem()) + ".png");
     std::error_code ec;
     if (fs::equivalent(dst, src, ec)) {
         dst = src.parent_path() /
-              (src.stem().string() + "_xER.png");
+              (Path::ToUtf8(src.stem()) + "_xER.png");
     }
+    const std::string dst_utf8 = Path::ToUtf8(dst);
     image::ImageSaver saver;
-    if (!saver.SavePng(display_, dst.string())) {
-        status_message_ = "PNG export failed: " + dst.string();
+    if (!saver.SavePng(display_, dst_utf8)) {
+        status_message_ = "PNG export failed: " + dst_utf8;
         return false;
     }
-    if (out_path) *out_path = dst.string();
-    status_message_ = "Exported " + dst.filename().string();
+    if (out_path) *out_path = dst_utf8;
+    status_message_ = "Exported " + Path::ToUtf8(dst.filename());
     return true;
 }
 

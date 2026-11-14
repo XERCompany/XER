@@ -15,6 +15,8 @@
 #include <algorithm>
 #include <fstream>
 
+#include "helper/path_utils.h"
+
 namespace image {
 
 DecoderFactory& DecoderFactory::Instance() {
@@ -49,8 +51,11 @@ BaseDecoder* DecoderFactory::FindByMagic(const uint8_t* header, std::size_t len)
 }
 
 BaseDecoder* DecoderFactory::Find(const std::string& path) {
+    // Paths are UTF-8; fs::path and ifstream need the native (wide) form.
+    const std::string upath = XER::Helper::Path::NormalizeUtf8Path(path);
+    const auto fs_path = XER::Helper::Path::FromUtf8(upath);
     // Try magic bytes first
-    std::ifstream f(path, std::ios::binary);
+    std::ifstream f(fs_path, std::ios::binary);
     if (f) {
         uint8_t buf[16] = {};
         f.read(reinterpret_cast<char*>(buf), sizeof(buf));
@@ -59,7 +64,7 @@ BaseDecoder* DecoderFactory::Find(const std::string& path) {
     }
     // Fallback: extension
     std::string ext = XER::Helper::String::ToLowerAscii(
-        std::filesystem::path(path).extension().string());
+        XER::Helper::Path::ToUtf8(fs_path.extension()));
     if (!ext.empty() && ext[0] == '.') ext = ext.substr(1);
     for (auto& d : decoders_) {
         for (auto& e : d->Extensions())
@@ -70,9 +75,11 @@ BaseDecoder* DecoderFactory::Find(const std::string& path) {
 
 std::shared_ptr<ImageBuffer> DecoderFactory::Decode(const std::string& path,
                                                       ImageDescriptor& desc) {
-    BaseDecoder* d = Find(path);
+    // Hand decoders clean UTF-8 (FFmpeg expects UTF-8 filenames on Windows).
+    const std::string upath = XER::Helper::Path::NormalizeUtf8Path(path);
+    BaseDecoder* d = Find(upath);
     if (!d) return nullptr;
-    return d->Decode(path, desc);
+    return d->Decode(upath, desc);
 }
 
 }  // namespace image

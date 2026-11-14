@@ -1,6 +1,7 @@
 #include "svg_decoder.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 #include "flux/core/logger.h"
+#include "helper/path_utils.h"
 #include "helper/tool_to.h"
 #include <fstream>
 #include <sstream>
@@ -72,8 +73,17 @@ static void GetSvgDimensions(xmlDocPtr doc, int& w_out, int& h_out) {
 std::shared_ptr<ImageBuffer>
 SvgDecoder::Rasterize(const std::string& path, int target_w, int target_h,
                        ImageDescriptor& desc) {
-    // Read SVG file content via the shared helper API.
-    const std::string svg_text = XER::Helper::ToolTo::ReadTextFile(path);
+    // Read SVG file content. fs::path keeps the UTF-16 form on Windows so
+    // non-ASCII paths open correctly (ToolTo::ReadTextFile goes through an
+    // ANSI std::string and would mangle them).
+    std::ifstream in(XER::Helper::Path::FromUtf8(path), std::ios::binary);
+    if (!in) {
+        XER::Flux::Core::Logger().Error("SvgDecoder", "Cannot open SVG file: " + path);
+        return nullptr;
+    }
+    std::ostringstream ss;
+    ss << in.rdbuf();
+    const std::string svg_text = ss.str();
     if (svg_text.empty()) {
         XER::Flux::Core::Logger().Error("SvgDecoder", "Cannot open SVG file: " + path);
         return nullptr;

@@ -18,6 +18,7 @@
 #include <iostream>
 #include <string>
 #include <memory>
+#include <vector>
 
 #include <absl/strings/str_cat.h>
 
@@ -31,6 +32,7 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <shellapi.h>
 
 #include "ui/core/application.h"
 #include "ui/core/window.h"
@@ -42,6 +44,37 @@
 
 namespace {
 namespace Str = XER::Helper::String;
+
+#if defined(_WIN32)
+#pragma comment(lib, "shell32.lib")
+
+std::string WideArgToUtf8(const wchar_t* w) {
+    if (w == nullptr || *w == L'\0') return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w, -1, nullptr, 0,
+                                      nullptr, nullptr);
+    if (n <= 0) return {};
+    std::string s(static_cast<size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), n, nullptr, nullptr);
+    s.pop_back();  // drop the trailing NUL written by -1 sizing
+    return s;
+}
+
+// argv from char** main() is ANSI-encoded and mangles non-ASCII paths
+// (e.g. Cyrillic names passed by the Explorer context menu). Re-parse the
+// original UTF-16 command line so every argument arrives as UTF-8.
+std::vector<std::string> CommandLineArgsUtf8() {
+    std::vector<std::string> out;
+    int wargc = 0;
+    LPWSTR* wargv = CommandLineToArgvW(GetCommandLineW(), &wargc);
+    if (wargv == nullptr) return out;
+    out.reserve(static_cast<size_t>(wargc));
+    for (int i = 0; i < wargc; ++i) {
+        out.push_back(WideArgToUtf8(wargv[i]));
+    }
+    LocalFree(wargv);
+    return out;
+}
+#endif
 
 void PrintUsage() {
     std::cout << "Usage:\n"
@@ -393,12 +426,21 @@ int RunGui(const std::string& image_path) {
 }  // namespace
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
+#if defined(_WIN32)
+    // Error/status output carries UTF-8 paths; make the console display them.
+    SetConsoleOutputCP(CP_UTF8);
+    (void)argc;
+    (void)argv;
+    const std::vector<std::string> args = CommandLineArgsUtf8();
+#else
+    std::vector<std::string> args(argv, argv + argc);
+#endif
+    if (args.size() < 2) {
         PrintUsage();
         return 1;
     }
 
-    const std::string arg = argv[1];
+    const std::string& arg = args[1];
 
     if (arg == "--help" || arg == "-h" || arg == "/?") {
         PrintUsage();
@@ -406,11 +448,11 @@ int main(int argc, char** argv) {
     }
 
     if (arg == "--info") {
-        if (argc < 3) {
+        if (args.size() < 3) {
             std::cerr << "Error: --info requires an image path\n";
             return 1;
         }
-        return RunInfoMode(argv[2]);
+        return RunInfoMode(args[2]);
     }
 
 #if defined(_WIN32)
@@ -421,8 +463,8 @@ int main(int argc, char** argv) {
         return RunContextMenu(false);
     }
 
-    // Default: GUI photo viewer.
-    return RunGui(arg);
+    // Default: GUI photo viewer. Paths arrive as UTF-8 (see above).
+    return RunGui(args[1]);
 #else
     std::cerr << "GUI viewer requires Windows. Use --info for text output.\n";
     return 1;
