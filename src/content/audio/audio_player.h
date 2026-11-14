@@ -81,6 +81,24 @@ public:
         fade_out_seconds_ = fade_out_seconds;
     }
 
+    // Crossfade: queues a decoded buffer as the "next" track. When the
+    // current buffer enters its last fade_out_seconds, the pending buffer
+    // is mixed in — current fades out while pending fades in over the same
+    // window (linear). At the boundary the pending buffer is promoted and
+    // playback continues seamlessly; SetTrackAdvancedCallback fires on the
+    // audio thread at that moment. An empty buffer cancels the pending
+    // track. Safe to call from any thread.
+    void SetPendingBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer);
+    // True while a pending buffer is adopted or staged for adoption —
+    // lets control threads avoid queueing a second "next" track.
+    bool HasPendingBuffer() const {
+        return pending_active_.load() || pending_commit_.load();
+    }
+    using TrackAdvancedCallback = std::function<void()>;
+    void SetTrackAdvancedCallback(TrackAdvancedCallback callback) {
+        track_advanced_callback_ = std::move(callback);
+    }
+
     int GetSampleRate() const { return sample_rate_; }
     int GetChannelCount() const { return channel_count_; }
 
@@ -106,6 +124,9 @@ private:
     // Converts a fade duration in seconds to a frame count, clamped to
     // half the loaded track (0 when fading is off or nothing is loaded).
     uint64_t FadeFrames(double seconds) const;
+    // Drops any queued pending buffer. Caller must ensure the audio thread
+    // is stopped (used by Stop()/Load*).
+    void ClearPendingBuffer();
     // Starts the render client and spawns the feed thread. Caller must
     // hold control_mutex_. Does NOT check IsLoaded/state — Play() does.
     bool StartRendering();
@@ -145,6 +166,17 @@ private:
     std::thread monitor_thread_;
     std::atomic<bool> monitor_stop_{false};
     std::unique_ptr<WasapiDeviceNotifier> notifier_;
+
+    // Crossfade pending buffer. pending_staging_ is written under
+    // pending_mutex_ by control threads; the audio thread adopts it at the
+    // top of each render iteration when pending_commit_ is set.
+    XER::Audio::Core::AudioSourceBuffer pending_buffer_;
+    XER::Audio::Core::AudioSourceBuffer pending_staging_;
+    std::mutex pending_mutex_;
+    std::atomic<bool> pending_commit_{false};
+    size_t pending_position_ = 0;   // interleaved cursor into pending_buffer_
+    std::atomic<bool> pending_active_{false};  // pending_buffer_ usable
+    TrackAdvancedCallback track_advanced_callback_;
 
     // Callbacks
     PositionCallback position_callback_;

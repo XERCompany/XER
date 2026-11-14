@@ -55,6 +55,16 @@ public:
         audio_player_.SetFadeInOut(fade_in_seconds, fade_out_seconds);
     }
 
+    // Crossfade: queue the next track's decoded buffer — it is mixed in
+    // during the current track's fade-out window and promoted at the
+    // boundary (see AudioPlayer::SetPendingBuffer).
+    void SetPendingBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer) {
+        audio_player_.SetPendingBuffer(std::move(buffer));
+    }
+    void SetTrackAdvancedCallback(std::function<void()> callback) {
+        audio_player_.SetTrackAdvancedCallback(std::move(callback));
+    }
+
     // Live effect processing
     bool ApplyEffectLive(const XER::Audio::FX::CustomEffectPackage& package, std::string* error_out = nullptr);
     bool IsEffectLiveActive() const {
