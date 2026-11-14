@@ -30,6 +30,8 @@ PitchInfo AudioPitchDetector::DetectPitch(const float* audio, size_t frame_count
 }
 
 bool AudioPitchDetector::IsPitched(const float* audio, size_t frame_count) const {
+    (void)audio;
+    (void)frame_count;
     return GetConfidence() > 0.5f;
 }
 
@@ -49,7 +51,7 @@ float AudioPitchDetector::GetFundamentalFrequency(const float* audio, size_t fra
         
         if (corr > max_corr) {
             max_corr = corr;
-            max_period = lag;
+            max_period = static_cast<float>(lag);
         }
     }
     
@@ -61,6 +63,8 @@ float AudioPitchDetector::GetFundamentalFrequency(const float* audio, size_t fra
 }
 
 std::vector<float> AudioPitchDetector::GetHarmonics(const float* audio, size_t frame_count) const {
+    (void)audio;
+    (void)frame_count;
     std::vector<float> harmonics(5, 0.0f);
     // float fundamental = GetFundamentalFrequency(audio, frame_count);
     

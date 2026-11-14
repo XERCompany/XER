@@ -67,7 +67,6 @@ bool GranularPitchShifter::ProcessBlock(const float* input, size_t frame_count, 
 		float mixed = 0.0f;
 		float weight_sum = 0.0f;
 		for (GrainState& grain : grains_) {
-			const double normalized_phase = grain.position / grain_size;
 			const size_t window_index = std::min(
 				grain_window_.size() - 1,
 				static_cast<size_t>(grain.position) % grain_window_.size());

@@ -13,13 +13,13 @@ class WebSocketNetworkDelegate {
 public:
     virtual ~WebSocketNetworkDelegate() = default;
 
-    virtual bool OnBeforeConnect(const std::string& url) { return true; }
-    virtual void OnConnected(const std::string& url) {}
-    virtual void OnDisconnected(const std::string& url,
-                                 uint16_t code,
-                                 const std::string& reason) {}
-    virtual void OnError(const std::string& url,
-                          const std::string& error) {}
+    virtual bool OnBeforeConnect(const std::string&) { return true; }
+    virtual void OnConnected(const std::string&) {}
+    virtual void OnDisconnected(const std::string&,
+                                 uint16_t,
+                                 const std::string&) {}
+    virtual void OnError(const std::string&,
+                          const std::string&) {}
 };
 
 class DefaultWebSocketNetworkDelegate : public WebSocketNetworkDelegate {};

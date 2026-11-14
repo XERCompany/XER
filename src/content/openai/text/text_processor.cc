@@ -53,7 +53,7 @@ std::future<TextAnalysisResult> OpenAITextProcessor::ProcessText(
 
         result.word_count = CountWords(params.input_text);
         result.sentence_count = CountSentences(params.input_text);
-        result.character_count = params.input_text.length();
+        result.character_count = static_cast<int>(params.input_text.length());
 
         promise.set_value(result);
     });
@@ -238,8 +238,8 @@ std::future<std::vector<TextAnalysisResult>> OpenAITextProcessor::ProcessBatch(
 
 int OpenAITextProcessor::CountWords(const std::string& text) const {
     std::istringstream iss(text);
-    return std::distance(std::istream_iterator<std::string>{iss},
-                        std::istream_iterator<std::string>{});
+    return static_cast<int>(std::distance(std::istream_iterator<std::string>{iss},
+                        std::istream_iterator<std::string>{}));
 }
 
 int OpenAITextProcessor::CountSentences(const std::string& text) const {
@@ -328,7 +328,7 @@ std::future<TextAnalysisResult> LocalTextProcessor::ProcessText(
         result.processed_text = params.input_text;
         result.word_count = CountWords(params.input_text);
         result.sentence_count = CountSentences(params.input_text);
-        result.character_count = params.input_text.length();
+        result.character_count = static_cast<int>(params.input_text.length());
         result.keywords = ExtractKeywords(params.input_text);
 
         auto sentiment = AnalyzeSentiment(params.input_text).get();
@@ -366,6 +366,7 @@ std::future<std::string> LocalTextProcessor::Translate(
 
 std::future<std::vector<std::string>> LocalTextProcessor::ExtractEntities(
     const std::string& text) {
+    (void)text;
 
     std::promise<std::vector<std::string>> promise;
     std::vector<std::string> entities;
@@ -377,6 +378,7 @@ std::future<std::vector<std::string>> LocalTextProcessor::ExtractEntities(
 std::future<std::string> LocalTextProcessor::Rewrite(
     const std::string& text,
     const std::string& style) {
+    (void)style;
 
     std::promise<std::string> promise;
     // Placeholder - would use NLP library
@@ -419,8 +421,8 @@ std::future<std::vector<TextAnalysisResult>> LocalTextProcessor::ProcessBatch(
 
 int LocalTextProcessor::CountWords(const std::string& text) const {
     std::istringstream iss(text);
-    return std::distance(std::istream_iterator<std::string>{iss},
-                        std::istream_iterator<std::string>{});
+    return static_cast<int>(std::distance(std::istream_iterator<std::string>{iss},
+                        std::istream_iterator<std::string>{}));
 }
 
 int LocalTextProcessor::CountSentences(const std::string& text) const {

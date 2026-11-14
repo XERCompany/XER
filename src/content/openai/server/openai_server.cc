@@ -167,6 +167,7 @@ std::future<ServerResponse> OpenAIServer::HandleRequest(const ServerRequest& req
 }
 
 ServerResponse OpenAIServer::HandleChatCompletion(const ServerRequest& request) {
+    (void)request;
     ServerResponse response;
 
     if (!impl_->client_) {
@@ -201,6 +202,7 @@ ServerResponse OpenAIServer::HandleChatCompletion(const ServerRequest& request) 
 }
 
 ServerResponse OpenAIServer::HandleImageGeneration(const ServerRequest& request) {
+    (void)request;
     ServerResponse response;
 
     if (!impl_->image_processor_) {
@@ -229,6 +231,7 @@ ServerResponse OpenAIServer::HandleImageGeneration(const ServerRequest& request)
 }
 
 ServerResponse OpenAIServer::HandleAudioTranscription(const ServerRequest& request) {
+    (void)request;
     ServerResponse response;
 
     if (!impl_->client_) {
@@ -257,6 +260,7 @@ ServerResponse OpenAIServer::HandleAudioTranscription(const ServerRequest& reque
 }
 
 ServerResponse OpenAIServer::HandleTextProcessing(const ServerRequest& request) {
+    (void)request;
     ServerResponse response;
 
     if (!impl_->text_processor_) {
@@ -366,6 +370,7 @@ ServerResponse OpenAIServer::HandleSkillExecute(const ServerRequest& request) {
 }
 
 ServerResponse OpenAIServer::HandleSandboxExecute(const ServerRequest& request) {
+    (void)request;
     ServerResponse response;
 
     if (!impl_->sandbox_) {
@@ -472,6 +477,8 @@ LoggingMiddleware::LoggingMiddleware(const std::string& log_level)
 }
 
 bool LoggingMiddleware::Process(const ServerRequest& request, ServerResponse& response) {
+    (void)request;
+    (void)response;
     // TODO: Implement actual logging
     // For now, just allow request to pass through
     return true;

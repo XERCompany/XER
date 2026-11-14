@@ -69,9 +69,9 @@ bool TransportNetworkSession::Open(std::string* error) {
 
     int fd = -1;
     for (auto* p = res; p; p = p->ai_next) {
-        fd = ::socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+        fd = static_cast<int>(::socket(p->ai_family, p->ai_socktype, p->ai_protocol));
         if (fd < 0) continue;
-        if (::connect(fd, p->ai_addr, p->ai_addrlen) == 0) break;
+        if (::connect(fd, p->ai_addr, static_cast<int>(p->ai_addrlen)) == 0) break;
         CloseSocket(fd);
         fd = -1;
     }

@@ -99,7 +99,7 @@ size_t Tensor::FlatIndex(const std::vector<size_t>& indices) const {
     size_t idx = 0;
     size_t stride = 1;
     
-    for (int i = shape_.size() - 1; i >= 0; --i) {
+    for (int i = static_cast<int>(shape_.size()) - 1; i >= 0; --i) {
         if (indices[i] >= shape_[i]) {
             throw std::out_of_range("Index out of bounds");
         }
@@ -135,7 +135,7 @@ void Tensor::Uniform(float min, float max) {
     std::uniform_real_distribution<> dis(min, max);
     
     for (int i = 0; i < data_.size(); ++i) {
-        data_(i, 0) = dis(gen);
+        data_(i, 0) = static_cast<float>(dis(gen));
     }
 }
 
@@ -145,7 +145,7 @@ void Tensor::Normal(float mean, float std) {
     std::normal_distribution<> dis(mean, std);
     
     for (int i = 0; i < data_.size(); ++i) {
-        data_(i, 0) = dis(gen);
+        data_(i, 0) = static_cast<float>(dis(gen));
     }
 }
 

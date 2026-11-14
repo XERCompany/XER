@@ -87,7 +87,8 @@ void GpuTrace(const char* step) {
     const DWORD n = GetTempPathA(MAX_PATH, path);
     if (n == 0 || n >= MAX_PATH) return;
     strncat_s(path, "XER\\gpu_trace.log", MAX_PATH - strlen(path) - 1);
-    if (FILE* f = fopen(path, "ab")) {
+    FILE* f = nullptr;
+    if (fopen_s(&f, path, "ab") == 0 && f != nullptr) {
         fprintf(f, "%llu %s\n",
                 static_cast<unsigned long long>(GetTickCount64()), step);
         fclose(f);

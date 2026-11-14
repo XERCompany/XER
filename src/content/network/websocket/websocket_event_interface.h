@@ -15,18 +15,18 @@ class WebSocketEventInterface {
 public:
     virtual ~WebSocketEventInterface() = default;
 
-    virtual void OnAddChannelResponse(bool success,
-                                      const std::string& selected_protocol,
-                                      const std::string& extensions) {}
-    virtual void OnDataFrame(bool fin,
-                              bool is_text,
-                              const std::vector<uint8_t>& data) {}
-    virtual void OnFlowControl(int64_t quota) {}
+    virtual void OnAddChannelResponse(bool,
+                                      const std::string&,
+                                      const std::string&) {}
+    virtual void OnDataFrame(bool,
+                              bool,
+                              const std::vector<uint8_t>&) {}
+    virtual void OnFlowControl(int64_t) {}
     virtual void OnClosingHandshake() {}
-    virtual void OnDropChannel(bool was_clean,
-                                uint16_t code,
-                                const std::string& reason) {}
-    virtual void OnFailChannel(const std::string& message) {}
+    virtual void OnDropChannel(bool,
+                                uint16_t,
+                                const std::string&) {}
+    virtual void OnFailChannel(const std::string&) {}
 };
 
 }  // namespace XER::Network::WebSocket

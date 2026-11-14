@@ -134,6 +134,7 @@ std::string OpenAIImageProcessor::GetImageInfo(const ImageData& image) const {
 }
 
 std::string OpenAIImageProcessor::ImageToBase64(const ImageData& image) const {
+    (void)image;
     // TODO: Implement actual base64 encoding
     // Would use a base64 library
     return "base64_encoded_image_data";
@@ -142,6 +143,7 @@ std::string OpenAIImageProcessor::ImageToBase64(const ImageData& image) const {
 ImageData OpenAIImageProcessor::Base64ToImage(
     const std::string& base64,
     ImageFormat format) const {
+    (void)base64;
 
     // TODO: Implement actual base64 decoding
     ImageData image;
@@ -169,6 +171,7 @@ std::future<ImageResponse> LocalImageProcessor::GenerateImage(
 
 std::future<ImageAnalysisResult> LocalImageProcessor::AnalyzeImage(
     const ImageData& image) {
+    (void)image;
 
     std::promise<ImageAnalysisResult> promise;
     ImageAnalysisResult result;
@@ -181,6 +184,7 @@ std::future<ImageAnalysisResult> LocalImageProcessor::AnalyzeImage(
 std::future<ImageData> LocalImageProcessor::ProcessImage(
     const ImageData& image,
     const ImageProcessingParams& params) {
+    (void)params;
 
     std::promise<ImageData> promise;
     ImageData result = image;
@@ -227,6 +231,7 @@ std::unique_ptr<IImageProcessor> ImageProcessorFactory::CreateDefault() {
 
 // ImageUtils implementation
 ImageData ImageUtils::LoadFromFile(const std::string& file_path) {
+    (void)file_path;
     // TODO: Implement actual file loading with stb_image or similar
     ImageData image;
     image.width = 1024;
@@ -239,6 +244,8 @@ ImageData ImageUtils::LoadFromFile(const std::string& file_path) {
 }
 
 bool ImageUtils::SaveToFile(const ImageData& image, const std::string& file_path) {
+    (void)image;
+    (void)file_path;
     // TODO: Implement actual file saving with stb_image_write or similar
     return true;
 }

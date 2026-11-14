@@ -13,6 +13,7 @@ ProxyService::ProxyService(const ProxyConfig& config) : config_(config) {}
 bool ProxyService::Resolve(const std::string& url,
                            ProxyInfo* info,
                            std::string* error) {
+    (void)error;
     // Extract host from URL
     std::string work = url;
     const auto sep = work.find("://");

@@ -341,7 +341,7 @@ int Process::WriteStdin(const std::string& data) {
   
 #ifdef _WIN32
   DWORD bytes_written;
-  if (WriteFile(stdin_write_, data.c_str(), data.size(), &bytes_written, nullptr)) {
+  if (WriteFile(stdin_write_, data.c_str(), static_cast<DWORD>(data.size()), &bytes_written, nullptr)) {
     return bytes_written;
   }
   return -1;
@@ -379,7 +379,7 @@ int Process::ReadStdout(std::string* data, size_t max_bytes) {
   
 #ifdef _WIN32
   DWORD bytes_read;
-  if (ReadFile(stdout_read_, &(*data)[0], max_bytes, &bytes_read, nullptr)) {
+  if (ReadFile(stdout_read_, &(*data)[0], static_cast<DWORD>(max_bytes), &bytes_read, nullptr)) {
     data->resize(bytes_read);
     return bytes_read;
   }
@@ -409,7 +409,7 @@ int Process::ReadStderr(std::string* data, size_t max_bytes) {
   
 #ifdef _WIN32
   DWORD bytes_read;
-  if (ReadFile(stderr_read_, &(*data)[0], max_bytes, &bytes_read, nullptr)) {
+  if (ReadFile(stderr_read_, &(*data)[0], static_cast<DWORD>(max_bytes), &bytes_read, nullptr)) {
     data->resize(bytes_read);
     return bytes_read;
   }

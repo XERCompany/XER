@@ -38,7 +38,7 @@ bool DnsClient::Query(const std::string& name,
 
     const std::string& ns = config_.nameservers[0];
 
-    int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    int sock = static_cast<int>(::socket(AF_INET, SOCK_DGRAM, 0));
     if (sock < 0) {
         if (error) *error = "socket() failed";
         return false;

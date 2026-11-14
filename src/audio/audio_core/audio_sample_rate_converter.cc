@@ -137,7 +137,7 @@ float AudioSampleRateConverter::InterpolateLinear(const float* buffer, double po
     int index = static_cast<int>(pos);
     double frac = pos - index;
     
-    return buffer[index] * (1.0f - frac) + buffer[index + 1] * frac;
+    return static_cast<float>(buffer[index] * (1.0 - frac) + buffer[index + 1] * frac);
 }
 
 float AudioSampleRateConverter::InterpolateWindowedSinc(const float* buffer, size_t frame_count, double pos) const {

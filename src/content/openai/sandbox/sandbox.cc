@@ -309,6 +309,7 @@ const std::vector<std::string> SecurityPolicy::kDangerousPatterns = {
 };
 
 bool SecurityPolicy::ValidateCode(const std::string& code, const std::string& language) {
+    (void)language;
     // Convert to lowercase for case-insensitive matching
     std::string lower_code = code;
     std::transform(lower_code.begin(), lower_code.end(), lower_code.begin(), ::tolower);

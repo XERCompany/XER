@@ -40,6 +40,7 @@ void AudioClockSync::UpdateClock(int64_t frame_position) {
 }
 
 bool AudioClockSync::SyncToExternal(int64_t external_position, int64_t external_timestamp_ns) {
+    (void)external_timestamp_ns;
     if (!initialized_) return false;
 
     int64_t drift = external_position - clock_info_.frame_position;

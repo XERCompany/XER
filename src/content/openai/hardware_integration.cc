@@ -217,16 +217,19 @@ bool GPUImageProcessor::IsInitialized() const {
 }
 
 bool GPUImageProcessor::ResizeImage(uint8_t* data, int width, int height, int new_width, int new_height) {
+    (void)data; (void)width; (void)height; (void)new_width; (void)new_height;
     // TODO: Implement GPU-accelerated resize using CUDA/Vulkan
     return true;
 }
 
 bool GPUImageProcessor::ApplyFilter(uint8_t* data, int width, int height, const std::string& filter_type) {
+    (void)data; (void)width; (void)height; (void)filter_type;
     // TODO: Implement GPU-accelerated filters
     return true;
 }
 
 bool GPUImageProcessor::ConvertFormat(uint8_t* data, int width, int height, const std::string& target_format) {
+    (void)data; (void)width; (void)height; (void)target_format;
     // TODO: Implement GPU-accelerated format conversion
     return true;
 }

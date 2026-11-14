@@ -12,10 +12,10 @@ namespace XER::Network::Quic {
 class QuicNetworkDelegate {
 public:
     virtual ~QuicNetworkDelegate() = default;
-    virtual void OnConnectionCreated(QuicConnectionId id, const std::string& host) {}
-    virtual void OnConnectionClosed(QuicConnectionId id, QuicErrorCode code) {}
-    virtual void OnStreamOpened(QuicConnectionId cid, QuicStreamId sid) {}
-    virtual void OnStreamClosed(QuicConnectionId cid, QuicStreamId sid) {}
+    virtual void OnConnectionCreated(QuicConnectionId, const std::string&) {}
+    virtual void OnConnectionClosed(QuicConnectionId, QuicErrorCode) {}
+    virtual void OnStreamOpened(QuicConnectionId, QuicStreamId) {}
+    virtual void OnStreamClosed(QuicConnectionId, QuicStreamId) {}
 };
 
 class DefaultQuicNetworkDelegate : public QuicNetworkDelegate {};

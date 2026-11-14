@@ -15,7 +15,7 @@ public:
 
     virtual void OnNetworkStarted() {}
     virtual void OnNetworkStopped() {}
-    virtual void OnNetworkError(const std::string& error) {}
+    virtual void OnNetworkError(const std::string&) {}
 };
 
 class DefaultNetworkServiceDelegate : public NetworkServiceDelegate {};

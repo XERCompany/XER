@@ -12,6 +12,13 @@
 #include <mupdf/fitz.h>
 #include <mupdf/pdf.h>
 
+#if defined(_MSC_VER)
+// MuPDF's fz_try/fz_catch are setjmp/longjmp by design; C++ objects are
+// only PODs at these call sites (see Guard/CountPages below).
+#pragma warning(push)
+#pragma warning(disable: 4611)
+#endif
+
 namespace XER::Content::Pdf {
 
 struct PdfDocument::Impl {
@@ -82,3 +89,7 @@ inline int CountPages(fz_context* ctx, fz_document* doc) {
 
 }  // namespace Internal
 }  // namespace XER::Content::Pdf
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif

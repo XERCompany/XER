@@ -18,10 +18,13 @@ SequentialModelBuilder& SequentialModelBuilder::AddDenseLayer(uint32_t units) {
 }
 
 SequentialModelBuilder& SequentialModelBuilder::AddConvLayer(uint32_t filters, uint32_t kernel_size) {
+    (void)filters;
+    (void)kernel_size;
     return *this;
 }
 
 SequentialModelBuilder& SequentialModelBuilder::AddDropout(float rate) {
+    (void)rate;
     return *this;
 }
 

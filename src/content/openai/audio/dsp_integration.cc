@@ -36,6 +36,7 @@ bool AudioFeatureExtractor::IsInitialized() const {
 }
 
 std::vector<float> AudioFeatureExtractor::ExtractMFCC(const AudioBuffer& buffer, int num_coefficients) {
+    (void)buffer;
     // TODO: Implement MFCC extraction using FFT engine
     std::vector<float> mfcc(num_coefficients, 0.0f);
     return mfcc;
@@ -71,16 +72,19 @@ std::vector<float> AudioFeatureExtractor::ExtractSpectralCentroid(const AudioBuf
 }
 
 std::vector<float> AudioFeatureExtractor::ExtractSpectralRolloff(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement spectral rolloff
     return {};
 }
 
 std::vector<float> AudioFeatureExtractor::ExtractSpectralBandwidth(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement spectral bandwidth
     return {};
 }
 
 std::vector<float> AudioFeatureExtractor::ExtractSpectralContrast(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement spectral contrast
     return {};
 }
@@ -134,6 +138,7 @@ std::vector<float> AudioFeatureExtractor::ExtractEnergy(const AudioBuffer& buffe
 }
 
 std::vector<float> AudioFeatureExtractor::ExtractChroma(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement chroma feature extraction
     return {};
 }
@@ -214,11 +219,13 @@ AudioBuffer AudioPreprocessor::RemoveSilence(const AudioBuffer& buffer, float th
         }
     }
 
-    result.duration_seconds = result.samples.size() / (buffer.sample_rate * buffer.channels);
+    result.duration_seconds = static_cast<float>(result.samples.size()) /
+                              static_cast<float>(buffer.sample_rate * buffer.channels);
     return result;
 }
 
 AudioBuffer AudioPreprocessor::ApplyWindow(const AudioBuffer& buffer, const std::string& window_type) {
+    (void)window_type;
     // TODO: Implement window functions using dsp_windowing_functions
     return buffer;
 }
@@ -229,11 +236,13 @@ AudioBuffer AudioPreprocessor::ApplyNoiseReduction(const AudioBuffer& buffer) {
 }
 
 AudioBuffer AudioPreprocessor::ApplyHighPassFilter(const AudioBuffer& buffer, float cutoff_freq) {
+    (void)cutoff_freq;
     // TODO: Implement high-pass filter using dsp_biquad_processor
     return buffer;
 }
 
 AudioBuffer AudioPreprocessor::ApplyLowPassFilter(const AudioBuffer& buffer, float cutoff_freq) {
+    (void)cutoff_freq;
     // TODO: Implement low-pass filter using dsp_biquad_processor
     return buffer;
 }
@@ -331,11 +340,13 @@ bool VoiceActivityDetector::IsInitialized() const {
 }
 
 std::vector<bool> VoiceActivityDetector::DetectVoiceActivity(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement VAD using energy-based detection
     return {};
 }
 
 std::vector<std::pair<float, float>> VoiceActivityDetector::DetectVoiceSegments(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement voice segment detection
     return {};
 }
@@ -379,11 +390,13 @@ bool SpeakerDiarization::IsInitialized() const {
 }
 
 std::vector<int> SpeakerDiarization::ClassifySpeakers(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement speaker classification using clustering
     return {};
 }
 
 std::vector<TranscriptionSegment> SpeakerDiarization::DiarizeWithTimestamps(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement diarization with timestamps
     return {};
 }
@@ -456,11 +469,13 @@ std::vector<float> SpectralVisualizer::GetSpectrum(const AudioBuffer& frame) {
 }
 
 std::vector<std::vector<float>> SpectralVisualizer::GenerateMelSpectrogram(const AudioBuffer& buffer, int num_mel_bands) {
+    (void)num_mel_bands;
     // TODO: Implement mel spectrogram with mel filterbank
     return GenerateSpectrogram(buffer);
 }
 
 std::vector<std::vector<float>> SpectralVisualizer::GenerateChromagram(const AudioBuffer& buffer) {
+    (void)buffer;
     // TODO: Implement chromagram using harmonic analysis
     return {};
 }

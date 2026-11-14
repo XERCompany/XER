@@ -12,10 +12,10 @@ namespace XER::Network::Spdy {
 class SpdyNetworkDelegate {
 public:
     virtual ~SpdyNetworkDelegate() = default;
-    virtual void OnSessionCreated(const std::string& host) {}
-    virtual void OnSessionClosed(const std::string& host) {}
-    virtual void OnStreamOpened(SpdyStreamId id) {}
-    virtual void OnStreamClosed(SpdyStreamId id) {}
+    virtual void OnSessionCreated(const std::string&) {}
+    virtual void OnSessionClosed(const std::string&) {}
+    virtual void OnStreamOpened(SpdyStreamId) {}
+    virtual void OnStreamClosed(SpdyStreamId) {}
 };
 
 class DefaultSpdyNetworkDelegate : public SpdyNetworkDelegate {};

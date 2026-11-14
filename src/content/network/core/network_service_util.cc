@@ -19,7 +19,7 @@ namespace XER::Network::Core {
 
 bool HasNetworkAccess() {
     // Try a UDP "connect" to a public IP (no actual packet sent).
-    const int fd = ::socket(AF_INET, SOCK_DGRAM, 0);
+    const int fd = static_cast<int>(::socket(AF_INET, SOCK_DGRAM, 0));
     if (fd < 0) return false;
     struct sockaddr_in sin{};
     sin.sin_family      = AF_INET;

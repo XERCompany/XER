@@ -14,7 +14,7 @@ std::vector<DriveInfo> DriveEnumerator::EnumerateDrives() {
     DWORD driveMask = GetLogicalDrives();
     for (int i = 0; i < 26; ++i) {
         if (driveMask & (1 << i)) {
-            char driveLetter = 'A' + i;
+            char driveLetter = static_cast<char>('A' + i);
             DriveInfo info = GetDriveInfo(driveLetter);
             if (info.totalBytes > 0) {
                 drives.push_back(info);
@@ -308,17 +308,20 @@ bool VolumeHelper::SetVolumeLabel(char driveLetter, const std::string& label) {
 
 bool VolumeHelper::FormatDrive(char driveLetter, const std::string& fileSystem,
                                bool quickFormat) {
+    (void)driveLetter; (void)fileSystem; (void)quickFormat;
     // Note: This requires elevated privileges and is a destructive operation
     // Simplified placeholder - actual implementation would use SHFormatDrive or FormatEx
     return false;
 }
 
 bool VolumeHelper::MountVolume(char driveLetter, const std::string& mountPoint) {
+    (void)driveLetter; (void)mountPoint;
     // Note: Simplified placeholder
     return false;
 }
 
 bool VolumeHelper::DismountVolume(char driveLetter) {
+    (void)driveLetter;
     // Note: Simplified placeholder
     return false;
 }
@@ -330,12 +333,14 @@ bool VolumeHelper::DismountVolume(char driveLetter) {
 void* StructuredStorage::storage_ = nullptr;
 
 bool StructuredStorage::CreateStorage(const std::string& filepath) {
+    (void)filepath;
     // Note: This requires COM initialization and IStorage interface
     // Simplified placeholder
     return false;
 }
 
 bool StructuredStorage::OpenStorage(const std::string& filepath) {
+    (void)filepath;
     // Note: This requires COM initialization and IStorage interface
     // Simplified placeholder
     return false;
@@ -349,17 +354,20 @@ void StructuredStorage::CloseStorage() {
 }
 
 bool StructuredStorage::CreateStream(const std::string& streamName) {
+    (void)streamName;
     // Note: Simplified placeholder
     return false;
 }
 
 bool StructuredStorage::WriteToStream(const std::string& streamName,
                                      const std::vector<uint8_t>& data) {
+    (void)streamName; (void)data;
     // Note: Simplified placeholder
     return false;
 }
 
 std::vector<uint8_t> StructuredStorage::ReadFromStream(const std::string& streamName) {
+    (void)streamName;
     // Note: Simplified placeholder
     return std::vector<uint8_t>();
 }

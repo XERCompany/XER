@@ -244,12 +244,12 @@ std::string JsonUtils::ExtractValue(absl::string_view json, absl::string_view ke
 
 // ThreadSafeMap implementation
 void ThreadSafeMap::Insert(const std::string& key, const std::string& value) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     map_[key] = value;
 }
 
 bool ThreadSafeMap::Get(const std::string& key, std::string* value) const {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     auto it = map_.find(key);
     if (it != map_.end()) {
         *value = it->second;
@@ -259,22 +259,22 @@ bool ThreadSafeMap::Get(const std::string& key, std::string* value) const {
 }
 
 bool ThreadSafeMap::Erase(const std::string& key) {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     return map_.erase(key) > 0;
 }
 
 void ThreadSafeMap::Clear() {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     map_.clear();
 }
 
 size_t ThreadSafeMap::Size() const {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     return map_.size();
 }
 
 std::vector<std::string> ThreadSafeMap::Keys() const {
-    absl::MutexLock lock(&mutex_);
+    absl::MutexLock lock(mutex_);
     std::vector<std::string> keys;
     for (const auto& pair : map_) {
         keys.push_back(pair.first);

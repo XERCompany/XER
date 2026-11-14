@@ -14,10 +14,10 @@ class HttpNetworkDelegate {
 public:
     virtual ~HttpNetworkDelegate() = default;
 
-    virtual void OnBeforeRequest(const Url::URLRequest& req) {}
-    virtual void OnResponseStarted(int status_code) {}
-    virtual void OnCompleted(bool ok, const std::string& error) {}
-    virtual void OnRedirect(const std::string& new_url) {}
+    virtual void OnBeforeRequest(const Url::URLRequest&) {}
+    virtual void OnResponseStarted(int) {}
+    virtual void OnCompleted(bool, const std::string&) {}
+    virtual void OnRedirect(const std::string&) {}
 };
 
 class DefaultHttpNetworkDelegate : public HttpNetworkDelegate {};

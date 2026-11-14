@@ -18,6 +18,7 @@ BaseAgent::~BaseAgent() = default;
 std::future<CompletionResponse> BaseAgent::Process(
     const std::string& input,
     const CompletionOptions& options) {
+    (void)options;
 
     std::promise<CompletionResponse> promise;
     auto future = promise.get_future();
@@ -220,6 +221,7 @@ std::vector<ChatMessage> BaseAgent::BuildMessages(const std::string& input) {
 }
 
 void BaseAgent::ProcessToolCall(const ToolCall& tool_call) {
+    (void)tool_call;
     SetState(AgentState::kExecuting);
 
     // TODO: Implement actual tool execution
@@ -280,10 +282,12 @@ ResearchAgent::ResearchAgent(std::shared_ptr<Client::OpenAIClient> client)
 }
 
 void ResearchAgent::EnableWebSearch(bool enable) {
+    (void)enable;
     // TODO: Implement web search tool registration
 }
 
 void ResearchAgent::EnableCodeExecution(bool enable) {
+    (void)enable;
     // TODO: Implement code execution sandbox integration
 }
 

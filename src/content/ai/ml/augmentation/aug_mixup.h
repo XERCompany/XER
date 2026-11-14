@@ -8,7 +8,7 @@ public:
     explicit AugMixup(float alpha = 0.4f);
     // Blend two samples: result stored in a, b is consumed.
     bool Blend(ImageSample& a, const ImageSample& b, float lambda = -1.0f);
-    bool Apply(ImageSample& sample) override { return false; }  // needs two samples
+    bool Apply(ImageSample&) override { return false; }  // needs two samples
     std::string Name() const override { return "Mixup"; }
 private:
     float alpha_;

@@ -41,6 +41,7 @@ bool AudioCacheManager::IsEntryExpired(const EntryType& entry) const {
 bool AudioCacheManager::SerializeMetadata(const AudioFileMetadata& metadata,
                                          std::vector<uint8_t>* out,
                                          std::string* error) {
+    (void)error;
     std::ostringstream oss;
     oss << metadata.sample_rate << " "
         << metadata.channels << " "
@@ -56,6 +57,7 @@ bool AudioCacheManager::SerializeMetadata(const AudioFileMetadata& metadata,
 bool AudioCacheManager::DeserializeMetadata(const std::vector<uint8_t>& data,
                                            AudioFileMetadata* out,
                                            std::string* error) {
+    (void)error;
     std::string str(data.begin(), data.end());
     std::istringstream iss(str);
     iss >> out->sample_rate
@@ -70,6 +72,7 @@ bool AudioCacheManager::DeserializeMetadata(const std::vector<uint8_t>& data,
 bool AudioCacheManager::SerializePreset(const EffectPreset& preset,
                                         std::vector<uint8_t>* out,
                                         std::string* error) {
+    (void)error;
     // Simple serialization: store raw parameters
     out->assign(preset.parameters.begin(), preset.parameters.end());
     return true;
@@ -78,6 +81,7 @@ bool AudioCacheManager::SerializePreset(const EffectPreset& preset,
 bool AudioCacheManager::DeserializePreset(const std::vector<uint8_t>& data,
                                           EffectPreset* out,
                                           std::string* error) {
+    (void)error;
     out->parameters.assign(data.begin(), data.end());
     return true;
 }
@@ -85,6 +89,7 @@ bool AudioCacheManager::DeserializePreset(const std::vector<uint8_t>& data,
 bool AudioCacheManager::SerializeAnalysisResult(const AnalysisResultCache& result,
                                                 std::vector<uint8_t>* out,
                                                 std::string* error) {
+    (void)error;
     // Simple serialization: store raw result data
     out->assign(result.result_data.begin(), result.result_data.end());
     return true;
@@ -93,6 +98,7 @@ bool AudioCacheManager::SerializeAnalysisResult(const AnalysisResultCache& resul
 bool AudioCacheManager::DeserializeAnalysisResult(const std::vector<uint8_t>& data,
                                                   AnalysisResultCache* out,
                                                   std::string* error) {
+    (void)error;
     out->result_data.assign(data.begin(), data.end());
     return true;
 }
@@ -127,6 +133,7 @@ std::optional<AudioFileMetadata> AudioCacheManager::GetCachedMetadata(
 }
 
 void AudioCacheManager::InvalidateMetadata(const std::string& path) {
+    (void)path;
     // TODO: Implement cache invalidation
     // This requires adding a remove method to CacheManager
 }
@@ -173,6 +180,7 @@ std::optional<EffectPreset> AudioCacheManager::GetCachedPreset(
 }
 
 void AudioCacheManager::InvalidatePreset(const std::string& preset_name) {
+    (void)preset_name;
     // TODO: Implement cache invalidation
     // This requires adding a remove method to CacheManager
 }
@@ -222,6 +230,8 @@ std::optional<AnalysisResultCache> AudioCacheManager::GetCachedAnalysisResult(
 
 void AudioCacheManager::InvalidateAnalysisResult(const std::string& analysis_type,
                                                  const std::string& audio_hash) {
+    (void)analysis_type;
+    (void)audio_hash;
     // TODO: Implement cache invalidation
     // This requires adding a remove method to CacheManager
 }

@@ -5,6 +5,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <sstream>
+
+#if defined(_MSC_VER)
+#define xer_sscanf sscanf_s
+#else
+#define xer_sscanf sscanf
+#endif
 #include <utility>
 
 #include "audio/effects_rack/custom_effect_eq_engine.h"
@@ -316,7 +322,7 @@ bool FxRackState::Deserialize(const std::string& text) {
             const char* p = line.c_str() + 3;
             for (std::size_t i = 0; i < parsed.eq_bands.size(); ++i) {
                 float f = 0.0f, q = 1.0f, g = 0.0f;
-                if (std::sscanf(p, "%f,%f,%f", &f, &q, &g) != 3) {
+                if (xer_sscanf(p, "%f,%f,%f", &f, &q, &g) != 3) {
                     break;
                 }
                 parsed.eq_bands[i] = FxEqBandState{f, q, g};
@@ -332,7 +338,7 @@ bool FxRackState::Deserialize(const std::string& text) {
             int algo = 0, enabled_flag = 1;
             float wet = 1.0f;
             int consumed = 0;
-            if (std::sscanf(line.c_str() + 5, "%d,%d,%f%n", &algo, &enabled_flag, &wet,
+            if (xer_sscanf(line.c_str() + 5, "%d,%d,%f%n", &algo, &enabled_flag, &wet,
                             &consumed) < 3) {
                 continue;
             }
@@ -351,7 +357,7 @@ bool FxRackState::Deserialize(const std::string& text) {
             for (auto& param : node.params) {
                 float value = 0.0f;
                 int used = 0;
-                if (std::sscanf(p, "%f%n", &value, &used) != 1) {
+                if (xer_sscanf(p, "%f%n", &value, &used) != 1) {
                     break;
                 }
                 param.value = value;

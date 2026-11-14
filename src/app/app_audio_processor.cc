@@ -16,6 +16,7 @@ bool AudioProcessor::Initialize() {
 }
 
 bool AudioProcessor::ApplyEffectLive(const std::string& effect_name, float param1, float param2) {
+    (void)param2;
     if (!initialized_) return false;
     
     // Apply effect with parameters
@@ -24,6 +25,7 @@ bool AudioProcessor::ApplyEffectLive(const std::string& effect_name, float param
 }
 
 bool AudioProcessor::ApplyPreset(const std::string& preset_name) {
+    (void)preset_name;
     if (!initialized_) return false;
     
     // Load and apply preset

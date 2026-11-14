@@ -263,8 +263,8 @@ bool RewriteArchive(const std::string& archive_path,
             *error = "cannot modify '" + src_fmt +
                      "' archives (read-only format); output would be '" +
                      dst_fmt + "'";
-            std::error_code ec;
-            std::filesystem::remove(FsPath(tmp_path), ec);
+            std::error_code ec_remove;
+            std::filesystem::remove(FsPath(tmp_path), ec_remove);
             return false;
         }
     }
@@ -328,8 +328,8 @@ bool RewriteArchive(const std::string& archive_path,
                          MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
             *error = "cannot replace archive file (error " +
                      std::to_string(GetLastError()) + ")";
-            std::error_code ec;
-            std::filesystem::remove(FsPath(tmp_path), ec);
+            std::error_code ec_remove;
+            std::filesystem::remove(FsPath(tmp_path), ec_remove);
             return false;
         }
     }
@@ -337,8 +337,8 @@ bool RewriteArchive(const std::string& archive_path,
     if (std::rename(tmp_path.c_str(), archive_path.c_str()) != 0) {
         *error = std::string("cannot replace archive file: ") +
                  std::strerror(errno);
-        std::error_code ec;
-        std::filesystem::remove(FsPath(tmp_path), ec);
+        std::error_code ec_remove;
+        std::filesystem::remove(FsPath(tmp_path), ec_remove);
         return false;
     }
 #endif

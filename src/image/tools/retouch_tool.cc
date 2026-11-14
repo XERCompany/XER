@@ -40,7 +40,8 @@ void RetouchTool::SpotRemove(ImageBuffer& img, int cx, int cy, int radius) {
             ++cnt;
         }
     if (!cnt) return;
-    uint8_t ar=sr/cnt, ag=sg/cnt, ab=sb/cnt, aa=sa/cnt;
+    uint8_t ar=static_cast<uint8_t>(sr/cnt), ag=static_cast<uint8_t>(sg/cnt),
+            ab=static_cast<uint8_t>(sb/cnt), aa=static_cast<uint8_t>(sa/cnt);
     for (int oy=-radius;oy<=radius;++oy)
         for (int ox=-radius;ox<=radius;++ox) {
             if (ox*ox+oy*oy>radius*radius) continue;

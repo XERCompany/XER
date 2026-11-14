@@ -14,8 +14,8 @@ void TrainOptimizer::Step(float loss) {
   // Adam update on a virtual scalar (real impl applies per-parameter)
   m_ = b1 * m_ + (1.0f - b1) * loss;
   v_ = b2 * v_ + (1.0f - b2) * loss * loss;
-  float mh = m_ / (1.0f - std::pow(b1, step_));
-  float vh = v_ / (1.0f - std::pow(b2, step_));
+  float mh = m_ / (1.0f - std::pow(b1, static_cast<float>(step_)));
+  float vh = v_ / (1.0f - std::pow(b2, static_cast<float>(step_)));
   // gradient step (virtual)
   (void)(lr_ * mh / (std::sqrt(vh) + eps));
 }

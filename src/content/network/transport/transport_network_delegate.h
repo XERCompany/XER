@@ -14,11 +14,11 @@ class TransportNetworkDelegate {
 public:
     virtual ~TransportNetworkDelegate() = default;
 
-    virtual void OnConnected(const std::string& host, uint16_t port) {}
-    virtual void OnDisconnected(const std::string& host, uint16_t port) {}
-    virtual void OnBytesSent(size_t bytes) {}
-    virtual void OnBytesReceived(size_t bytes) {}
-    virtual void OnError(const std::string& error) {}
+    virtual void OnConnected(const std::string&, uint16_t) {}
+    virtual void OnDisconnected(const std::string&, uint16_t) {}
+    virtual void OnBytesSent(size_t) {}
+    virtual void OnBytesReceived(size_t) {}
+    virtual void OnError(const std::string&) {}
 };
 
 // No-op default delegate.

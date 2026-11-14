@@ -238,7 +238,7 @@ bool Tabs::HandleEvent(const Event& event) {
                 const int hit = HitTab(event.position);
                 if (hit >= 0) {
                     pressed_tab_ = hit;
-                    press_t_.Set(1.0f, 0.08);
+                    press_t_.Set(1.0f, 0.08f);
                     Invalidate();
                 }
                 return hit >= 0;
@@ -247,7 +247,7 @@ bool Tabs::HandleEvent(const Event& event) {
         case Event::Type::MouseUp:
             if (pressed_tab_ >= 0) {
                 pressed_tab_ = -1;
-                press_t_.Set(0.0f, 0.16);
+                press_t_.Set(0.0f, 0.16f);
                 Invalidate();
             }
             return false;

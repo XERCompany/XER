@@ -27,7 +27,7 @@ bool NodeGraphManager::RegisterAudioInputNode(const std::string& audio_path) {
     descriptor_audio_input.title = "Audio Input";
     
     // Placeholder evaluation - would need proper context
-    descriptor_audio_input.evaluate = [](XER::NodeGraph::EvalContext& ctx) -> bool {
+    descriptor_audio_input.evaluate = [](XER::NodeGraph::EvalContext&) -> bool {
         // Audio loading logic would go here
         return true;
     };
