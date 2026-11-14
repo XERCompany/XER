@@ -97,11 +97,6 @@ void Direct2DRenderer::SetClearColor(Theme::Color color) {
     clear_color_ = color;
 }
 
-void Direct2DRenderer::SetFrameDamage(Layout::Rect damage) {
-    frame_damage_ = damage;
-    has_frame_damage_ = true;
-}
-
 void Direct2DRenderer::SetDpi(UINT dpi) {
     if (dpi == 0) {
         throw std::invalid_argument("DPI must be greater than zero");
@@ -186,7 +181,6 @@ void Direct2DRenderer::ReleaseTargets() {
     backbuffer_.Reset();
     backbuffer_target_.Reset();
     canvas_valid_ = false;
-    blit_full_frame_ = true;
     target_size_ = {0, 0};
 }
 
@@ -284,22 +278,12 @@ void Direct2DRenderer::BeginFrame(Layout::Rect bounds) {
         static_cast<UINT32>(std::max<LONG>(1, client_rect.bottom));
     EnsureTargets(pixel_width, pixel_height);
 
-    // Full repaint when no damage was reported, the canvas has no previous
-    // frame to retain, or the damage covers the whole frame (with a small
-    // tolerance for pixel rounding).
-    blit_full_frame_ =
-        !canvas_valid_ ||
-        !has_frame_damage_ ||
-        (frame_damage_.x <= bounds.x + 1.0f &&
-         frame_damage_.y <= bounds.y + 1.0f &&
-         frame_damage_.x + frame_damage_.width >=
-             bounds.x + bounds.width - 1.0f &&
-         frame_damage_.y + frame_damage_.height >=
-             bounds.y + bounds.height - 1.0f);
-
+    // The canvas is cleared only when it has no valid previous frame —
+    // widget drawing is damage-culled upstream, but the final blit always
+    // covers the whole canvas (see EndFrame).
     dc_->BeginDraw();
     dc_->SetTarget(canvas_.Get());
-    if (blit_full_frame_) {
+    if (!canvas_valid_) {
         dc_->Clear(ToColor(clear_color_));
     }
     frame_started_ = true;
@@ -309,26 +293,19 @@ void Direct2DRenderer::EndFrame() {
     RequireFrame();
     frame_started_ = false;
 
-    // Blit the retained canvas onto the swapchain back buffer — the whole
-    // canvas on full frames, only the damaged region otherwise — then
-    // present. The back buffer keeps last frame's pixels outside the blit.
-    const D2D1_SIZE_F canvas_size = canvas_->GetSize();
-    D2D1_RECT_F dest = D2D1::RectF(
-        0.0f, 0.0f, canvas_size.width, canvas_size.height);
-    if (!blit_full_frame_) {
-        dest = D2D1::RectF(
-            std::max(0.0f, frame_damage_.x),
-            std::max(0.0f, frame_damage_.y),
-            std::min(canvas_size.width, frame_damage_.x + frame_damage_.width),
-            std::min(canvas_size.height, frame_damage_.y + frame_damage_.height));
-    }
+    // Blit the whole retained canvas onto the swapchain back buffer.
+    // A partial blit is NOT possible here: a flip-model swapchain rotates
+    // between BufferCount buffers and only the current back buffer is
+    // reachable — updating just the damage rect would leave the other
+    // buffer one frame stale and flicker every other present. The full
+    // textured blit is a cheap GPU copy; the expensive part (widget draw
+    // commands) is already culled to the damage region upstream.
     dc_->SetTarget(backbuffer_target_.Get());
     dc_->DrawBitmap(
         canvas_.Get(),
-        dest,
+        nullptr,
         1.0f,
-        D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
-        &dest);
+        D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
 
     const auto result = dc_->EndDraw();
     if (FAILED(result)) {
@@ -338,10 +315,8 @@ void Direct2DRenderer::EndFrame() {
         }
         ThrowIfFailed(result, "ID2D1DeviceContext::EndDraw");
     }
-    // Canvas now holds a complete frame; damage is consumed by this blit.
+    // Canvas now holds a complete frame.
     canvas_valid_ = true;
-    has_frame_damage_ = false;
-    blit_full_frame_ = true;
 
     const HRESULT present_hr = swap_chain_->Present(1, 0);
     if (present_hr == DXGI_ERROR_DEVICE_REMOVED ||

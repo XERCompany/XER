@@ -221,6 +221,15 @@ void Widget::SetParent(std::shared_ptr<Widget> parent) {
             parent->children_.push_back(self);
         }
     }
+    // The retained canvas keeps last frame's pixels: both the vacated area
+    // in the old parent and the adopted area in the new one must repaint,
+    // and paint_dirty_ must reach the tree or no WM_PAINT is scheduled.
+    if (previous) {
+        previous->Invalidate();
+    }
+    if (parent) {
+        parent->Invalidate();
+    }
 }
 
 std::shared_ptr<Widget> Widget::GetParent() const {

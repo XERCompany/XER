@@ -34,7 +34,6 @@ public:
 
     void SetClearColor(Theme::Color color);
     void SetDpi(UINT dpi);
-    void SetFrameDamage(Layout::Rect damage) override;
     void BeginFrame(Layout::Rect bounds) override;
     void EndFrame() override;
     void FillRect(Layout::Rect rect, Theme::Color color, float radius) override;
@@ -69,16 +68,9 @@ private:
     UINT dpi_;
     Theme::Color clear_color_{1.0f, 1.0f, 1.0f, 1.0f};
     bool frame_started_ = false;
-    // Damage rect for the current frame (client coords). When it does not
-    // cover the whole frame the canvas keeps its previous contents outside
-    // the damage area and only that region is re-rendered.
-    Layout::Rect frame_damage_{};
-    bool has_frame_damage_ = false;
     // True once the retained canvas holds a complete presented frame;
-    // a fresh canvas must be fully cleared before partial damage applies.
+    // a fresh canvas must be fully cleared before reuse.
     bool canvas_valid_ = false;
-    // Whether EndFrame blits the whole canvas or only frame_damage_.
-    bool blit_full_frame_ = true;
     D2D1_SIZE_U target_size_{0, 0};
 
     // D3D11 device shared by the DXGI swapchain and the D2D device.
