@@ -38,6 +38,24 @@ cmake -S . -B build2 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.
 cmake --build build2 --config Release
 ```
 
+### Linux / macOS
+
+Зависимости — гибрид: системные пакеты (apt / Homebrew) для всего, что есть в репозиториях ОС, и частичный vcpkg только для портов без системного аналога (skia, ggml, folly, onnxruntime, ...). Маппинг имён — `cmake/deps/`, toolchain-файлы — `cmake/platforms/`.
+
+```bash
+# Linux (Ubuntu 24.04): собрать список пакетов — шаг "Install build tools +
+# system dependencies (apt)" в .github/workflows/build.yml, затем:
+cmake --preset linux-release
+cmake --build --preset linux-release
+
+# macOS:
+cmake --preset macos-arm64   # Apple Silicon
+cmake --preset macos-x64     # Intel
+cmake --build --preset macos-arm64
+```
+
+Для частичного vcpkg передать `-DXER_VCPKG_ROOT=<путь-к-vcpkg> -DXER_VCPKG_TRIPLET=x64-linux` (или `arm64-osx`/`x64-osx`). cuDNN на Linux требует CUDA toolkit (`cuda-toolkit-12-6` из NVIDIA apt-репозитория) — GPU не нужен, только nvcc.
+
 | Цель | Бинарник | Назначение |
 |---|---|---|
 | `Editor` | `build2/bin/Editor.exe` | Главное приложение |
