@@ -1,12 +1,15 @@
-If: 
-  PathMatch: [.*\.h, .*\.cc] 
-  PathExclude: src/.* 
+CompileFlags:
+  CompilationDatabase: out/build/default
+---
+If:
+  PathMatch: [.*\.h, .*\.cc]
+  PathExclude: src/.*
 CompileFlags:
   BuiltinHeaders: QueryDriver
-  Add: 
-    - "-I./src"
+  Add:
+    - "-ID:/Developers/XER3/src"
     - "-IC:/vcpkg/installed/x64-windows-release/include"
     - "-I./package/module/node_modules/nan"
-    - "-std=c++17"
+    - "-std=c++2c"
   Remove: ["-W*"]
-  Compiler: clang++ 
+  Compiler: clang++

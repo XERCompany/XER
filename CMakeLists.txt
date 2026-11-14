@@ -337,6 +337,8 @@ set_target_properties(sd PROPERTIES
 add_executable(HubCivitAIBrowser
     tools/HubCivitAIBrowser/main.cc
     tools/HubCivitAIBrowser/hub_browser_widget.cc
+    tools/HubCivitAIBrowser/hub_dialogs.cc
+    tools/HubCivitAIBrowser/hub_preview_cache.cc
 )
 target_include_directories(HubCivitAIBrowser PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -347,8 +349,80 @@ target_compile_features(HubCivitAIBrowser PRIVATE cxx_std_23)
 target_link_libraries(HubCivitAIBrowser PRIVATE
     XER_UI_Core
     XER_CivitaiModels
+    XER_Archive
 )
 set_target_properties(HubCivitAIBrowser PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# audioconvert.exe — Audio format converter using XER audio codecs
+add_executable(audioconvert tools/audioconvert/main.cc)
+target_include_directories(audioconvert PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(audioconvert PRIVATE cxx_std_23)
+target_link_libraries(audioconvert PRIVATE
+    XER_AudioCore
+    XER_Flux_Core
+    XER_Helper
+)
+set_target_properties(audioconvert PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# audioapplyeffect.exe — Apply audio effects to input file and save to output
+add_executable(audioapplyeffect tools/audioapplyeffect/main.cc)
+target_include_directories(audioapplyeffect PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(audioapplyeffect PRIVATE cxx_std_23)
+target_link_libraries(audioapplyeffect PRIVATE
+    XER_AudioCore
+    XER_Flux_Core
+    XER_Helper
+)
+set_target_properties(audioapplyeffect PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# audioprobe.exe — Audio file information probe
+add_executable(audioprobe tools/audioprobe/main.cc)
+target_include_directories(audioprobe PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(audioprobe PRIVATE cxx_std_23)
+target_link_libraries(audioprobe PRIVATE
+    XER_AudioCore
+    XER_Flux_Core
+    XER_Helper
+)
+set_target_properties(audioprobe PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# audioplayer.exe — Simple audio player using XER AudioPlayer
+add_executable(audioplayer tools/audioplayer/main.cc)
+target_include_directories(audioplayer PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(audioplayer PRIVATE cxx_std_23)
+target_link_libraries(audioplayer PRIVATE
+    XER_App
+    XER_Flux_Core
+    XER_Helper
+    winmm
+)
+set_target_properties(audioplayer PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# preview.exe — Image preview tool using XER image API
+add_executable(preview tools/preview/main.cc)
+target_include_directories(preview PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(preview PRIVATE cxx_std_23)
+target_link_libraries(preview PRIVATE
+    XER_Image
+    XER_Flux_Core
+    XER_Helper
+)
+set_target_properties(preview PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
 include(CTest)
