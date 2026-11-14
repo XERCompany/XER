@@ -279,18 +279,9 @@ void AudioPlayer::HandleDefaultDeviceChange() {
     // render_client_ every iteration. state_ intentionally stays
     // kPlaying/kPaused: dropping to kStopped would look like a natural
     // track end to pollers and trigger a track advance mid-rebind.
-    stop_thread_ = true;
-    if (audio_thread_) {
-        WaitForSingleObject(audio_thread_, INFINITE);
-        CloseHandle(audio_thread_);
-        audio_thread_ = nullptr;
-    }
-    if (audio_client_) {
-        audio_client_->Stop();
-    }
-    // A queued crossfade buffer was decoded for the old endpoint's format
-    // — drop it; the next decode uses the new rate/channel layout.
-    ClearPendingBuffer();
+    // StopFeedThread also drops queued crossfade buffers (decoded for the
+    // old endpoint's format).
+    StopFeedThread();
 
     if (render_client_) {
         render_client_->Release();
@@ -486,26 +477,34 @@ bool AudioPlayer::LoadFromFile(const std::string& file_path, std::string* error_
         return false;
     }
 
+    // Join the feed thread BEFORE swapping buffers: the render loop holds
+    // pointers into audio_buffer_/pending_queue_ and a stale
+    // playback_position_ can exceed the new buffer — swapping under it is
+    // a data race (and an out-of-bounds read).
+    const bool was_playing = state_.load() == PlaybackState::kPlaying;
+    StopFeedThread();
+    if (was_playing) {
+        UpdateState(PlaybackState::kStopped);
+    }
+
     audio_buffer_ = std::move(buffer);
     playback_position_ = 0;
     current_time_ = 0.0;
-
-    if (state_ == PlaybackState::kPlaying) {
-        Stop();
-    }
 
     return true;
 }
 
 bool AudioPlayer::LoadFromBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer) {
     std::lock_guard<std::recursive_mutex> lock(control_mutex_);
+    const bool was_playing = state_.load() == PlaybackState::kPlaying;
+    StopFeedThread();
+    if (was_playing) {
+        UpdateState(PlaybackState::kStopped);
+    }
+
     audio_buffer_ = std::move(buffer);
     playback_position_ = 0;
     current_time_ = 0.0;
-
-    if (state_ == PlaybackState::kPlaying) {
-        Stop();
-    }
 
     return IsLoaded();
 }
@@ -566,23 +565,28 @@ bool AudioPlayer::Pause() {
     return true;
 }
 
-bool AudioPlayer::Stop() {
-    std::lock_guard<std::recursive_mutex> lock(control_mutex_);
-    if (state_ == PlaybackState::kStopped) {
-        return true;
-    }
-
+void AudioPlayer::StopFeedThread() {
+    // Caller holds control_mutex_. The feed thread is joined before return
+    // so buffer/pending swaps afterwards cannot race the render loop.
     stop_thread_ = true;
     if (audio_thread_) {
         WaitForSingleObject(audio_thread_, INFINITE);
         CloseHandle(audio_thread_);
         audio_thread_ = nullptr;
     }
-
     if (audio_client_) {
         audio_client_->Stop();
     }
     ClearPendingBuffer();
+}
+
+bool AudioPlayer::Stop() {
+    std::lock_guard<std::recursive_mutex> lock(control_mutex_);
+    if (state_ == PlaybackState::kStopped) {
+        return true;
+    }
+
+    StopFeedThread();
 
     playback_position_ = 0;
     current_time_ = 0.0;
@@ -635,10 +639,11 @@ uint64_t AudioPlayer::FadeFrames(double seconds) const {
 }
 
 void AudioPlayer::SetPendingBuffer(
-    XER::Audio::Core::AudioSourceBuffer&& buffer) {
+    XER::Audio::Core::AudioSourceBuffer&& buffer, int64_t track_tag) {
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
-        pending_staging_ = std::move(buffer);
+        pending_staging_.push_back(
+            PendingEntry{std::move(buffer), track_tag});
     }
     pending_commit_.store(true);
 }
@@ -646,11 +651,11 @@ void AudioPlayer::SetPendingBuffer(
 void AudioPlayer::ClearPendingBuffer() {
     {
         std::lock_guard<std::mutex> lock(pending_mutex_);
-        pending_staging_ = XER::Audio::Core::AudioSourceBuffer{};
-        pending_buffer_ = XER::Audio::Core::AudioSourceBuffer{};
+        pending_staging_.clear();
+        pending_queue_.clear();
     }
     pending_position_ = 0;
-    pending_active_ = false;
+    pending_count_.store(0);
     pending_commit_.store(false);
 }
 
@@ -677,23 +682,41 @@ void AudioPlayer::ProcessAudio() {
     uint64_t fade_channels =
         static_cast<uint64_t>((std::max)(1, audio_buffer_.channels));
 
-    // Promotes the queued pending buffer when the current one is exhausted.
+    // Queue-front render state — refreshed every render iteration and by
+    // try_promote_pending() when the front is consumed.
+    const std::vector<float>* pending_samples = nullptr;
+    size_t pending_total_samples = 0;
+
+    // Promotes the queue front when the current buffer is exhausted.
     // Requires matching rate/channel layout; returns false otherwise.
+    // After a promote the next queued buffer becomes the crossfade source,
+    // so transitions chain without gaps.
     auto try_promote_pending = [&]() -> bool {
-        if (!pending_active_ ||
-            pending_buffer_.sample_rate != audio_buffer_.sample_rate ||
-            pending_buffer_.channels != audio_buffer_.channels) {
+        // Skip poison entries (empty buffers queued for undecodable
+        // tracks) so play order stays contiguous without audible gaps.
+        while (!pending_queue_.empty() &&
+               pending_queue_.front().buffer.samples.empty()) {
+            pending_queue_.pop_front();
+            pending_count_.store(pending_queue_.size());
+        }
+        if (pending_queue_.empty() ||
+            pending_queue_.front().buffer.sample_rate !=
+                audio_buffer_.sample_rate ||
+            pending_queue_.front().buffer.channels !=
+                audio_buffer_.channels) {
             return false;
         }
-        audio_buffer_ = std::move(pending_buffer_);
+        PendingEntry promoted = std::move(pending_queue_.front());
+        pending_queue_.pop_front();
+        pending_count_.store(pending_queue_.size());
+        audio_buffer_ = std::move(promoted.buffer);
         // A pending buffer that already mixed during the overlap window
         // had its fade-in performed by the crossfade ramp — don't apply
         // the track's own fade-in on top (would cause a gain dip when
         // fade_in > fade_out).
         const bool had_crossfade = pending_position_ > 0;
         playback_position_ = pending_position_;
-        pending_position_ = 0;
-        pending_active_ = false;
+        pending_position_ = 0;  // cursor restarts for the new front
         samples = &audio_buffer_.samples;
         total_samples = samples->size();
         fade_total_frames = audio_buffer_.frame_count;
@@ -705,27 +728,38 @@ void AudioPlayer::ProcessAudio() {
         fading = (fade_in_frames | fade_out_frames) != 0;
         fade_channels =
             static_cast<uint64_t>((std::max)(1, audio_buffer_.channels));
+        pending_samples = pending_queue_.empty()
+            ? nullptr
+            : &pending_queue_.front().buffer.samples;
+        pending_total_samples =
+            pending_samples != nullptr ? pending_samples->size() : 0;
         if (track_advanced_callback_) {
-            track_advanced_callback_();
+            track_advanced_callback_(promoted.track_tag);
         }
         return true;
     };
 
     while (!stop_thread_) {
-        // Adopt a pending buffer queued via SetPendingBuffer (crossfade
-        // "next" track). The staging handoff is mutex-guarded; the flag
-        // exchange keeps the audio thread off the lock in the common case.
+        // Adopt buffers queued via SetPendingBuffer (crossfade "next"
+        // tracks). The staging handoff is mutex-guarded; the flag exchange
+        // keeps the audio thread off the lock in the common case.
         if (pending_commit_.exchange(false)) {
             {
                 std::lock_guard<std::mutex> lock(pending_mutex_);
-                pending_buffer_ = std::move(pending_staging_);
+                while (!pending_staging_.empty()) {
+                    pending_queue_.push_back(
+                        std::move(pending_staging_.front()));
+                    pending_staging_.pop_front();
+                }
             }
-            pending_position_ = 0;
-            pending_active_ = !pending_buffer_.samples.empty();
+            pending_count_.store(pending_queue_.size());
         }
 
-        const std::vector<float>* pending_samples = &pending_buffer_.samples;
-        const size_t pending_total_samples = pending_samples->size();
+        pending_samples = pending_queue_.empty()
+            ? nullptr
+            : &pending_queue_.front().buffer.samples;
+        pending_total_samples =
+            pending_samples != nullptr ? pending_samples->size() : 0;
 
         UINT32 num_padding_frames = 0;
         HRESULT hr = audio_client_->GetCurrentPadding(&num_padding_frames);
@@ -789,12 +823,13 @@ void AudioPlayer::ProcessAudio() {
                     frame_gain *= static_cast<float>(
                         static_cast<double>(remaining) /
                         static_cast<double>(fade_out_frames));
-                    // Crossfade window == fade-out window: mix the pending
-                    // buffer in with a complementary 0->1 ramp.
-                    mixing = pending_active_ &&
-                        pending_buffer_.sample_rate ==
+                    // Crossfade window == fade-out window: mix the queue
+                    // front in with a complementary 0->1 ramp.
+                    mixing = pending_samples != nullptr &&
+                        pending_queue_.front().buffer.sample_rate ==
                             audio_buffer_.sample_rate &&
-                        pending_buffer_.channels == audio_buffer_.channels;
+                        pending_queue_.front().buffer.channels ==
+                            audio_buffer_.channels;
                 }
                 if (mixing) {
                     // First frame of the overlap window: rewind the pending

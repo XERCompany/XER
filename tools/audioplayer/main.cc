@@ -46,6 +46,7 @@
 #include "app/app_audio_controller.h"
 #include "async_io/io_thread_pool.h"
 #include "audio/audio_core/audio_source_loader.h"
+#include "audio/fx_customs/fx_customs_presets.h"
 #include "flux/terminal/terminal_output_renderer.h"
 #include "flux/terminal/terminal_colors.h"
 #include "flux/terminal/terminal_styles.h"
@@ -83,9 +84,14 @@ bool ParseFadeSeconds(const std::string& text, double* out) {
 
 void PrintUsage() {
     std::cout << "Usage: audioplayer.exe [--loop={track,playlist,none}] "
-                 "[--fade[=SEC]] [--fade-in=SEC] [--fade-out=SEC] <audio_file>\n";
+                 "[--fade[=SEC]] [--fade-in=SEC] [--fade-out=SEC] "
+                 "[--effect=<fx[;fx]>] [--preload=N] <audio_file>\n";
     std::cout << "\nScans the file's folder and plays all audio files as a playlist.\n";
     std::cout << "Loop: track=repeat current, playlist=repeat folder, none=play once (default)\n";
+    std::cout << "Fade: linear in/out per track; the next track is decoded "
+                 "fade_out+5s before the end and crossfaded in.\n";
+    std::cout << "Effect: live FX chain (names from audioapplyeffect --list).\n";
+    std::cout << "Preload: decoded tracks kept in memory for crossfade (default 2).\n";
     std::cout << "\nControls: Space=pause/resume  Left/Right=seek 5s  Up/Down=volume  "
                  "N=next  P=prev  M=mute  Q=quit\n";
 }
@@ -365,11 +371,14 @@ enum class SessionResult { kEnded, kNext, kPrev, kQuit, kAdvanced };
 SessionResult PlaySession(XER::App::AudioController& controller,
                           const std::string& track_tag,
                           std::atomic<bool>& track_advanced,
+                          std::atomic<int64_t>& advanced_tag,
+                          int64_t* advanced_tag_out,
                           const std::function<void()>& on_render_tick) {
     bool quit = false;
     auto last_render = std::chrono::steady_clock::now() - std::chrono::seconds(1);
     while (!quit) {
         if (track_advanced.exchange(false)) {
+            *advanced_tag_out = advanced_tag.load();
             return SessionResult::kAdvanced;
         }
         const PlaybackState state = controller.GetState();
@@ -474,14 +483,17 @@ int main(int argc, char** argv) {
     XER::Bridge::FFmpeg::SetLogLevel(XER::Bridge::FFmpeg::LogLevel::kError);
 #endif
 
-    // Parse --loop={track,playlist,none} (also accepts "--loop X") and the
-    // fade options. -1 marks "not specified" so --fade-in/--fade-out can
-    // override --fade regardless of argument order.
+    // Parse --loop={track,playlist,none} (also accepts "--loop X"), the
+    // fade options, --effect=<chain> and --preload=N. -1 marks "not
+    // specified" so --fade-in/--fade-out can override --fade regardless
+    // of argument order.
     LoopMode loop_mode = LoopMode::kNone;
     double fade_both = -1.0;
     double fade_in_opt = -1.0;
     double fade_out_opt = -1.0;
     std::string input_path;
+    std::string effect_arg;
+    long long preload_depth = 2;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         std::string value;
@@ -509,6 +521,28 @@ int main(int argc, char** argv) {
             value = arg.substr(11);
         } else if (arg == "--fade-out") {
             fade_out_opt = 5.0;
+        } else if (arg.rfind("--effect=", 0) == 0) {
+            effect_arg = arg.substr(9);
+        } else if (arg == "--effect" && i + 1 < argc) {
+            effect_arg = argv[++i];
+        } else if (arg.rfind("--preload=", 0) == 0) {
+            const std::string v = arg.substr(10);
+            char* end = nullptr;
+            const long long n = std::strtoll(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end != '\0' || n < 0 || n > 16) {
+                std::cerr << "Error: invalid --preload value '" << v << "'\n";
+                return 1;
+            }
+            preload_depth = n;
+        } else if (arg == "--preload" && i + 1 < argc) {
+            const std::string v = argv[++i];
+            char* end = nullptr;
+            const long long n = std::strtoll(v.c_str(), &end, 10);
+            if (end == v.c_str() || *end != '\0' || n < 0 || n > 16) {
+                std::cerr << "Error: invalid --preload value '" << v << "'\n";
+                return 1;
+            }
+            preload_depth = n;
         } else if (!arg.empty() && arg[0] == '-' && arg != "-") {
             std::cerr << "Error: unknown option '" << arg << "'\n";
             PrintUsage();
@@ -551,6 +585,42 @@ int main(int argc, char** argv) {
     const double fade_out = fade_out_opt >= 0.0 ? fade_out_opt
         : (fade_both >= 0.0 ? fade_both : 5.0);
 
+    // --effect="Name1;Name2;...": build each preset and merge their nodes
+    // into one package with stage offsets so the live flow runs them
+    // sequentially (same semantics as audioapplyeffect's chain).
+    XER::Audio::FX::CustomEffectPackage fx_package;
+    fx_package.label = effect_arg;
+    if (!effect_arg.empty()) {
+        std::vector<std::string> fx_names;
+        for (const std::string& part : Str::Split(effect_arg, ';')) {
+            const std::string name = Str::TrimAsciiWhitespaceCopy(part);
+            if (!name.empty()) fx_names.push_back(name);
+        }
+        if (fx_names.empty()) {
+            std::cerr << "Error: empty --effect list\n";
+            return 1;
+        }
+        uint32_t stage_offset = 0;
+        for (const std::string& name : fx_names) {
+            if (!XER::Audio::FX::Customs::IsFxCustomPresetSupported(name)) {
+                std::cerr << "Error: unknown effect '" << name << "'\n";
+                std::cerr << "Run audioapplyeffect.exe --list for names\n";
+                return 1;
+            }
+            XER::Audio::FX::CustomEffectPackage pkg =
+                XER::Audio::FX::Customs::BuildFxCustomPreset(name);
+            uint32_t max_stage = 0;
+            for (const auto& node : pkg.nodes) {
+                max_stage = (std::max)(max_stage, node.stage_index);
+            }
+            for (auto& node : pkg.nodes) {
+                node.stage_index += stage_offset;
+                fx_package.nodes.push_back(std::move(node));
+            }
+            stage_offset += max_stage + 1;
+        }
+    }
+
     XER::Flux::Terminal::WriteLine(
         OutputStream::kStdout,
         absl::StrCat(
@@ -569,12 +639,33 @@ int main(int argc, char** argv) {
     }
     controller.SetFadeInOut(fade_in, fade_out);
 
-    // Crossfade bookkeeping: the audio thread fires this when the pending
-    // buffer is promoted at a track boundary; PlaySession polls the flag.
+    // Live effect chain (--effect): built once, runs on every WASAPI
+    // block through AudioController's streaming CustomEffectFlow.
+    if (!fx_package.nodes.empty()) {
+        std::string fx_error;
+        if (!controller.ApplyEffectLive(fx_package, &fx_error)) {
+            std::cerr << "Error: failed to initialize effect chain: "
+                      << fx_error << "\n";
+            return 1;
+        }
+        XER::Flux::Terminal::WriteLine(
+            OutputStream::kStdout,
+            absl::StrCat(
+                "FX: ", XER::Flux::Terminal::ColorUtils::Dim(effect_arg)
+            )
+        );
+    }
+
+    // Crossfade bookkeeping: the audio thread fires this when a queued
+    // buffer is promoted at a track boundary; PlaySession polls the flag
+    // and reads the promoted entry's playlist tag.
     std::atomic<bool> track_advanced{false};
-    long long pending_index = -1;  // playlist index living in the player
+    std::atomic<int64_t> advanced_tag{-1};
     controller.SetTrackAdvancedCallback(
-        [&track_advanced] { track_advanced.store(true); });
+        [&](int64_t tag) {
+            advanced_tag.store(tag);
+            track_advanced.store(true);
+        });
 
     // Scan the file's folder into a playlist.
     FolderPlaylist playlist = ScanFolderPlaylist(input_path);
@@ -626,10 +717,6 @@ int main(int argc, char** argv) {
         }
         return -1;
     };
-    auto auto_next_index = [&]() -> long long {
-        return auto_next_index_from(
-            static_cast<long long>(playlist.index));
-    };
     auto request_prefetch = [&](long long index) {
         if (index < 0) {
             prefetch_path.clear();
@@ -647,33 +734,81 @@ int main(int argc, char** argv) {
             DecodeTrackAsync(path, pl->GetSampleRate(), pl->GetChannelCount());
     };
 
-    // Called from PlaySession's render tick (~10 Hz): when the in-flight
-    // decode finishes, hand it to the player as the crossfade pending
-    // buffer, remember which playlist entry it is, and start decoding the
-    // track after it so the pipeline stays full.
-    auto install_prefetch_if_ready = [&]() {
-        // Only one "next" track can be queued — a second install would
-        // overwrite the pending buffer and desync pending_index. Keep the
-        // decode alive and retry on the next tick instead.
-        if (controller.GetPlayer()->HasPendingBuffer()) {
-            return;
-        }
-        if (!prefetch_future.valid() || prefetch_path.empty() ||
-            prefetch_future.wait_for(std::chrono::seconds(0)) !=
+    // Decode frontier: index of the last track submitted for decode.
+    // The next submit is auto_next_index_from(decode_cursor), so decodes
+    // always follow play order. Reset whenever a fresh (non-promoted)
+    // load happens — the player's queue is cleared on load, so the
+    // pipeline rebuilds from the new current track.
+    long long decode_cursor = -1;
+
+    // Called from PlaySession's render tick (~10 Hz):
+    //  1) installs a finished decode into the player's crossfade queue
+    //     (tagged with its playlist index),
+    //  2) submits the next decode once the current track is within
+    //     fade_out + 5 s of its end and the queue has spare capacity —
+    //     decoded tracks stay in memory (--preload depth) so boundaries
+    //     never wait on the decoder.
+    auto pipeline_tick = [&]() {
+        XER::Content::Audio::AudioPlayer* player = controller.GetPlayer();
+
+        if (prefetch_future.valid() && !prefetch_path.empty() &&
+            prefetch_future.wait_for(std::chrono::seconds(0)) ==
                 std::future_status::ready) {
-            return;
+            DecodedTrack decoded = prefetch_future.get();
+            const long long idx = prefetch_index;
+            prefetch_path.clear();
+            prefetch_index = -1;
+            prefetch_future = {};
+            if (decoded.ok && buffer_matches_device(decoded.buffer)) {
+                player->SetPendingBuffer(std::move(decoded.buffer), idx);
+            } else if (!decoded.ok) {
+                // Decode failed: report it now and queue a poison entry
+                // so play order stays contiguous — the player skips
+                // empty buffers at promote time. A format mismatch is
+                // NOT poisoned: the track is playable, the synchronous
+                // load path retries it at the current device format.
+                const std::string& path =
+                    playlist.files[static_cast<std::size_t>(idx)];
+                char etag[32];
+                std::snprintf(etag, sizeof(etag), "%zu/%zu",
+                              static_cast<std::size_t>(idx) + 1,
+                              playlist.files.size());
+                XER::Flux::Terminal::WriteLine(
+                    OutputStream::kStdout,
+                    absl::StrCat(
+                        "\n",
+                        XER::Flux::Terminal::ForegroundSequence(
+                            TerminalColor::kRed),
+                        "Cannot decode [", etag, "] ", path, ": ",
+                        decoded.error.empty() ? "decode failed"
+                                              : decoded.error,
+                        XER::Flux::Terminal::ResetStyleSequence()
+                    )
+                );
+                player->SetPendingBuffer(
+                    XER::Audio::Core::AudioSourceBuffer{}, idx);
+            }
         }
-        DecodedTrack decoded = prefetch_future.get();
-        const long long idx = prefetch_index;
-        prefetch_path.clear();
-        prefetch_index = -1;
-        prefetch_future = {};
-        if (!decoded.ok || !buffer_matches_device(decoded.buffer)) {
-            return;  // decode failed / stale format — sync path handles it
+
+        // Submit the next decode when the end-of-track lead window opens:
+        // fade_out seconds of crossfade plus a 5 s decode margin
+        // (fade_out = 0 -> 5 s lead).
+        const double duration = controller.GetDuration();
+        const double position = controller.GetCurrentTime();
+        const double lead = fade_out + 5.0;
+        const bool in_window = duration > 0.0 &&
+            (duration - position) <= lead;
+        const bool inflight = prefetch_future.valid();
+        if (in_window && !inflight &&
+            player->PendingCount() <
+                static_cast<size_t>(preload_depth) &&
+            decode_cursor >= 0) {
+            const long long next = auto_next_index_from(decode_cursor);
+            if (next >= 0) {
+                request_prefetch(next);
+                decode_cursor = next;
+            }
         }
-        controller.GetPlayer()->SetPendingBuffer(std::move(decoded.buffer));
-        pending_index = idx;
-        request_prefetch(auto_next_index_from(idx));
     };
 
     // Hide the cursor while the status line is being redrawn.
@@ -733,7 +868,21 @@ int main(int argc, char** argv) {
                 if (done) break;
                 continue;
             }
-            pending_index = -1;  // fresh session — stale pending is gone
+            // Fresh session: the player's pending queue was cleared on
+            // load — reset the decode frontier and keep an in-flight
+            // decode only when it targets this track or its successor.
+            decode_cursor = static_cast<long long>(playlist.index);
+            const long long want_next = auto_next_index_from(
+                static_cast<long long>(playlist.index));
+            if (!prefetch_path.empty() &&
+                prefetch_path != track_path &&
+                (want_next < 0 ||
+                 prefetch_path !=
+                     playlist.files[static_cast<std::size_t>(want_next)])) {
+                prefetch_path.clear();
+                prefetch_index = -1;
+                prefetch_future = {};
+            }
         }
 
         XER::Content::Audio::AudioPlayer* player = controller.GetPlayer();
@@ -745,14 +894,16 @@ int main(int argc, char** argv) {
             break;
         }
 
-        // Start decoding the next track while this one plays.
-        request_prefetch(auto_next_index());
-
         // Play the track; --loop=track replays it until skip/quit.
+        // pipeline_tick installs finished decodes into the crossfade
+        // queue and submits new ones inside the end-of-track lead window.
         SessionResult result;
+        int64_t promoted_tag = -1;
         do {
+            promoted_tag = -1;
             result = PlaySession(controller, track_tag, track_advanced,
-                                 install_prefetch_if_ready);
+                                 advanced_tag, &promoted_tag,
+                                 pipeline_tick);
             if (result != SessionResult::kEnded || loop_mode != LoopMode::kTrack) {
                 break;
             }
@@ -769,21 +920,21 @@ int main(int argc, char** argv) {
                 quit = true;
                 break;
             case SessionResult::kAdvanced: {
-                // The pending buffer was promoted mid-stream: adopt its
-                // playlist index and keep playing without reloading.
-                const bool index_ok = pending_index >= 0 &&
-                    static_cast<std::size_t>(pending_index) <
+                // A queued buffer was promoted mid-stream: adopt its
+                // playlist tag and keep playing without reloading. The
+                // queue already holds the following tracks, so the
+                // pipeline continues from decode_cursor untouched.
+                const bool tag_ok = promoted_tag >= 0 &&
+                    static_cast<std::size_t>(promoted_tag) <
                         playlist.files.size();
-                if (index_ok) {
+                if (tag_ok) {
                     playlist.index =
-                        static_cast<std::size_t>(pending_index);
-                    pending_index = -1;
+                        static_cast<std::size_t>(promoted_tag);
                     resume_without_load = true;
                 } else {
                     bool done = false;
                     AdvancePlaylist(playlist, loop_mode, false, 1, &done);
                     if (done) playlist_done = true;
-                    pending_index = -1;
                 }
                 break;
             }
@@ -794,22 +945,6 @@ int main(int argc, char** argv) {
                                 true,
                                 result == SessionResult::kNext ? 1 : -1,
                                 &done);
-                // Manual navigation invalidates the decode-ahead target
-                // unless it is still the correct "next" track (e.g. N
-                // landing on the prefetched song keeps the following
-                // decode alive).
-                const long long want = auto_next_index_from(
-                    static_cast<long long>(playlist.index));
-                const bool keep =
-                    prefetch_path == playlist.files[playlist.index] ||
-                    (want >= 0 &&
-                     prefetch_path ==
-                         playlist.files[static_cast<std::size_t>(want)]);
-                if (!keep) {
-                    prefetch_path.clear();
-                    prefetch_index = -1;
-                    prefetch_future = {};
-                }
                 break;
             }
             case SessionResult::kEnded: {
