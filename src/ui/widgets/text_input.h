@@ -27,6 +27,10 @@ public:
     // inputs treat Enter as submit, not newline).
     void SetOnSubmit(std::function<void()> callback);
 
+    // Undo/redo the last edit. Return false when there is nothing to undo/redo.
+    bool Undo();
+    bool Redo();
+
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
     using Widget::Layout;
@@ -52,8 +56,6 @@ private:
     void EraseRange(std::size_t begin, std::size_t end);
     void MoveCaret(std::size_t position, bool extend_selection);
     void PushUndo();
-    bool Undo();
-    bool Redo();
     void NotifyValueChanged();
     // Display text: the value itself, or one bullet per code point in
     // password mode. Byte offsets in the result do NOT match value_.

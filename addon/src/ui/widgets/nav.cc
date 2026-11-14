@@ -274,14 +274,22 @@ NAN_METHOD(TitleBarClearActionPill) {
 NAN_METHOD(TitleBarSetOnWindowCommand) {
     auto* w = CastWidget<UIW::AppTitleBar>(info.This());
     if (!w) return;
-    BindWidgetCallback(info.This(), info, 0, "windowCommand",
-                       [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnWindowCommand(
-                               store ? [store](UIW::AppTitleBar::WindowCommand cmd) {
-                                   store->Emit("windowCommand",
-                                               static_cast<int>(cmd));
-                               } : nullptr);
-                       });
+    auto store = CallbacksOf(info.This());
+    std::function<void(int)> cb;
+    if (store) {
+        if (HasArg(info, 0) && info[0]->IsFunction()) {
+            store->Set("windowCommand", info[0].As<v8::Function>());
+            cb = [store](int cmd) { store->Emit("windowCommand", cmd); };
+        } else {
+            store->Remove("windowCommand");
+        }
+    }
+    w->SetOnWindowCommand(
+        cb ? std::function<void(UIW::AppTitleBar::WindowCommand)>(
+                 [cb](UIW::AppTitleBar::WindowCommand cmd) {
+                     cb(static_cast<int>(cmd));
+                 })
+           : nullptr);
 }
 
 NAN_METHOD(TitleBarSetMaximized) {

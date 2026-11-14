@@ -107,6 +107,17 @@ inline void BindWidgetCallback(v8::Local<v8::Value> self,
     }
 }
 
+// Builds a std::function<R(Args...)> that emits `key` on `store`; returns an
+// empty std::function when store is null (clears the C++ side). Use inside
+// BindWidgetCallback setters:
+//   w->SetOnClick(EmitFn<void>(store, "click"));
+template <typename R, typename... Args>
+inline std::function<R(Args...)> EmitFn(
+    const std::shared_ptr<CallbackStore>& store, const char* key) {
+    if (!store) return {};
+    return [store, key](Args... a) { store->Emit(key, a...); };
+}
+
 // Register a concrete widget class: ctor template inheriting Widget +
 // prototype methods.
 inline void RegisterWidgetClass(

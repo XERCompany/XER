@@ -118,7 +118,8 @@ NAN_METHOD(WindowGetSize) {
         info.GetReturnValue().Set(Nan::Undefined());
         return;
     }
-    const auto [w, h] = self->Get()->GetSize();
+    int w = 0, h = 0;
+    self->Get()->GetSize(&w, &h);
     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
     Nan::Set(obj, Nan::New("width").ToLocalChecked(), Nan::New(w));
     Nan::Set(obj, Nan::New("height").ToLocalChecked(), Nan::New(h));
@@ -137,7 +138,8 @@ NAN_METHOD(WindowGetPosition) {
         info.GetReturnValue().Set(Nan::Undefined());
         return;
     }
-    const auto [x, y] = self->Get()->GetPosition();
+    int x = 0, y = 0;
+    self->Get()->GetPosition(&x, &y);
     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
     Nan::Set(obj, Nan::New("x").ToLocalChecked(), Nan::New(x));
     Nan::Set(obj, Nan::New("y").ToLocalChecked(), Nan::New(y));
@@ -287,8 +289,11 @@ NAN_METHOD(WindowSetOnClose) {
     auto* self = UnwrapWindow(info.This());
     BindCallback(self, info, 0, "close",
                  [&](std::shared_ptr<CallbackStore> s) {
-                     self->Get()->SetOnClose(s ? [s]() { s->Emit("close"); }
-                                              : nullptr);
+                     if (s) {
+                         self->Get()->SetOnClose([s]() { s->Emit("close"); });
+                     } else {
+                         self->Get()->SetOnClose(nullptr);
+                     }
                  });
 }
 
@@ -296,9 +301,12 @@ NAN_METHOD(WindowSetOnResize) {
     auto* self = UnwrapWindow(info.This());
     BindCallback(self, info, 0, "resize",
                  [&](std::shared_ptr<CallbackStore> s) {
-                     self->Get()->SetOnResize(
-                         s ? [s](int w, int h) { s->Emit("resize", w, h); }
-                           : nullptr);
+                     if (s) {
+                         self->Get()->SetOnResize(
+                             [s](int w, int h) { s->Emit("resize", w, h); });
+                     } else {
+                         self->Get()->SetOnResize(nullptr);
+                     }
                  });
 }
 

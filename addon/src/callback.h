@@ -16,6 +16,8 @@
 
 #include "util.h"
 
+#include "layout/geometry.h"
+
 namespace xer::addon {
 
 namespace UIL = XER::UI::Layout;
@@ -99,10 +101,10 @@ public:
     template <typename... Args>
     void Emit(const char* name, Args&&... args) {
         auto it = fns_.find(name);
-        if (it == fns_.end() || !*it->second) return;
+        if (it == fns_.end() || it->second->IsEmpty()) return;
         v8::Local<v8::Value> argv[sizeof...(Args) > 0 ? sizeof...(Args) : 1] = {
             ToV8(std::forward<Args>(args))...};
-        Nan::Call(*it->second, Nan::GetCurrentContext()->Global(),
+        Nan::Call(Nan::New(*it->second), Nan::GetCurrentContext()->Global(),
                   static_cast<int>(sizeof...(Args)), argv);
     }
 
@@ -110,10 +112,11 @@ public:
     template <typename... Args>
     v8::Local<v8::Value> Call(const char* name, Args&&... args) {
         auto it = fns_.find(name);
-        if (it == fns_.end() || !*it->second) return Nan::Undefined();
+        if (it == fns_.end() || it->second->IsEmpty()) return Nan::Undefined();
         v8::Local<v8::Value> argv[sizeof...(Args) > 0 ? sizeof...(Args) : 1] = {
             ToV8(std::forward<Args>(args))...};
-        return Nan::Call(*it->second, Nan::GetCurrentContext()->Global(),
+        return Nan::Call(Nan::New(*it->second),
+                         Nan::GetCurrentContext()->Global(),
                          static_cast<int>(sizeof...(Args)), argv)
             .ToLocalChecked();
     }

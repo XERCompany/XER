@@ -34,6 +34,7 @@ using xer::addon::CallbackStore;
 using xer::addon::ui::CastWidget;
 using xer::addon::ui::CallbacksOf;
 using xer::addon::ui::BindWidgetCallback;
+using xer::addon::ui::EmitFn;
 using xer::addon::ui::RegisterWidgetClass;
 
 // --- small shared helpers -----------------------------------------------------
@@ -107,9 +108,7 @@ NAN_METHOD(ButtonSetOnClick) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "click",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnClick(store ? [store]() {
-                               store->Emit("click");
-                           } : nullptr);
+                           w->SetOnClick(EmitFn<void>(store, "click"));
                        });
 }
 
@@ -135,9 +134,7 @@ NAN_METHOD(CheckboxSetOnChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "changed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnChanged(store ? [store](bool v) {
-                               store->Emit("changed", v);
-                           } : nullptr);
+                           w->SetOnChanged(EmitFn<void, bool>(store, "changed"));
                        });
 }
 
@@ -167,9 +164,7 @@ NAN_METHOD(RadioGroupSetOnChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "changed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnChanged(store ? [store](int v) {
-                               store->Emit("changed", v);
-                           } : nullptr);
+                           w->SetOnChanged(EmitFn<void, int>(store, "changed"));
                        });
 }
 
@@ -219,9 +214,7 @@ NAN_METHOD(SelectSetOnChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "changed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnChanged(store ? [store](int v) {
-                               store->Emit("changed", v);
-                           } : nullptr);
+                           w->SetOnChanged(EmitFn<void, int>(store, "changed"));
                        });
 }
 
@@ -261,9 +254,8 @@ NAN_METHOD(SliderSetOnValueChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "valueChanged",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnValueChanged(store ? [store](float v) {
-                               store->Emit("valueChanged", v);
-                           } : nullptr);
+                           w->SetOnValueChanged(
+                               EmitFn<void, float>(store, "valueChanged"));
                        });
 }
 
@@ -289,9 +281,7 @@ NAN_METHOD(SwitchSetOnChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "changed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnChanged(store ? [store](bool v) {
-                               store->Emit("changed", v);
-                           } : nullptr);
+                           w->SetOnChanged(EmitFn<void, bool>(store, "changed"));
                        });
 }
 
@@ -340,9 +330,7 @@ NAN_METHOD(TabsSetOnChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "changed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnChanged(store ? [store](int v) {
-                               store->Emit("changed", v);
-                           } : nullptr);
+                           w->SetOnChanged(EmitFn<void, int>(store, "changed"));
                        });
 }
 
@@ -381,9 +369,8 @@ NAN_METHOD(ToggleSetOnPressedChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "pressedChanged",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnPressedChanged(store ? [store](bool v) {
-                               store->Emit("pressedChanged", v);
-                           } : nullptr);
+                           w->SetOnPressedChanged(
+                               EmitFn<void, bool>(store, "pressedChanged"));
                        });
 }
 
@@ -425,9 +412,8 @@ NAN_METHOD(ToggleGroupSetOnChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "changed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnChanged(store ? [store](const std::vector<int>& v) {
-                               store->Emit("changed", v);
-                           } : nullptr);
+                           w->SetOnChanged(EmitFn<void, const std::vector<int>&>(
+                               store, "changed"));
                        });
 }
 
@@ -477,9 +463,8 @@ NAN_METHOD(TextInputSetOnValueChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "valueChanged",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnValueChanged(store ? [store](const std::string& v) {
-                               store->Emit("valueChanged", v);
-                           } : nullptr);
+                           w->SetOnValueChanged(EmitFn<void, const std::string&>(
+                               store, "valueChanged"));
                        });
 }
 
@@ -488,9 +473,7 @@ NAN_METHOD(TextInputSetOnSubmit) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "submit",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnSubmit(store ? [store]() {
-                               store->Emit("submit");
-                           } : nullptr);
+                           w->SetOnSubmit(EmitFn<void>(store, "submit"));
                        });
 }
 
@@ -530,9 +513,8 @@ NAN_METHOD(TextareaSetOnChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "changed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnChanged(store ? [store](const std::string& v) {
-                               store->Emit("changed", v);
-                           } : nullptr);
+                           w->SetOnChanged(EmitFn<void, const std::string&>(
+                               store, "changed"));
                        });
 }
 
@@ -573,9 +555,7 @@ NAN_METHOD(PaginationSetOnPageChanged) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "pageChanged",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnPageChanged(store ? [store](int v) {
-                               store->Emit("pageChanged", v);
-                           } : nullptr);
+                           w->SetOnPageChanged(EmitFn<void, int>(store, "pageChanged"));
                        });
 }
 

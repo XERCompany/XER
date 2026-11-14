@@ -42,6 +42,7 @@ using xer::addon::ui::WidgetWrap;
 using xer::addon::ui::CastWidget;
 using xer::addon::ui::CallbacksOf;
 using xer::addon::ui::BindWidgetCallback;
+using xer::addon::ui::EmitFn;
 using xer::addon::ui::WidgetFromArg;
 using xer::addon::ui::RegisterWidgetClass;
 
@@ -259,9 +260,8 @@ NAN_METHOD(AccordionSetOnToggled) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "toggled",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnToggled(store ? [store](std::size_t i, bool open) {
-                               store->Emit("toggled", i, open);
-                           } : nullptr);
+                           w->SetOnToggled(
+                               EmitFn<void, std::size_t, bool>(store, "toggled"));
                        });
 }
 
@@ -281,9 +281,7 @@ NAN_METHOD(BreadcrumbSetOnNavigate) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "navigate",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnNavigate(store ? [store](int i) {
-                               store->Emit("navigate", i);
-                           } : nullptr);
+                           w->SetOnNavigate(EmitFn<void, int>(store, "navigate"));
                        });
 }
 
@@ -417,9 +415,7 @@ NAN_METHOD(DialogSetOnClosed) {
     if (!w) return;
     BindWidgetCallback(info.This(), info, 0, "closed",
                        [&](std::shared_ptr<CallbackStore> store) {
-                           w->SetOnClosed(store ? [store]() {
-                               store->Emit("closed");
-                           } : nullptr);
+                           w->SetOnClosed(EmitFn<void>(store, "closed"));
                        });
 }
 
@@ -472,7 +468,7 @@ NAN_METHOD(ScreenLoadingIsFinished) {
 
 NAN_METHOD(ScreenLoadingTick) {
     auto* w = CastWidget<UIW::ScreenLoadingWidget>(info.This());
-    if (w) w->Tick(NumArg(info, 0, 0.016));
+    if (w) w->Tick();
 }
 
 }  // namespace
