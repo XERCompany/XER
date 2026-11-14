@@ -9,6 +9,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
+
+#include "helper/env_utils.h"
 
 #include "content/network/socket/ssl_client_socket.h"
 #include "content/network/socket/tcp_client_socket.h"
@@ -714,6 +717,39 @@ bool HttpGet(std::string_view url,
                          static_cast<size_t>(n));
     }
     return true;
+}
+
+std::string DefaultCaBundlePath() {
+    // 1. Explicit env overrides.
+    for (const char* var : {"XER_CA_BUNDLE", "SSL_CERT_FILE",
+                            "CURL_CA_BUNDLE"}) {
+        const std::string v = XER::Helper::GetEnv(var);
+        if (!v.empty() && std::filesystem::exists(v)) {
+            return v;
+        }
+    }
+
+    // 2. Well-known install locations (Windows-first, then POSIX).
+    static const char* kCandidates[] = {
+#if defined(_WIN32)
+        "C:/vcpkg/installed/x64-windows-release/share/curl/cacert.pem",
+        "C:/vcpkg/installed/x64-windows-release/share/openssl/cacert.pem",
+        "C:/Program Files/Git/mingw64/ssl/certs/ca-bundle.crt",
+        "C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt",
+        "C:/Windows/System32/curl-ca-bundle.crt",
+#else
+        "/etc/ssl/certs/ca-certificates.crt",
+        "/etc/ssl/cert.pem",
+        "/etc/pki/tls/certs/ca-bundle.crt",
+#endif
+    };
+    for (const char* c : kCandidates) {
+        std::error_code ec;
+        if (std::filesystem::exists(c, ec)) {
+            return c;
+        }
+    }
+    return {};
 }
 
 }  // namespace content::civitai::internal

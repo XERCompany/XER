@@ -65,6 +65,7 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
     scheduler_.BuildSchedule(req.scheduler, req.steps);
 
     auto text_embedding = runtime.EncodeText(expanded_prompt, config_.text_embedding_dim);
+    auto uncond_embedding = runtime.EncodeText(req.negative_prompt, config_.text_embedding_dim);
 
     auto latent = SdLatentTensor::Make(req.width, req.height);
     SdLatentTensor::FillGaussian(latent, rng, config_.init_noise_sigma);
@@ -80,12 +81,13 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
         const uint64_t n = latent.GetElementCount();
         std::copy(latent_data, latent_data + n, predicted_noise.begin());
 
-        runtime.PredictNoise(text_embedding,
-                             predicted_noise.data(),
-                             n,
-                             t,
-                             sigma,
-                             guidance * sdxl_branch.RefinerGain(backend, runtime.loaded().sdxl_branch_loaded));
+        runtime.PredictNoiseCfg(text_embedding,
+                                uncond_embedding,
+                                predicted_noise.data(),
+                                n,
+                                t,
+                                sigma,
+                                guidance * sdxl_branch.RefinerGain(backend, runtime.loaded().sdxl_branch_loaded));
 
         scheduler_.ApplyStep(latent_data,
                              predicted_noise.data(),
@@ -116,6 +118,7 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
     result.metadata["backend"] = caps.selected_backend;
     result.metadata["weights_loaded_text"] = runtime.loaded().text_encoder_loaded ? "true" : "false";
     result.metadata["weights_loaded_unet"] = runtime.loaded().unet_loaded ? "true" : "false";
+    result.metadata["unet_real_weights"] = runtime.HasRealUnet() ? "true" : "false";
     result.metadata["weights_loaded_vae"] = runtime.loaded().vae_loaded ? "true" : "false";
     result.metadata["weights_loaded_controlnet"] = runtime.loaded().controlnet_loaded ? "true" : "false";
     result.metadata["weights_loaded_sdxl"] = runtime.loaded().sdxl_branch_loaded ? "true" : "false";

@@ -299,6 +299,39 @@ add_custom_command(TARGET ArchiveManager POST_BUILD
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/ArchiveManager/www"
         "${CMAKE_BINARY_DIR}/bin/www")
 
+# sd.exe — lightweight image generator CLI (stable-diffusion style).
+# sd.exe generate.json — resolves weights locally or via Civitai, runs the
+# sd_base pipeline and writes a PNG with webui-compatible metadata.
+add_executable(sd
+    tools/SdGenerate/main.cc
+    tools/SdGenerate/sd_config.cc
+    tools/SdGenerate/sd_lora.cc
+    tools/SdGenerate/sd_model_resolver.cc
+    tools/SdGenerate/sd_png_writer.cc
+)
+target_include_directories(sd PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+)
+target_compile_features(sd PRIVATE cxx_std_23)
+target_link_libraries(sd PRIVATE
+    XER_ContentAI
+    XER_CivitaiModels
+    XER_Image
+    jsoncpp_lib
+    ZLIB::ZLIB
+)
+# Capability probes inside XER_ContentAI (sd_gpu_dispatch) reference the
+# CUDA/OpenCV bridge libs, which are configured after src/content/ai.
+if(TARGET XER_BridgeCuda)
+    target_link_libraries(sd PRIVATE XER_BridgeCuda)
+endif()
+if(TARGET XER_BridgeOpenCV)
+    target_link_libraries(sd PRIVATE XER_BridgeOpenCV)
+endif()
+set_target_properties(sd PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)

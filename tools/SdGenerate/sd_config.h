@@ -32,6 +32,14 @@ struct SdCliConfig {
     // Informational sampler label for PNG metadata.
     std::string sampler_name = "euler";
     bool embed_metadata = true;
+
+    // Batch count (1 = single image).
+    uint32_t count = 1;
+    // Post-generation integer upscale factor (1 = off, via OpenCV).
+    uint32_t upscale = 1;
+    // Optional LoRA adapter (.safetensors) merged into the UNet weights.
+    std::string lora_path;
+    float lora_strength = 1.0f;
 };
 
 // Parse generate.json into SdCliConfig. Returns false + fills |error| on
