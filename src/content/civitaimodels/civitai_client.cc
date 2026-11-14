@@ -222,8 +222,10 @@ void CivitaiModelDownloader::SetSkipVerify(bool skip) {
 CivitaiClient& CivitaiModelDownloader::Client() { return client_; }
 
 std::vector<CivitaiModel> CivitaiModelDownloader::SearchModels(
-    const std::string& query, int limit) {
-    return client_.SearchModels(query, limit);
+    const std::string& query, int limit, const std::string& types,
+    const std::string& sort, bool include_nsfw) {
+    return client_.SearchModels(query, limit, types, sort, 1, {},
+                                include_nsfw, nullptr);
 }
 
 std::optional<CivitaiModel> CivitaiModelDownloader::GetModel(
