@@ -34,10 +34,11 @@ public:
     Layout::Size GetPreferredSize() const override;
     Layout::Size GetMaxSize() const override;
 
+    bool IsDropdownOpen() const;
+
 private:
     void OpenDropdown();
     void CloseDropdown();
-    bool IsDropdownOpen() const;
 
     std::vector<std::string> options_;
     int selected_index_ = -1;

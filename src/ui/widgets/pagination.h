@@ -28,9 +28,10 @@ public:
     Layout::Size GetPreferredSize() const override;
     Layout::Size GetMaxSize() const override;
 
-private:
     // Builds the visible page sequence: page indices or -1 for ellipsis.
     std::vector<int> VisiblePages() const;
+
+private:
     int HitButton(const Layout::Point& position) const; // index into buttons_
     void GoTo(int page);
 
