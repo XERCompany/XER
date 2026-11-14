@@ -292,13 +292,17 @@ bool PhotoBrowser::Crop(int x, int y, int w, int h) {
 }
 
 void PhotoBrowser::SetBrightness(float value) {
-    brightness_ = std::clamp(value, -100.0f, 100.0f);
+    value = std::clamp(value, -100.0f, 100.0f);
+    if (value == brightness_) return;
+    brightness_ = value;
     RebuildDisplay();
     MarkEdited();
 }
 
 void PhotoBrowser::SetContrast(float value) {
-    contrast_ = std::clamp(value, 0.0f, 200.0f);
+    value = std::clamp(value, 0.0f, 200.0f);
+    if (value == contrast_) return;
+    contrast_ = value;
     RebuildDisplay();
     MarkEdited();
 }

@@ -14,6 +14,7 @@
 //
 // Supported formats: JPEG, PNG, WEBP, TIFF, GIF, BMP, PSD, EXR, HEIF, SVG
 
+#include <functional>
 #include <iostream>
 #include <string>
 #include <memory>
@@ -33,6 +34,8 @@
 
 #include "ui/core/application.h"
 #include "ui/core/window.h"
+#include "ui/theme/theme.h"
+#include "ui/widgets/app_title_bar.h"
 #include "photo_browser.h"
 #include "photo_viewer_widget.h"
 #endif
@@ -338,6 +341,46 @@ int RunGui(const std::string& image_path) {
     auto widget = std::make_shared<preview::PhotoViewerWidget>(browser.get(),
                                                              window.get());
     window->SetContent(widget);
+
+    // Frameless IDE-style chrome: AppTitleBar supplies min/max/close and the
+    // File/Info menu bar; empty bar areas act as native drag regions.
+    window->SetCustomTitleBar(true, 38.0f);
+    window->SetTitleBarHitTest([widget](XER::UI::Layout::Point p) {
+        auto* tb = widget->TitleBar();
+        return tb != nullptr && tb->IsInteractiveAt(p);
+    });
+    window->SetTheme(XER::UI::Theme::Variant::Dark);
+
+    auto* tb = widget->TitleBar();
+    using WindowCommand = XER::UI::Widgets::AppTitleBar::WindowCommand;
+    tb->SetOnWindowCommand([window](WindowCommand cmd) {
+        switch (cmd) {
+            case WindowCommand::Minimize: window->Minimize(); break;
+            case WindowCommand::ToggleMaximize: window->ToggleMaximize(); break;
+            case WindowCommand::Close: window->Close(); break;
+        }
+    });
+    widget->SetOnQuitRequest([window] { window->Close(); });
+
+    std::function<void(bool)> apply_theme = [window, tb, &apply_theme](bool dark) {
+        window->SetTheme(dark ? XER::UI::Theme::Variant::Dark
+                              : XER::UI::Theme::Variant::Light);
+        tb->SetThemeToggle(dark, apply_theme);
+    };
+    tb->SetThemeToggle(true, apply_theme);
+
+    auto sync_maximize = [window, tb]() {
+        tb->SetMaximized(window->IsWindowMaximized());
+    };
+    window->SetOnResize([sync_maximize](int, int) { sync_maximize(); });
+
+    window->SetFrameCallback(
+        [widget, sync_maximize]() {
+            widget->TickTree(0.016);
+            sync_maximize();
+        },
+        66);
+
     window->Show();
 
     const int rc = ui_app.Run();

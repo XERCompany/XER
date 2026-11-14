@@ -27,6 +27,8 @@ public:
 
     // Load audio file
     bool LoadFromFile(const std::string& file_path, std::string* error_out = nullptr);
+    // Installs a pre-decoded buffer (async prefetch path) — no re-decode.
+    bool LoadFromBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer);
     bool IsLoaded() const { return audio_player_.IsLoaded(); }
 
     // Playback control

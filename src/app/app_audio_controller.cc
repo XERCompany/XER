@@ -39,6 +39,13 @@ bool AudioController::LoadFromFile(const std::string& file_path, std::string* er
     return audio_player_.LoadFromFile(file_path, error_out);
 }
 
+bool AudioController::LoadFromBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer) {
+    if (!initialized_) {
+        return false;
+    }
+    return audio_player_.LoadFromBuffer(std::move(buffer));
+}
+
 bool AudioController::Play() {
     if (!initialized_) return false;
     return audio_player_.Play();

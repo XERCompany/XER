@@ -4,6 +4,9 @@
 #include <string>
 #include <functional>
 #include <vector>
+#include <atomic>
+#include <mutex>
+#include <thread>
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -11,6 +14,8 @@
 #include "audio/audio_core/audio_source_loader.h"
 
 namespace XER::Content::Audio {
+
+class WasapiDeviceNotifier;
 
 // Audio playback state
 enum class PlaybackState {
@@ -37,6 +42,9 @@ public:
 
     // Load audio file
     bool LoadFromFile(const std::string& file_path, std::string* error_out = nullptr);
+    // Installs an already-decoded buffer (e.g. prefetched asynchronously by
+    // AudioSourceLoader) without running the decoder again.
+    bool LoadFromBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer);
     bool IsLoaded() const { return audio_buffer_.frame_count > 0; }
 
     // Playback control
@@ -71,7 +79,20 @@ public:
 
 private:
     bool InitializeWASAPI();
+    // Binds IAudioClient/IAudioRenderClient on the current device_ and
+    // adopts the endpoint mix format (shared mode requires it).
+    bool BindRenderEndpoint();
     void CleanupWASAPI();
+
+    // Default-device hot-swap: an IMMNotificationClient signals a Win32
+    // event; MonitorLoop performs the actual rebind off the RPC thread.
+    void RegisterDeviceMonitor();
+    void UnregisterDeviceMonitor();
+    void MonitorLoop();
+    void HandleDefaultDeviceChange();
+    // Rewrites audio_buffer_ in place when the new endpoint's mix format
+    // differs (rate and/or channel count).
+    bool ReformatBufferForDevice(int old_rate, int old_channels);
     void UpdateState(PlaybackState new_state);
 
     // WASAPI handles
@@ -90,7 +111,7 @@ private:
     size_t playback_position_;
 
     // Playback state
-    PlaybackState state_;
+    std::atomic<PlaybackState> state_;
     double current_time_;
     float volume_;
     bool initialized_;
@@ -98,6 +119,14 @@ private:
     // Threading
     HANDLE audio_thread_;
     bool stop_thread_;
+
+    // Device-change monitoring (guarded by control_mutex_ for the rebind
+    // path; the monitor thread itself only waits on device_event_).
+    std::recursive_mutex control_mutex_;
+    HANDLE device_event_ = nullptr;
+    std::thread monitor_thread_;
+    std::atomic<bool> monitor_stop_{false};
+    std::unique_ptr<WasapiDeviceNotifier> notifier_;
 
     // Callbacks
     PositionCallback position_callback_;

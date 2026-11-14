@@ -35,11 +35,16 @@ namespace FX = XER::Audio::FX;
 namespace Str = XER::Helper::String;
 
 void PrintUsage() {
-    std::cout << "Usage: audioapplyeffect.exe <input> <output> <effect> [node.param=value ...]\n";
+    std::cout << "Usage: audioapplyeffect.exe <input> <output> <effect[;effect...]> [node.param=value ...]\n";
     std::cout << "   or: audioapplyeffect.exe --list\n";
+    std::cout << "\nEffects are applied sequentially, in the order given.\n";
+    std::cout << "Parameters apply to every effect that has the node; prefix with\n";
+    std::cout << "an effect name to target one: <effect>.<node>.<param>=<value>.\n";
     std::cout << "\nExamples:\n";
     std::cout << "  audioapplyeffect.exe input.wav output.wav compressor\n";
+    std::cout << "  audioapplyeffect.exe input.wav output.wav \"RoomReverb;BassBoost\"\n";
     std::cout << "  audioapplyeffect.exe input.wav output.wav reverb reverb.room_size=0.8\n";
+    std::cout << "  audioapplyeffect.exe input.wav output.wav \"Reverb;Compressor\" Compressor.threshold=-12\n";
     std::cout << "  audioapplyeffect.exe input.wav output.wav eq parametric_eq.freq=1000\n";
 }
 
@@ -116,13 +121,24 @@ int main(int argc, char** argv) {
 
     std::string input_path = argv[1];
     std::string output_path = argv[2];
-    std::string effect_name = argv[3];
+    const std::string effect_arg = argv[3];
 
-    // Check if effect is supported
-    if (!FX::Customs::IsFxCustomPresetSupported(effect_name)) {
-        std::cerr << "Error: unknown effect '" << effect_name << "'\n";
-        std::cerr << "Run --list to see available effects\n";
+    // Effect chain: "Name1;Name2;..." — each segment is one preset.
+    std::vector<std::string> effect_names;
+    for (const std::string& part : Str::Split(effect_arg, ';')) {
+        const std::string name = Str::TrimAsciiWhitespaceCopy(part);
+        if (!name.empty()) effect_names.push_back(name);
+    }
+    if (effect_names.empty()) {
+        std::cerr << "Error: empty effect list\n";
         return 1;
+    }
+    for (const std::string& name : effect_names) {
+        if (!FX::Customs::IsFxCustomPresetSupported(name)) {
+            std::cerr << "Error: unknown effect '" << name << "'\n";
+            std::cerr << "Run --list to see available effects\n";
+            return 1;
+        }
     }
 
     // Load input audio
@@ -168,60 +184,115 @@ int main(int argc, char** argv) {
         )
     );
 
-    // Build effect package
-    FX::CustomEffectPackage package = FX::Customs::BuildFxCustomPreset(effect_name);
+    // Build one package per effect in the chain.
+    std::vector<FX::CustomEffectPackage> packages;
+    packages.reserve(effect_names.size());
+    for (const std::string& name : effect_names) {
+        packages.push_back(FX::Customs::BuildFxCustomPreset(name));
+    }
 
-    // Parse additional parameters
+    // Parse additional parameters.
+    //   node.param=value            -> applied to every effect that has `node`
+    //   <effect>.<node>.<param>=v    -> applied only to the named effect
     for (int i = 4; i < argc; ++i) {
         const std::string param = argv[i];
         const std::vector<std::string> kv = Str::Split(param, '=');
-        const size_t dot = kv.empty() ? std::string::npos : kv[0].rfind('.');
+        const size_t last_dot = kv.empty() ? std::string::npos : kv[0].rfind('.');
+        const size_t first_dot = kv.empty() ? std::string::npos : kv[0].find('.');
 
         float value = 0.0f;
-        if (kv.size() != 2 || dot == std::string::npos ||
+        if (kv.size() != 2 || last_dot == std::string::npos ||
+            first_dot == last_dot ||
             !ParseNumber(std::string_view(kv[1]), &value)) {
             std::cerr << "Error: bad parameter '" << param << "' (expected node.param=value)\n";
             return 1;
         }
 
-        if (!FX::InvokeCustomEffectParameter(&package, kv[0].substr(0, dot),
-                                             kv[0].substr(dot + 1), value)) {
-            std::cerr << "Error: effect '" << effect_name << "' has no node '" << kv[0].substr(0, dot) << "'\n";
+        const std::string param_name = kv[0].substr(last_dot + 1);
+        std::vector<size_t> targets;
+        std::string node_name;
+        std::string scoped_effect;
+
+        if (first_dot != std::string::npos && first_dot < last_dot) {
+            // "<effect>.<node>.<param>" — scoped to one effect.
+            scoped_effect = kv[0].substr(0, first_dot);
+            node_name = kv[0].substr(first_dot + 1, last_dot - first_dot - 1);
+            for (size_t e = 0; e < effect_names.size(); ++e) {
+                if (Str::EqualsIgnoreAsciiCase(effect_names[e], scoped_effect)) {
+                    targets.push_back(e);
+                    break;
+                }
+            }
+            if (targets.empty()) {
+                std::cerr << "Error: parameter '" << param
+                          << "' names unknown effect '" << scoped_effect << "'\n";
+                return 1;
+            }
+        } else {
+            // "node.param" — broadcast to all effects.
+            node_name = kv[0].substr(0, last_dot);
+            targets.resize(packages.size());
+            for (size_t e = 0; e < packages.size(); ++e) targets[e] = e;
+        }
+
+        int applied = 0;
+        for (const size_t e : targets) {
+            if (FX::InvokeCustomEffectParameter(&packages[e], node_name,
+                                                param_name, value)) {
+                ++applied;
+            }
+        }
+        if (applied == 0) {
+            std::cerr << "Error: no effect in the chain has node '" << node_name << "'\n";
             return 1;
         }
 
         XER::Flux::Terminal::WriteLine(
             XER::Flux::Terminal::OutputStream::kStdout,
-            absl::StrCat("Set parameter: ", param)
+            absl::StrCat("Set parameter: ", param,
+                         " (applied to ", applied, " effect(s))")
         );
     }
 
-    // Apply effect
-    XER::Flux::Terminal::WriteLine(
-        XER::Flux::Terminal::OutputStream::kStdout,
-        absl::StrCat(
-            XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
-            XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "Applying effect: ", effect_name, "...",
-            XER::Flux::Terminal::ResetStyleSequence()
-        )
-    );
+    // Apply the chain sequentially: output of each stage feeds the next.
+    std::vector<float> output = buffer.samples;
+    for (size_t i = 0; i < packages.size(); ++i) {
+        const std::string& name = effect_names[i];
+        XER::Flux::Terminal::WriteLine(
+            XER::Flux::Terminal::OutputStream::kStdout,
+            absl::StrCat(
+                XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
+                XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
+                "Applying effect ", i + 1, "/", packages.size(), ": ", name, "...",
+                XER::Flux::Terminal::ResetStyleSequence()
+            )
+        );
 
-    std::vector<float> output;
-    FX::CustomEffectReport report;
-    if (!FX::RunCustomEffectPackageInterleaved(
-            package, static_cast<float>(buffer.sample_rate), buffer.samples,
-            buffer.channels, &output, &report, &error)) {
-        std::cerr << "Error applying effect: " << error << "\n";
-        return 1;
+        std::vector<float> step_out;
+        FX::CustomEffectReport report;
+        if (!FX::RunCustomEffectPackageInterleaved(
+                packages[i], static_cast<float>(buffer.sample_rate), output,
+                buffer.channels, &step_out, &report, &error)) {
+            std::cerr << "Error applying effect '" << name << "': " << error << "\n";
+            return 1;
+        }
+
+        XER::Flux::Terminal::WriteLine(
+            XER::Flux::Terminal::OutputStream::kStdout,
+            absl::StrCat(
+                "  Peak: ", report.peak, "  RMS: ", report.rms
+            )
+        );
+        output = std::move(step_out);
     }
 
     XER::Flux::Terminal::WriteLine(
         XER::Flux::Terminal::OutputStream::kStdout,
         absl::StrCat(
-            "Effect applied successfully\n",
-            "Peak: ", report.peak, "\n",
-            "RMS: ", report.rms
+            XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kGreen),
+            XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
+            "All ", packages.size(), " effect(s) applied",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
