@@ -99,7 +99,7 @@ Blob Linear(const Blob& x, int in_dim, int out_dim,
 }
 
 // ---- conv2d: x[C,H,W], wt[O,I,kh,kw], optional bias[O] ---------------------
-Blob Conv2d(const Blob& x, int c, int h, int w,
+Blob Conv2d(const Blob& x, int /*c*/, int h, int w,
             const SdWeightTensor* wt, const SdWeightTensor* bias,
             int stride = 1, int pad = 1) {
     const int o = static_cast<int>(wt->shape[0]);

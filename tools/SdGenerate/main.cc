@@ -397,6 +397,9 @@ int main(int argc, char** argv) {
                   << out_path << " (" << w << "x" << h << ") seed="
                   << result.metadata["seed"]
                   << " backend=" << result.metadata["backend"]
+                  << " unet_real=" << result.metadata["unet_real_weights"]
+                  << " vae_real=" << result.metadata["vae_real_weights"]
+                  << " clip_real=" << result.metadata["clip_real_weights"]
                   << " elapsed_ms=" << result.metadata["elapsed_ms"] << "\n";
     }
 

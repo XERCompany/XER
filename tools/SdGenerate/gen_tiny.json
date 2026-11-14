@@ -1,0 +1,16 @@
+{
+ "model": "unet_tiny.safetensors",
+ "unet": "unet_tiny.safetensors",
+ "vae": "vae_tiny.safetensors",
+ "prompt": "test real unet+vae",
+ "negative_prompt": "bad",
+ "width": 128,
+ "height": 128,
+ "steps": 4,
+ "guidance_scale": 3.0,
+ "seed": 42,
+ "scheduler": "euler",
+ "count": 1,
+ "output": "tiny_real.png",
+ "text_encoder": "clip_tiny/clip_tiny.safetensors"
+}

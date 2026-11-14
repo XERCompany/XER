@@ -104,6 +104,7 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
     }
 
     SdVaeDecoder vae_decoder;
+    vae_decoder.SetWeightsPath(runtime.vae_weights_path());
     auto image = vae_decoder.Decode(latent,
                                     req.width,
                                     req.height,
@@ -119,6 +120,8 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
     result.metadata["weights_loaded_text"] = runtime.loaded().text_encoder_loaded ? "true" : "false";
     result.metadata["weights_loaded_unet"] = runtime.loaded().unet_loaded ? "true" : "false";
     result.metadata["unet_real_weights"] = runtime.HasRealUnet() ? "true" : "false";
+    result.metadata["vae_real_weights"] = vae_decoder.HasRealWeights() ? "true" : "false";
+    result.metadata["clip_real_weights"] = runtime.HasRealTextEncoder() ? "true" : "false";
     result.metadata["weights_loaded_vae"] = runtime.loaded().vae_loaded ? "true" : "false";
     result.metadata["weights_loaded_controlnet"] = runtime.loaded().controlnet_loaded ? "true" : "false";
     result.metadata["weights_loaded_sdxl"] = runtime.loaded().sdxl_branch_loaded ? "true" : "false";

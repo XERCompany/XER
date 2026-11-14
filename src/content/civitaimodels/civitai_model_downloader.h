@@ -43,6 +43,14 @@ struct CivitaiModel {
     std::string name;
     std::string type;          // "Checkpoint", "TextualInversion", ...
     std::vector<CivitaiModelVersion> versions;
+
+    // Browse/display metadata (populated by ParseModel).
+    bool        nsfw = false;
+    uint64_t    download_count = 0;
+    uint64_t    thumbs_up_count = 0;
+    double      rating = 0.0;      // 0..5, 0 when unrated
+    std::string cover_url;         // first entry of images[]
+    std::string creator;           // creator.username
 };
 
 // ---------------------------------------------------------------------------
@@ -102,6 +110,7 @@ public:
         const std::string& query, int limit = 20,
         const std::string& types = {}, const std::string& sort = {},
         int page = 1, const std::string& cursor = {},
+        bool include_nsfw = false,
         std::string* next_cursor_out = nullptr);
 
 private:
@@ -219,7 +228,10 @@ public:
 
     // Convenience wrappers around CivitaiClient.
     std::vector<CivitaiModel> SearchModels(const std::string& query,
-                                           int limit = 20);
+                                           int limit = 20,
+                                           const std::string& types = {},
+                                           const std::string& sort = {},
+                                           bool include_nsfw = false);
     std::optional<CivitaiModel> GetModel(const std::string& model_id);
 
     // Download one file of a model version into the cache.

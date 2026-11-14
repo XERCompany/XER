@@ -78,6 +78,26 @@ CivitaiModel ParseModel(const Json::Value& m) {
     out.id = JsonString(m, "id");
     out.name = JsonString(m, "name");
     out.type = JsonString(m, "type");
+    out.nsfw = m.get("nsfw", false).asBool();
+    const Json::Value& stats = m["stats"];
+    if (stats.isObject()) {
+        out.download_count = JsonUint(stats, "downloadCount");
+        out.thumbs_up_count = JsonUint(stats, "thumbsupCount");
+        const Json::Value& rating = stats["rating"];
+        if (rating.isDouble() || rating.isInt() || rating.isUInt()) {
+            out.rating = rating.asDouble();
+        }
+    }
+    const Json::Value& images = m["images"];
+    if (images.isArray() && !images.empty()) {
+        out.cover_url = JsonString(images[0], "url");
+        if (out.cover_url.empty()) {
+            // url may be nested under a "url"/"name" pair on some entries
+            out.cover_url = JsonString(images[0], "url");
+        }
+    }
+    const Json::Value& creator = m["creator"];
+    if (creator.isObject()) out.creator = JsonString(creator, "username");
     const Json::Value& versions = m["modelVersions"];
     if (versions.isArray()) {
         for (const auto& v : versions) {
@@ -137,7 +157,7 @@ std::optional<CivitaiModel> CivitaiClient::GetModel(
 std::vector<CivitaiModel> CivitaiClient::SearchModels(
     const std::string& query, int limit, const std::string& types,
     const std::string& sort, int page, const std::string& cursor,
-    std::string* next_cursor_out) {
+    bool include_nsfw, std::string* next_cursor_out) {
     // Civitai rejects `page` when `query` is present — browse pagination
     // uses `page`, search pagination uses `cursor` (response metadata).
     std::string q = "/models?limit=" + std::to_string(limit);
@@ -149,7 +169,7 @@ std::vector<CivitaiModel> CivitaiClient::SearchModels(
     }
     if (!types.empty()) q += "&types=" + internal::UrlEncode(types);
     if (!sort.empty()) q += "&sort=" + internal::UrlEncode(sort);
-    q += "&nsfw=false";
+    q += include_nsfw ? "&nsfw=true" : "&nsfw=false";
 
     const auto root = CivitaiApiGet(q, api_key_);
     if (!root) return {};
