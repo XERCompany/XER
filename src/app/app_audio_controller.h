@@ -50,6 +50,11 @@ public:
     float GetVolume() const;
     void SetVolume(float volume);
 
+    // Linear fade in/out around track boundaries (see AudioPlayer).
+    void SetFadeInOut(double fade_in_seconds, double fade_out_seconds) {
+        audio_player_.SetFadeInOut(fade_in_seconds, fade_out_seconds);
+    }
+
     // Live effect processing
     bool ApplyEffectLive(const XER::Audio::FX::CustomEffectPackage& package, std::string* error_out = nullptr);
     bool IsEffectLiveActive() const {

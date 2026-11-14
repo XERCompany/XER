@@ -176,6 +176,17 @@ struct AudioFrameInfo {
 	std::vector<uint8_t> data;
 };
 
+// FFmpeg log verbosity (maps to av_log levels). Libraries stay quiet by
+// default at AV_LOG_INFO; tools can raise/lower per process.
+enum class LogLevel {
+	kQuiet,
+	kError,
+	kWarning,
+	kInfo,
+	kDebug,
+};
+void SetLogLevel(LogLevel level);
+
 bool IsAvailable();
 bool HasFilterLibrary();
 bool HasDeviceLibrary();

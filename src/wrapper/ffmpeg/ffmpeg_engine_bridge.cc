@@ -21,6 +21,7 @@ extern "C" {
 #include <libavutil/channel_layout.h>
 #include <libavutil/dict.h>
 #include <libavutil/imgutils.h>
+#include <libavutil/log.h>
 #include <libavutil/pixdesc.h>
 #include <libavutil/opt.h>
 #include <libavutil/samplefmt.h>
@@ -805,6 +806,22 @@ bool DecodeFramesImpl(const std::string& path,
 #endif
 
 }  // namespace
+
+void SetLogLevel(LogLevel level) {
+#if ENGINE_HAS_FFMPEG_BRIDGE
+    int av_level = AV_LOG_INFO;
+    switch (level) {
+        case LogLevel::kQuiet:   av_level = AV_LOG_QUIET;   break;
+        case LogLevel::kError:   av_level = AV_LOG_ERROR;   break;
+        case LogLevel::kWarning: av_level = AV_LOG_WARNING; break;
+        case LogLevel::kInfo:    av_level = AV_LOG_INFO;    break;
+        case LogLevel::kDebug:   av_level = AV_LOG_DEBUG;   break;
+    }
+    av_log_set_level(av_level);
+#else
+    (void)level;
+#endif
+}
 
 bool IsAvailable() {
 #if ENGINE_HAS_FFMPEG_BRIDGE

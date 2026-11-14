@@ -78,6 +78,8 @@ AudioPlayer::AudioPlayer()
     , state_(PlaybackState::kStopped)
     , current_time_(0.0)
     , volume_(1.0f)
+    , fade_in_seconds_(0.0)
+    , fade_out_seconds_(0.0)
     , initialized_(false)
     , audio_thread_(nullptr)
     , stop_thread_(false) {
@@ -268,14 +270,15 @@ void AudioPlayer::HandleDefaultDeviceChange() {
     }
 
     const bool was_playing = state_.load() == PlaybackState::kPlaying;
-    const bool was_paused = state_.load() == PlaybackState::kPaused;
     const bool had_audio = IsLoaded();
     const double resume_time = current_time_;
     const int old_rate = sample_rate_;
     const int old_channels = channel_count_;
 
     // Stop the feed thread first — it dereferences audio_client_/
-    // render_client_ every iteration.
+    // render_client_ every iteration. state_ intentionally stays
+    // kPlaying/kPaused: dropping to kStopped would look like a natural
+    // track end to pollers and trigger a track advance mid-rebind.
     stop_thread_ = true;
     if (audio_thread_) {
         WaitForSingleObject(audio_thread_, INFINITE);
@@ -331,13 +334,11 @@ void AudioPlayer::HandleDefaultDeviceChange() {
         Seek(resume_time);
     }
 
+    // state_ never left kPlaying, so StartRendering() restarts the feed
+    // thread directly (Play() would early-return on the same state).
+    // Paused/stopped sessions keep their state — nothing to restart.
     if (was_playing) {
-        // Play() re-Starts the client and spawns a fresh feed thread.
-        Play();
-    } else if (was_paused) {
-        UpdateState(PlaybackState::kPaused);
-    } else {
-        UpdateState(PlaybackState::kStopped);
+        StartRendering();
     }
 }
 
@@ -517,6 +518,11 @@ bool AudioPlayer::Play() {
         return true;
     }
 
+    return StartRendering();
+}
+
+bool AudioPlayer::StartRendering() {
+    // control_mutex_ held by caller (Play or the device-change rebind).
     HRESULT hr = audio_client_->Start();
     if (FAILED(hr)) {
         UpdateState(PlaybackState::kError);
@@ -614,6 +620,16 @@ void AudioPlayer::SetVolume(float volume) {
     volume_ = volume;
 }
 
+uint64_t AudioPlayer::FadeFrames(double seconds) const {
+    if (seconds <= 0.0 || !IsLoaded()) {
+        return 0;
+    }
+    const uint64_t frames = static_cast<uint64_t>(
+        seconds * static_cast<double>(audio_buffer_.sample_rate));
+    const uint64_t half = audio_buffer_.frame_count / 2;
+    return frames > half ? half : frames;
+}
+
 void AudioPlayer::ProcessAudio() {
     if (audio_client_ == nullptr || render_client_ == nullptr) {
         UpdateState(PlaybackState::kError);
@@ -624,6 +640,15 @@ void AudioPlayer::ProcessAudio() {
     // crackling) on processors without FTZ/DAZ enabled by default.
     unsigned int cw = 0;
     _controlfp_s(&cw, _DN_FLUSH, _MCW_DN);
+
+    // Fade in/out frame counts, resolved once — the buffer cannot change
+    // while this thread lives (Load* stops the thread first).
+    const uint64_t fade_total_frames = audio_buffer_.frame_count;
+    const uint64_t fade_in_frames = FadeFrames(fade_in_seconds_);
+    const uint64_t fade_out_frames = FadeFrames(fade_out_seconds_);
+    const bool fading = (fade_in_frames | fade_out_frames) != 0;
+    const uint64_t fade_channels =
+        static_cast<uint64_t>((std::max)(1, audio_buffer_.channels));
 
     while (!stop_thread_) {
         UINT32 num_padding_frames = 0;
@@ -660,9 +685,32 @@ void AudioPlayer::ProcessAudio() {
         float* dest = use_processor ? block_scratch_.data() : output;
 
         for (UINT32 i = 0; i < num_available_frames; ++i) {
+            float frame_gain = volume_;
+            if (fading) {
+                // Linear "normal" curve: ramp up over the head, ramp down
+                // over the tail. frame_index derives from the interleaved
+                // sample position consumed so far.
+                const uint64_t frame_index =
+                    playback_position_ / fade_channels;
+                if (frame_index < fade_in_frames) {
+                    frame_gain *= static_cast<float>(
+                        static_cast<double>(frame_index) /
+                        static_cast<double>(fade_in_frames));
+                }
+                if (fade_out_frames != 0 &&
+                    frame_index + fade_out_frames > fade_total_frames) {
+                    const uint64_t remaining =
+                        fade_total_frames > frame_index
+                            ? fade_total_frames - frame_index
+                            : 0;
+                    frame_gain *= static_cast<float>(
+                        static_cast<double>(remaining) /
+                        static_cast<double>(fade_out_frames));
+                }
+            }
             for (int ch = 0; ch < channel_count_; ++ch) {
                 if (playback_position_ < total_samples) {
-                    float sample = samples[playback_position_] * volume_;
+                    float sample = samples[playback_position_] * frame_gain;
                     dest[i * channel_count_ + ch] = sample;
                     ++playback_position_;
                 } else {
