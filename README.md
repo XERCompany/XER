@@ -1,50 +1,53 @@
 # XER Editor
 
-Нативный Windows-аудио/видеоредактор с визуальным редактором узловых графов
-(NodeGraph), Lua-скриптингом UI (LSUI), модульной DSP/A-I обработкой аудио,
-сетевым стеком и FFmpeg-интеграцией.
+A native Windows audio/video editor with a visual node-graph editor
+(NodeGraph), Lua-scripted UI (LSUI), modular DSP/AI audio processing,
+a full network stack, and FFmpeg integration.
 
-- **Язык:** C++23, Win32 API, Direct2D/Direct3D12, Skia (Ganesh), Lua 5.x
-- **Сборка:** CMake 3.21+ + vcpkg (`x64-windows-release`)
-- **Выходные бинарники:** `build2/bin/Editor.exe`, `XER_UI_Tests.exe`,
+- **Language:** C++23, Win32 API, Direct2D/Direct3D12, Skia (Ganesh), Lua 5.x
+- **Build:** CMake 3.21+ + vcpkg (`x64-windows-release`)
+- **Output binaries:** `build2/bin/Editor.exe`, `XER_UI_Tests.exe`,
   `lsui.exe`, `EngineScanVST3.exe`
 
 ---
 
-## Содержание
+## Contents
 
-- [Сборка и запуск](#сборка-и-запуск)
-- [Архитектура](#архитектура)
-- [Карта модулей `src/`](#карта-модулей-src)
-- [Узел графа: модель, executor, история](#node_graph)
-- [UI: канвас, виджеты, NodeGraph-редактор](#ui)
+- [Build and run](#build-and-run)
+- [Architecture](#architecture)
+- [Module map of `src/`](#module-map-of-src)
+- [Node graph: model, executor, history](#node_graph)
+- [UI: canvas, widgets, NodeGraph editor](#ui)
 - [Flux: core, terminal, renderer](#flux)
 - [LSUI — Lua UI](#lsui)
-- [Аудио: DSP, синтез, плагины, кодеки](#audio)
-- [Сеть: sockets, HTTP, QUIC, WebSocket, S3](#network)
-- [Видео: FFmpeg decoder, сессии, аудио-плеер](#video)
+- [Audio: DSP, synth, plugins, codecs](#audio)
+- [Network: sockets, HTTP, QUIC, WebSocket, S3](#network)
+- [Video: FFmpeg decoder, sessions, audio player](#video)
 - [SQL: ORM, query builder, SQLite](#sql)
-- [AsyncIO: потоки, память, hardware abstraction](#async_io)
+- [AsyncIO: threads, memory, hardware abstraction](#async_io)
 - [Cache, Helper, Wrappers](#misc)
-- [Примеры кода](#примеры-кода)
+- [Code examples](#code-examples)
 
 ---
 
-## Сборка и запуск
+## Build and run
 
 ```bat
-:: Требуется Visual Studio 2022 + vcpkg (C:\vcpkg)
+:: Requires Visual Studio 2022 + vcpkg (C:\vcpkg)
 cmake -S . -B build2 -DCMAKE_TOOLCHAIN_FILE=C:/vcpkg/scripts/buildsystems/vcpkg.cmake
 cmake --build build2 --config Release
 ```
 
 ### Linux / macOS
 
-Зависимости — гибрид: системные пакеты (apt / Homebrew) для всего, что есть в репозиториях ОС, и частичный vcpkg только для портов без системного аналога (skia, ggml, folly, onnxruntime, ...). Маппинг имён — `cmake/deps/`, toolchain-файлы — `cmake/platforms/`.
+Dependencies are a hybrid: system packages (apt / Homebrew) for everything
+available in OS repositories, and partial vcpkg only for ports without a
+system equivalent (skia, ggml, folly, onnxruntime, ...). The name mapping
+lives in `cmake/deps/`, toolchain files in `cmake/platforms/`.
 
 ```bash
-# Linux (Ubuntu 24.04): собрать список пакетов — шаг "Install build tools +
-# system dependencies (apt)" в .github/workflows/build.yml, затем:
+# Linux (Ubuntu 24.04): build the package list — the "Install build tools +
+# system dependencies (apt)" step in .github/workflows/build.yml, then:
 cmake --preset linux-release
 cmake --build --preset linux-release
 
@@ -54,144 +57,144 @@ cmake --preset macos-x64     # Intel
 cmake --build --preset macos-arm64
 ```
 
-Для частичного vcpkg передать `-DXER_VCPKG_ROOT=<путь-к-vcpkg> -DXER_VCPKG_TRIPLET=x64-linux` (или `arm64-osx`/`x64-osx`). cuDNN на Linux требует CUDA toolkit (`cuda-toolkit-12-6` из NVIDIA apt-репозитория) — GPU не нужен, только nvcc.
+For partial vcpkg pass `-DXER_VCPKG_ROOT=<path-to-vcpkg> -DXER_VCPKG_TRIPLET=x64-linux` (or `arm64-osx`/`x64-osx`). cuDNN on Linux requires the CUDA toolkit (`cuda-toolkit-12-6` from NVIDIA's apt repository) — no GPU needed, only nvcc.
 
-| Цель | Бинарник | Назначение |
+| Target | Binary | Purpose |
 |---|---|---|
-| `Editor` | `build2/bin/Editor.exe` | Главное приложение |
-| `XER_UI_Tests` | `build2/bin/XER_UI_Tests.exe` | UI/FFmpeg тесты |
-| `lsui` | `build2/bin/lsui.exe` | Lua UI рантайм |
-| `EngineScanVST3` | `build2/bin/EngineScanVST3.exe` | Сканер VST3-плагинов |
+| `Editor` | `build2/bin/Editor.exe` | Main application |
+| `XER_UI_Tests` | `build2/bin/XER_UI_Tests.exe` | UI/FFmpeg tests |
+| `lsui` | `build2/bin/lsui.exe` | Lua UI runtime |
+| `EngineScanVST3` | `build2/bin/EngineScanVST3.exe` | VST3 plugin scanner |
 
 ```bat
-build2\bin\Editor.exe            :: редактор (Projects → NodeGraph)
-build2\bin\lsui.exe script.lua   :: Lua-скрипт с UI-окнами
-build2\bin\XER_UI_Tests.exe      :: тесты
+build2\bin\Editor.exe            :: editor (Projects → NodeGraph)
+build2\bin\lsui.exe script.lua   :: Lua script with UI windows
+build2\bin\XER_UI_Tests.exe      :: tests
 ```
 
-Кэш/логи/crash-дампы: `%TEMP%\XER\cache\` (crash-репорты — `cache\crashes\`).
+Cache/logs/crash dumps: `%TEMP%\XER\cache\` (crash reports — `cache\crashes\`).
 
 ---
 
-## Архитектура
+## Architecture
 
 ```
 main.cc
- └─ src/app            Application shell: AppUI, окна, crash handler,
-                       NodeGraph-ноды приложения (VST3/Lua/FX/S3/Network)
- └─ src/ui             UI-фреймворк: Window, Canvas (HWND+Skia/D3D12),
-                       тема, layout, 80+ виджетов, NodeGraphEditorWidget
- └─ src/node_graph     Модель графа: Graph/Node/Link/Group, History,
-                       Executor (параллельный, incremental, step-debug),
-                       сериализация JSON, реестр типов, ProjectStore (SQLite)
- └─ src/flux           Мини-фреймворк: core, terminal emulator,
-                       renderer, input, history — используется LSUI
- └─ src/lsui           lsui.exe — Lua-скрипты с UI-окнами,
+ └─ src/app            Application shell: AppUI, windows, crash handler,
+                       app NodeGraph nodes (VST3/Lua/FX/S3/Network)
+ └─ src/ui             UI framework: Window, Canvas (HWND+Skia/D3D12),
+                       theme, layout, 80+ widgets, NodeGraphEditorWidget
+ └─ src/node_graph     Graph model: Graph/Node/Link/Group, History,
+                       Executor (parallel, incremental, step-debug),
+                       JSON serialization, type registry, ProjectStore (SQLite)
+ └─ src/flux           Mini-framework: core, terminal emulator,
+                       renderer, input, history — used by LSUI
+ └─ src/lsui           lsui.exe — Lua scripts with UI windows,
                        watch(), Node.js-style require
- └─ src/audio          DSP-движок: biquad/IIR/FIR, FFT (MKL), синтез,
-                       VST3/CLAP/AU хосты, эффекты, MIDI, кодеки
- └─ src/content        Контентные модули: network/* (полный сетевой стек),
+ └─ src/audio          DSP engine: biquad/IIR/FIR, FFT (MKL), synth,
+                       VST3/CLAP/AU hosts, effects, MIDI, codecs
+ └─ src/content        Content modules: network/* (full network stack),
                        video (FFmpeg), s3, hex, clipboard, audio player
- └─ src/wrapper        Мосты к внешним библиотекам: Skia, FFmpeg, CUDA,
+ └─ src/wrapper        Bridges to external libraries: Skia, FFmpeg, CUDA,
                        cuDNN, ANGLE, OpenCV
- └─ src/sql            SQL-движок: SQLite storage, ORM, query builder
- └─ src/async_io       Async I/O: thread pool, буферы, prefetch,
+ └─ src/sql            SQL engine: SQLite storage, ORM, query builder
+ └─ src/async_io       Async I/O: thread pool, buffers, prefetch,
                        hardware abstraction (CPU/GPU/thermals/NVML)
- └─ src/cache          Кэш-хранилище: persistent + temporary, scan/lock
- └─ src/helper         Утилиты: string_utils, buffer, dict, compression, diff
- └─ src/lunca          Мини-протокол packet/udp_socket (Lua network)
+ └─ src/cache          Cache storage: persistent + temporary, scan/lock
+ └─ src/helper         Utilities: string_utils, buffer, dict, compression, diff
+ └─ src/lunca          Minimal packet/udp_socket protocol (Lua network)
 ```
 
-Все пространства имён унифицированы под корень `XER::`
+All namespaces are unified under the `XER::` root
 (`XER::Engine::*`, `XER::Content::*`, `XER::UI::*`, `XER::NodeGraph`, …).
 
 ---
 
-## Карта модулей `src/`
+## Module map of `src/`
 
-### `src/app/` — точка входа приложения
+### `src/app/` — application entry point
 
-| Файл | Описание |
+| File | Description |
 |---|---|
-| `app_main.cc/.h` | `App::Main` — инициализация Flux/UI, запуск event loop |
-| `app_ui.cc/.h` | `AppUI` — композиция окна: Projects browser ↔ NodeGraph editor ↔ Settings ↔ Video; `pending_action_` для отложенных переходов |
-| `app_audio_controller.cc/.h` | `AudioController` — управление аудио-движком из UI |
-| `app_audio_processor.cc/.h` | Обработка аудио-потока (effects chain) |
-| `app_node_graph_manager.cc/.h` | Менеджер NodeGraph-проектов |
-| `node_graph_app_nodes.cc/.h` | Регистрация прикладных NodeGraph-типов: `plugin.vst3`, `plugin.vst3_view`, `lua.*`, `fx.*`, `net.*`, `s3.*`, `io.*` — eval-функции, VST3/Lua state management |
-| `crash_handler.cc/.h` | `App::Crash` — unhandled exception filter: minidump + crash.log + state.json + stackscan + авторестарт (max depth 2), `SetSessionProject`, `ConsumePendingReport` |
+| `app_main.cc/.h` | `App::Main` — Flux/UI initialization, event loop startup |
+| `app_ui.cc/.h` | `AppUI` — window composition: Projects browser ↔ NodeGraph editor ↔ Settings ↔ Video; `pending_action_` for deferred transitions |
+| `app_audio_controller.cc/.h` | `AudioController` — audio engine control from the UI |
+| `app_audio_processor.cc/.h` | Audio stream processing (effects chain) |
+| `app_node_graph_manager.cc/.h` | NodeGraph project manager |
+| `node_graph_app_nodes.cc/.h` | App NodeGraph type registration: `plugin.vst3`, `plugin.vst3_view`, `lua.*`, `fx.*`, `net.*`, `s3.*`, `io.*` — eval functions, VST3/Lua state management |
+| `crash_handler.cc/.h` | `App::Crash` — unhandled exception filter: minidump + crash.log + state.json + stackscan + auto-restart (max depth 2), `SetSessionProject`, `ConsumePendingReport` |
 
-### `src/async_io/` — асинхронный I/O и hardware
+### `src/async_io/` — async I/O and hardware
 
-| Файл | Описание |
+| File | Description |
 |---|---|
-| `io_thread_pool.*` | Общий пул рабочих потоков (`GetSharedInstance`) |
-| `async_task_queue.*` | Очередь отложенных задач |
-| `async_file_reader/writer.*` | Файловое чтение/запись через пул |
-| `io_stream_reader/writer.*` | Потоковые обёртки над файлами |
-| `io_buffer_pool.*`, `async_buffer_pool.*` | Пулы буферов (zero-alloc hot path) |
-| `io_cache_manager.*` | Кэширование прочитанных данных |
-| `io_file_map.*` | Memory-mapped файлы |
-| `io_prefetch_manager.*` | Упреждающее чтение (readahead) |
-| `io_priority_queue.*` | Приоритетная очередь задач |
-| `dnn_backends/cudnn_*` | cuDNN-движки: bridge, convolution, pooling, activation |
+| `io_thread_pool.*` | Shared worker pool (`GetSharedInstance`) |
+| `async_task_queue.*` | Deferred task queue |
+| `async_file_reader/writer.*` | File read/write via the pool |
+| `io_stream_reader/writer.*` | Streaming wrappers over files |
+| `io_buffer_pool.*`, `async_buffer_pool.*` | Buffer pools (zero-alloc hot path) |
+| `io_cache_manager.*` | Read-data caching |
+| `io_file_map.*` | Memory-mapped files |
+| `io_prefetch_manager.*` | Read-ahead prefetching |
+| `io_priority_queue.*` | Priority task queue |
+| `dnn_backends/cudnn_*` | cuDNN engines: bridge, convolution, pooling, activation |
 | `hardware_abstraction/*` | CPU/GPU/Memory/Disk/Network/Battery info, `HwPowerMonitor` (RAPL), `HwTempSensor` + alert callback, `NvmlLoader` (NVIDIA NVML), `SystemInfoProvider` (async snapshot → JSON), `HwCapabilityScanner`, `HwTopologyMap`, `HwDirectIO` |
 | `log_and_debug/*` | `IoPerfCounter`, `IoMemoryTracker`, `IoGpuUsageLogger`, `IoDumpHelper` |
 | `sync_primitives/*` | `MutexWrapper`, `ReadWriteLock`, `Barrier`/`SyncBarrier`, `ConditionVariableWrapper`, `SyncEventListener`, `SyncSemaphoreCpu` |
 
-### `src/audio/` — аудио-подсистема
+### `src/audio/` — audio subsystem
 
-#### `audio_core/` — движок реального времени
+#### `audio_core/` — real-time engine
 
-`AudioEngine`, `AudioEngineHost`, `AudioAsyncManager` (оффлоад на пул),
+`AudioEngine`, `AudioEngineHost`, `AudioAsyncManager` (offload to the pool),
 `AudioBufferManager`, `AudioFifoQueue`, `AudioClockSync`, `AudioLatencyMonitor`,
 `AudioInterleaveProcessor`, `AudioBitDepthConverter`, `AudioSampleRateConverter`,
 `AudioSourceLoader`, `AudioThreadPriority`, `AudioCacheManager`, `AudioLogger`.
 
-#### `dsp_algorithms/` — DSP-примитивы
+#### `dsp_algorithms/` — DSP primitives
 
-`DspBiquadProcessor` (biquad-фильтры), `DspIirFilterBank`, `DspFirFilterBank`,
-`DspConvolutionEngine` (свёртка), `DspFftEngine` (**MKL DFTI**),
+`DspBiquadProcessor` (biquad filters), `DspIirFilterBank`, `DspFirFilterBank`,
+`DspConvolutionEngine` (convolution), `DspFftEngine` (**MKL DFTI**),
 `DspStftProcessor`, `DspPhaseVocoder`, `DspPitchShifterGranular`,
 `DspSpectralShaper`, `DspDelayLineCircular`, `DspWindowingFunctions`.
 
-#### `effects_rack/` — 66 файлов: эффект-примитивы и цепочки
+#### `effects_rack/` — 66 files: effect primitives and chains
 
-- **Динамика:** `fx_dynamics_compressor/expander/gate/limiter`
+- **Dynamics:** `fx_dynamics_compressor/expander/gate/limiter`
 - **EQ:** `fx_eq_graphic`, `fx_eq_parametric`, `custom_effect_eq_engine`, `custom_effect_eq_lite`
-- **Модуляция:** `fx_mod_chorus`, `fx_mod_flanger`, `fx_mod_phaser`, `fx_mod_extra`
-- **Дисторшн:** `fx_distortion_tube`, `fx_distortion_bitcrush`
-- **Реверб:** `fx_reverb_algorithmic`, `fx_reverb_convolution`
-- **Питч:** `fx_pitch_auto_tune_correct`
+- **Modulation:** `fx_mod_chorus`, `fx_mod_flanger`, `fx_mod_phaser`, `fx_mod_extra`
+- **Distortion:** `fx_distortion_tube`, `fx_distortion_bitcrush`
+- **Reverb:** `fx_reverb_algorithmic`, `fx_reverb_convolution`
+- **Pitch:** `fx_pitch_auto_tune_correct`
 - **Custom FX framework:** `custom_effect*` (core, flow, invoke, node,
-  node_wrapper — CLAP-обёртка ноды, package, processor, algorithms,
+  node_wrapper — CLAP node wrapper, package, processor, algorithms,
   apply_multi, fxdata, struct, list, curve_line, accel, advanced_processing)
 
-#### `plugin_wrappers/` — внешние плагины
+#### `plugin_wrappers/` — external plugins
 
-`Vst3ExternalHost`/`Vst3HostInterface`/`Vst3PluginScanner` (сканирование
-через `EngineScanVST3.exe`), `ClapExternalPluginHost`/`ClapHostInterface`/
-`ClapMinimal`, `AuHostInterface` (macOS-заглушка), `PluginBuiltinHost`,
+`Vst3ExternalHost`/`Vst3HostInterface`/`Vst3PluginScanner` (scanning
+via `EngineScanVST3.exe`), `ClapExternalPluginHost`/`ClapHostInterface`/
+`ClapMinimal`, `AuHostInterface` (macOS stub), `PluginBuiltinHost`,
 `PluginParameterBridge`.
 
-#### `synth_engine/` — синтезатор
+#### `synth_engine/` — synthesizer
 
 `SynthOscAnalog/Fm/Noise/Wavetable`, `SynthEnvAdsr`, `SynthEnvMultistage`,
 `SynthLfoStandard`, `SynthFilterLadder`, `SynthModulationMatrix`,
 `SynthPolyphonyController`, `SynthVoiceManager`.
 
-#### `file_io_codecs/` — кодеки
+#### `file_io_codecs/` — codecs
 
 `CodecWavPcm`, `CodecWavFloat`, `CodecFlacDecoder`, `CodecMp3Lame`,
 `CodecOggVorbis`, `CodecAacAdts`, `CodecMetadataId3`,
 `CodecFfmpegDecodeHelper`/`CodecFfmpegEncodeHelper`, `CodecFileStreamer`.
 
-#### `analysis_ai/` — анализ и AI
+#### `analysis_ai/` — analysis and AI
 
 `AudioFftAnalyzer`, `AudioPitchDetector`, `AnalPitchEstimator`,
 `AnalSpectrogramGenerator`, `AnalBeatTracker`, `AnalOnsetDetection`,
 `AnalLoudnessMeterLufs`, `AnalRmsPeakDetector`, `AnalHarmonicContent`,
-`AiOpenvinoMusicRemark` (OpenVINO-инференс).
+`AiOpenvinoMusicRemark` (OpenVINO inference).
 
 #### `midi_sequencing/`
 
@@ -199,188 +202,193 @@ main.cc
 `MidiPatternSequencer`, `MidiAutomationCurve`, `MidiControllerMapping`,
 `MidiSysexHandler`.
 
-#### `fx_customs/` — пресеты и готовые цепочки
+#### `fx_customs/` — presets and ready-made chains
 
 `FxCustomsEffectBuilder`, `FxCustomsPresets`, `FxCustomsMasteringEffects`,
 `FxCustomsSpatial(Effects)`, `FxCustomsVintageEffects`, `FxCustomsVocalEffects`,
 `FxCustomsEffectUtils`.
 
-#### `demo/` — CLI-демо и smoke-тесты
+#### `demo/` — CLI demos and smoke tests
 
 `AudioAnalysisCli`, `AudioDspDemo`, `AudioAnalysisSmoke`, `AudioModulesSmoke`,
 `AudioFxCustom`.
 
-### `src/node_graph/` — модель графа
+### `src/node_graph/` — graph model
 
-| Файл | Описание |
+| File | Description |
 |---|---|
-| `node_graph.h/.cc` | `Graph`, `Node`, `PortRef`, `Link`, `Group`, `Value`, `NodeTypeDescriptor` — DAG-модель, валидация (циклы, типы портов, dangling links), dirty-tracking, topological order / execution levels |
+| `node_graph.h/.cc` | `Graph`, `Node`, `PortRef`, `Link`, `Group`, `Value`, `NodeTypeDescriptor` — DAG model, validation (cycles, port types, dangling links), dirty-tracking, topological order / execution levels |
 | `node_graph_value.*` | `Value` — variant: none/number/bool/string/array |
-| `node_graph_registry.*` | `NodeTypeRegistry` — регистрация типов нод без изменения ядра |
-| `node_graph_executor.*` | `Executor` — параллельная оценка по уровням, incremental cache, external inputs/outputs, **step-debug**: `StepOnce(StepInfo)`/`ResetStep()`/`step_result()` |
-| `node_graph_history.*` | `History` + `Command` (Apply/Revert/MergeWith), `MacroCommand`, `SnapshotCommand`, `GroupCommand` — undo/redo все правки включая группы |
-| `node_graph_serializer.*` | JSON-сериализация графа, `kGraphFormatVersion`, валидация при загрузке |
-| `node_graph_json.*` | JSON DOM (`Json::Value`-подобный) |
-| `node_graph_builtins.*` | Встроенные типы: math, string, array (convolve через MKL FFT), io.*, graph.input/output/subgraph |
-| `node_graph_ext.*` | Расширенные типы: MKL-ускоренные array.* (vdSin, cblas), string.* (UTF-8, regex, base64, crc32, compress) |
-| `node_graph_project_store.*` | `ProjectStore` — SQLite-backed проекты: create/config/rename/delete, graphs, presets |
+| `node_graph_registry.*` | `NodeTypeRegistry` — node type registration without touching the core |
+| `node_graph_executor.*` | `Executor` — parallel level-based evaluation, incremental cache, external inputs/outputs, **step-debug**: `StepOnce(StepInfo)`/`ResetStep()`/`step_result()` |
+| `node_graph_history.*` | `History` + `Command` (Apply/Revert/MergeWith), `MacroCommand`, `SnapshotCommand`, `GroupCommand` — undo/redo of all edits including groups |
+| `node_graph_serializer.*` | JSON graph serialization, `kGraphFormatVersion`, load-time validation |
+| `node_graph_json.*` | JSON DOM (`Json::Value`-like) |
+| `node_graph_builtins.*` | Built-in types: math, string, array (convolve via MKL FFT), io.*, graph.input/output/subgraph |
+| `node_graph_ext.*` | Extended types: MKL-accelerated array.* (vdSin, cblas), string.* (UTF-8, regex, base64, crc32, compress) |
+| `node_graph_project_store.*` | `ProjectStore` — SQLite-backed projects: create/config/rename/delete, graphs, presets |
 
-### `src/ui/` — UI-фреймворк
+### `src/ui/` — UI framework
 
 #### `core/`
 
-`Window` (HWND + message loop, `frame_callback_` таймер),
+`Window` (HWND + message loop, `frame_callback_` timer),
 `Application` (singleton, Run/Shutdown).
 
 #### `canvas/`
 
-`Canvas` — дочерний HWND поверх окна: растр через Skia surface **или**
-GPU-путь D3D12+Ganesh (`TryInitGpu`, `GaneshD3DAllocator` committed
+`Canvas` — child HWND over the window: raster via Skia surface **or**
+GPU path D3D12+Ganesh (`TryInitGpu`, `GaneshD3DAllocator` committed
 resources, flip-model swapchain, device-removed → raster fallback).
-Input/render колбэки, clip stack, `DrawImageBgra` persistent texture.
+Input/render callbacks, clip stack, `DrawImageBgra` persistent texture.
 
-#### `widgets/` — 80 виджетов
+#### `widgets/` — 80 widgets
 
-- **NodeGraph:** `node_graph_editor_widget.*` — главный редактор:
-  pan/zoom-to-cursor, snap к сетке, drag нод/связей, box-select,
-  copy/paste/duplicate, align/distribute, palette+поиск, контекстные меню
+- **NodeGraph:** `node_graph_editor_widget.*` — the main editor:
+  pan/zoom-to-cursor, grid snap, node/link drag, box-select,
+  copy/paste/duplicate, align/distribute, palette+search, context menus
   (Add Node, Problems, Group/Ungroup, Collapse/Expand, Step Graph,
-  Reset Debug), subgraphs, minimap, валидация-бейджи, autosave,
-  inspector с port values после run.
-  `node_param_host.*` — прозрачный HWND-overlay с нативными контролами
-  параметров внутри нод (EDIT/COMBOBOX/CHECKBOX/file browse),
-  click-through через `WS_EX_LAYERED`+colorkey.
-- **Базовые:** `widget`, `widget_tree`, `button`, `label`, `checkbox`,
+  Reset Debug), subgraphs, minimap, validation badges, autosave,
+  inspector with port values after run.
+  `node_param_host.*` — transparent HWND overlay with native parameter
+  controls inside nodes (EDIT/COMBOBOX/CHECKBOX/file browse),
+  click-through via `WS_EX_LAYERED`+colorkey.
+- **Basic:** `widget`, `widget_tree`, `button`, `label`, `checkbox`,
   `radio_group`, `select`, `switch`, `toggle`, `slider`, `text_input`,
   `textarea`, `badge`, `card`, `alert`, `dialog`, `context_menu`,
   `breadcrumb`, `pagination`, `progress`, `separator`, `skeleton`,
   `spinner`, `tabs`, `tooltip`, `scroll_area`, `accordion`, `avatar`
-- **Специализированные:** `projects_widget` (Project browser:
-  Select/Config/Duplicate/Delete + поиск), `settings_widget`,
-  `fx_rack_widget` + `fx_rack_state` (цепочка эффектов),
-  `eq_editor` (EQ-кривые), `waveform_widget`, `audio_player_widget`,
+- **Specialized:** `projects_widget` (Project browser:
+  Select/Config/Duplicate/Delete + search), `settings_widget`,
+  `fx_rack_widget` + `fx_rack_state` (effects chain),
+  `eq_editor` (EQ curves), `waveform_widget`, `audio_player_widget`,
   `video_preview_widget`, `chain_map_widget`, `screen_loading_widget`
-  (splash: проверка БД/проектов/кэша/драйверов)
+  (splash: DB/projects/cache/driver checks)
+- **Kit primitives:** `kbd`, `marker`, `aspect_ratio`, `button_group`,
+  `input_group`, `field`, `item`, `empty`, `collapsible`, `direction`,
+  `form`, `attachment`, `bubble`, `message`, `message_scroller`,
+  `input_otp`, `hover_card`, `popover`, `dropdown_menu`, `sheet`,
+  `drawer`, `resizable`, `carousel`
 
 #### `theme/`, `layout/`, `motion/`, `colorspace/`, `rendering/`, `platform/`, `backends/`
 
-- `theme/` — shadcn-подобные токены светлой/тёмной темы (`Theme::Tokens`, `Theme::Color`)
+- `theme/` — design-token light/dark theme (`Theme::Tokens`, `Theme::Color`)
 - `layout/geometry.h` — Rect/Point/Size
-- `motion/` — `Motion` (easing-анимации), `accel` (**MKL VML** для float- ops)
+- `motion/` — `Motion` (easing animations), `accel` (**MKL VML** for float ops)
 - `colorspace/` — `ColorSpace`, `ColorManager`, `HdrManager`
-- `rendering/renderer.h` — интерфейс рендерера
-- `rendering/windows/direct2d_renderer.*` — D2D-бэкенд
-- `platform/windows/input_translator.*` — Win32 ввод → события
-- `backends/flux/` — Flux-адаптеры: `FluxRenderer`, `FluxInputAdapter`
-- `demo/audio_player_demo.cc` — демо
+- `rendering/renderer.h` — renderer interface
+- `rendering/windows/direct2d_renderer.*` — D2D backend
+- `platform/windows/input_translator.*` — Win32 input → events
+- `backends/flux/` — Flux adapters: `FluxRenderer`, `FluxInputAdapter`
+- `demo/audio_player_demo.cc` — demo
 
-### `src/flux/` — минимальный фреймворк (ядро LSUI)
+### `src/flux/` — minimal framework (LSUI core)
 
-| Подмодуль | Файлы | Назначение |
+| Submodule | Files | Purpose |
 |---|---|---|
-| `core/` | `flux_core`, `flux_config`, `flux_context`, `logger`, `module_manager` | Инициализация, конфиг, логирование, модули |
-| `terminal/` | `terminal_emulator`, `terminal_buffer`, `terminal_ansi_parser`, `terminal_colors`, `terminal_styles`, `terminal_extended`, `terminal_input_handler`, `terminal_interface`, `terminal_manager`, `terminal_output_renderer`, `terminal_size_detector`, `terminal_window` | Полный ANSI-терминал: буфер, parser, стили, fit/center/rule, snapshot |
-| `rendering/` | `renderer`, `render_context`, `render_pipeline`, `frame_buffer` | Рендер-конвейер |
-| `input/` | `input_manager`, `key_binding_manager`, `command_parser` | Ввод и биндинги |
-| `history/` | `action_history`, `command_history` | История действий/команд |
+| `core/` | `flux_core`, `flux_config`, `flux_context`, `logger`, `module_manager` | Init, config, logging, modules |
+| `terminal/` | `terminal_emulator`, `terminal_buffer`, `terminal_ansi_parser`, `terminal_colors`, `terminal_styles`, `terminal_extended`, `terminal_input_handler`, `terminal_interface`, `terminal_manager`, `terminal_output_renderer`, `terminal_size_detector`, `terminal_window` | Full ANSI terminal: buffer, parser, styles, fit/center/rule, snapshot |
+| `rendering/` | `renderer`, `render_context`, `render_pipeline`, `frame_buffer` | Render pipeline |
+| `input/` | `input_manager`, `key_binding_manager`, `command_parser` | Input and bindings |
+| `history/` | `action_history`, `command_history` | Action/command history |
 
 ### `src/lsui/` — lsui.exe: Lua UI
 
-| Файл | Описание |
+| File | Description |
 |---|---|
-| `lsui.cc/.h` | `UiWindow` — окно на Canvas, Lua API: `ui.window{}`, `on_tick/on_mouse/on_key`, immediate-mode draw (`rect/text/button`...), `watch()` на чистом Lua, crash-filter в main |
-| `lsui_term.cc` | `term.*` модуль поверх `flux/terminal`: print/println/write/write_err, clear/snapshot/text, size, fit/center/rule, fg/bg/style/reset |
-| `main.cc` | Точка входа: Lua state, `kLuaHelpers` — **Node.js-style require**: `./rel`, `../rel`, `node_modules` walk-up, `LSUI_PATH`, `mod.lua`/`mod/init.lua`, `module.exports`/`exports`, circular-require partial exports, `require.resolve`, `__dirname`/`__filename`/`module`/`exports` |
+| `lsui.cc/.h` | `UiWindow` — Canvas-based window, Lua API: `ui.window{}`, `on_tick/on_mouse/on_key`, immediate-mode draw (`rect/text/button`...), `watch()` in pure Lua, crash filter in main |
+| `lsui_term.cc` | `term.*` module over `flux/terminal`: print/println/write/write_err, clear/snapshot/text, size, fit/center/rule, fg/bg/style/reset |
+| `main.cc` | Entry point: Lua state, `kLuaHelpers` — **Node.js-style require**: `./rel`, `../rel`, `node_modules` walk-up, `LSUI_PATH`, `mod.lua`/`mod/init.lua`, `module.exports`/`exports`, circular-require partial exports, `require.resolve`, `__dirname`/`__filename`/`module`/`exports` |
 
-### `src/wrapper/` — мосты к внешним библиотекам (`engine::bridge::*`)
+### `src/wrapper/` — bridges to external libraries (`engine::bridge::*`)
 
-| Модуль | Файлы | Назначение |
+| Module | Files | Purpose |
 |---|---|---|
 | `skia/` | `skia_engine_bridge` + `_codec_extra`, `_fx`, `_image_filter`, `_lottie`, `_m44`, `_pdf`, `_shader`, `_svg` | Skia API: image codecs, color filters, shaders, SVG/Lottie/PDF, matrices |
-| `ffmpeg/` | `ffmpeg_engine_bridge`, `ffmpeg_video_decoder` | FFmpeg: decoder с audio-tap (`EnableAudioTap`, `ReadAudioFrames` на отдельном потоке, packet queue под mutex) |
+| `ffmpeg/` | `ffmpeg_engine_bridge`, `ffmpeg_video_decoder` | FFmpeg: decoder with audio-tap (`EnableAudioTap`, `ReadAudioFrames` on a separate thread, packet queue under mutex) |
 | `cuda/` | `cuda_engine_bridge` | CUDA runtime bridge |
 | `cudnn/` | `cudnn_engine_bridge` | cuDNN bridge |
 | `angle/` | `angle_engine_bridge` | ANGLE (OpenGL ES → D3D) |
 | `opencv/` | `opencv_engine_bridge` | OpenCV bridge |
 
-### `src/content/` — контентные модули (`XER::Content::*`)
+### `src/content/` — content modules (`XER::Content::*`)
 
-#### `network/` — сетевой стек (~100 файлов, namespace `XER::network::*`)
+#### `network/` — network stack (~100 files, namespace `XER::network::*`)
 
-| Подмодуль | Файлы | Назначение |
+| Submodule | Files | Purpose |
 |---|---|---|
-| `socket/` | `tcp_client_socket`, `udp_client_socket`, `ssl_client_socket`, `socket_client`, `socket_server`, `socket_stream`, `socket_proxy`, `network_selector`, `net_log` + `platform/{windows,posix}/socket_platform_*` | Сокеты: TCP/UDP/SSL, selector, proxy, платформенные абстракции |
-| `ssl/` | `ssl_context`, `ssl_session_cache` | SSL-окружение и кэш сессий |
-| `cert/` | `cert_database`, `cert_storage`, `cert_transparency`, `cert_verifier`, `cert_verify_result`, `nss_certificate`, `scoped_nss_types` | X.509/NSS-сертификаты, CT-логи, верификация |
-| `dns/` | `dns_client`, `dns_resolver`, `dns_config_service`, `dns_record_type`, `host_resolver`, `host_resolver_impl` | DNS-резолвер |
-| `http/` | `http_auth`, `http_cache`, `http_network_delegate`, `http_network_session`, `http_request/response_headers`, `http_server_properties`, `http_stream`, `http_stream_factory`, `http_sync_request`, `http_transaction`, `http_util` | HTTP/1.1 клиент: сессии, транзакции, кэш, auth |
-| `quic/` | `quic_connection`, `quic_crypto_stream`, `quic_network_delegate/session`, `quic_packet`, `quic_protocol`, `quic_server_id`, `quic_stream`, `quic_version_manager` | QUIC-протокол |
-| `spdy/` | `spdy_framer`, `spdy_network_delegate`, `spdy_protocol`, `spdy_session`, `spdy_stream` | SPDY-протокол |
-| `websocket/` | `websocket_frame`, `websocket_handshake_stream`, `websocket_network_delegate`, `websocket_stream`, `websocket_event_interface` | WebSocket-клиент (RFC6455) |
-| `ftp/` | `ftp_ftp_request`, `ftp_ftp_stream`, `ftp_ftp_network_delegate` | FTP-клиент |
-| `url/` | `url_request`, `url_request_context(+getter)`, `url_request_intercepting_job`, `url_request_job`, `url_request_util`, `url_util` | URL-запросы и парсинг |
-| `proxy/` | `proxy_config`, `proxy_info`, `proxy_resolver(+factory)`, `proxy_service`, `socks_client_socket` | HTTP/SOCKS-прокси |
-| `transport/` | `transport_client_socket`, `transport_server_socket`, `transport_io_buffer`, `transport_network_delegate/session` | Транспортный слой |
-| `core/` | `network_context`, `network_service`, `network_service_delegate`, `network_service_util`, `network_task_runner` | Сетевой сервис и контекст |
-| `async/` | `async_operation_manager` + `iocp/iocp_completion_port`, `posix/epoll_async_socket` | Async-операции: IOCP (Windows) / epoll (POSIX) |
-| `cache/` | `network_cache_manager` | Кэш HTTP-ответов |
-| `logging/` | `network_logger` | Сетевое логирование |
-| `network_util/` | `network_util` | Утилиты |
+| `socket/` | `tcp_client_socket`, `udp_client_socket`, `ssl_client_socket`, `socket_client`, `socket_server`, `socket_stream`, `socket_proxy`, `network_selector`, `net_log` + `platform/{windows,posix}/socket_platform_*` | Sockets: TCP/UDP/SSL, selector, proxy, platform abstractions |
+| `ssl/` | `ssl_context`, `ssl_session_cache` | SSL context and session cache |
+| `cert/` | `cert_database`, `cert_storage`, `cert_transparency`, `cert_verifier`, `cert_verify_result`, `nss_certificate`, `scoped_nss_types` | X.509/NSS certificates, CT logs, verification |
+| `dns/` | `dns_client`, `dns_resolver`, `dns_config_service`, `dns_record_type`, `host_resolver`, `host_resolver_impl` | DNS resolver |
+| `http/` | `http_auth`, `http_cache`, `http_network_delegate`, `http_network_session`, `http_request/response_headers`, `http_server_properties`, `http_stream`, `http_stream_factory`, `http_sync_request`, `http_transaction`, `http_util` | HTTP/1.1 client: sessions, transactions, cache, auth |
+| `quic/` | `quic_connection`, `quic_crypto_stream`, `quic_network_delegate/session`, `quic_packet`, `quic_protocol`, `quic_server_id`, `quic_stream`, `quic_version_manager` | QUIC protocol |
+| `spdy/` | `spdy_framer`, `spdy_network_delegate`, `spdy_protocol`, `spdy_session`, `spdy_stream` | SPDY protocol |
+| `websocket/` | `websocket_frame`, `websocket_handshake_stream`, `websocket_network_delegate`, `websocket_stream`, `websocket_event_interface` | WebSocket client (RFC6455) |
+| `ftp/` | `ftp_ftp_request`, `ftp_ftp_stream`, `ftp_ftp_network_delegate` | FTP client |
+| `url/` | `url_request`, `url_request_context(+getter)`, `url_request_intercepting_job`, `url_request_job`, `url_request_util`, `url_util` | URL requests and parsing |
+| `proxy/` | `proxy_config`, `proxy_info`, `proxy_resolver(+factory)`, `proxy_service`, `socks_client_socket` | HTTP/SOCKS proxy |
+| `transport/` | `transport_client_socket`, `transport_server_socket`, `transport_io_buffer`, `transport_network_delegate/session` | Transport layer |
+| `core/` | `network_context`, `network_service`, `network_service_delegate`, `network_service_util`, `network_task_runner` | Network service and context |
+| `async/` | `async_operation_manager` + `iocp/iocp_completion_port`, `posix/epoll_async_socket` | Async operations: IOCP (Windows) / epoll (POSIX) |
+| `cache/` | `network_cache_manager` | HTTP response cache |
+| `logging/` | `network_logger` | Network logging |
+| `network_util/` | `network_util` | Utilities |
 
-#### Прочие content-модули
+#### Other content modules
 
-| Модуль | Файлы | Назначение |
+| Module | Files | Purpose |
 |---|---|---|
-| `video/` | `video_session` (фоновый decode-worker), `video_decoder`, `video_engine`, `video_audio_player` (WASAPI streaming из shared decoder), `video_frame(+cache)`, `video_info`, `video_command_buffer` | Видео: FFmpeg-декодер, play/pause/seek, аудиодорожка через тот же контейнер |
-| `s3/` | `s3_client`, `s3_signer` (AWS Signature V4), `s3_types` | S3-совместимое хранилище |
-| `hex/` | `hex.h` (+`detail`) | HEX-кодирование/декодирование байт |
-| `clipboard/` | `clipboard` | Буфер обмена |
-| `audio/` | `audio_player` | Аудио-плеер контента |
+| `video/` | `video_session` (background decode worker), `video_decoder`, `video_engine`, `video_audio_player` (WASAPI streaming from shared decoder), `video_frame(+cache)`, `video_info`, `video_command_buffer` | Video: FFmpeg decoder, play/pause/seek, audio track from the same container |
+| `s3/` | `s3_client`, `s3_signer` (AWS Signature V4), `s3_types` | S3-compatible storage |
+| `hex/` | `hex.h` (+`detail`) | HEX encode/decode of bytes |
+| `clipboard/` | `clipboard` | Clipboard |
+| `audio/` | `audio_player` | Content audio player |
 
-### `src/sql/` — SQL-движок (`XER::Engine::SQL::*`)
+### `src/sql/` — SQL engine (`XER::Engine::SQL::*`)
 
-| Подмодуль | Файлы | Назначение |
+| Submodule | Files | Purpose |
 |---|---|---|
-| `storage/` | `sqlite_database` | SQLite-обёртка: open/exec/prepare/transaction |
+| `storage/` | `sqlite_database` | SQLite wrapper: open/exec/prepare/transaction |
 | `modern/` | `query_builder`, `query` | Fluent query builder (`SELECT/INSERT/UPDATE/DELETE`) |
-| `orm/` | `table_schema` | Схемы таблиц для ORM |
-| `content/` | `value`, `row` | `Value` (SQL-типы), `Row` |
-| `plus/` | `transaction` | Транзакции |
+| `orm/` | `table_schema` | Table schemas for ORM |
+| `content/` | `value`, `row` | `Value` (SQL types), `Row` |
+| `plus/` | `transaction` | Transactions |
 
-### `src/cache/` — кэш-хранилище (`XER::Engine::Cache`)
+### `src/cache/` — cache storage (`XER::Engine::Cache`)
 
 `CacheManager` (singleton, `Persistent()`/`Temporary()` roots),
 `PersistentStorage`, `TemporaryStorage`, `CacheStorage`, `CacheEntry`,
 `CacheConfiguration`, `CacheConstants`, `CacheEncryptionHandler`,
 `CacheScanAndLock`, `CacheUtils`.
 
-### `src/helper/` — утилиты (`XER::Engine::Helper`)
+### `src/helper/` — utilities (`XER::Engine::Helper`)
 
 `string_utils` + `helper/string` (String helpers, UTF-8),
 `buffer` (Buffer), `dict` (Dict), `file_diff` (diff),
-`compression_codec` (zlib), `jsoncpp_helper` (Json::Value мост),
-`tool_to` (Tool::ToString и пр.).
+`compression_codec` (zlib), `jsoncpp_helper` (Json::Value bridge),
+`tool_to` (Tool::ToString etc.).
 
-### `src/lunca/` — Lua-сеть (`common/`)
+### `src/lunca/` — Lua network (`common/`)
 
-`packet` (упаковка пакетов), `udp_socket` — минимальный UDP для Lua.
+`packet` (packet packing), `udp_socket` — minimal UDP for Lua.
 
-### Корневые файлы
+### Root files
 
-| Файл | Описание |
+| File | Description |
 |---|---|
-| `main.cc` | Точка входа: crash-handler install → App::Main |
-| `app_command.h/.cc` | `XER::AppCommand` — CLI-парсер команд (в `namespace XER`) |
-| `engine_params.h/.cc` | `XER::EngineParams` — runtime-конфиг из CLI/env |
-| `audio_config_helper.h/.cc` | Применение audio-JSON конфига к командам |
-| `json_config_helper.h/.cc` | JSON-конфиг хелперы |
-| `tools/EngineScanVST3/main.cc` | Утилита сканирования VST3-плагинов (путь, имя, параметры) |
+| `main.cc` | Entry point: crash-handler install → App::Main |
+| `app_command.h/.cc` | `XER::AppCommand` — CLI command parser (in `namespace XER`) |
+| `engine_params.h/.cc` | `XER::EngineParams` — runtime config from CLI/env |
+| `audio_config_helper.h/.cc` | Applying audio-JSON config to commands |
+| `json_config_helper.h/.cc` | JSON config helpers |
+| `tools/EngineScanVST3/main.cc` | VST3 plugin scanner utility (path, name, parameters) |
 
 ---
 
-## `<a id="node_graph"></a>`NodeGraph: модель, executor, история
+## `<a id="node_graph"></a>`NodeGraph: model, executor, history
 
-### Модель (`Graph`)
+### Model (`Graph`)
 
 ```cpp
 #include "node_graph/node_graph.h"
@@ -390,39 +398,39 @@ XER::NodeGraph::Graph graph(registry);
 auto& math = graph.AddNode("math.add");       // NodeId
 graph.MoveNode(math.id, 100.0, 50.0);
 
-// Порты и связи
+// Ports and links
 graph.Connect({src_node, "out"}, {dst_node, "in"});
 
-// Группы (визуальные рамки)
+// Groups (visual frames)
 XER::NodeGraph::Group grp;
 grp.title = "DSP chain"; grp.x = 0; grp.y = 0; grp.w = 400; grp.h = 300;
 grp.color = "#6366f1";
 graph.AddGroup(grp);
 
-// Валидация
+// Validation
 for (const auto& issue : graph.Validate()) {
     // issue.severity / issue.message / issue.node
 }
 ```
 
-### Executor — запуск, incremental, step-debug
+### Executor — run, incremental, step-debug
 
 ```cpp
 XER::NodeGraph::Executor ex(graph);
 
-// Полный запуск
+// Full run
 XER::NodeGraph::ExecutionResult res = ex.Run();
 // res.ok / res.evaluated / res.cached / res.node_errors / res.logs
 
-// Пошаговое выполнение (по одному execution-уровню за вызов)
+// Step execution (one execution level per call)
 XER::NodeGraph::Executor::StepInfo step;
 while (ex.StepOnce(&step)) {
-    // step.level, step.total_levels, step.nodes — ноды этого шага
-    // port values уже в кэше:
+    // step.level, step.total_levels, step.nodes — this step's nodes
+    // port values are already in the cache:
     auto v = ex.GetOutput(step.nodes.front(), "out");
 }
-ex.ResetStep();          // сброс сессии
-ex.InvalidateCache();    // полная инвалидация
+ex.ResetStep();          // reset the session
+ex.InvalidateCache();    // full invalidation
 ```
 
 ### History — undo/redo
@@ -433,11 +441,11 @@ hist.BeginMacro("Move nodes");
 hist.MoveNode(id, x, y);
 hist.AddGroup(std::move(grp));
 hist.EndMacro();
-hist.Undo();   // откат всего macro
+hist.Undo();   // rolls back the whole macro
 hist.Redo();
 ```
 
-### Сериализация и проекты
+### Serialization and projects
 
 ```cpp
 #include "node_graph/node_graph_serializer.h"
@@ -445,9 +453,9 @@ hist.Redo();
 
 std::string json = XER::NodeGraph::SerializeGraph(graph);
 XER::NodeGraph::Graph loaded(registry);
-XER::NodeGraph::DeserializeGraph(json, &loaded);   // проверка версии
+XER::NodeGraph::DeserializeGraph(json, &loaded);   // version check
 
-// SQLite-backed проекты
+// SQLite-backed projects
 XER::NodeGraph::ProjectStore store(db_path);
 store.CreateProject("My Project", &err);
 store.SaveGraph(project_id, "main", graph);
@@ -455,7 +463,7 @@ store.SaveGraph(project_id, "main", graph);
 
 ---
 
-## `<a id="ui"></a>`UI: канвас, виджеты, NodeGraph-редактор
+## `<a id="ui"></a>`UI: canvas, widgets, NodeGraph editor
 
 ### Canvas — HWND + Skia/D3D12
 
@@ -472,9 +480,9 @@ canvas.SetInputCallback([](unsigned msg, int x, int y, int btn,
 });
 ```
 
-GPU-путь: D3D12 + Ganesh, собственный `GaneshD3DAllocator`
-(committed resources), flip-model swapchain, fallback на raster
-при device-removed.
+GPU path: D3D12 + Ganesh, own `GaneshD3DAllocator`
+(committed resources), flip-model swapchain, raster
+fallback on device-removed.
 
 ### NodeGraphEditorWidget
 
@@ -483,33 +491,33 @@ auto editor = std::make_shared<XER::UI::Widgets::NodeGraphEditorWidget>(
     hwnd, theme_hook, project_id);
 editor->SetHostVisible(true);          // canvas + param overlay
 editor->SetPluginEditorHandler(...);   // VST3 editor HWND
-editor->SetBrowserBackHook(...);       // кнопка "назад"
+editor->SetBrowserBackHook(...);       // "back" button
 window->SetContent(editor);
 ```
 
-Возможности: pan/zoom-to-cursor, grid snap, drag нод/связей,
+Features: pan/zoom-to-cursor, grid snap, node/link drag,
 box-select, multi-select, copy/paste/duplicate, align/distribute,
-поиск нод (палитра), контекстные меню, subgraphs, minimap,
-группы (Group/Ungroup Selection), collapse нод (header+порты),
-валидация-бейджи + Problems-меню, step-debug (Step Graph/Reset Debug),
-автосохранение, inspector с port values.
+node search (palette), context menus, subgraphs, minimap,
+groups (Group/Ungroup Selection), node collapse (header+ports),
+validation badges + Problems menu, step-debug (Step Graph/Reset Debug),
+autosave, inspector with port values.
 
-### Виджеты
+### Widgets
 
-Все виджеты — immediate-mode поверх `Renderer` + `WidgetTree`:
+All widgets are immediate-mode over `Renderer` + `WidgetTree`:
 `Button`, `Label`, `Checkbox`, `Select`, `Slider`, `TextInput`,
 `Dialog`, `ContextMenu`, `Tabs`, `ScrollArea`, `ProjectsWidget`,
 `SettingsWidget`, `FxRackWidget`, `EqEditor`, `WaveformWidget`,
-`AudioPlayerWidget`, `VideoPreviewWidget`, `NodeParamHost` и др.
+`AudioPlayerWidget`, `VideoPreviewWidget`, `NodeParamHost`, etc.
 
-Тема — shadcn-подобная: `Theme::Tokens` (light/dark),
+Theme — design tokens: `Theme::Tokens` (light/dark),
 `Theme::Color{r,g,b,a}`, `Mix`, `AccentC`, `DangerC`, `WarnC`.
 
 ---
 
 ## `<a id="flux"></a>`Flux: core, terminal, renderer
 
-Flux — минимальный фреймворк, на котором построен LSUI (и частично UI).
+Flux is the minimal framework LSUI (and partially the UI) is built on.
 
 ```cpp
 #include "flux/core/flux_core.h"
@@ -523,7 +531,7 @@ term.Println("world");
 ```
 
 - `flux/core/` — `FluxCore` (init/shutdown), `FluxConfig`, `FluxContext`, `Logger`, `ModuleManager`
-- `flux/terminal/` — `TerminalEmulator` + `TerminalBuffer` + `TerminalAnsiParser` + стили/цвета: `print/println/write/write_err`, `clear/snapshot/text`, `size()`, `fit/center/rule`, `fg/bg/style/reset`
+- `flux/terminal/` — `TerminalEmulator` + `TerminalBuffer` + `TerminalAnsiParser` + styles/colors: `print/println/write/write_err`, `clear/snapshot/text`, `size()`, `fit/center/rule`, `fg/bg/style/reset`
 - `flux/rendering/` — `Renderer`, `RenderContext`, `RenderPipeline`, `FrameBuffer`
 - `flux/input/` — `InputManager`, `KeyBindingManager`, `CommandParser`
 - `flux/history/` — `ActionHistory`, `CommandHistory`
@@ -532,7 +540,7 @@ term.Println("world");
 
 ## `<a id="lsui"></a>`LSUI — Lua UI
 
-`lsui.exe script.lua` — запускает Lua-скрипт с UI-окнами.
+`lsui.exe script.lua` — runs a Lua script with UI windows.
 
 ```lua
 -- demo.lua
@@ -546,16 +554,16 @@ local win = ui.window({
 
 win:button({ x = 10, y = 10, w = 100, h = 30, label = "Click" })
 
-ui.watch(1.0, function()          -- каждые 1 сек
+ui.watch(1.0, function()          -- every 1 second
     print("tick")
 end)
 
--- require как в Node.js:
-local util = require("./lib/util")        -- относительно файла
+-- Node.js-style require:
+local util = require("./lib/util")        -- relative to file
 local pkg  = require("mylib")             -- node_modules walk-up / LSUI_PATH
 ```
 
-Терминальный модуль:
+Terminal module:
 
 ```lua
 local term = require("term")
@@ -567,9 +575,9 @@ local snap = term.snapshot()
 
 ---
 
-## `<a id="audio"></a>`Аудио: DSP, синтез, плагины, кодеки
+## `<a id="audio"></a>`Audio: DSP, synth, plugins, codecs
 
-### DSP-примитивы (`audio/dsp_algorithms`)
+### DSP primitives (`audio/dsp_algorithms`)
 
 ```cpp
 #include "audio/dsp_algorithms/dsp_biquad_processor.h"
@@ -583,7 +591,7 @@ XER::Engine::Audio::DSP::FFTEngine fft(1024);   // MKL DFTI
 fft.Forward(real_in, complex_out);
 ```
 
-### VST3/CLAP хостинг
+### VST3/CLAP hosting
 
 ```cpp
 #include "audio/plugin_wrappers/vst3_external_host.h"
@@ -595,17 +603,17 @@ host.SetParameter(0, 0.75f);
 host.Process(in_block, out_block, 512);
 ```
 
-### NodeGraph audio-ноды (`app/node_graph_app_nodes`)
+### NodeGraph audio nodes (`app/node_graph_app_nodes`)
 
 ```cpp
-// Регистрация типов: plugin.vst3, plugin.vst3_view, lua.buffer,
+// Type registration: plugin.vst3, plugin.vst3_view, lua.buffer,
 // fx.<algo>, net.websocket_*, s3.*, io.file_*, audio.*
-// VST3/Lua states живут в g_vst3_hosts / g_lua_states под mutex.
+// VST3/Lua states live in g_vst3_hosts / g_lua_states under mutex.
 ```
 
 ---
 
-## `<a id="network"></a>`Сеть: sockets, HTTP, QUIC, WebSocket, S3
+## `<a id="network"></a>`Network: sockets, HTTP, QUIC, WebSocket, S3
 
 ```cpp
 #include "content/network/socket/tcp_client_socket.h"
@@ -616,7 +624,7 @@ host.Process(in_block, out_block, 512);
 XER::Content::Network::TcpClientSocket sock;
 sock.Connect("example.com", 80, &err);
 
-// WebSocket (NodeGraph нода net.websocket_send)
+// WebSocket (NodeGraph node net.websocket_send)
 auto ws = std::make_unique<XER::network::websocket::WebSocketStream>(
     std::move(sock));
 ws->SendText("hello", &err);
@@ -636,24 +644,24 @@ s3.PutObject("path/file.bin", data, &err);
 
 ---
 
-## `<a id="video"></a>`Видео: FFmpeg decoder, сессии, аудио-плеер
+## `<a id="video"></a>`Video: FFmpeg decoder, sessions, audio player
 
 ```cpp
 #include "content/video/video_session.h"
 #include "content/video/video_audio_player.h"
 
 XER::Content::Video::VideoSession session;
-session.Open("video.mp4", &err);     // фоновый decode-worker
+session.Open("video.mp4", &err);     // background decode worker
 session.Play(); session.Pause(); session.Seek(10.0);
 
 XER::Content::Video::VideoAudioPlayer player;
-player.Attach(session.GetAvDecoder());         // тот же контейнер!
+player.Attach(session.GetAvDecoder());         // same container!
 player.Play();
 ```
 
-`VideoDecoder` — FFmpeg wrapper: video-кадры на одном потоке,
-`ReadAudioFrames` на втором (audio packets через mutex queue),
-`EnableAudioTap(true)` — аудио из того же открытого контейнера.
+`VideoDecoder` — FFmpeg wrapper: video frames on one thread,
+`ReadAudioFrames` on a second (audio packets via mutex queue),
+`EnableAudioTap(true)` — audio from the same open container.
 
 ---
 
@@ -673,7 +681,7 @@ auto rows = db.Query(q);
 
 ---
 
-## `<a id="async_io"></a>`AsyncIO: потоки, память, hardware
+## `<a id="async_io"></a>`AsyncIO: threads, memory, hardware
 
 ```cpp
 #include "async_io/io_thread_pool.h"
@@ -681,14 +689,14 @@ auto rows = db.Query(q);
 
 auto& pool = XER::AsyncIO::IO::Async::IOThreadPool::GetSharedInstance();
 pool.Enqueue([] { /* worker task */ });
-pool.WaitAll();                      // дождаться очереди
+pool.WaitAll();                      // wait for the queue
 
-// Системная информация (async snapshot → JSON)
+// System info (async snapshot → JSON)
 auto fut = XER::AsyncIO::HardwareAbstraction::SystemInfoProvider::Instance()
     .GetSnapshotAsync();
 ```
 
-`HwTempSensor` — мониторинг температур с alert-callback;
+`HwTempSensor` — temperature monitoring with alert callback;
 `HwPowerMonitor` — RAPL power (Linux) / stub (Windows);
 `NvmlLoader` — NVIDIA NVML.
 
@@ -713,15 +721,15 @@ XER::Content::Hex::Encode(data.data(), data.size());
 XER::Content::Hex::Decode("deadbeef");
 ```
 
-Wrappers (`engine::bridge::*` → теперь `XER::engine::bridge::*`):
-Skia (полный графический API + кодеки + SVG/Lottie/PDF), FFmpeg,
-CUDA, cuDNN, ANGLE, OpenCV — тонкие C++ обёртки над C API.
+Wrappers (`engine::bridge::*` → now `XER::engine::bridge::*`):
+Skia (full graphics API + codecs + SVG/Lottie/PDF), FFmpeg,
+CUDA, cuDNN, ANGLE, OpenCV — thin C++ wrappers over C APIs.
 
 ---
 
-## `<a id="примеры-кода"></a>`Примеры кода
+## `<a id="code-examples"></a>`Code examples
 
-### 1. NodeGraph: создать граф, добавить ноды, соединить, сохранить
+### 1. NodeGraph: create a graph, add nodes, connect, save
 
 ```cpp
 #include "node_graph/node_graph.h"
@@ -735,7 +743,7 @@ using namespace XER::NodeGraph;
 
 NodeTypeRegistry registry;
 RegisterBuiltinNodes(registry);       // math/string/array/io/graph.*
-RegisterExtendedNodes(registry);      // MKL-ускоренные расширения
+RegisterExtendedNodes(registry);      // MKL-accelerated extensions
 
 Graph graph(&registry);
 History hist(graph);
@@ -754,19 +762,19 @@ while (ex.StepOnce(&step)) {
     printf("level %zu: %zu nodes\n", step.level, step.nodes.size());
 }
 
-// Сохранить
+// Save
 std::string json = SerializeGraph(graph);
 ```
 
-### 2. NodeGraph: группы + collapse + валидация
+### 2. NodeGraph: groups + collapse + validation
 
 ```cpp
-// Группа через History (undoable)
+// Group via History (undoable)
 Group grp{.title = "Chain", .x = -20, .y = -30, .w = 500, .h = 200,
           .color = "#6366f1"};
 hist.AddGroup(grp);
 
-// Валидация
+// Validation
 for (const auto& issue : graph.Validate()) {
     if (issue.severity == ValidationIssue::Severity::kError) {
         printf("ERROR node %llu: %s\n",
@@ -775,10 +783,10 @@ for (const auto& issue : graph.Validate()) {
 }
 
 // Editor-side collapse: Level::collapsed_nodes — set<NodeId>
-// Свёрнутая нода = header + порты (без param-рядов), связи работают.
+// A collapsed node = header + ports (no param rows), links still work.
 ```
 
-### 3. LSUI: окно + require + watch
+### 3. LSUI: window + require + watch
 
 ```lua
 -- main.lua
@@ -805,14 +813,14 @@ function M.greet(name) return "Hello, " .. name end
 return M
 ```
 
-### 4. VST3 plugin в NodeGraph
+### 4. VST3 plugin in NodeGraph
 
 ```lua
--- В NodeGraph добавьте ноду plugin.vst3, params:
+-- In NodeGraph add a plugin.vst3 node, params:
 --   path = "C:/Plugins/Serum.vst3"
 --   sampleRate = 44100
 --   p0..p7 = normalized params (0..1)
--- После Run графа editor автоматически откроет plugin GUI.
+-- After the graph runs the editor opens the plugin GUI automatically.
 ```
 
 ### 5. FFmpeg video + audio
@@ -821,12 +829,12 @@ return M
 XER::Content::Video::VideoSession vs;
 vs.Open("movie.mkv");
 
-// Аудио из того же декодера:
+// Audio from the same decoder:
 XER::Content::Video::VideoAudioPlayer ap;
 ap.AttachDecoder(vs.SharedDecoder());
 ap.Play();
 vs.Play();
-// SyncTo() держит playhead'ы синхронными (drift > 300ms → seek).
+// SyncTo() keeps the playheads in sync (drift > 300ms → seek).
 ```
 
 ### 6. AsyncIO thread pool + hardware info
@@ -840,23 +848,23 @@ auto fut = pool.PostAndWait([] {
 printf("CPU: %s\n", fut.get().c_str());
 ```
 
-### 7. Crash handler (уже встроен в main.cc)
+### 7. Crash handler (already built into main.cc)
 
 ```cpp
 // main.cc:
-XER::App::Crash::Install();          // до всего остального
-// При краше: minidump + crash.log + state.json →
-// %TEMP%/XER/cache/crashes/<timestamp>/, авторестарт (--crash-depth<=2)
-// stackscan в crash.log показывает return-адреса без frame pointers.
+XER::App::Crash::Install();          // before everything else
+// On crash: minidump + crash.log + state.json →
+// %TEMP%/XER/cache/crashes/<timestamp>/, auto-restart (--crash-depth<=2)
+// stackscan in crash.log shows return addresses without frame pointers.
 ```
 
 ---
 
-## Статус и известные проблемы
+## Status and known issues
 
-- **Namespace-миграция `XER::`** — завершена по коду (~230 файлов),
-  полная сборка верифицируется.
+- **`XER::` namespace migration** — complete across the codebase (~230 files),
+  full build verified.
 - **GPU**: D3D12+Ganesh OK; device-removed → raster fallback;
-  `gpu_trace.log` в `%TEMP%/XER/`.
-- **Краши**: stackscan в crash_handler для диагностики rip=0/AV.
-- **Тесты**: `XER_UI_Tests.exe` — 39 тестов (UI + FFmpeg).
+  `gpu_trace.log` in `%TEMP%/XER/`.
+- **Crashes**: stackscan in crash_handler for rip=0/AV diagnostics.
+- **Tests**: `XER_UI_Tests.exe` — 39 tests (UI + FFmpeg).
