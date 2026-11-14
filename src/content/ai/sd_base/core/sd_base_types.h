@@ -30,6 +30,9 @@ struct SdRuntimeCapabilities {
     bool ffmpeg_available = false;
     bool eigen_available = false;
     bool xnnpack_available = false;
+    bool vulkan_available = false;
+    bool level_zero_available = false;
+    bool ggml_available = false;
     std::string selected_backend;
 };
 

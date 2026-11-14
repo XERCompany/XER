@@ -9,6 +9,13 @@
 #include <mutex>
 #include <condition_variable>
 
+#if defined(XER_AI_HAS_CUDA_LIB) && __has_include(<cuda_runtime.h>)
+#  include <cuda_runtime.h>
+#  define XER_WSCUDA_HAS_CUDA 1
+#else
+#  define XER_WSCUDA_HAS_CUDA 0
+#endif
+
 namespace XER::ModelsBuilder::Weights {
 
 namespace {
@@ -31,10 +38,31 @@ XER::AsyncIO::IO::Async::AsyncTaskQueue& GetSharedQueue() {
 WeightSyncCuda::WeightSyncCuda() {
     auto features = Utility::DetectExternalLibraries();
     cuda_available_ = features.has_cuda;
+#if XER_WSCUDA_HAS_CUDA
+    if (cuda_available_) {
+        int device_count = 0;
+        cuda_available_ =
+            (cudaGetDeviceCount(&device_count) == cudaSuccess &&
+             device_count > 0);
+        if (cuda_available_) {
+            cudaSetDevice(0);
+        }
+    }
+#endif
 }
 
 WeightSyncCuda::~WeightSyncCuda() {
     WaitAll();
+#if XER_WSCUDA_HAS_CUDA
+    std::lock_guard<std::mutex> lk(device_mutex_);
+    for (auto& [name, buf] : device_buffers_) {
+        (void)name;
+        if (buf.ptr) {
+            cudaFree(buf.ptr);
+        }
+    }
+    device_buffers_.clear();
+#endif
 }
 
 void WeightSyncCuda::PushAsync(const std::string& tensor_name,
@@ -52,10 +80,45 @@ void WeightSyncCuda::PushAsync(const std::string& tensor_name,
     ++pending_tasks_;
 
     auto task = [name_copy, data_copy, callback, this]() {
-        // Simulate CUDA host→device transfer
-        bool ok = !data_copy.empty();
+        bool ok = false;
+        std::string err;
+#if XER_WSCUDA_HAS_CUDA
+        {
+            std::lock_guard<std::mutex> lk(device_mutex_);
+            auto& buf = device_buffers_[name_copy];
+            const size_t bytes = data_copy.size() * sizeof(float);
+            if (!buf.ptr || buf.floats < data_copy.size()) {
+                if (buf.ptr) {
+                    cudaFree(buf.ptr);
+                    buf.ptr = nullptr;
+                    buf.floats = 0;
+                }
+                if (data_copy.empty() ||
+                    cudaMalloc(&buf.ptr, bytes) != cudaSuccess || !buf.ptr) {
+                    err = "cudaMalloc failed for " + name_copy;
+                    device_buffers_.erase(name_copy);
+                } else {
+                    buf.floats = data_copy.size();
+                }
+            }
+            if (buf.ptr) {
+                if (cudaMemcpy(buf.ptr, data_copy.data(), bytes,
+                               cudaMemcpyHostToDevice) == cudaSuccess) {
+                    ok = true;
+                } else {
+                    err = "cudaMemcpy H2D failed for " + name_copy + ": " +
+                          cudaGetErrorString(cudaGetLastError());
+                }
+            }
+        }
+#else
+        ok = !data_copy.empty();
+        if (!ok) {
+            err = "Empty tensor: " + name_copy;
+        }
+#endif
         --pending_tasks_;
-        if (callback) callback(ok, ok ? "" : "Empty tensor: " + name_copy);
+        if (callback) callback(ok, err);
     };
 
     auto& q = GetSharedQueue();
@@ -75,9 +138,32 @@ void WeightSyncCuda::PullAsync(const std::string& tensor_name,
     ++pending_tasks_;
 
     auto task = [name_copy, &out_data, callback, this]() {
-        // Simulate CUDA device→host transfer (no-op, out_data unchanged)
+        bool ok = false;
+        std::string err;
+#if XER_WSCUDA_HAS_CUDA
+        {
+            std::lock_guard<std::mutex> lk(device_mutex_);
+            auto it = device_buffers_.find(name_copy);
+            if (it == device_buffers_.end() || !it->second.ptr) {
+                err = "No device buffer for " + name_copy;
+            } else {
+                out_data.resize(it->second.floats);
+                const size_t bytes = it->second.floats * sizeof(float);
+                if (cudaMemcpy(out_data.data(), it->second.ptr, bytes,
+                               cudaMemcpyDeviceToHost) == cudaSuccess) {
+                    ok = true;
+                } else {
+                    err = "cudaMemcpy D2H failed for " + name_copy + ": " +
+                          cudaGetErrorString(cudaGetLastError());
+                    out_data.clear();
+                }
+            }
+        }
+#else
+        ok = true;
+#endif
         --pending_tasks_;
-        if (callback) callback(true, "");
+        if (callback) callback(ok, err);
     };
 
     GetSharedQueue().EnqueueTask(std::move(task), 0, nullptr);

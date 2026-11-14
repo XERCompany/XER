@@ -228,6 +228,213 @@ if(TARGET blaze::blaze)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_BLAZE=1)
 endif()
 
+# ---------------------------------------------------------------------------
+# GPU compute / shader toolchain (Vulkan + SPIR-V path for custom kernels).
+# ---------------------------------------------------------------------------
+
+# glslang: GLSL/HLSL -> SPIR-V compiler used to build compute shaders.
+find_package(glslang QUIET)
+if(TARGET glslang::glslang)
+    target_link_libraries(XER_ContentAI PUBLIC glslang::glslang)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_GLSLANG=1)
+elseif(TARGET glslang::SPIRV)
+    target_link_libraries(XER_ContentAI PUBLIC
+        glslang::SPIRV glslang::MachineIndependent glslang::GenericCodeGen
+        glslang::OSDependent)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_GLSLANG=1)
+endif()
+
+# shaderc: single-call shader compiler (glslang + SPIRV-Tools + glslang HLSL).
+find_package(unofficial-shaderc QUIET)
+if(TARGET unofficial::shaderc::shaderc)
+    target_link_libraries(XER_ContentAI PUBLIC
+        unofficial::shaderc::shaderc unofficial::shaderc::shaderc_util)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_SHADERC=1)
+endif()
+
+# SPIRV-Tools: SPIR-V optimizer/validator for generated kernels.
+find_package(SPIRV-Tools QUIET)
+if(TARGET SPIRV-Tools-shared)
+    target_link_libraries(XER_ContentAI PUBLIC SPIRV-Tools-shared)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_SPIRV_TOOLS=1)
+elseif(TARGET SPIRV-Tools-static)
+    target_link_libraries(XER_ContentAI PUBLIC SPIRV-Tools-static)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_SPIRV_TOOLS=1)
+endif()
+
+# Vulkan loader + headers (CMake FindVulkan module).
+find_package(Vulkan QUIET)
+if(TARGET Vulkan::Vulkan)
+    target_link_libraries(XER_ContentAI PUBLIC Vulkan::Vulkan)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_VULKAN=1)
+endif()
+
+# Vulkan loader shared library target from the vcpkg vulkan-loader port.
+find_package(VulkanLoader QUIET)
+if(TARGET Vulkan::Loader)
+    target_link_libraries(XER_ContentAI PUBLIC Vulkan::Loader)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_VULKAN_LOADER=1)
+endif()
+
+# Vulkan utility libraries: header-only helpers (SafeStruct, layers, etc.).
+find_package(VulkanUtilityLibraries QUIET)
+if(TARGET Vulkan::SafeStruct)
+    target_link_libraries(XER_ContentAI PUBLIC
+        Vulkan::SafeStruct Vulkan::UtilityHeaders Vulkan::LayerSettings
+        Vulkan::CompilerConfiguration)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_VULKAN_UTIL=1)
+endif()
+
+# Vulkan Memory Allocator (GPUOpen): GPU buffer/heap management for kernels.
+find_package(VulkanMemoryAllocator QUIET)
+if(TARGET GPUOpen::VulkanMemoryAllocator)
+    target_link_libraries(XER_ContentAI PUBLIC GPUOpen::VulkanMemoryAllocator)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_VMA=1)
+endif()
+
+# Level Zero: Intel GPU compute API (SYCL/oneAPI backend). The port ships
+# headers + ze_loader.lib without a CMake config, so locate the lib directly.
+find_library(XER_AI_ZE_LOADER_LIB NAMES ze_loader)
+if(XER_AI_ZE_LOADER_LIB)
+    target_link_libraries(XER_ContentAI PUBLIC ${XER_AI_ZE_LOADER_LIB})
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_LEVEL_ZERO=1)
+endif()
+
+# AsmJit: lightweight JIT for machine code — custom numeric kernels.
+find_package(asmjit QUIET)
+if(TARGET asmjit::asmjit)
+    target_link_libraries(XER_ContentAI PUBLIC asmjit::asmjit)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ASMJIT=1)
+endif()
+
+# ---------------------------------------------------------------------------
+# Serialization / model & config formats.
+# ---------------------------------------------------------------------------
+
+# nlohmann_json: modern JSON for model manifests and trainer configs.
+find_package(nlohmann_json QUIET)
+if(TARGET nlohmann_json::nlohmann_json)
+    target_link_libraries(XER_ContentAI PUBLIC nlohmann_json::nlohmann_json)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_NLOHMANN_JSON=1)
+endif()
+
+# RapidJSON: fast JSON parser (alternative frontend for large manifests).
+find_package(RapidJSON QUIET)
+if(TARGET RapidJSON)
+    target_link_libraries(XER_ContentAI PUBLIC RapidJSON)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_RAPIDJSON=1)
+endif()
+
+# tinyxml2: XML parser for ONNX-XML / legacy model descriptors.
+find_package(tinyxml2 QUIET)
+if(TARGET tinyxml2::tinyxml2)
+    target_link_libraries(XER_ContentAI PUBLIC tinyxml2::tinyxml2)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_TINYXML2=1)
+endif()
+
+# date: Howard Hinnant date library for training schedules/checkpoints.
+find_package(date QUIET)
+if(TARGET date::date)
+    target_link_libraries(XER_ContentAI PUBLIC date::date)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_DATE=1)
+endif()
+
+# JSON Schema validator: validates model manifests against schemas.
+find_package(nlohmann_json_schema_validator QUIET)
+if(TARGET nlohmann_json_schema_validator::validator)
+    target_link_libraries(XER_ContentAI PUBLIC nlohmann_json_schema_validator::validator)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_JSON_SCHEMA_VALIDATOR=1)
+endif()
+
+# ---------------------------------------------------------------------------
+# Compression codecs for packed weights / datasets.
+# ---------------------------------------------------------------------------
+
+# LZ4: fast compression for tensor payloads.
+find_package(lz4 QUIET)
+if(TARGET LZ4::lz4_shared)
+    target_link_libraries(XER_ContentAI PUBLIC LZ4::lz4_shared)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_LZ4=1)
+elseif(TARGET LZ4::lz4)
+    target_link_libraries(XER_ContentAI PUBLIC LZ4::lz4)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_LZ4=1)
+endif()
+
+# Snappy: fast compression used by TFRecord-style datasets.
+find_package(Snappy QUIET)
+if(TARGET Snappy::snappy)
+    target_link_libraries(XER_ContentAI PUBLIC Snappy::snappy)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_SNAPPY=1)
+endif()
+
+# Brotli: high-ratio compression for distributed checkpoints.
+find_package(unofficial-brotli QUIET)
+if(TARGET unofficial::brotli::brotlidec)
+    target_link_libraries(XER_ContentAI PUBLIC
+        unofficial::brotli::brotlidec unofficial::brotli::brotlicommon)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_BROTLI=1)
+endif()
+
+# ---------------------------------------------------------------------------
+# Imaging / signal processing for vision & audio models.
+# ---------------------------------------------------------------------------
+
+# tinyexr: HDR EXR decode/encode for HDR vision pipelines.
+find_package(tinyexr QUIET)
+if(TARGET unofficial::tinyexr::tinyexr)
+    target_link_libraries(XER_ContentAI PUBLIC unofficial::tinyexr::tinyexr)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_TINYEXR=1)
+endif()
+
+# Leptonica: image processing primitives for OCR (pairs with Tesseract).
+find_package(Leptonica QUIET)
+if(TARGET leptonica)
+    target_link_libraries(XER_ContentAI PUBLIC leptonica)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_LEPTONICA=1)
+endif()
+
+# pffft: portable FFT for spectral/audio feature extraction.
+find_package(pffft QUIET)
+if(TARGET pffft::pffft)
+    target_link_libraries(XER_ContentAI PUBLIC pffft::pffft)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_PFFFT=1)
+endif()
+
+# ---------------------------------------------------------------------------
+# Infrastructure: networking, regex tokenizers, storage, profiling, JIT.
+# ---------------------------------------------------------------------------
+
+# cURL: model hub downloads (HuggingFace/Civitai adapters).
+find_package(CURL QUIET)
+if(TARGET CURL::libcurl)
+    target_link_libraries(XER_ContentAI PUBLIC CURL::libcurl)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_CURL=1)
+elseif(TARGET CURL::libcurl_shared)
+    target_link_libraries(XER_ContentAI PUBLIC CURL::libcurl_shared)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_CURL=1)
+endif()
+
+# RE2: linear-time regex engine for tokenizer/preprocessing rules.
+find_package(re2 QUIET)
+if(TARGET re2::re2)
+    target_link_libraries(XER_ContentAI PUBLIC re2::re2)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_RE2=1)
+endif()
+
+# SQLite: local model registry / feature cache.
+find_package(unofficial-sqlite3 QUIET)
+if(TARGET unofficial::sqlite3::sqlite3)
+    target_link_libraries(XER_ContentAI PUBLIC unofficial::sqlite3::sqlite3)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_SQLITE3=1)
+endif()
+
+# Kineto: PyTorch-derived profiler headers for training/inference traces.
+find_package(unofficial-kineto QUIET)
+if(TARGET unofficial::kineto::headers)
+    target_link_libraries(XER_ContentAI PUBLIC unofficial::kineto::headers)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_KINETO=1)
+endif()
+
 target_compile_features(XER_ContentAI PUBLIC cxx_std_23)
 
 if(MSVC)

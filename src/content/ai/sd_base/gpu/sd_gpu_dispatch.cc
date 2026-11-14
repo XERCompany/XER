@@ -36,6 +36,9 @@ SdRuntimeCapabilities SdGpuDispatch::Detect() {
     caps.ffmpeg_available = XER::Bridge::FFmpeg::IsAvailable();
     caps.eigen_available = libs.has_eigen;
     caps.xnnpack_available = libs.has_xnnpack;
+    caps.vulkan_available = libs.has_vulkan;
+    caps.level_zero_available = libs.has_level_zero;
+    caps.ggml_available = libs.has_ggml;
     caps.selected_backend = "cpu/eigen";
     return caps;
 }
@@ -52,6 +55,9 @@ std::string SdGpuDispatch::BackendName(SdBackendKind backend) {
         case SdBackendKind::Onnx: return "onnx";
         case SdBackendKind::CpuXnnpack: return "cpu/xnnpack";
         case SdBackendKind::Tensorflow: return "tensorflow";
+        case SdBackendKind::Vulkan: return "vulkan";
+        case SdBackendKind::LevelZero: return "level-zero";
+        case SdBackendKind::Ggml: return "ggml";
         case SdBackendKind::CpuEigen: return "cpu/eigen";
     }
     return "cpu/eigen";
@@ -71,6 +77,11 @@ SdBackendKind SdGpuDispatch::SelectBackend(const SdRuntimeCapabilities& caps,
     if (hint == "onnx" && caps.onnx_available) return SdBackendKind::Onnx;
     if ((hint == "xnn" || hint == "xnnpack") && caps.xnnpack_available) return SdBackendKind::CpuXnnpack;
     if ((hint == "tf" || hint == "tensorflow") && caps.tensorflow_available) return SdBackendKind::Tensorflow;
+    if (hint == "vulkan" && caps.vulkan_available) return SdBackendKind::Vulkan;
+    if ((hint == "level-zero" || hint == "level_zero" || hint == "ze") && caps.level_zero_available) {
+        return SdBackendKind::LevelZero;
+    }
+    if (hint == "ggml" && caps.ggml_available) return SdBackendKind::Ggml;
     if (hint == "eigen" && caps.eigen_available) return SdBackendKind::CpuEigen;
 
     if (config.prefer_cuda && config.prefer_cudnn && caps.cuda_available && caps.cudnn_available) {
@@ -102,6 +113,9 @@ SdBackendKind SdGpuDispatch::SelectBackend(const SdRuntimeCapabilities& caps,
     if (caps.tensorflow_available) return SdBackendKind::Tensorflow;
     if (caps.cuda_available && caps.cudnn_available) return SdBackendKind::CudaCudnn;
     if (caps.cuda_available && caps.cutlass_available) return SdBackendKind::CudaCutlass;
+    if (caps.vulkan_available) return SdBackendKind::Vulkan;
+    if (caps.level_zero_available) return SdBackendKind::LevelZero;
+    if (caps.ggml_available) return SdBackendKind::Ggml;
 
     return SdBackendKind::CpuEigen;
 }

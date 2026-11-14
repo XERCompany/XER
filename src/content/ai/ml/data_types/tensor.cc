@@ -1,8 +1,11 @@
 ﻿#include "tensor.h"
 
+#include <Eigen/Core>
+
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <new>
 
 namespace XER::MLData::Types {
 
@@ -118,13 +121,25 @@ bool Tensor::Allocate() {
         return true;
     }
 
-    data_ = std::calloc(1, memory_size_);
-    return data_ != nullptr;
+    // Eigen's aligned allocator keeps tensor payloads compatible with the
+    // SIMD alignment expected by Eigen/oneDNN/MKL kernels (throws on OOM).
+    try {
+        data_ = Eigen::internal::aligned_malloc(memory_size_);
+    } catch (const std::bad_alloc&) {
+        memory_size_ = 0;
+        return false;
+    }
+    if (data_ == nullptr) {
+        memory_size_ = 0;
+        return false;
+    }
+    std::memset(data_, 0, memory_size_);
+    return true;
 }
 
 void Tensor::Release() {
     if (data_ != nullptr) {
-        std::free(data_);
+        Eigen::internal::aligned_free(data_);
         data_ = nullptr;
     }
 }

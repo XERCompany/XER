@@ -47,6 +47,12 @@ float MlMathUtils::Variance(const std::vector<float>& values) {
 		return 0.0f;
 	}
 
+#if XER_AI_HAS_EIGEN_HEADER
+	Eigen::Map<const Eigen::ArrayXf> map(values.data(), static_cast<Eigen::Index>(values.size()));
+	const float mean = map.mean();
+	const float sum = (map - mean).square().sum();
+	return sum / static_cast<float>(values.size() - 1U);
+#else
 	const float mean = Mean(values);
 	float sum = 0.0f;
 	for (const float value : values) {
@@ -54,6 +60,7 @@ float MlMathUtils::Variance(const std::vector<float>& values) {
 		sum += delta * delta;
 	}
 	return sum / static_cast<float>(values.size() - 1U);
+#endif
 }
 
 std::vector<float> MlMathUtils::Normalize(const std::vector<float>& values) {
@@ -61,6 +68,20 @@ std::vector<float> MlMathUtils::Normalize(const std::vector<float>& values) {
 		return {};
 	}
 
+#if XER_AI_HAS_EIGEN_HEADER
+	Eigen::Map<const Eigen::ArrayXf> map(values.data(), static_cast<Eigen::Index>(values.size()));
+	const float min_value = map.minCoeff();
+	const float max_value = map.maxCoeff();
+	const float range = max_value - min_value;
+	if (range <= 0.0f) {
+		return std::vector<float>(values.size(), 0.0f);
+	}
+
+	std::vector<float> out(values.size(), 0.0f);
+	Eigen::Map<Eigen::ArrayXf> out_map(out.data(), static_cast<Eigen::Index>(out.size()));
+	out_map = (map - min_value) / range;
+	return out;
+#else
 	const auto [min_it, max_it] = std::minmax_element(values.begin(), values.end());
 	const float min_value = *min_it;
 	const float max_value = *max_it;
@@ -74,6 +95,7 @@ std::vector<float> MlMathUtils::Normalize(const std::vector<float>& values) {
 		out[i] = (values[i] - min_value) / range;
 	}
 	return out;
+#endif
 }
 
 std::vector<float> MlMathUtils::Softmax(const std::vector<float>& logits) {
@@ -81,6 +103,21 @@ std::vector<float> MlMathUtils::Softmax(const std::vector<float>& logits) {
 		return {};
 	}
 
+#if XER_AI_HAS_EIGEN_HEADER
+	Eigen::Map<const Eigen::ArrayXf> map(logits.data(), static_cast<Eigen::Index>(logits.size()));
+	const float max_logit = map.maxCoeff();
+	Eigen::ArrayXf exps = (map - max_logit).exp();
+	const float denom = exps.sum();
+	if (denom <= 0.0f) {
+		return std::vector<float>(logits.size(), 0.0f);
+	}
+	exps /= denom;
+
+	std::vector<float> out(logits.size(), 0.0f);
+	Eigen::Map<Eigen::ArrayXf> out_map(out.data(), static_cast<Eigen::Index>(out.size()));
+	out_map = exps;
+	return out;
+#else
 	const float max_logit = *std::max_element(logits.begin(), logits.end());
 	std::vector<float> exps(logits.size(), 0.0f);
 	for (size_t i = 0; i < logits.size(); ++i) {
@@ -96,6 +133,7 @@ std::vector<float> MlMathUtils::Softmax(const std::vector<float>& logits) {
 		value /= denom;
 	}
 	return exps;
+#endif
 }
 
 std::vector<float> MlMathUtils::L2Normalize(const std::vector<float>& values, float epsilon) {
@@ -108,11 +146,19 @@ std::vector<float> MlMathUtils::L2Normalize(const std::vector<float>& values, fl
 		return std::vector<float>(values.size(), 0.0f);
 	}
 
+#if XER_AI_HAS_EIGEN_HEADER
+	Eigen::Map<const Eigen::ArrayXf> map(values.data(), static_cast<Eigen::Index>(values.size()));
+	std::vector<float> out(values.size(), 0.0f);
+	Eigen::Map<Eigen::ArrayXf> out_map(out.data(), static_cast<Eigen::Index>(out.size()));
+	out_map = map / norm;
+	return out;
+#else
 	std::vector<float> out(values.size(), 0.0f);
 	for (size_t i = 0; i < values.size(); ++i) {
 		out[i] = values[i] / norm;
 	}
 	return out;
+#endif
 }
 
 }  // namespace XER::ML::Utils
