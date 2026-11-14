@@ -80,15 +80,20 @@ void AppTitleBar::SetNavActions(bool can_go_back, bool can_go_forward,
 }
 
 void AppTitleBar::SetMenus(std::vector<Menu> menus) {
-    menus_.clear();
-    menus_.reserve(menus.size());
-    for (auto& m : menus) {
+    std::vector<MenuEntry> next;
+    next.reserve(menus.size());
+    for (std::size_t i = 0; i < menus.size(); ++i) {
         MenuEntry entry;
-        entry.label = std::move(m.label);
-        entry.mnemonic = m.mnemonic;
-        entry.items = std::move(m.items);
-        menus_.push_back(std::move(entry));
+        entry.label = std::move(menus[i].label);
+        entry.mnemonic = menus[i].mnemonic;
+        entry.items = std::move(menus[i].items);
+        if (i < menus_.size() && menus_[i].label == entry.label) {
+            entry.rect = menus_[i].rect;
+            entry.width = menus_[i].width;
+        }
+        next.push_back(std::move(entry));
     }
+    menus_ = std::move(next);
     RequestLayout();
     Invalidate();
 }
@@ -768,8 +773,10 @@ bool AppTitleBar::HandleEvent(const Event& event) {
                         ci.action = wi.action;
                         items.push_back(std::move(ci));
                     }
+                    hovered_zone_ = HitZone::None;
+                    hovered_menu_index_ = -1;
                     auto menu = ContextMenu::Create(std::move(items));
-                    menu->SetAnchor(event.position);
+                    menu->SetAnchor({workspace_rect_.x, b.Bottom() + 2.0f});
                     ShowOverlay(menu);
                 }
                 Invalidate();
@@ -792,7 +799,12 @@ bool AppTitleBar::HandleEvent(const Event& event) {
             case HitZone::Menu: {
                 for (std::size_t i = 0; i < menus_.size(); ++i) {
                     if (menus_[i].rect.Contains(event.position)) {
-                        OpenMenuOverlay(static_cast<int>(i), event.position);
+                        const Layout::Point anchor{menus_[i].rect.x,
+                                                   b.Bottom() + 2.0f};
+                        hovered_zone_ = HitZone::None;
+                        hovered_menu_index_ = -1;
+                        OpenMenuOverlay(static_cast<int>(i), anchor);
+                        Invalidate();
                         return true;
                     }
                 }
@@ -846,9 +858,13 @@ bool AppTitleBar::HandleEvent(const Event& event) {
                         ci.action = ai.action;
                         items.push_back(std::move(ci));
                     }
+                    hovered_zone_ = HitZone::None;
+                    hovered_menu_index_ = -1;
                     auto menu = ContextMenu::Create(std::move(items));
-                    menu->SetAnchor(event.position);
+                    menu->SetAnchor({std::max(4.0f, avatar_rect_.Right() - 216.0f),
+                                     b.Bottom() + 2.0f});
                     ShowOverlay(menu);
+                    Invalidate();
                     return true;
                 }
                 break;

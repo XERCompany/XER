@@ -342,6 +342,8 @@ public:
                     if (frame_callback_) {
                         frame_callback_();
                     }
+                    widget_tree_.Tick(
+                        static_cast<double>(frame_interval_ms_) * 0.001);
                     FlushDirtyState(message_hwnd);
                     return 0;
                 }
@@ -494,6 +496,13 @@ public:
                             }
                             if (dip_y >= 0.0f &&
                                 dip_y < title_bar_height_dip_) {
+                                // While a modal overlay (menu / select / dialog)
+                                // is open, route titlebar clicks to the client
+                                // area so outside clicks dismiss the overlay
+                                // instead of dragging the window.
+                                if (widget_tree_.GetOverlay() != nullptr) {
+                                    return HTCLIENT;
+                                }
                                 if (title_bar_hit_test_ &&
                                     title_bar_hit_test_(
                                         Layout::Point{dip_x, dip_y})) {

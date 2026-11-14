@@ -110,57 +110,7 @@ void HubBrowserWidget::BuildTitleBar() {
     });
 
     tb->SetNavActions(false, false, nullptr, nullptr);
-
-    std::vector<AppTitleBar::Menu> menus;
-    auto add_menu = [&](const char* label, std::vector<AppTitleBar::MenuItem> items) {
-        AppTitleBar::Menu m;
-        m.label = label;
-        m.items = std::move(items);
-        menus.push_back(std::move(m));
-    };
-    add_menu("File", {
-        {"New Search", "Ctrl+N", [this]() { RunSearch(); }},
-        {"Refresh Models", "F5", [this]() { RunSearch(); }, true, false, false, true},
-        {"Copy API Endpoint", "", [this]() {
-            XER::Content::Clipboard::SetText("https://civitai.com/api/v1");
-            SetStatus("Copied API endpoint to clipboard.");
-        }},
-    });
-    add_menu("Filter", {
-        {"All Types", "", [this]() {
-            active_category_ = 0; types_ = Categories()[0].api_type;
-            ResetPagination(); RunSearch();
-        }},
-        {"Checkpoints Only", "", [this]() { active_category_ = 1; types_ = "Checkpoint"; RunSearch(); }},
-        {"LoRA Only", "", [this]() { active_category_ = 2; types_ = "LORA"; RunSearch(); }},
-        {"NSFW Toggle", "", [this]() {
-            auto* sw = static_cast<Switch*>(nsfw_switch_.get());
-            sw->SetChecked(!sw->IsChecked());
-            SetStatus(nsfw_ ? "NSFW content enabled." : "NSFW content hidden.");
-        }, true, nsfw_},
-    });
-    add_menu("Sort", {
-        {"Highest Rated", "", [this]() { sort_ = "Highest Rated"; RunSearch(); }, true, sort_ == "Highest Rated"},
-        {"Most Downloaded", "", [this]() { sort_ = "Most Downloaded"; RunSearch(); }, true, sort_ == "Most Downloaded"},
-        {"Newest", "", [this]() { sort_ = "Newest"; RunSearch(); }, true, sort_ == "Newest"},
-        {"Oldest", "", [this]() { sort_ = "Oldest"; RunSearch(); }, true, sort_ == "Oldest"},
-        {"Name", "", [this]() { sort_ = "Name"; RunSearch(); }, true, sort_ == "Name"},
-    });
-    add_menu("View", {
-        {"List View", "", [this]() { SetViewMode(ViewMode::List); }, true, view_mode_ == ViewMode::List},
-        {"Grid View", "", [this]() { SetViewMode(ViewMode::Grid); }, true, view_mode_ == ViewMode::Grid},
-        {"Left Sidebar", "", [this]() { SetLeftPanelVisible(!left_panel_visible_); }, true, left_panel_visible_},
-        {"Right Inspector", "", [this]() { SetRightPanelVisible(!right_panel_visible_); }, true, right_panel_visible_},
-    });
-    add_menu("Help", {
-        {"About Civitai Hub", "", [this]() {
-            SetStatus("Civitai Hub — model browser powered by XER src/ui + Civitai API v1.");
-        }},
-        {"API Documentation", "", [this]() {
-            SetStatus("API: https://civitai.com/api/v1  (token via XER_CIVITAI_API_KEY)");
-        }},
-    });
-    tb->SetMenus(std::move(menus));
+    RebuildMenus();
 
     tb->SetCenterCommand("Search Civitai models...",
                         [this]() {
@@ -191,6 +141,79 @@ void HubBrowserWidget::BuildTitleBar() {
     tb->SetActionPill("Quick Fetch", [this]() { RunSearch(); }, false);
 }
 
+void HubBrowserWidget::RebuildMenus() {
+    if (!title_bar_) return;
+    std::vector<AppTitleBar::Menu> menus;
+    auto add_menu = [&](const char* label, std::vector<AppTitleBar::MenuItem> items) {
+        AppTitleBar::Menu m;
+        m.label = label;
+        m.items = std::move(items);
+        menus.push_back(std::move(m));
+    };
+    add_menu("File", {
+        {"New Search", "Ctrl+K", [this]() {
+            static_cast<TextInput*>(search_input_.get())->SetFocused(true);
+        }},
+        {"Refresh Models", "F5", [this]() { RunSearch(); }, true, false, false, true},
+        {"Copy API Endpoint", "", [this]() {
+            XER::Content::Clipboard::SetText("https://civitai.com/api/v1");
+            SetStatus("Copied API endpoint to clipboard.");
+        }},
+    });
+    add_menu("Filter", {
+        {"All Types", "", [this]() {
+            active_category_ = 0; types_ = Categories()[0].api_type;
+            static_cast<Select*>(type_select_.get())->SetSelectedIndex(0);
+            RebuildMenus(); ResetPagination(); RunSearch();
+        }, true, active_category_ == 0},
+        {"Checkpoints Only", "", [this]() {
+            active_category_ = 1; types_ = "Checkpoint";
+            static_cast<Select*>(type_select_.get())->SetSelectedIndex(1);
+            RebuildMenus(); ResetPagination(); RunSearch();
+        }, true, active_category_ == 1},
+        {"LoRA Only", "", [this]() {
+            active_category_ = 2; types_ = "LORA";
+            static_cast<Select*>(type_select_.get())->SetSelectedIndex(2);
+            RebuildMenus(); ResetPagination(); RunSearch();
+        }, true, active_category_ == 2},
+        {"NSFW Content", "", [this]() {
+            auto* sw = static_cast<Switch*>(nsfw_switch_.get());
+            sw->SetChecked(!sw->IsChecked());
+            RebuildMenus();
+            SetStatus(nsfw_ ? "NSFW content enabled." : "NSFW content hidden.");
+        }, true, nsfw_, false, true},
+    });
+    auto set_sort = [this](const char* s, int idx) {
+        sort_ = s;
+        static_cast<Select*>(sort_select_.get())->SetSelectedIndex(idx);
+        RebuildMenus();
+        ResetPagination();
+        RunSearch();
+    };
+    add_menu("Sort", {
+        {"Highest Rated", "", [set_sort]() { set_sort("Highest Rated", 0); }, true, sort_ == "Highest Rated"},
+        {"Most Downloaded", "", [set_sort]() { set_sort("Most Downloaded", 1); }, true, sort_ == "Most Downloaded"},
+        {"Newest", "", [set_sort]() { set_sort("Newest", 2); }, true, sort_ == "Newest"},
+        {"Oldest", "", [set_sort]() { set_sort("Oldest", 3); }, true, sort_ == "Oldest"},
+        {"Name", "", [set_sort]() { set_sort("Name", 4); }, true, sort_ == "Name"},
+    });
+    add_menu("View", {
+        {"List View", "", [this]() { SetViewMode(ViewMode::List); }, true, view_mode_ == ViewMode::List},
+        {"Grid View", "", [this]() { SetViewMode(ViewMode::Grid); }, true, view_mode_ == ViewMode::Grid},
+        {"Left Sidebar", "", [this]() { SetLeftPanelVisible(!left_panel_visible_); }, true, left_panel_visible_, false, true},
+        {"Right Inspector", "", [this]() { SetRightPanelVisible(!right_panel_visible_); }, true, right_panel_visible_},
+    });
+    add_menu("Help", {
+        {"About Civitai Hub", "", [this]() {
+            SetStatus("Civitai Hub — model browser powered by XER src/ui + Civitai API v1.");
+        }},
+        {"API Documentation", "", [this]() {
+            SetStatus("API: https://civitai.com/api/v1  (token via XER_CIVITAI_API_KEY)");
+        }},
+    });
+    title_bar_->SetMenus(std::move(menus));
+}
+
 void HubBrowserWidget::BuildToolbar() {
     search_input_ = std::make_shared<TextInput>("");
     auto* ti = static_cast<TextInput*>(search_input_.get());
@@ -219,6 +242,7 @@ void HubBrowserWidget::BuildToolbar() {
         for (std::size_t c = 0; c < Categories().size(); ++c) {
             if (Categories()[c].api_type == types_) { active_category_ = static_cast<int>(c); break; }
         }
+        RebuildMenus();
         ResetPagination();
         if (!results_.empty()) RunSearch();
     });
@@ -231,6 +255,7 @@ void HubBrowserWidget::BuildToolbar() {
         static const char* names[] = {"Highest Rated", "Most Downloaded",
                                       "Newest", "Oldest", "Name"};
         sort_ = names[std::clamp(i, 0, 4)];
+        RebuildMenus();
         ResetPagination();
         if (!results_.empty()) RunSearch();
     });
@@ -238,6 +263,7 @@ void HubBrowserWidget::BuildToolbar() {
     nsfw_switch_ = std::make_shared<Switch>(false);
     static_cast<Switch*>(nsfw_switch_.get())->SetOnChanged([this](bool v) {
         nsfw_ = v;
+        RebuildMenus();
         ResetPagination();
         if (!results_.empty()) RunSearch();
     });
@@ -445,6 +471,7 @@ void HubBrowserWidget::SetViewMode(ViewMode mode) {
     if (view_mode_ == mode) return;
     view_mode_ = mode;
     scroll_ = 0.0f;
+    RebuildMenus();
     RecomputeHitRects();
     Invalidate();
 }
@@ -454,6 +481,7 @@ void HubBrowserWidget::SetLeftPanelVisible(bool visible) {
     title_bar_->SetLeftPanelToggle(true, left_panel_visible_, [this]() {
         SetLeftPanelVisible(!left_panel_visible_);
     });
+    RebuildMenus();
     RecomputeHitRects();
     RequestLayout();
     Invalidate();
@@ -464,6 +492,7 @@ void HubBrowserWidget::SetRightPanelVisible(bool visible) {
     title_bar_->SetRightPanelToggle(true, right_panel_visible_, [this]() {
         SetRightPanelVisible(!right_panel_visible_);
     });
+    RebuildMenus();
     SyncInspectorVisibility();
     RecomputeHitRects();
     RequestLayout();
@@ -838,6 +867,7 @@ bool HubBrowserWidget::HandleEvent(const Event& event) {
                 cat != active_category_) {
                 active_category_ = cat;
                 types_ = Categories()[cat].api_type;
+                RebuildMenus();
                 ResetPagination();
                 RunSearch();
                 // Sync toolbar select last — its on_changed re-triggers

@@ -27,6 +27,7 @@ std::shared_ptr<ContextMenu> ContextMenu::Create(std::vector<Item> items) {
 
 ContextMenu::ContextMenu(std::vector<Item> items)
     : items_(std::move(items)) {
+    SetFocusable(true);
     // Popover entrance: quick ease-out fade + rise (exits stay instant).
     open_t_.Set(1.0f, 0.13f);
 }
@@ -149,6 +150,12 @@ void ContextMenu::Tick(double dt_seconds) {
     if (!IsEffectivelyVisible()) {
         return;
     }
+    if (!ticked_ && rendered_) {
+        // Already painted at full opacity on the first frame: snap to 1.0 so
+        // the first timer tick doesn't briefly dip alpha back near 0.
+        open_t_.Set(1.0f, 0.0f);
+    }
+    ticked_ = true;
     open_t_.Update(static_cast<float>(dt_seconds));
     if (open_t_.Active()) {
         Invalidate();
@@ -157,23 +164,25 @@ void ContextMenu::Tick(double dt_seconds) {
 
 void ContextMenu::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
-    const float p = open_t_.Value();
+    // Same guard as SelectOverlay: hosts that only tick root_ (or before the
+    // first timer tick arrives) would otherwise render at open_t_.Value()==0
+    // and make every menu item completely invisible.
+    const float p = ticked_ ? open_t_.Value() : 1.0f;
+    rendered_ = true;
     const auto FA = [p](Theme::Color col) {
         col.a *= p;
         return col;
     };
     Layout::Rect menu = MenuRect(bounds);
     menu.y += (1.0f - p) * -6.0f;
-    // Frosted popover: blur the backdrop behind the menu, then dim slightly.
+    // Soft elevation shadow behind the menu panel.
     renderer.DrawBackdropBlur(
         Layout::Rect{menu.x - 8.0f, menu.y - 8.0f, menu.width + 16.0f,
                      menu.height + 16.0f},
         0.7f);
-    renderer.FillRect(menu, FA(Theme::Color{0.0f, 0.0f, 0.0f, 0.18f}),
-                      tokens.radius_medium);
-    // Translucent popover (Tailwind bg-surface/95 glass feel).
+    // Opaque surface so menu items remain readable over any content below.
     Theme::Color menu_bg = tokens.surface;
-    menu_bg.a *= 0.96f;
+    menu_bg.a = 1.0f;
     renderer.FillRect(menu, FA(menu_bg), tokens.radius_medium);
     renderer.StrokeRect(menu, FA(tokens.border), 1.0f, tokens.radius_medium);
 
@@ -222,29 +231,37 @@ void ContextMenu::Render(Rendering::Renderer& renderer, const Theme::Tokens& tok
             tokens.font_body,
             600
         };
-        const float text_h = renderer.MeasureText(item.label, style).height;
-        const float text_y = row.y + (kItemHeight - text_h) * 0.5f;
-        float text_x = row.x + tokens.spacing_medium;
+        const auto sample = item.label.empty()
+            ? std::string_view("Ag")
+            : std::string_view(item.label);
+        const float text_h = renderer.MeasureText(sample, style).height;
+        const float text_y = row.y + std::max(0.0f, (kItemHeight - text_h) * 0.5f);
+        float text_x = row.x + 12.0f;
         if (item.checked) {
-            renderer.DrawText("✓", Layout::Rect{row.x + 8.0f, text_y, kCheckWidth, text_h},
+            renderer.DrawText("✓", Layout::Rect{row.x + 8.0f, text_y, kCheckWidth, text_h + 1.0f},
                               check_style);
-            text_x += kCheckWidth;
+            text_x += 18.0f;
         }
+        const Rendering::TextStyle hint_style{FA(tokens.muted), tokens.font_small, 400};
+        const auto hint_size = item.shortcut.empty()
+            ? Layout::Size{}
+            : renderer.MeasureText(item.shortcut, hint_style);
+        const float hint_reserve = item.shortcut.empty()
+            ? 0.0f
+            : (hint_size.width + 12.0f);
         renderer.DrawText(
             item.label,
             Layout::Rect{text_x, text_y,
-                         row.x + row.width - text_x - tokens.spacing_medium -
-                             (item.shortcut.empty() ? 0.0f : 90.0f),
-                         text_h},
+                         std::max(0.0f, row.x + row.width - text_x - 12.0f - hint_reserve),
+                         text_h + 1.0f},
             style
         );
         if (!item.shortcut.empty()) {
-            const Rendering::TextStyle hint_style{FA(tokens.muted), tokens.font_small, 400};
-            const auto hint_size = renderer.MeasureText(item.shortcut, hint_style);
+            const float hint_y = row.y + std::max(0.0f, (kItemHeight - hint_size.height) * 0.5f);
             renderer.DrawText(
                 item.shortcut,
-                Layout::Rect{row.x + row.width - hint_size.width - tokens.spacing_medium,
-                             text_y, hint_size.width, text_h},
+                Layout::Rect{row.x + row.width - hint_size.width - 12.0f,
+                             hint_y, hint_size.width + 2.0f, hint_size.height + 1.0f},
                 hint_style
             );
         }

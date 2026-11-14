@@ -48,6 +48,7 @@ public:
 
 private:
     void BuildTitleBar();
+    void RebuildMenus();
     void BuildToolbar();
     void BuildInspectorControls();
 
