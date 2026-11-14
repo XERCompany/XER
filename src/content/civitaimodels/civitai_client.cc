@@ -7,6 +7,7 @@
 #include "helper/env_utils.h"
 
 #include <cstdlib>
+#include <cstring>
 #include <sstream>
 
 #include <json/json.h>
@@ -60,6 +61,54 @@ CivitaiModelFile ParseModelFile(const Json::Value& f) {
     return out;
 }
 
+CivitaiModelImage ParseModelImage(const Json::Value& img) {
+    CivitaiModelImage out;
+    out.url = JsonString(img, "url");
+    out.width = static_cast<int>(JsonUint(img, "width"));
+    out.height = static_cast<int>(JsonUint(img, "height"));
+    out.type = JsonString(img, "type");
+    if (img.isObject()) {
+        const Json::Value& nl = img["nsfwLevel"];
+        if (nl.isInt() || nl.isUInt()) {
+            out.nsfw = nl.asInt() > 1;
+        } else {
+            const Json::Value& n = img["nsfw"];
+            if (n.isBool()) {
+                out.nsfw = n.asBool();
+            } else if (n.isString()) {
+                const std::string s = n.asString();
+                out.nsfw = !s.empty() && s != "None" && s != "false";
+            }
+        }
+        const Json::Value& meta = img["meta"];
+        if (meta.isObject()) {
+            out.prompt = JsonString(meta, "prompt");
+            out.negative_prompt = JsonString(meta, "negativePrompt");
+            out.sampler = JsonString(meta, "sampler");
+            out.steps = static_cast<int>(JsonUint(meta, "steps"));
+            const Json::Value& cfg = meta["cfgScale"];
+            if (cfg.isDouble() || cfg.isInt() || cfg.isUInt()) {
+                out.cfg_scale = cfg.asDouble();
+            }
+            out.seed = JsonString(meta, "seed");
+        }
+    }
+    return out;
+}
+
+bool EndsWithIgnoreCase(const std::string& s, const char* suffix) {
+    const std::size_t n = std::strlen(suffix);
+    if (s.size() < n) return false;
+    for (std::size_t i = 0; i < n; ++i) {
+        char a = s[s.size() - n + i];
+        char b = suffix[i];
+        if (a >= 'A' && a <= 'Z') a = static_cast<char>(a + ('a' - 'A'));
+        if (b >= 'A' && b <= 'Z') b = static_cast<char>(b + ('a' - 'A'));
+        if (a != b) return false;
+    }
+    return true;
+}
+
 CivitaiModelVersion ParseModelVersion(const Json::Value& v) {
     CivitaiModelVersion out;
     out.id = JsonString(v, "id");
@@ -69,6 +118,21 @@ CivitaiModelVersion ParseModelVersion(const Json::Value& v) {
     const Json::Value& files = v["files"];
     if (files.isArray()) {
         for (const auto& f : files) out.files.push_back(ParseModelFile(f));
+    }
+    const Json::Value& images = v["images"];
+    if (images.isArray()) {
+        for (const auto& img : images) {
+            if (out.images.size() >= 12) break;
+            auto parsed = ParseModelImage(img);
+            if (parsed.url.empty()) continue;
+            // Skip raw video streams when collecting static artwork previews.
+            if (parsed.type == "video" ||
+                EndsWithIgnoreCase(parsed.url, ".mp4") ||
+                EndsWithIgnoreCase(parsed.url, ".webm")) {
+                continue;
+            }
+            out.images.push_back(std::move(parsed));
+        }
     }
     return out;
 }
@@ -105,6 +169,14 @@ CivitaiModel ParseModel(const Json::Value& m) {
     if (versions.isArray()) {
         for (const auto& v : versions) {
             out.versions.push_back(ParseModelVersion(v));
+        }
+    }
+    if (out.cover_url.empty()) {
+        for (const auto& ver : out.versions) {
+            if (!ver.images.empty()) {
+                out.cover_url = ver.images.front().url;
+                break;
+            }
         }
     }
     return out;

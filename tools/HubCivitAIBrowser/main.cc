@@ -1,7 +1,6 @@
-// HubCivitAIBrowser.exe — Civitai model browser with search and filters.
-// GUI built on the project's src/ui framework; downloads go through the
-// existing XER CivitaiModelDownloader (cache + resume + sha256 verify).
-// Frameless IDE-style chrome via Window::SetCustomTitleBar + AppTitleBar.
+// HubCivitAIBrowser.exe — Civitai Studio Hub (search, filters, generated
+// artwork previews, Download + ArchiveManager ZIP inspector dialog, Downloads
+// & Settings workspace tabs) built on src/ui + XER Cache/AsyncIO/Archive/Network.
 
 #include "hub_browser_widget.h"
 
@@ -20,7 +19,7 @@ int main() {
     }
 
     auto window = std::make_shared<XER::UI::Core::Window>();
-    if (!window->Create("Hub Civitai Browser", 1280, 800)) {
+    if (!window->Create("Hub Civitai Browser", 1320, 840)) {
         return 1;
     }
 
@@ -29,17 +28,14 @@ int main() {
     window->SetContent(browser);
     window->SetOnClose([]() {});
 
-    // Frameless IDE chrome: custom titlebar height + interactive-region
-    // hit-test so empty bar areas behave as native caption drag regions.
     window->SetCustomTitleBar(true, 38.0f);
     window->SetTitleBarHitTest([browser](XER::UI::Layout::Point p) {
         auto* tb = browser->TitleBar();
         return tb != nullptr && tb->IsInteractiveAt(p);
     });
     window->SetTheme(XER::UI::Theme::Variant::Dark);
-    window->SetSizeLimits(760, 520, 0, 0);
+    window->SetSizeLimits(820, 560, 0, 0);
 
-    // Wire titlebar -> window commands and theme switching.
     auto* tb = browser->TitleBar();
     using WindowCommand = XER::UI::Widgets::AppTitleBar::WindowCommand;
     tb->SetOnWindowCommand([window](WindowCommand cmd) {
@@ -55,26 +51,28 @@ int main() {
                 break;
         }
     });
-    tb->SetThemeToggle(
-        window->GetTheme() == XER::UI::Theme::Variant::Dark,
-        [window](bool dark) {
-            window->SetTheme(dark ? XER::UI::Theme::Variant::Dark
-                                  : XER::UI::Theme::Variant::Light);
-        });
 
-    // Keep the maximize/restore glyph in sync with actual window state.
+    auto apply_theme = [window, tb](bool dark) {
+        window->SetTheme(dark ? XER::UI::Theme::Variant::Dark
+                              : XER::UI::Theme::Variant::Light);
+        tb->SetThemeToggle(dark, [window](bool next_dark) {
+            window->SetTheme(next_dark ? XER::UI::Theme::Variant::Dark
+                                       : XER::UI::Theme::Variant::Light);
+        });
+    };
+    browser->SetOnThemeRequest(apply_theme);
+
     auto sync_maximize = [window, tb]() {
         tb->SetMaximized(window->IsWindowMaximized());
     };
     window->SetOnResize([sync_maximize](int, int) { sync_maximize(); });
 
-    // Drive async search/download completion polling + titlebar animation.
     window->SetFrameCallback(
         [browser, sync_maximize]() {
             browser->TickTree(0.016);
             sync_maximize();
         },
-        100);
+        66);
 
     window->Show();
     return app.Run();

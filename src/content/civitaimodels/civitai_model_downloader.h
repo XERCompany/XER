@@ -29,12 +29,28 @@ struct CivitaiModelFile {
     bool        primary = false;
 };
 
+// An example generated artwork attached to a Civitai model version.
+struct CivitaiModelImage {
+    std::string url;
+    int         width = 0;
+    int         height = 0;
+    bool        nsfw = false;
+    std::string type;             // "image" | "video"
+    std::string prompt;
+    std::string negative_prompt;
+    std::string sampler;
+    int         steps = 0;
+    double      cfg_scale = 0.0;
+    std::string seed;
+};
+
 // A specific version of a Civitai model.
 struct CivitaiModelVersion {
     std::string id;
     std::string name;
     std::string base_model;    // "SD 1.5", "SDXL 1.0", "Flux.1 D", ...
     std::vector<CivitaiModelFile> files;
+    std::vector<CivitaiModelImage> images;
 };
 
 // A Civitai model entry as returned by /api/v1/models.
