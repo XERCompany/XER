@@ -23,6 +23,10 @@ void WriteLine(OutputStream stream, std::string_view text) {
 	TerminalManager::Instance().WriteLine(stream, text);
 }
 
+void Flush(OutputStream stream) {
+	TerminalManager::Instance().Flush(stream);
+}
+
 void ClearSnapshot() {
 	TerminalManager::Instance().ResetBuffer();
 }

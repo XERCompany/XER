@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 #include <numeric>
 #include <vector>
 
@@ -29,6 +30,7 @@
 #if defined(XER_AI_HAS_GGML)
 #include <ggml.h>
 #include <ggml-backend.h>
+#include <ggml-alloc.h>
 #include <ggml-cpu.h>
 #define XER_PRED_HAS_GGML 1
 #else
@@ -70,8 +72,88 @@ float ApplyActivation(const float value, const Core::ActivationType activation) 
     return value;
 }
 
+#if XER_PRED_HAS_GGML
+
+namespace {
+
+// Process-wide ggml backend: prefers a discrete/integrated GPU device
+// (CUDA via ggml-cuda, Vulkan via ggml-vulkan, ...) and falls back to CPU.
+// Backend init is expensive (CUDA context ~hundreds of ms), so it is
+// created once and reused; graph computes are serialized because ggml
+// backends are not safe for concurrent graph_compute on the same instance.
+struct GgmlBackendLease {
+    ggml_backend_dev_t dev = nullptr;
+    ggml_backend_t backend = nullptr;
+    bool is_cpu = false;
+    std::mutex mutex;
+
+    ~GgmlBackendLease() {
+        if (backend != nullptr) {
+            ggml_backend_free(backend);
+        }
+    }
+};
+
+GgmlBackendLease& GgmlBackend() {
+    // Heap-allocated on purpose: lives for the whole process (ggml backend
+    // teardown ordering vs static destruction is not worth the risk), and
+    // std::mutex makes the lease non-movable so it cannot be a value static.
+    static GgmlBackendLease* lease = [] {
+        auto* l = new GgmlBackendLease();
+        ggml_backend_load_all();  // registers built-ins + dlopens ggml-*.{dll,so}
+
+        static constexpr enum ggml_backend_dev_type kPreferred[] = {
+            GGML_BACKEND_DEVICE_TYPE_GPU,
+            GGML_BACKEND_DEVICE_TYPE_IGPU,
+            GGML_BACKEND_DEVICE_TYPE_ACCEL,
+            GGML_BACKEND_DEVICE_TYPE_CPU,
+        };
+        for (const enum ggml_backend_dev_type type : kPreferred) {
+            ggml_backend_dev_t candidate = ggml_backend_dev_by_type(type);
+            if (candidate == nullptr) {
+                continue;
+            }
+            ggml_backend_t b = ggml_backend_dev_init(candidate, nullptr);
+            if (b != nullptr) {
+                l->dev = candidate;
+                l->backend = b;
+                l->is_cpu = (type == GGML_BACKEND_DEVICE_TYPE_CPU);
+                break;
+            }
+        }
+        if (l->backend == nullptr && ggml_backend_dev_count() > 0) {
+            // Registry non-empty but preferred types absent — take dev 0.
+            l->dev = ggml_backend_dev_get(0);
+            l->backend = ggml_backend_dev_init(l->dev, nullptr);
+        }
+        if (l->backend == nullptr) {
+            // Last resort: the CPU backend is always linked into ggml::ggml.
+            l->backend = ggml_backend_cpu_init();
+            l->is_cpu = true;
+        }
+        // One-time diagnostic: which device actually serves ggml graphs.
+        static const bool logged = [l] {
+            const char* name = (l->dev != nullptr && ggml_backend_dev_name(l->dev) != nullptr)
+                                   ? ggml_backend_dev_name(l->dev)
+                                   : (l->is_cpu ? "CPU" : "unknown");
+            Utility::ModelBuilderLogger::GetInstance().Info(
+                std::string("ggml backend selected: ") + name);
+            return true;
+        }();
+        (void)logged;
+        return l;
+    }();
+    return *lease;
+}
+
+} // namespace
+
+#endif // XER_PRED_HAS_GGML
+
 // ggml graph executor: y = act(W*x + b) on a real ggml compute graph.
 // Row-major W[units x in] maps directly onto ggml ne={in, units} layout.
+// Runs on the best available ggml backend (CUDA/Vulkan GPU preferred,
+// CPU fallback) through the backend-agnostic ggml_backend_* API.
 bool TryGgmlDenseForward(const Core::DenseLayer& layer,
                          const std::vector<float>& input,
                          std::vector<float>& output) {
@@ -87,10 +169,15 @@ bool TryGgmlDenseForward(const Core::DenseLayer& layer,
         return false;
     }
 
+    GgmlBackendLease& lease = GgmlBackend();
+    if (lease.backend == nullptr) {
+        return false;
+    }
+
     const size_t mem_size = weights.size() * sizeof(float) +
                             input.size() * sizeof(float) +
                             units * sizeof(float) * 4U + (4U << 20U);
-    ggml_init_params params = {mem_size, nullptr, false};
+    ggml_init_params params = {mem_size, nullptr, true /* no_alloc */};
     ggml_context* ctx = ggml_init(params);
     if (ctx == nullptr) {
         return false;
@@ -118,7 +205,7 @@ bool TryGgmlDenseForward(const Core::DenseLayer& layer,
             default: break;
         }
     }
-    if (y == nullptr || y->data == nullptr) {
+    if (y == nullptr) {
         ggml_free(ctx);
         return false;
     }
@@ -130,24 +217,39 @@ bool TryGgmlDenseForward(const Core::DenseLayer& layer,
     }
     ggml_build_forward_expand(graph, y);
 
-    std::memcpy(w->data, weights.data(), weights.size() * sizeof(float));
-    std::memcpy(x->data, input.data(), input.size() * sizeof(float));
-    if (b != nullptr) {
-        std::memcpy(b->data, bias.data(), bias.size() * sizeof(float));
-    }
-
-    const int threads = static_cast<int>(
-        std::min<size_t>(Utility::SuggestedInferenceThreadCount(), 64U));
-    const ggml_status status = ggml_graph_compute_with_ctx(ctx, graph, threads);
-    if (status != GGML_STATUS_SUCCESS) {
+    // Allocate every ctx tensor on the selected backend's buffer.
+    ggml_backend_buffer_t buffer = ggml_backend_alloc_ctx_tensors(ctx, lease.backend);
+    if (buffer == nullptr) {
         ggml_free(ctx);
         return false;
     }
 
-    output.assign(reinterpret_cast<const float*>(y->data),
-                  reinterpret_cast<const float*>(y->data) + units);
+    const size_t w_bytes = weights.size() * sizeof(float);
+    const size_t x_bytes = input.size() * sizeof(float);
+    const size_t y_bytes = units * sizeof(float);
+    ggml_backend_tensor_set(w, weights.data(), 0, w_bytes);
+    ggml_backend_tensor_set(x, input.data(), 0, x_bytes);
+    if (b != nullptr) {
+        ggml_backend_tensor_set(b, bias.data(), 0, bias.size() * sizeof(float));
+    }
+
+    output.assign(units, 0.0f);
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(lease.mutex);
+        if (lease.is_cpu) {
+            ggml_backend_cpu_set_n_threads(lease.backend, static_cast<int>(
+                std::min<size_t>(Utility::SuggestedInferenceThreadCount(), 64U)));
+        }
+        ok = ggml_backend_graph_compute(lease.backend, graph) == GGML_STATUS_SUCCESS;
+        if (ok) {
+            ggml_backend_tensor_get(y, output.data(), 0, y_bytes);
+        }
+    }
+
+    ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
-    return true;
+    return ok;
 #else
     (void)layer; (void)input; (void)output;
     return false;

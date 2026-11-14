@@ -1,9 +1,18 @@
-// preview.exe — Image preview tool using XER image API
+// preview.exe — Image viewer/editor + info tool using XER image API
 //
-// Usage: preview.exe <image_file>
+// Usage:
+//   preview.exe <image_file>              Open GUI viewer (scans folder,
+//                                         arrows/PgUp/PgDn navigate,
+//                                         wheel zoom, drag pan, crop,
+//                                         rotate/flip, brightness/contrast,
+//                                         save / export PNG)
+//   preview.exe --info <image_file>       Print format/dimension/metadata dump
+//   preview.exe --register-context-menu   Add "Preview with XER3" to the
+//                                         Windows Explorer context menu
+//                                         (HKCU, no admin required)
+//   preview.exe --unregister-context-menu Remove the context menu entries
 //
-// Displays information about image files: format, dimensions, color space,
-// pixel format, and metadata.
+// Supported formats: JPEG, PNG, WEBP, TIFF, GIF, BMP, PSD, EXR, HEIF, SVG
 
 #include <iostream>
 #include <string>
@@ -19,13 +28,25 @@
 #include "flux/terminal/terminal_styles.h"
 #include "helper/string_utils.h"
 
+#if defined(_WIN32)
+#include <windows.h>
+
+#include "ui/core/application.h"
+#include "ui/core/window.h"
+#include "photo_browser.h"
+#include "photo_viewer_widget.h"
+#endif
+
 namespace {
 namespace Str = XER::Helper::String;
 
 void PrintUsage() {
-    std::cout << "Usage: preview.exe <image_file>\n";
-    std::cout << "\nDisplays detailed information about image files.\n";
-    std::cout << "Supported formats: JPEG, PNG, WEBP, TIFF, GIF, BMP, PSD, EXR, HEIF, SVG\n";
+    std::cout << "Usage:\n"
+              << "  preview.exe <image_file>               Open GUI photo viewer\n"
+              << "  preview.exe --info <image_file>        Print image information\n"
+              << "  preview.exe --register-context-menu    Register Explorer context menu\n"
+              << "  preview.exe --unregister-context-menu  Remove context menu entries\n"
+              << "\nSupported formats: JPEG, PNG, WEBP, TIFF, GIF, BMP, PSD, EXR, HEIF, SVG\n";
 }
 
 std::string PixelFormatToString(image::PixelFormat fmt) {
@@ -71,26 +92,17 @@ std::string FormatBytes(size_t bytes) {
     return std::string(buf);
 }
 
-}  // namespace
-
-int main(int argc, char** argv) {
-    if (argc < 2) {
-        PrintUsage();
-        return 1;
-    }
-
-    std::string input_path = argv[1];
-
+int RunInfoMode(const std::string& input_path) {
     XER::Flux::Terminal::WriteLine(
         XER::Flux::Terminal::OutputStream::kStdout,
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kCyan),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "Image Preview: ", input_path
+            "Image Info: ", input_path,
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
-    // Load image
     image::ImageLoader loader;
     image::ImageDescriptor desc;
     auto buffer = loader.Load(input_path, desc);
@@ -100,13 +112,13 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    // Print format information
     XER::Flux::Terminal::WriteLine(
         XER::Flux::Terminal::OutputStream::kStdout,
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Format Information ==="
+            "\n=== Format Information ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -118,13 +130,13 @@ int main(int argc, char** argv) {
         )
     );
 
-    // Print dimensions
     XER::Flux::Terminal::WriteLine(
         XER::Flux::Terminal::OutputStream::kStdout,
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Dimensions ==="
+            "\n=== Dimensions ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -138,13 +150,13 @@ int main(int argc, char** argv) {
         )
     );
 
-    // Print color information
     XER::Flux::Terminal::WriteLine(
         XER::Flux::Terminal::OutputStream::kStdout,
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Color Information ==="
+            "\n=== Color Information ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -160,13 +172,13 @@ int main(int argc, char** argv) {
         )
     );
 
-    // Print buffer information
     XER::Flux::Terminal::WriteLine(
         XER::Flux::Terminal::OutputStream::kStdout,
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Buffer Information ==="
+            "\n=== Buffer Information ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -179,14 +191,14 @@ int main(int argc, char** argv) {
         )
     );
 
-    // Print multi-page info
     if (desc.page_count > 1) {
         XER::Flux::Terminal::WriteLine(
             XER::Flux::Terminal::OutputStream::kStdout,
             absl::StrCat(
                 XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
                 XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-                "\n=== Multi-Page Information ==="
+                "\n=== Multi-Page Information ===",
+                XER::Flux::Terminal::ResetStyleSequence()
             )
         );
 
@@ -196,14 +208,14 @@ int main(int argc, char** argv) {
         );
     }
 
-    // Print metadata if available
     if (!desc.metadata.empty()) {
         XER::Flux::Terminal::WriteLine(
             XER::Flux::Terminal::OutputStream::kStdout,
             absl::StrCat(
                 XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
                 XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-                "\n=== Metadata ==="
+                "\n=== Metadata ===",
+                XER::Flux::Terminal::ResetStyleSequence()
             )
         );
 
@@ -216,4 +228,160 @@ int main(int argc, char** argv) {
     }
 
     return 0;
+}
+
+#if defined(_WIN32)
+
+/// Extensions registered under SystemFileAssociations — works for files that
+/// have no per-user association override and needs no admin rights.
+const wchar_t* kContextMenuExts[] = {
+    L".png", L".jpg", L".jpeg", L".bmp", L".gif", L".webp",
+    L".tif", L".tiff", L".heic", L".heif", L".avif",
+};
+
+constexpr const wchar_t* kVerbKeyTail = L"\\shell\\XER3Preview";
+constexpr const wchar_t* kVerbName = L"Preview with XER3";
+
+std::wstring ExePathW() {
+    wchar_t buf[MAX_PATH * 2] = {};
+    const DWORD n = GetModuleFileNameW(nullptr, buf, MAX_PATH * 2);
+    return n > 0 ? std::wstring(buf, n) : std::wstring();
+}
+
+int SetKeyString(HKEY root, const std::wstring& subkey,
+                 const std::wstring& value_name, const std::wstring& data) {
+    HKEY key = nullptr;
+    if (RegCreateKeyExW(root, subkey.c_str(), 0, nullptr, 0,
+                        KEY_WRITE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+        return static_cast<int>(GetLastError());
+    }
+    const LSTATUS st = RegSetValueExW(
+        key, value_name.c_str(), 0, REG_SZ,
+        reinterpret_cast<const BYTE*>(data.c_str()),
+        static_cast<DWORD>((data.size() + 1) * sizeof(wchar_t)));
+    RegCloseKey(key);
+    return st == ERROR_SUCCESS ? 0 : static_cast<int>(st);
+}
+
+int RunContextMenu(bool register_menu) {
+    const std::wstring exe = ExePathW();
+    if (exe.empty()) {
+        std::cerr << "Error: cannot determine preview.exe path\n";
+        return 1;
+    }
+
+    int failures = 0;
+    for (const wchar_t* ext : kContextMenuExts) {
+        char narrow[16] = {};
+        size_t converted = 0;
+        wcstombs_s(&converted, narrow, sizeof(narrow), ext, _TRUNCATE);
+
+        const std::wstring base =
+            std::wstring(L"Software\\Classes\\SystemFileAssociations\\") + ext +
+            kVerbKeyTail;
+        if (register_menu) {
+            const int e1 = SetKeyString(HKEY_CURRENT_USER, base, L"",
+                                        kVerbName);
+            const int e2 = SetKeyString(HKEY_CURRENT_USER, base + L"\\Icon", L"",
+                                        exe);
+            const int e3 = SetKeyString(
+                HKEY_CURRENT_USER, base + L"\\command", L"",
+                L"\"" + exe + L"\" \"%1\"");
+            const bool ok = (e1 | e2 | e3) == 0;
+            std::cout << (ok ? "  + " : "  ! ") << narrow;
+            if (!ok) {
+                ++failures;
+                std::cout << " (error " << (e1 ? e1 : (e2 ? e2 : e3)) << ")";
+            }
+            std::cout << "\n";
+        } else {
+            const LSTATUS st = RegDeleteTreeW(
+                HKEY_CURRENT_USER,
+                (std::wstring(L"Software\\Classes\\SystemFileAssociations\\") +
+                 ext + kVerbKeyTail).c_str());
+            std::cout << (st == ERROR_SUCCESS || st == ERROR_FILE_NOT_FOUND
+                              ? "  - removed "
+                              : "  ! failed  ")
+                      << narrow;
+            if (st != ERROR_SUCCESS && st != ERROR_FILE_NOT_FOUND) ++failures;
+            std::cout << "\n";
+        }
+    }
+
+    std::cout << (register_menu
+                      ? "Context menu 'Preview with XER3' registered under HKCU.\n"
+                      : "Context menu entries removed.\n");
+    return failures == 0 ? 0 : 1;
+}
+
+int RunGui(const std::string& image_path) {
+    auto browser = std::make_unique<preview::PhotoBrowser>();
+    if (!browser->Open(image_path)) {
+        std::cerr << "Error: " << browser->StatusMessage() << "\n";
+        return 1;
+    }
+
+    auto& ui_app = XER::UI::Core::Application::Instance();
+    if (!ui_app.Initialize()) {
+        std::cerr << "Error: UI initialization failed\n";
+        return 1;
+    }
+
+    auto window = std::make_shared<XER::UI::Core::Window>();
+    if (!window->Create("XER Preview", 1280, 800)) {
+        std::cerr << "Error: window creation failed\n";
+        ui_app.Shutdown();
+        return 1;
+    }
+    window->SetSizeLimits(860, 560, 0, 0);
+
+    auto widget = std::make_shared<preview::PhotoViewerWidget>(browser.get(),
+                                                             window.get());
+    window->SetContent(widget);
+    window->Show();
+
+    const int rc = ui_app.Run();
+    ui_app.Shutdown();
+    return rc;
+}
+
+#endif  // _WIN32
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    if (argc < 2) {
+        PrintUsage();
+        return 1;
+    }
+
+    const std::string arg = argv[1];
+
+    if (arg == "--help" || arg == "-h" || arg == "/?") {
+        PrintUsage();
+        return 0;
+    }
+
+    if (arg == "--info") {
+        if (argc < 3) {
+            std::cerr << "Error: --info requires an image path\n";
+            return 1;
+        }
+        return RunInfoMode(argv[2]);
+    }
+
+#if defined(_WIN32)
+    if (arg == "--register-context-menu") {
+        return RunContextMenu(true);
+    }
+    if (arg == "--unregister-context-menu") {
+        return RunContextMenu(false);
+    }
+
+    // Default: GUI photo viewer.
+    return RunGui(arg);
+#else
+    std::cerr << "GUI viewer requires Windows. Use --info for text output.\n";
+    return 1;
+#endif
 }

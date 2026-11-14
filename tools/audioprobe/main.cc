@@ -84,7 +84,8 @@ int main(int argc, char** argv) {
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kCyan),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "Audio File Probe: ", input_path
+            "Audio File Probe: ", input_path,
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -103,7 +104,8 @@ int main(int argc, char** argv) {
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Format Information ==="
+            "\n=== Format Information ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -121,7 +123,8 @@ int main(int argc, char** argv) {
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Audio Properties ==="
+            "\n=== Audio Properties ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -142,7 +145,8 @@ int main(int argc, char** argv) {
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Audio Analysis ==="
+            "\n=== Audio Analysis ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -160,7 +164,8 @@ int main(int argc, char** argv) {
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kYellow),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "\n=== Buffer Information ==="
+            "\n=== Buffer Information ===",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 

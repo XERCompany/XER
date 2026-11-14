@@ -45,9 +45,11 @@ size_t CodecFileStreamer::WriteBytes(const uint8_t* src, size_t bytes) {
         return 0;
     }
     perf_counter_.StartCounter("codec_stream_write");
-    const size_t written = writer_.WriteSync(src, bytes);
+    const bool ok = writer_.WriteSync(src, bytes);
     perf_counter_.StopCounter("codec_stream_write");
-    return written;
+    // WriteSync is all-or-nothing: report the full count on success, 0 on
+    // failure so callers can compare against the requested byte count.
+    return ok ? bytes : 0;
 }
 
 void CodecFileStreamer::Close() {
