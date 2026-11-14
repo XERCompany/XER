@@ -1,5 +1,26 @@
 CompileFlags:
   CompilationDatabase: out/build/default
+  Add:
+    - "-std=c++2c"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/eigen3"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/libxml2"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/miniz"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/openblas"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/opencv4"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/openjpeg-2.5"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/opus"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/skia"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/srt"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/svt-av1"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/vma"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/vpl"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/webgpu_upstream"
+    - "-isystemC:/vcpkg/installed/x64-windows-release/include/webp"
+    - "-isystemC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.4/include"
+    - "-isystemC:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.4/include/cccl"
+    - "-isystemC:/Program Files/NVIDIA/CUDNN/v9.26/include/12.9"
+  Remove: ["-external:*", "-std:c++latest"]
 ---
 If:
   PathMatch: [.*\.h, .*\.cc]
@@ -8,8 +29,6 @@ CompileFlags:
   BuiltinHeaders: QueryDriver
   Add:
     - "-ID:/Developers/XER3/src"
-    - "-IC:/vcpkg/installed/x64-windows-release/include"
     - "-I./package/module/node_modules/nan"
-    - "-std=c++2c"
   Remove: ["-W*"]
   Compiler: clang++
