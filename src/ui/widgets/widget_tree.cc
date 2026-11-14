@@ -498,6 +498,7 @@ void WidgetTree::Tick(double dt_seconds) {
         HideTooltip();
     }
     if (overlay_ != nullptr) {
+        overlay_->TickTree(dt_seconds);
         return; // modal layer owns interaction; no hover tooltips meanwhile
     }
     const auto target = hovered_widget_.lock();

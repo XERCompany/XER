@@ -61,56 +61,6 @@ std::string FormatKey(const TextStyle& style) {
     return std::to_string(style.size) + "|" + std::to_string(style.weight);
 }
 
-// One separable box-blur pass over interleaved BGRA pixels using a sliding
-// window. `horizontal` selects the pass direction; edges clamp.
-void BoxBlurPass(std::vector<std::uint8_t>& px, int w, int h, int radius,
-                 bool horizontal) {
-    if (radius <= 0 || w <= 0 || h <= 0) return;
-    const int n = horizontal ? w : h;
-    const int m = horizontal ? h : w;
-    const int r = std::min(radius, std::max(0, n / 2));
-    if (r <= 0) return;
-    const int win = 2 * r + 1;
-
-    auto at = [&](int i, int line) -> const std::uint8_t* {
-        const int x = horizontal ? i : line;
-        const int y = horizontal ? line : i;
-        return &px[(static_cast<std::size_t>(y) * w + x) * 4];
-    };
-
-    std::vector<std::uint8_t> tmp(px.size());
-    for (int line = 0; line < m; ++line) {
-        std::uint64_t sum[4] = {0, 0, 0, 0};
-        for (int i = -r; i <= r; ++i) {
-            const std::uint8_t* p = at(std::clamp(i, 0, n - 1), line);
-            for (int c = 0; c < 4; ++c) sum[c] += p[c];
-        }
-        for (int i = 0; i < n; ++i) {
-            std::uint8_t* d = horizontal
-                ? &tmp[(static_cast<std::size_t>(line) * w + i) * 4]
-                : &tmp[(static_cast<std::size_t>(i) * w + line) * 4];
-            for (int c = 0; c < 4; ++c) {
-                d[c] = static_cast<std::uint8_t>(sum[c] / win);
-            }
-            const std::uint8_t* out_p = at(std::clamp(i - r, 0, n - 1), line);
-            const std::uint8_t* in_p = at(std::clamp(i + r + 1, 0, n - 1), line);
-            for (int c = 0; c < 4; ++c) {
-                sum[c] += in_p[c] - out_p[c];
-            }
-        }
-    }
-    px.swap(tmp);
-}
-
-// Box-blur iterations ≈ a gaussian blur; fewer passes = subtler frost.
-void BoxBlurN(std::vector<std::uint8_t>& px, int w, int h, int radius,
-              int iterations) {
-    for (int i = 0; i < iterations; ++i) {
-        BoxBlurPass(px, w, h, radius, true);
-        BoxBlurPass(px, w, h, radius, false);
-    }
-}
-
 } // namespace
 
 Direct2DRenderer::Direct2DRenderer(HWND hwnd)
@@ -456,174 +406,52 @@ D2D1_COLOR_F Direct2DRenderer::ToColor(Theme::Color color) const {
 
 void Direct2DRenderer::DrawBackdropBlur(Layout::Rect rect, float radius) {
     RequireFrame();
-    if (!(radius > 0.5f) || hwnd_ == nullptr) {
+    if (!(radius > 0.0f) || rect.width <= 0.0f || rect.height <= 0.0f) {
         return;
     }
 
-    // Widget coordinates are DIPs; GDI works in physical pixels.
-    const float dip_to_px = dpi_ / 96.0f;
+    // Pure Direct2D elevation/scrim (no GDI GetDC(nullptr) screen capture,
+    // which reads the desktop behind DWM-extended Direct2D surfaces).
     RECT client{};
-    if (!GetClientRect(hwnd_, &client) || client.right <= 0 ||
-        client.bottom <= 0) {
+    float client_dip_w = 0.0f;
+    float client_dip_h = 0.0f;
+    if (hwnd_ != nullptr && GetClientRect(hwnd_, &client)) {
+        const float px_to_dip = 96.0f / static_cast<float>(dpi_);
+        client_dip_w = static_cast<float>(client.right) * px_to_dip;
+        client_dip_h = static_cast<float>(client.bottom) * px_to_dip;
+    }
+
+    auto* brush = Brush();
+    if (client_dip_w > 0.0f && client_dip_h > 0.0f &&
+        rect.width >= client_dip_w * 0.85f &&
+        rect.height >= client_dip_h * 0.85f) {
+        // Full-window modal backdrop (Dialog).
+        brush->SetColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.48f));
+        render_target_->FillRectangle(ToRect(rect), brush);
         return;
     }
 
-    float x0 = rect.x * dip_to_px;
-    float y0 = rect.y * dip_to_px;
-    float x1 = (rect.x + rect.width) * dip_to_px;
-    float y1 = (rect.y + rect.height) * dip_to_px;
-    x0 = std::clamp(x0, 0.0f, static_cast<float>(client.right));
-    y0 = std::clamp(y0, 0.0f, static_cast<float>(client.bottom));
-    x1 = std::clamp(x1, 0.0f, static_cast<float>(client.right));
-    y1 = std::clamp(y1, 0.0f, static_cast<float>(client.bottom));
-    if (x1 - x0 < 4.0f || y1 - y0 < 4.0f) {
-        return;
-    }
-
-    // Capture a region inflated by the blur bleed, in screen coordinates.
-    const int margin = static_cast<int>(std::ceil(radius * dip_to_px * 1.5f));
-    POINT origin{0, 0};
-    if (!ClientToScreen(hwnd_, &origin)) {
-        return;
-    }
-    const int vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
-    const int vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-    const int vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-    const int vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
-
-    int cap_x = origin.x + static_cast<int>(std::floor(x0)) - margin;
-    int cap_y = origin.y + static_cast<int>(std::floor(y0)) - margin;
-    int cap_w = static_cast<int>(std::ceil(x1 - x0)) + 2 * margin;
-    int cap_h = static_cast<int>(std::ceil(y1 - y0)) + 2 * margin;
-    cap_x = std::clamp(cap_x, vx, std::max(vx, vx + vw - cap_w));
-    cap_y = std::clamp(cap_y, vy, std::max(vy, vy + vh - cap_h));
-    cap_w = std::min(cap_w, vw);
-    cap_h = std::min(cap_h, vh);
-    if (cap_w < 8 || cap_h < 8) {
-        return;
-    }
-
-    // BitBlt the screen region into a top-down 32bpp DIB.
-    HDC screen_dc = GetDC(nullptr);
-    if (screen_dc == nullptr) return;
-    HDC mem_dc = CreateCompatibleDC(screen_dc);
-    BITMAPINFO bmi{};
-    bmi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
-    bmi.bmiHeader.biWidth = cap_w;
-    bmi.bmiHeader.biHeight = -cap_h;  // top-down
-    bmi.bmiHeader.biPlanes = 1;
-    bmi.bmiHeader.biBitCount = 32;
-    bmi.bmiHeader.biCompression = BI_RGB;
-    void* dib_bits = nullptr;
-    HBITMAP dib = CreateDIBSection(mem_dc, &bmi, DIB_RGB_COLORS, &dib_bits,
-                                   nullptr, 0);
-    std::vector<std::uint8_t> work;
-    bool captured = false;
-    if (dib != nullptr && dib_bits != nullptr && mem_dc != nullptr) {
-        HBITMAP old_bmp =
-            static_cast<HBITMAP>(SelectObject(mem_dc, dib));
-        if (BitBlt(mem_dc, 0, 0, cap_w, cap_h, screen_dc, cap_x, cap_y,
-                   SRCCOPY) != 0) {
-            work.assign(static_cast<std::size_t>(cap_w) * cap_h * 4, 0);
-            const auto* src = static_cast<const std::uint8_t*>(dib_bits);
-            // DIB rows are already top-down (negative height); force alpha.
-            for (int y = 0; y < cap_h; ++y) {
-                std::memcpy(work.data() + static_cast<std::size_t>(y) * cap_w * 4,
-                            src + static_cast<std::size_t>(y) * cap_w * 4,
-                            static_cast<std::size_t>(cap_w) * 4);
-                std::uint8_t* row = work.data() +
-                    static_cast<std::size_t>(y) * cap_w * 4;
-                for (int x = 0; x < cap_w; ++x) {
-                    row[x * 4 + 3] = 255;
-                }
-            }
-            captured = true;
+    // Floating popover (ContextMenu / SelectOverlay): multi-step soft drop
+    // shadow inside the caller's inflated halo rect.
+    constexpr float kAlphas[4] = {0.035f, 0.055f, 0.08f, 0.11f};
+    for (int i = 0; i < 4; ++i) {
+        const float inset = static_cast<float>(i) * 2.0f;
+        const float y_off = static_cast<float>(4 - i) * 1.0f;
+        const float w = rect.width - 2.0f * inset;
+        const float h = rect.height - 2.0f * inset;
+        if (w <= 2.0f || h <= 2.0f) {
+            break;
         }
-        SelectObject(mem_dc, old_bmp);
+        const D2D1_RECT_F r = D2D1::RectF(
+            rect.x + inset,
+            rect.y + inset + y_off,
+            rect.x + inset + w,
+            rect.y + inset + h + y_off);
+        const float corner = std::min(12.0f - inset * 0.5f, std::min(w, h) * 0.5f);
+        brush->SetColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, kAlphas[i]));
+        render_target_->FillRoundedRectangle(
+            D2D1::RoundedRect(r, corner, corner), brush);
     }
-    if (dib != nullptr) DeleteObject(dib);
-    if (mem_dc != nullptr) DeleteDC(mem_dc);
-    ReleaseDC(nullptr, screen_dc);
-    if (!captured) {
-        return;
-    }
-
-    // Downsample: average cap_w×cap_h blocks into dw×dh, then box-blur.
-    // Working at reduced resolution keeps the CPU cost trivial even for
-    // fullscreen blur.
-    const float radius_px = radius * dip_to_px;
-    // Downsample factor grows with radius but may be 1 — forcing f>=2 made
-    // even tiny radii look heavily blurred (2x box downsample alone reads
-    // as strong blur). Full-res + small kernel = subtle frost.
-    const int f = std::clamp(
-        static_cast<int>(std::lround(radius_px / 10.0f)), 1, 8);
-    const int dw = std::max(1, cap_w / f);
-    const int dh = std::max(1, cap_h / f);
-    std::vector<std::uint8_t> ds_px(static_cast<std::size_t>(dw) * dh * 4, 0);
-    for (int dy = 0; dy < dh; ++dy) {
-        const int y_begin = dy * f;
-        const int y_end = std::min(cap_h, y_begin + f);
-        for (int dx = 0; dx < dw; ++dx) {
-            const int x_begin = dx * f;
-            const int x_end = std::min(cap_w, x_begin + f);
-            std::uint64_t sum[4] = {0, 0, 0, 0};
-            std::uint64_t count = 0;
-            for (int y = y_begin; y < y_end; ++y) {
-                const std::uint8_t* row =
-                    work.data() + static_cast<std::size_t>(y) * cap_w * 4;
-                for (int x = x_begin; x < x_end; ++x) {
-                    const std::uint8_t* p = row + x * 4;
-                    for (int c = 0; c < 4; ++c) sum[c] += p[c];
-                    ++count;
-                }
-            }
-            std::uint8_t* d =
-                ds_px.data() + (static_cast<std::size_t>(dy) * dw + dx) * 4;
-            for (int c = 0; c < 4; ++c) {
-                d[c] = static_cast<std::uint8_t>(sum[c] / count);
-            }
-        }
-    }
-    const int r_ds = std::clamp(
-        static_cast<int>(std::lround(radius_px / (f * 2.0f))), 1, 32);
-    // Tiny radii get a single blur iteration — a whisper of frost, not a
-    // smear (and ~3x cheaper per frame).
-    BoxBlurN(ds_px, dw, dh, r_ds, radius_px < 4.0f ? 1 : 3);
-
-    // Upload (cached bitmap, recreated only on size change).
-    if (blur_bitmap_ == nullptr || blur_bitmap_size_.width !=
-            static_cast<UINT32>(dw) ||
-        blur_bitmap_size_.height != static_cast<UINT32>(dh)) {
-        blur_bitmap_.Reset();
-        ThrowIfFailed(
-            render_target_->CreateBitmap(
-                D2D1::SizeU(static_cast<UINT32>(dw),
-                            static_cast<UINT32>(dh)),
-                nullptr, 0,
-                D2D1::BitmapProperties(
-                    D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
-                                      D2D1_ALPHA_MODE_PREMULTIPLIED),
-                    static_cast<float>(dpi_), static_cast<float>(dpi_)),
-                blur_bitmap_.GetAddressOf()),
-            "ID2D1RenderTarget::CreateBitmap (backdrop blur)");
-        blur_bitmap_size_ = D2D1::SizeU(static_cast<UINT32>(dw),
-                                        static_cast<UINT32>(dh));
-    }
-    ThrowIfFailed(
-        blur_bitmap_->CopyFromMemory(nullptr, ds_px.data(),
-                                     static_cast<UINT32>(dw) * 4),
-        "ID2D1Bitmap::CopyFromMemory (backdrop blur)");
-
-    // Paint the blurred capture back over the same client-space rect,
-    // inflated by the blur margin so the frost bleeds past the panel edge.
-    const float left = (cap_x - origin.x) / dip_to_px;
-    const float top = (cap_y - origin.y) / dip_to_px;
-    const float w = cap_w / dip_to_px;
-    const float h = cap_h / dip_to_px;
-    const D2D1_RECT_F dest = D2D1::RectF(left, top, left + w, top + h);
-    render_target_->DrawBitmap(
-        blur_bitmap_.Get(), &dest, 1.0f,
-        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
 }
 
 Microsoft::WRL::ComPtr<ID2D1Bitmap> Direct2DRenderer::LoadImageBitmap(

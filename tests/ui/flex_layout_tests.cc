@@ -2,6 +2,9 @@
 // overlap-free row distribution used by IDE-style widgets.
 
 #include "ui/layout/flex.h"
+#include "ui/theme/theme.h"
+#include "ui/widgets/context_menu.h"
+#include "ui/widgets/widget_tree.h"
 
 #include <cmath>
 
@@ -185,4 +188,93 @@ XER_UI_TEST(FlexCenteredTextRectHonorsHorizontalCenterWithPaddingAndEmptyText) {
     const Rect empty_r = XER::UI::Layout::CenteredTextRect(
         r, "", style, box, 8.0f, false);
     XER_UI_EXPECT_TRUE(empty_r.height >= 12.0f);
+}
+
+namespace {
+
+class AlphaRecordingRenderer final : public XER::UI::Rendering::Renderer {
+public:
+    void BeginFrame(Rect) override {}
+    void EndFrame() override {}
+    void FillRect(Rect, XER::UI::Theme::Color c, float) override {
+        fill_alphas.push_back(c.a);
+    }
+    void StrokeRect(Rect, XER::UI::Theme::Color c, float, float) override {
+        stroke_alphas.push_back(c.a);
+    }
+    void DrawLine(XER::UI::Layout::Point, XER::UI::Layout::Point,
+                  XER::UI::Theme::Color, float) override {}
+    void DrawText(std::string_view text, Rect,
+                  XER::UI::Rendering::TextStyle s) override {
+        text_alphas.push_back(s.color.a);
+        labels.emplace_back(text);
+    }
+    XER::UI::Layout::Size MeasureText(
+        std::string_view text,
+        XER::UI::Rendering::TextStyle style) const override {
+        if (text.empty()) return {};
+        return {static_cast<float>(text.size()) * 7.0f, style.size + 4.0f};
+    }
+
+    std::vector<float> fill_alphas;
+    std::vector<float> stroke_alphas;
+    std::vector<float> text_alphas;
+    std::vector<std::string> labels;
+};
+
+} // namespace
+
+XER_UI_TEST(ContextMenuRendersOpaqueWithoutTickAndHandlesEscapeAndClick) {
+    using XER::UI::Widgets::ContextMenu;
+    using XER::UI::Widgets::Event;
+    using XER::UI::Widgets::KeyCode;
+    using XER::UI::Widgets::MouseButton;
+    using XER::UI::Widgets::WidgetTree;
+
+    bool clicked = false;
+    auto menu = ContextMenu::Create({
+        {"List View", [&clicked]() { clicked = true; }, true, false, true, "Ctrl+1", false},
+        {"Grid View", nullptr, true, false, false, "", false},
+    });
+    menu->SetAnchor({100.0f, 40.0f});
+
+    XER::UI::Theme::Provider theme;
+    theme.SetVariant(XER::UI::Theme::Variant::Dark);
+
+    WidgetTree tree;
+    auto dummy_root = ContextMenu::Create({});
+    tree.SetRoot(dummy_root);
+    tree.Layout({0.0f, 0.0f, 800.0f, 600.0f}, theme.GetTokens());
+    tree.ShowOverlay(menu);
+
+    AlphaRecordingRenderer r;
+    // Render immediately with ZERO Tick() calls — items must be 100% opaque.
+    tree.Render(r, theme.GetTokens());
+    XER_UI_EXPECT_FALSE(r.text_alphas.empty());
+    for (float a : r.text_alphas) {
+        XER_UI_EXPECT_TRUE(a > 0.99f);
+    }
+
+    // Clicking the first item activates it and closes the overlay.
+    Event down;
+    down.type = Event::Type::MouseDown;
+    down.mouse_button = MouseButton::Left;
+    down.position = {140.0f, 56.0f};
+    tree.HandleEvent(down);
+    Event up = down;
+    up.type = Event::Type::MouseUp;
+    tree.HandleEvent(up);
+    XER_UI_EXPECT_TRUE(clicked);
+    XER_UI_EXPECT_TRUE(tree.GetOverlay() == nullptr);
+
+    // Re-open and verify Escape closes the menu via focusable overlay routing.
+    auto menu2 = ContextMenu::Create({{"Item", nullptr}});
+    menu2->SetAnchor({100.0f, 40.0f});
+    tree.ShowOverlay(menu2);
+    XER_UI_EXPECT_TRUE(tree.GetOverlay() == menu2);
+    Event esc;
+    esc.type = Event::Type::KeyDown;
+    esc.key = KeyCode::Escape;
+    tree.HandleEvent(esc);
+    XER_UI_EXPECT_TRUE(tree.GetOverlay() == nullptr);
 }

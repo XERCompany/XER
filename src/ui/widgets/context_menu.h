@@ -69,6 +69,8 @@ private:
     Layout::Point anchor_;
     int hovered_item_ = -1;
     bool closed_ = false;
+    bool ticked_ = false;
+    bool rendered_ = false;
     Motion::Tween open_t_;
 };
 
