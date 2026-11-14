@@ -3,6 +3,9 @@
 # Enabled via:  cmake -DXER_BUILD_NODE_ADDON=ON ...
 # Output:       <build>/bin/xer.node   (loaded by addon/index.js)
 #
+# Layout:  src/addon.cc (module entry), src/util.h (shared NAN helpers),
+#          src/image/, src/audio/, src/ui/ (per-area bindings).
+#
 # Node headers are fetched from nodejs.org matching `node --version`;
 # NAN (Native Abstractions for Node.js) comes from the official repo.
 
@@ -84,9 +87,16 @@ endif()
 
 # --- Module ------------------------------------------------------------------
 add_library(xeraddon MODULE
-    src/xer_addon.cc
-    src/bind_image.cc
-    src/bind_audio.cc
+    src/addon.cc
+    src/image/image.cc
+    src/audio/audio.cc
+    src/ui/ui.cc
+    src/ui/widget.cc
+    src/ui/window.cc
+    src/ui/application.cc
+    src/ui/widgets/controls.cc
+    src/ui/widgets/display.cc
+    src/ui/widgets/nav.cc
 )
 
 set_target_properties(xeraddon PROPERTIES
@@ -117,4 +127,5 @@ target_link_libraries(xeraddon PRIVATE
     XER_AudioCore
     XER_Flux_Core
     XER_Helper
+    XER_UI_Core
 )

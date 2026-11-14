@@ -1,7 +1,7 @@
 // xer.audio.* — audio probe/convert bindings (XER_AudioCore).
 // Mirrors tools/audioprobe + tools/audioconvert.
 
-#include "xer_bind.h"
+#include "util.h"
 
 #include <cmath>
 #include <filesystem>

@@ -3,8 +3,9 @@
 //   xer.info()                  runtime/platform info
 //   xer.image.{info,decode,save}
 //   xer.audio.{info,convert}
+//   xer.XER.{Application,Window,Widget,Label}   (src/ui toolkit)
 
-#include "xer_bind.h"
+#include "util.h"
 
 #include <node_version.h>
 
@@ -55,6 +56,12 @@ NAN_MODULE_INIT(Init) {
     v8::Local<v8::Object> audio = Nan::New<v8::Object>();
     xer::addon::InitAudio(audio);
     Nan::Set(target, Nan::New("audio").ToLocalChecked(), audio);
+
+    v8::Local<v8::Object> ui_ns = Nan::New<v8::Object>();
+    xer::addon::InitUI(ui_ns);
+    Nan::Set(target, Nan::New("UI").ToLocalChecked(), ui_ns);
+    // Back-compat alias: example.js and early scripts use `XER.*`.
+    Nan::Set(target, Nan::New("XER").ToLocalChecked(), ui_ns);
 }
 
 NODE_MODULE(xeraddon, Init)

@@ -165,13 +165,15 @@ public:
     void RemoveChild(std::shared_ptr<Widget> child);
     const std::vector<std::shared_ptr<Widget>>& GetChildren() const;
 
+    // Bounds in parent coordinates and repaint request — public so hosts
+    // (Node addon, tests) can position widgets without a layout pass.
+    Layout::Rect GetBounds() const;
+    void SetBounds(const Layout::Rect& bounds);
+    void Invalidate();
+
 protected:
     Widget() = default;
 
-    Layout::Rect GetBounds() const;
-    void SetBounds(const Layout::Rect& bounds);
-
-    void Invalidate();
     void RequestLayout();
 
     // Draws the shadcn-style outer focus ring around the widget bounds when
