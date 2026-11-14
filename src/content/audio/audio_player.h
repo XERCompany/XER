@@ -7,6 +7,8 @@
 #include <atomic>
 #include <mutex>
 #include <thread>
+#include <deque>
+#include <cstdint>
 #include <windows.h>
 #include <mmdeviceapi.h>
 #include <audioclient.h>
@@ -81,20 +83,20 @@ public:
         fade_out_seconds_ = fade_out_seconds;
     }
 
-    // Crossfade: queues a decoded buffer as the "next" track. When the
-    // current buffer enters its last fade_out_seconds, the pending buffer
-    // is mixed in — current fades out while pending fades in over the same
-    // window (linear). At the boundary the pending buffer is promoted and
-    // playback continues seamlessly; SetTrackAdvancedCallback fires on the
-    // audio thread at that moment. An empty buffer cancels the pending
-    // track. Safe to call from any thread.
-    void SetPendingBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer);
-    // True while a pending buffer is adopted or staged for adoption —
-    // lets control threads avoid queueing a second "next" track.
-    bool HasPendingBuffer() const {
-        return pending_active_.load() || pending_commit_.load();
-    }
-    using TrackAdvancedCallback = std::function<void()>;
+    // Crossfade: queues a decoded buffer as a "next" track. When the
+    // current buffer enters its last fade_out_seconds, the queue front is
+    // mixed in — current fades out while it fades in over the same window
+    // (linear). At the boundary the front is promoted and playback
+    // continues seamlessly; the following queued buffer then becomes the
+    // next crossfade source, so transitions chain without gaps.
+    // SetTrackAdvancedCallback fires on the audio thread at each promote
+    // with the tag passed to SetPendingBuffer (-1 when unused).
+    // Safe to call from any thread; entries are consumed in order.
+    void SetPendingBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer,
+                          int64_t track_tag = -1);
+    // Number of decoded tracks currently queued for crossfade.
+    size_t PendingCount() const { return pending_count_.load(); }
+    using TrackAdvancedCallback = std::function<void(int64_t track_tag)>;
     void SetTrackAdvancedCallback(TrackAdvancedCallback callback) {
         track_advanced_callback_ = std::move(callback);
     }
@@ -124,7 +126,11 @@ private:
     // Converts a fade duration in seconds to a frame count, clamped to
     // half the loaded track (0 when fading is off or nothing is loaded).
     uint64_t FadeFrames(double seconds) const;
-    // Drops any queued pending buffer. Caller must ensure the audio thread
+    // Stops the feed thread and render client and drops queued pending
+    // buffers WITHOUT touching state_/position — used by Load* so the
+    // buffer swap never races the audio thread.
+    void StopFeedThread();
+    // Drops any queued pending buffers. Caller must ensure the audio thread
     // is stopped (used by Stop()/Load*).
     void ClearPendingBuffer();
     // Starts the render client and spawns the feed thread. Caller must
@@ -167,15 +173,21 @@ private:
     std::atomic<bool> monitor_stop_{false};
     std::unique_ptr<WasapiDeviceNotifier> notifier_;
 
-    // Crossfade pending buffer. pending_staging_ is written under
-    // pending_mutex_ by control threads; the audio thread adopts it at the
-    // top of each render iteration when pending_commit_ is set.
-    XER::Audio::Core::AudioSourceBuffer pending_buffer_;
-    XER::Audio::Core::AudioSourceBuffer pending_staging_;
+    // Crossfade pending queue. pending_staging_ is written under
+    // pending_mutex_ by control threads; the audio thread drains it into
+    // pending_queue_ at the top of each render iteration when
+    // pending_commit_ is set. pending_count_ mirrors the queue depth for
+    // lock-free control-thread queries.
+    struct PendingEntry {
+        XER::Audio::Core::AudioSourceBuffer buffer;
+        int64_t track_tag = -1;
+    };
+    std::deque<PendingEntry> pending_queue_;     // audio-thread owned
+    std::deque<PendingEntry> pending_staging_;   // control-thread, mutexed
     std::mutex pending_mutex_;
     std::atomic<bool> pending_commit_{false};
-    size_t pending_position_ = 0;   // interleaved cursor into pending_buffer_
-    std::atomic<bool> pending_active_{false};  // pending_buffer_ usable
+    std::atomic<size_t> pending_count_{0};
+    size_t pending_position_ = 0;   // interleaved cursor into queue front
     TrackAdvancedCallback track_advanced_callback_;
 
     // Callbacks

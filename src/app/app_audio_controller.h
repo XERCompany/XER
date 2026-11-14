@@ -57,11 +57,14 @@ public:
 
     // Crossfade: queue the next track's decoded buffer — it is mixed in
     // during the current track's fade-out window and promoted at the
-    // boundary (see AudioPlayer::SetPendingBuffer).
-    void SetPendingBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer) {
-        audio_player_.SetPendingBuffer(std::move(buffer));
+    // boundary (see AudioPlayer::SetPendingBuffer). `track_tag` is handed
+    // back to the TrackAdvancedCallback on promote.
+    void SetPendingBuffer(XER::Audio::Core::AudioSourceBuffer&& buffer,
+                          int64_t track_tag = -1) {
+        audio_player_.SetPendingBuffer(std::move(buffer), track_tag);
     }
-    void SetTrackAdvancedCallback(std::function<void()> callback) {
+    void SetTrackAdvancedCallback(
+        std::function<void(int64_t track_tag)> callback) {
         audio_player_.SetTrackAdvancedCallback(std::move(callback));
     }
 
