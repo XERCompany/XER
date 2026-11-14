@@ -7,6 +7,12 @@
 #include <cstring>
 #include <cstdlib>
 
+#if defined(_MSC_VER)
+#define xer_sscanf sscanf_s
+#else
+#define xer_sscanf sscanf
+#endif
+
 // libxml2 for SVG attribute parsing
 #if __has_include(<libxml/parser.h>)
 #include <libxml/parser.h>
@@ -48,7 +54,7 @@ static void GetSvgDimensions(xmlDocPtr doc, int& w_out, int& h_out) {
         xmlChar* vb = xmlGetProp(root, BAD_CAST "viewBox");
         if (vb) {
             float vbx, vby, vbw = -1.f, vbh = -1.f;
-            std::sscanf(reinterpret_cast<const char*>(vb),
+            xer_sscanf(reinterpret_cast<const char*>(vb),
                         "%f %f %f %f", &vbx, &vby, &vbw, &vbh);
             xmlFree(vb);
             if (vbw > 0.f) w = vbw;

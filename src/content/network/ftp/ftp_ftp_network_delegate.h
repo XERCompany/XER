@@ -12,10 +12,10 @@ namespace XER::Network::Ftp {
 class FtpNetworkDelegate {
 public:
     virtual ~FtpNetworkDelegate() = default;
-    virtual bool OnBeforeConnect(const std::string& host, uint16_t port) { return true; }
-    virtual void OnConnected(const std::string& host) {}
-    virtual void OnDisconnected(const std::string& host) {}
-    virtual void OnError(const std::string& error) {}
+    virtual bool OnBeforeConnect(const std::string&, uint16_t) { return true; }
+    virtual void OnConnected(const std::string&) {}
+    virtual void OnDisconnected(const std::string&) {}
+    virtual void OnError(const std::string&) {}
 };
 
 class DefaultFtpNetworkDelegate : public FtpNetworkDelegate {};

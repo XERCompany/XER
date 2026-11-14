@@ -58,7 +58,6 @@ bool CertTransparency::ParseSCTs(const std::vector<uint8_t>& extension_data,
 
     while (pos + 2 <= list_end) {
         const uint16_t sct_len = Read16BE(p + pos); pos += 2;
-        const size_t sct_start = pos;
         const size_t sct_end   = pos + sct_len;
         if (sct_end > list_end) break;
 

@@ -117,14 +117,14 @@ void DeviceContext::Line(int x1, int y1, int x2, int y2) {
 
 void DeviceContext::Text(int x, int y, const std::string& text) {
     if (hdc_) {
-        ::TextOutA(hdc_, x, y, text.c_str(), text.length());
+        ::TextOutA(hdc_, x, y, text.c_str(), static_cast<int>(text.length()));
     }
 }
 
 SIZE DeviceContext::GetTextExtent(const std::string& text) {
     SIZE size = {0, 0};
     if (hdc_) {
-        ::GetTextExtentPoint32A(hdc_, text.c_str(), text.length(), &size);
+        ::GetTextExtentPoint32A(hdc_, text.c_str(), static_cast<int>(text.length()), &size);
     }
     return size;
 }

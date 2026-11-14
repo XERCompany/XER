@@ -116,9 +116,9 @@ bool STFTProcessor::Synthesize(float* output, size_t frame_count) {
 	}
 #endif
 
-	for (size_t i = 0; i < hop_size_; ++i) {
-		const float normalization = normalization_buffer_[i];
-		output[i] = normalization > kNormalizationFloor ? overlap_buffer_[i] / normalization : 0.0f;
+	for (size_t j = 0; j < hop_size_; ++j) {
+		const float normalization = normalization_buffer_[j];
+		output[j] = normalization > kNormalizationFloor ? overlap_buffer_[j] / normalization : 0.0f;
 	}
 
 	if (hop_size_ < fft_size_) {

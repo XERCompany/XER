@@ -93,7 +93,7 @@ int OnnxOptimizer::EliminatDeadCode(std::vector<OnnxNode>& nodes,
     int eliminated = 0;
     
     // Backward pass: mark tensors needed for outputs
-    for (int i = nodes.size() - 1; i >= 0; --i) {
+    for (int i = static_cast<int>(nodes.size()) - 1; i >= 0; --i) {
         const auto& node = nodes[i];
         
         // Check if this node produces a required tensor

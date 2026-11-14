@@ -186,7 +186,7 @@ inline double NormL2(const double* x, std::size_t n) {
 // 1-based index of max |x[i]| — same convention as cblas_idamax.
 inline int IndexOfMaxAbs(const double* x, std::size_t n) {
 #ifdef XER_HAVE_MKL
-    return cblas_idamax(static_cast<int>(n), x, 1);
+    return static_cast<int>(cblas_idamax(static_cast<int>(n), x, 1));
 #else
     int best = 0;
     double best_abs = -1.0;
@@ -755,8 +755,8 @@ void RegisterExtendedNodes(NodeTypeRegistry& r) {
                         for (std::size_t i = 0; i < s.size(); i += 3) {
                             const unsigned a = static_cast<unsigned char>(s[i]);
                             const unsigned b = i + 1 < s.size() ? static_cast<unsigned char>(s[i + 1]) : 0;
-                            const unsigned c = i + 2 < s.size() ? static_cast<unsigned char>(s[i + 2]) : 0;
-                            const unsigned v = (a << 16) | (b << 8) | c;
+                            const unsigned c_byte = i + 2 < s.size() ? static_cast<unsigned char>(s[i + 2]) : 0;
+                            const unsigned v = (a << 16) | (b << 8) | c_byte;
                             out += tbl[(v >> 18) & 63];
                             out += tbl[(v >> 12) & 63];
                             out += i + 1 < s.size() ? tbl[(v >> 6) & 63] : '=';

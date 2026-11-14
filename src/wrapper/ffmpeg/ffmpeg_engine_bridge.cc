@@ -1981,11 +1981,11 @@ bool EncodeAudioFrames(const EncodeAudioParams& params,
             success = false;
             break;
         }
-        const int destination_samples = av_rescale_rnd(
+        const int destination_samples = static_cast<int>(av_rescale_rnd(
             swr_get_delay(swr_context, input_sample_rate) + input_frame.sample_count,
             codec_context->sample_rate,
             input_sample_rate,
-            AV_ROUND_UP);
+            AV_ROUND_UP));
         uint8_t** converted_data = nullptr;
         int converted_linesize = 0;
         result = av_samples_alloc_array_and_samples(
@@ -2389,6 +2389,8 @@ bool RunFilterGraph(const std::string& input_path,
                     const std::string& output_path,
                     const std::string& filter_graph,
                     std::string* out_error) {
+    (void)input_path;
+    (void)output_path;
 #if ENGINE_HAS_FFMPEG_BRIDGE && ENGINE_HAS_FFMPEG_AVFILTER
     AVFilterGraph* graph = avfilter_graph_alloc();
     if (!graph) {
@@ -2422,6 +2424,7 @@ bool CaptureDeviceToStream(const std::string& format_name,
                            const std::string& output_path,
                            int duration_seconds,
                            std::string* out_error) {
+    (void)output_path;
 #if ENGINE_HAS_FFMPEG_BRIDGE && ENGINE_HAS_FFMPEG_AVDEVICE
     avdevice_register_all();
 

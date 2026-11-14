@@ -239,6 +239,7 @@ AuraCastSession& AuraCastSession::Instance() {
 // ──────────────────────────────────────────────────────────────────────────────
 std::vector<AuraCastDevice> AuraCastSession::ScanForSources(
     int timeout_ms, int hci_dev) const {
+    (void)hci_dev;
     std::vector<AuraCastDevice> found;
 
 #if defined(__linux__)
@@ -371,6 +372,7 @@ std::vector<AuraCastDevice> AuraCastSession::ScanForSources(
 bool AuraCastSession::SyncToSource(const AuraCastDevice& source,
                                     SinkCallback          state_cb,
                                     AudioFrameCallback    audio_cb) {
+    (void)source;
     Detach();  // Clean up any previous session.
 
     state_cb_  = std::move(state_cb);

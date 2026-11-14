@@ -115,11 +115,11 @@ bool WaveOutDevice::SetFormat(int sampleRate, int bitsPerSample, int channels) {
     }
     
     waveFormat_.wFormatTag = WAVE_FORMAT_PCM;
-    waveFormat_.nChannels = channels;
-    waveFormat_.nSamplesPerSec = sampleRate;
-    waveFormat_.wBitsPerSample = bitsPerSample;
-    waveFormat_.nBlockAlign = channels * bitsPerSample / 8;
-    waveFormat_.nAvgBytesPerSec = sampleRate * waveFormat_.nBlockAlign;
+    waveFormat_.nChannels = static_cast<WORD>(channels);
+    waveFormat_.nSamplesPerSec = static_cast<DWORD>(sampleRate);
+    waveFormat_.wBitsPerSample = static_cast<WORD>(bitsPerSample);
+    waveFormat_.nBlockAlign = static_cast<WORD>(channels * bitsPerSample / 8);
+    waveFormat_.nAvgBytesPerSec = static_cast<DWORD>(sampleRate * waveFormat_.nBlockAlign);
     waveFormat_.cbSize = 0;
     
     return Open(WAVE_MAPPER);
@@ -133,7 +133,7 @@ bool WaveOutDevice::Play(const std::vector<uint8_t>& data) {
     WAVEHDR waveHeader;
     ZeroMemory(&waveHeader, sizeof(waveHeader));
     waveHeader.lpData = (LPSTR)data.data();
-    waveHeader.dwBufferLength = data.size();
+    waveHeader.dwBufferLength = static_cast<DWORD>(data.size());
     waveHeader.dwFlags = 0;
     
     MMRESULT result = waveOutPrepareHeader(hWaveOut_, &waveHeader, sizeof(waveHeader));
@@ -220,11 +220,11 @@ bool WaveInDevice::SetFormat(int sampleRate, int bitsPerSample, int channels) {
     }
     
     waveFormat_.wFormatTag = WAVE_FORMAT_PCM;
-    waveFormat_.nChannels = channels;
-    waveFormat_.nSamplesPerSec = sampleRate;
-    waveFormat_.wBitsPerSample = bitsPerSample;
-    waveFormat_.nBlockAlign = channels * bitsPerSample / 8;
-    waveFormat_.nAvgBytesPerSec = sampleRate * waveFormat_.nBlockAlign;
+    waveFormat_.nChannels = static_cast<WORD>(channels);
+    waveFormat_.nSamplesPerSec = static_cast<DWORD>(sampleRate);
+    waveFormat_.wBitsPerSample = static_cast<WORD>(bitsPerSample);
+    waveFormat_.nBlockAlign = static_cast<WORD>(channels * bitsPerSample / 8);
+    waveFormat_.nAvgBytesPerSec = static_cast<DWORD>(sampleRate * waveFormat_.nBlockAlign);
     waveFormat_.cbSize = 0;
     
     return Open(WAVE_MAPPER);

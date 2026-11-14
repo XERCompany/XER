@@ -83,6 +83,7 @@ std::optional<HttpResponseCacheEntry> NetworkCacheManager::GetCachedHttpResponse
 }
 
 void NetworkCacheManager::InvalidateHttpResponse(const std::string& url) {
+    (void)url;
     // TODO: Implement cache invalidation
     // This requires adding a remove method to CacheManager
 }
@@ -138,6 +139,7 @@ std::optional<DnsCacheEntry> NetworkCacheManager::GetCachedDnsEntry(
 }
 
 void NetworkCacheManager::InvalidateDnsEntry(const std::string& hostname) {
+    (void)hostname;
     // TODO: Implement cache invalidation
 }
 
@@ -187,6 +189,7 @@ std::optional<SslSessionCacheEntry> NetworkCacheManager::GetCachedSslSession(
 }
 
 void NetworkCacheManager::InvalidateSslSession(const std::string& host) {
+    (void)host;
     // TODO: Implement cache invalidation
 }
 
@@ -212,6 +215,7 @@ size_t NetworkCacheManager::GetSslSessionCount() const {
 bool NetworkCacheManager::SerializeHttpResponse(const HttpResponseCacheEntry& entry,
                                                std::vector<uint8_t>* out,
                                                std::string* error) {
+    (void)error;
     // Simple serialization: status_code (4 bytes) + headers + body
     // TODO: Implement proper serialization
     out->push_back(static_cast<uint8_t>(entry.status_code));

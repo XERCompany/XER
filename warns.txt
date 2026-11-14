@@ -1,0 +1,206 @@
+src\app\app_audio_processor.cc:18 C4100 "param2": ���ᯮ�짮����� ��ࠬ���
+src\app\app_audio_processor.cc:26 C4100 "preset_name": ���ᯮ�짮����� ��ࠬ���
+src\app\app_node_graph_manager.cc:30 C4100 "ctx": ���ᯮ�짮����� ��ࠬ���
+src\app\node_graph_app_nodes.cc:592 C4244 ��㬥��: �८�ࠧ������ "unsigned __int64" � "const _Ty", �������� ����� ���
+src\audio\analysis_ai\audio_pitch_detector.cc:32 C4100 "frame_count": ���ᯮ�짮����� ��ࠬ���
+src\audio\analysis_ai\audio_pitch_detector.cc:52 C4244 =: �८�ࠧ������ "size_t" � "float", �������� ����� ������
+src\audio\analysis_ai\audio_pitch_detector.cc:63 C4100 "frame_count": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:129 C4100 "path": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:175 C4100 "preset_name": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:223 C4100 "analysis_type": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:224 C4100 "audio_hash": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:43 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:58 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:72 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:80 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:87 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_cache_manager.cc:95 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_clock_sync.cc:42 C4100 "external_timestamp_ns": ���ᯮ�짮����� ��ࠬ���
+src\audio\audio_core\audio_sample_rate_converter.cc:140 C4244 return: �८�ࠧ������ "double" � "float", �������� ����� ������
+src\audio\dsp_algorithms\dsp_pitch_shifter_granular.cc:70 C4189 normalized_phase: �����쭠� ��६����� ���樠����஢���, �� �� �ᯮ�짮����
+src\audio\dsp_algorithms\dsp_stft_processor.cc:119 C4456 ������� "i" ��뢠�� �।��饥 �����쭮� �������
+src\content\ai\ml\augmentation\aug_mixup.h:11 C4100 "sample": ���ᯮ�짮����� ��ࠬ���
+src\content\ai\ml\tensors\tensor.cc:102 C4267 ���樠������: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\content\ai\ml\tensors\tensor.cc:138 C4244 =: �८�ࠧ������ "double" � "float", �������� ����� ������
+src\content\ai\ml\tensors\tensor.cc:148 C4244 =: �८�ࠧ������ "double" � "float", �������� ����� ������
+src\content\ai\models_builder\model_builder\model_builder.cc:20 C4100 "kernel_size": ���ᯮ�짮����� ��ࠬ���
+src\content\ai\models_builder\model_builder\model_builder.cc:24 C4100 "rate": ���ᯮ�짮����� ��ࠬ���
+src\content\ai\models_builder\training_core\train_optimizer.cc:17 C4244 ���樠������: �८�ࠧ������ "double" � "float", �������� ����� ������
+src\content\ai\models_builder\training_core\train_optimizer.cc:18 C4244 ���樠������: �८�ࠧ������ "double" � "float", �������� ����� ������
+src\content\ai\reader\onnx_stack\onnx_optimizer.cc:96 C4267 ���樠������: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\content\archive\archive_manager.cc:266 C4456 ������� "ec" ��뢠�� �।��饥 �����쭮� �������
+src\content\archive\archive_manager.cc:331 C4456 ������� "ec" ��뢠�� �।��饥 �����쭮� �������
+src\content\device\cast\aura\aura_cast_session.cc:241 C4100 "hci_dev": ���ᯮ�짮����� ��ࠬ���
+src\content\device\cast\aura\aura_cast_session.cc:371 C4100 "source": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/core/network_service_delegate.h:18 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/ftp/ftp_ftp_network_delegate.h:15 C4100 "port": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/ftp/ftp_ftp_network_delegate.h:16 C4100 "host": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/ftp/ftp_ftp_network_delegate.h:17 C4100 "host": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/ftp/ftp_ftp_network_delegate.h:18 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/http/http_network_delegate.h:17 C4100 "req": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/http/http_network_delegate.h:18 C4100 "status_code": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/http/http_network_delegate.h:19 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/http/http_network_delegate.h:20 C4100 "new_url": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/quic/quic_network_delegate.h:15 C4100 "host": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/quic/quic_network_delegate.h:16 C4100 "code": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/quic/quic_network_delegate.h:17 C4100 "sid": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/quic/quic_network_delegate.h:18 C4100 "sid": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/spdy/spdy_network_delegate.h:15 C4100 "host": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/spdy/spdy_network_delegate.h:16 C4100 "host": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/spdy/spdy_network_delegate.h:17 C4100 "id": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/spdy/spdy_network_delegate.h:18 C4100 "id": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/transport/transport_network_delegate.h:17 C4100 "port": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/transport/transport_network_delegate.h:18 C4100 "port": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/transport/transport_network_delegate.h:19 C4100 "bytes": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/transport/transport_network_delegate.h:20 C4100 "bytes": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/transport/transport_network_delegate.h:21 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:18 C4100 "success": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:19 C4100 "selected_protocol": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:20 C4100 "extensions": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:21 C4100 "fin": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:22 C4100 "is_text": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:23 C4100 "data": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:24 C4100 "quota": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:26 C4100 "was_clean": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:27 C4100 "code": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:28 C4100 "reason": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_event_interface.h:29 C4100 "message": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_network_delegate.h:16 C4100 "url": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_network_delegate.h:17 C4100 "url": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_network_delegate.h:18 C4100 "url": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_network_delegate.h:19 C4100 "code": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_network_delegate.h:20 C4100 "reason": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_network_delegate.h:21 C4100 "url": ���ᯮ�짮����� ��ࠬ���
+src\content\network\..\..\content/network/websocket/websocket_network_delegate.h:22 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\content\network\cache\network_cache_manager.cc:140 C4100 "hostname": ���ᯮ�짮����� ��ࠬ���
+src\content\network\cache\network_cache_manager.cc:189 C4100 "host": ���ᯮ�짮����� ��ࠬ���
+src\content\network\cache\network_cache_manager.cc:214 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\content\network\cache\network_cache_manager.cc:85 C4100 "url": ���ᯮ�짮����� ��ࠬ���
+src\content\network\cert\cert_transparency.cc:61 C4189 sct_start: �����쭠� ��६����� ���樠����஢���, �� �� �ᯮ�짮����
+src\content\network\core\network_service_util.cc:22 C4244 ���樠������: �८�ࠧ������ "SOCKET" � "int", �������� ����� ������
+src\content\network\dns\dns_client.cc:41 C4244 ���樠������: �८�ࠧ������ "SOCKET" � "int", �������� ����� ������
+src\content\network\ftp\ftp_ftp_stream.cc:109 C4996 'sscanf': This function or variable may be unsafe. Consider using ssca
+src\content\network\proxy\proxy_service.cc:15 C4100 "error": ���ᯮ�짮����� ��ࠬ���
+src\content\network\transport\transport_network_session.cc:72 C4244 =: �८�ࠧ������ "SOCKET" � "int", �������� ����� ������
+src\content\network\transport\transport_network_session.cc:74 C4267 ��㬥��: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\content\openai\agent\agent.cc:20 C4100 "options": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\agent\agent.cc:222 C4100 "tool_call": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\agent\agent.cc:282 C4100 "enable": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\agent\agent.cc:286 C4100 "enable": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:137 C4100 "options": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:155 C4100 "file_path": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:165 C4100 "file_path": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:170 C4100 "target_format": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:245 C4100 "options": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:266 C4100 "file_path": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:276 C4100 "file_path": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:281 C4100 "target_format": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\audio_transcriber.cc:402 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:136 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:217 C4244 =: �८�ࠧ������ "unsigned __int64" � "float", �������� ����� ������
+src\content\openai\audio\dsp_integration.cc:221 C4100 "window_type": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:231 C4100 "cutoff_freq": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:236 C4100 "cutoff_freq": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:333 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:338 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:38 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:381 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:386 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:458 C4100 "num_mel_bands": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:463 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:73 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:78 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\audio\dsp_integration.cc:83 C4100 "buffer": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\hardware_integration.cc:219 C4100 "new_height": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\hardware_integration.cc:224 C4100 "filter_type": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\hardware_integration.cc:229 C4100 "target_format": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\image\image_processor.cc:136 C4100 "image": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\image\image_processor.cc:143 C4100 "base64": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\image\image_processor.cc:171 C4100 "image": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\image\image_processor.cc:183 C4100 "params": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\image\image_processor.cc:229 C4100 "file_path": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\image\image_processor.cc:241 C4100 "file_path": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\openai_utils.cc:247 C4996 'absl::lts_20260107::MutexLock::MutexLock': Use the constructor that t
+src\content\openai\openai_utils.cc:252 C4996 'absl::lts_20260107::MutexLock::MutexLock': Use the constructor that t
+src\content\openai\openai_utils.cc:262 C4996 'absl::lts_20260107::MutexLock::MutexLock': Use the constructor that t
+src\content\openai\openai_utils.cc:267 C4996 'absl::lts_20260107::MutexLock::MutexLock': Use the constructor that t
+src\content\openai\openai_utils.cc:272 C4996 'absl::lts_20260107::MutexLock::MutexLock': Use the constructor that t
+src\content\openai\openai_utils.cc:277 C4996 'absl::lts_20260107::MutexLock::MutexLock': Use the constructor that t
+src\content\openai\sandbox\sandbox.cc:311 C4100 "language": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\server\openai_server.cc:169 C4100 "request": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\server\openai_server.cc:203 C4100 "request": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\server\openai_server.cc:231 C4100 "request": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\server\openai_server.cc:259 C4100 "request": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\server\openai_server.cc:368 C4100 "request": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\server\openai_server.cc:474 C4100 "response": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\text\text_processor.cc:241 C4244 return: �८�ࠧ������ "__int64" � "int", �������� ����� ������
+src\content\openai\text\text_processor.cc:331 C4267 =: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\content\openai\text\text_processor.cc:368 C4100 "text": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\text\text_processor.cc:379 C4100 "style": ���ᯮ�짮����� ��ࠬ���
+src\content\openai\text\text_processor.cc:422 C4244 return: �८�ࠧ������ "__int64" � "int", �������� ����� ������
+src\content\openai\text\text_processor.cc:56 C4267 =: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\content\pdf\..\..\content/pdf/pdf_internal.h:78 C4611 ����������⢨� ����� "_setjmp" � �������஬ ��ꥪ⮢ C++ �� �㤥� ��७�ᨬ�
+src\content\platform\windows\winapi\audio\winapi_audio.cc:118 C4244 =: �८�ࠧ������ "int" � "WORD", �������� ����� ������
+src\content\platform\windows\winapi\audio\winapi_audio.cc:120 C4244 =: �८�ࠧ������ "int" � "WORD", �������� ����� ������
+src\content\platform\windows\winapi\audio\winapi_audio.cc:121 C4244 =: �८�ࠧ������ "int" � "WORD", �������� ����� ������
+src\content\platform\windows\winapi\audio\winapi_audio.cc:136 C4267 =: �८�ࠧ������ �� "size_t" � "DWORD"; �������� ����� ������
+src\content\platform\windows\winapi\audio\winapi_audio.cc:223 C4244 =: �८�ࠧ������ "int" � "WORD", �������� ����� ������
+src\content\platform\windows\winapi\audio\winapi_audio.cc:225 C4244 =: �८�ࠧ������ "int" � "WORD", �������� ����� ������
+src\content\platform\windows\winapi\audio\winapi_audio.cc:226 C4244 =: �८�ࠧ������ "int" � "WORD", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:18 C4100 "wndProc": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\controls\winapi_controls.cc:367 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:372 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:377 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:388 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:393 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:405 C4244 ���樠������: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:451 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:456 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:461 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:472 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:477 C4244 return: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\controls\winapi_controls.cc:489 C4244 ���樠������: �८�ࠧ������ "LRESULT" � "int", �������� ����� ������
+src\content\platform\windows\winapi\graphics\winapi_graphics.cc:120 C4267 ��㬥��: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\content\platform\windows\winapi\graphics\winapi_graphics.cc:127 C4267 ��㬥��: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\content\platform\windows\winapi\network\winapi_network.cc:107 C4996 'inet_ntoa': Use inet_ntop() or InetNtop() instead or define _WINSOCK_
+src\content\platform\windows\winapi\network\winapi_network.cc:142 C4100 "url": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\network\winapi_network.cc:148 C4100 "data": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\network\winapi_network.cc:153 C4100 "url": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\network\winapi_network.cc:159 C4100 "proxy": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\network\winapi_network.cc:163 C4100 "milliseconds": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\network\winapi_network.cc:192 C4996 'gethostbyname': Use getaddrinfo() or GetAddrInfoW() instead or define
+src\content\platform\windows\winapi\network\winapi_network.cc:195 C4996 'inet_ntoa': Use inet_ntop() or InetNtop() instead or define _WINSOCK_
+src\content\platform\windows\winapi\network\winapi_network.cc:207 C4996 'gethostbyaddr': Use getnameinfo() or GetNameInfoW() instead or define
+src\content\platform\windows\winapi\network\winapi_network.cc:247 C4100 "port": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\network\winapi_network.cc:34 C4996 'inet_ntoa': Use inet_ntop() or InetNtop() instead or define _WINSOCK_
+src\content\platform\windows\winapi\network\winapi_network.cc:61 C4996 'gethostbyname': Use getaddrinfo() or GetAddrInfoW() instead or define
+src\content\platform\windows\winapi\network\winapi_network.cc:65 C4996 'inet_ntoa': Use inet_ntop() or InetNtop() instead or define _WINSOCK_
+src\content\platform\windows\winapi\network\winapi_network.cc:72 C4100 "interfaceName": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:17 C4244 ���樠������: �८�ࠧ������ "int" � "char", �������� ����� ������
+src\content\platform\windows\winapi\storage\winapi_storage.cc:309 C4100 "fileSystem": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:310 C4100 "quickFormat": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:316 C4100 "mountPoint": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:321 C4100 "driveLetter": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:332 C4100 "filepath": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:338 C4100 "filepath": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:351 C4100 "streamName": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:356 C4100 "streamName": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:357 C4100 "data": ���ᯮ�짮����� ��ࠬ���
+src\content\platform\windows\winapi\storage\winapi_storage.cc:362 C4100 "streamName": ���ᯮ�짮����� ��ࠬ���
+src\content\process\process.cc:344 C4267 ��㬥��: �८�ࠧ������ �� "size_t" � "DWORD"; �������� ����� ������
+src\content\process\process.cc:382 C4267 ��㬥��: �८�ࠧ������ �� "size_t" � "DWORD"; �������� ����� ������
+src\content\process\process.cc:412 C4267 ��㬥��: �८�ࠧ������ �� "size_t" � "DWORD"; �������� ����� ������
+src\image\formats\svg_decoder.cc:51 C4996 'sscanf': This function or variable may be unsafe. Consider using ssca
+src\image\tools\retouch_tool.cc:43 C4244 ���樠������: �८�ࠧ������ "uint64_t" � "uint8_t", �������� ����� ������
+src\node_graph\node_graph_ext.cc:189 C4267 return: �८�ࠧ������ �� "size_t" � "int"; �������� ����� ������
+src\node_graph\node_graph_ext.cc:758 C4457 ������� "c" ��뢠�� ��ࠬ��� �㭪樨
+src\ui\canvas\canvas.cc:90 C4996 'fopen': This function or variable may be unsafe. Consider using fopen
+src\ui\widgets\fx_rack_state.cc:319 C4996 'sscanf': This function or variable may be unsafe. Consider using ssca
+src\ui\widgets\fx_rack_state.cc:335 C4996 'sscanf': This function or variable may be unsafe. Consider using ssca
+src\ui\widgets\fx_rack_state.cc:354 C4996 'sscanf': This function or variable may be unsafe. Consider using ssca
+src\ui\widgets\tabs.cc:241 C4305 ��㬥��: ��祭�� �� "double" � "float"
+src\ui\widgets\tabs.cc:250 C4305 ��㬥��: ��祭�� �� "double" � "float"
+src\wrapper\ffmpeg\ffmpeg_engine_bridge.cc:1984 C4244 ���樠������: �८�ࠧ������ "int64_t" � "int", �������� ����� ������
+src\wrapper\ffmpeg\ffmpeg_engine_bridge.cc:2388 C4100 "input_path": ���ᯮ�짮����� ��ࠬ���
+src\wrapper\ffmpeg\ffmpeg_engine_bridge.cc:2389 C4100 "output_path": ���ᯮ�짮����� ��ࠬ���
+src\wrapper\ffmpeg\ffmpeg_engine_bridge.cc:2422 C4100 "output_path": ���ᯮ�짮����� ��ࠬ���

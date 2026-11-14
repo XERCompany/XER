@@ -10,6 +10,19 @@
 
 namespace XER::Content::Platform::WinAPI::Network {
 
+namespace {
+
+// Converts an IPv4 address to dotted-quad string (replaces deprecated inet_ntoa).
+std::string Ipv4ToString(const in_addr& addr) {
+    char buf[INET_ADDRSTRLEN] = {};
+    if (inet_ntop(AF_INET, &addr, buf, sizeof(buf)) == nullptr) {
+        return {};
+    }
+    return buf;
+}
+
+}  // namespace
+
 // ---------------------------------------------------------------------------
 // Network Helper
 // ---------------------------------------------------------------------------
@@ -31,7 +44,7 @@ std::vector<NetworkInterface> NetworkHelper::EnumerateInterfaces() {
                     // Convert IP address to string
                     struct in_addr ipAddr;
                     ipAddr.S_un.S_addr = (u_long)pIPAddrTable->table[i].dwAddr;
-                    iface.ipAddress = inet_ntoa(ipAddr);
+                    iface.ipAddress = Ipv4ToString(ipAddr);
                     
                     iface.name = "Interface " + std::to_string(i);
                     iface.description = "Ethernet Adapter";
@@ -58,11 +71,16 @@ NetworkInterface NetworkHelper::GetPrimaryInterface() {
 std::string NetworkHelper::GetLocalIPAddress() {
     char hostname[256];
     if (gethostname(hostname, sizeof(hostname)) == 0) {
-        struct hostent* host = gethostbyname(hostname);
-        if (host) {
-            struct in_addr* addr = (struct in_addr*)host->h_addr_list[0];
-            if (addr) {
-                return std::string(inet_ntoa(*addr));
+        addrinfo hints{};
+        hints.ai_family = AF_INET;
+        hints.ai_socktype = SOCK_STREAM;
+        addrinfo* result = nullptr;
+        if (getaddrinfo(hostname, nullptr, &hints, &result) == 0 && result != nullptr) {
+            const auto* sa = reinterpret_cast<const sockaddr_in*>(result->ai_addr);
+            const std::string ip = Ipv4ToString(sa->sin_addr);
+            freeaddrinfo(result);
+            if (!ip.empty()) {
+                return ip;
             }
         }
     }
@@ -70,6 +88,7 @@ std::string NetworkHelper::GetLocalIPAddress() {
 }
 
 std::string NetworkHelper::GetMacAddress(const std::string& interfaceName) {
+    (void)interfaceName;
     // Note: This requires GetAdaptersInfo or GetAdaptersAddresses
     // Simplified placeholder
     return "00:00:00:00:00:00";
@@ -104,7 +123,7 @@ std::vector<std::string> NetworkHelper::ResolveHostname(const std::string& hostn
     if (getaddrinfo(hostname.c_str(), NULL, &hints, &result) == 0) {
         for (struct addrinfo* ptr = result; ptr != NULL; ptr = ptr->ai_next) {
             struct sockaddr_in* sockaddr = (struct sockaddr_in*)ptr->ai_addr;
-            addresses.push_back(inet_ntoa(sockaddr->sin_addr));
+            addresses.push_back(Ipv4ToString(sockaddr->sin_addr));
         }
         freeaddrinfo(result);
     }
@@ -140,27 +159,33 @@ void WinHTTPHelper::Shutdown() {
 }
 
 std::string WinHTTPHelper::Get(const std::string& url) {
+    (void)url;
     // Note: Simplified placeholder
     // Full implementation would use WinHttpOpenRequest, WinHttpSendRequest, etc.
     return "";
 }
 
 std::string WinHTTPHelper::Post(const std::string& url, const std::string& data) {
+    (void)url;
+    (void)data;
     // Note: Simplified placeholder
     return "";
 }
 
 void WinHTTPHelper::AsyncGet(const std::string& url, ResponseCallback callback) {
+    (void)url;
     // Note: Simplified placeholder
     // Full implementation would use async WinHTTP operations
     callback("", false);
 }
 
 void WinHTTPHelper::SetProxy(const std::string& proxy) {
+    (void)proxy;
     // Note: Simplified placeholder
 }
 
 void WinHTTPHelper::SetTimeout(int milliseconds) {
+    (void)milliseconds;
     // Note: Simplified placeholder
 }
 
@@ -188,27 +213,39 @@ void WinSockHelper::Shutdown() {
 
 std::string WinSockHelper::GetHostByName(const std::string& hostname) {
     if (!Initialize()) return "";
-    
-    struct hostent* host = gethostbyname(hostname.c_str());
-    if (host && host->h_addr_list[0]) {
-        struct in_addr* addr = (struct in_addr*)host->h_addr_list[0];
-        return std::string(inet_ntoa(*addr));
+
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    addrinfo* result = nullptr;
+    if (getaddrinfo(hostname.c_str(), nullptr, &hints, &result) == 0 && result != nullptr) {
+        const auto* sa = reinterpret_cast<const sockaddr_in*>(result->ai_addr);
+        const std::string ip = Ipv4ToString(sa->sin_addr);
+        freeaddrinfo(result);
+        return ip;
     }
-    
+
     return "";
 }
 
 std::string WinSockHelper::GetHostByAddr(const std::string& ipAddress) {
     if (!Initialize()) return "";
     
-    struct in_addr addr;
-    inet_pton(AF_INET, ipAddress.c_str(), &addr);
-    
-    struct hostent* host = gethostbyaddr((char*)&addr, sizeof(addr), AF_INET);
-    if (host && host->h_name) {
-        return std::string(host->h_name);
+    in_addr addr{};
+    if (inet_pton(AF_INET, ipAddress.c_str(), &addr) != 1) {
+        return "";
     }
-    
+
+    sockaddr_in sa{};
+    sa.sin_family = AF_INET;
+    sa.sin_addr = addr;
+
+    char name[NI_MAXHOST] = {};
+    if (getnameinfo(reinterpret_cast<const sockaddr*>(&sa), sizeof(sa),
+                    name, sizeof(name), nullptr, 0, NI_NAMEREQD) == 0) {
+        return std::string(name);
+    }
+
     return "";
 }
 
@@ -245,6 +282,7 @@ std::vector<WinSock2Helper::SocketInfo> WinSock2Helper::EnumerateSockets() {
 }
 
 bool WinSock2Helper::IsPortOpen(int port) {
+    (void)port;
     // Note: Simplified placeholder
     // Full implementation would attempt to bind to the port
     return false;

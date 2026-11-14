@@ -16,6 +16,7 @@ Window::~Window() {
 }
 
 bool Window::Create(const WindowParams& params, WNDPROC wndProc) {
+    (void)wndProc;
     HINSTANCE hInstance = GetModuleHandle(NULL);
     
     hwnd_ = CreateWindowExA(
@@ -364,17 +365,17 @@ void ListBox::Destroy() {
 
 int ListBox::AddString(const std::string& text) {
     if (!hwnd_) return LB_ERR;
-    return SendMessage(hwnd_, LB_ADDSTRING, 0, (LPARAM)text.c_str());
+    return static_cast<int>(SendMessage(hwnd_, LB_ADDSTRING, 0, (LPARAM)text.c_str()));
 }
 
 int ListBox::InsertString(int index, const std::string& text) {
     if (!hwnd_) return LB_ERR;
-    return SendMessage(hwnd_, LB_INSERTSTRING, index, (LPARAM)text.c_str());
+    return static_cast<int>(SendMessage(hwnd_, LB_INSERTSTRING, index, (LPARAM)text.c_str()));
 }
 
 int ListBox::DeleteString(int index) {
     if (!hwnd_) return LB_ERR;
-    return SendMessage(hwnd_, LB_DELETESTRING, index, 0);
+    return static_cast<int>(SendMessage(hwnd_, LB_DELETESTRING, index, 0));
 }
 
 void ListBox::ResetContent() {
@@ -385,12 +386,12 @@ void ListBox::ResetContent() {
 
 int ListBox::GetCount() const {
     if (!hwnd_) return 0;
-    return SendMessage(hwnd_, LB_GETCOUNT, 0, 0);
+    return static_cast<int>(SendMessage(hwnd_, LB_GETCOUNT, 0, 0));
 }
 
 int ListBox::GetCurSel() const {
     if (!hwnd_) return LB_ERR;
-    return SendMessage(hwnd_, LB_GETCURSEL, 0, 0);
+    return static_cast<int>(SendMessage(hwnd_, LB_GETCURSEL, 0, 0));
 }
 
 void ListBox::SetCurSel(int index) {
@@ -402,7 +403,7 @@ void ListBox::SetCurSel(int index) {
 std::string ListBox::GetText(int index) const {
     if (!hwnd_) return "";
     
-    int len = SendMessage(hwnd_, LB_GETTEXTLEN, index, 0);
+    const int len = static_cast<int>(SendMessage(hwnd_, LB_GETTEXTLEN, index, 0));
     if (len == LB_ERR) return "";
     
     std::string text(len + 1, '\0');
@@ -448,17 +449,17 @@ void ComboBox::Destroy() {
 
 int ComboBox::AddString(const std::string& text) {
     if (!hwnd_) return CB_ERR;
-    return SendMessage(hwnd_, CB_ADDSTRING, 0, (LPARAM)text.c_str());
+    return static_cast<int>(SendMessage(hwnd_, CB_ADDSTRING, 0, (LPARAM)text.c_str()));
 }
 
 int ComboBox::InsertString(int index, const std::string& text) {
     if (!hwnd_) return CB_ERR;
-    return SendMessage(hwnd_, CB_INSERTSTRING, index, (LPARAM)text.c_str());
+    return static_cast<int>(SendMessage(hwnd_, CB_INSERTSTRING, index, (LPARAM)text.c_str()));
 }
 
 int ComboBox::DeleteString(int index) {
     if (!hwnd_) return CB_ERR;
-    return SendMessage(hwnd_, CB_DELETESTRING, index, 0);
+    return static_cast<int>(SendMessage(hwnd_, CB_DELETESTRING, index, 0));
 }
 
 void ComboBox::ResetContent() {
@@ -469,12 +470,12 @@ void ComboBox::ResetContent() {
 
 int ComboBox::GetCount() const {
     if (!hwnd_) return 0;
-    return SendMessage(hwnd_, CB_GETCOUNT, 0, 0);
+    return static_cast<int>(SendMessage(hwnd_, CB_GETCOUNT, 0, 0));
 }
 
 int ComboBox::GetCurSel() const {
     if (!hwnd_) return CB_ERR;
-    return SendMessage(hwnd_, CB_GETCURSEL, 0, 0);
+    return static_cast<int>(SendMessage(hwnd_, CB_GETCURSEL, 0, 0));
 }
 
 void ComboBox::SetCurSel(int index) {
@@ -486,7 +487,7 @@ void ComboBox::SetCurSel(int index) {
 std::string ComboBox::GetText(int index) const {
     if (!hwnd_) return "";
     
-    int len = SendMessage(hwnd_, CB_GETLBTEXTLEN, index, 0);
+    const int len = static_cast<int>(SendMessage(hwnd_, CB_GETLBTEXTLEN, index, 0));
     if (len == CB_ERR) return "";
     
     std::string text(len + 1, '\0');

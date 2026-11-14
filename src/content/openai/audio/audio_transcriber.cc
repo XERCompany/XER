@@ -135,6 +135,7 @@ std::future<TranscriptionResult> WhisperTranscriber::TranscribeBuffer(
 
 void WhisperTranscriber::StartRealTimeTranscription(
     const TranscriptionOptions& options) {
+    (void)options;
 
     impl_->real_time_active_ = true;
 }
@@ -153,6 +154,7 @@ void WhisperTranscriber::SetRealTimeCallback(RealTimeCallback callback) {
 }
 
 AudioBuffer WhisperTranscriber::LoadAudioFile(const std::string& file_path) {
+    (void)file_path;
     // TODO: Implement actual audio file loading using XER audio subsystem
     AudioBuffer buffer;
     buffer.sample_rate = 16000;  // Whisper expects 16kHz
@@ -163,11 +165,14 @@ AudioBuffer WhisperTranscriber::LoadAudioFile(const std::string& file_path) {
 }
 
 bool WhisperTranscriber::SaveAudioFile(const AudioBuffer& buffer, const std::string& file_path) {
+    (void)buffer;
+    (void)file_path;
     // TODO: Implement actual audio file saving
     return true;
 }
 
 AudioBuffer WhisperTranscriber::ConvertFormat(const AudioBuffer& buffer, AudioFormat target_format) {
+    (void)target_format;
     // TODO: Implement actual format conversion
     return buffer;
 }
@@ -243,6 +248,7 @@ std::future<TranscriptionResult> LocalWhisperTranscriber::TranscribeBuffer(
 
 void LocalWhisperTranscriber::StartRealTimeTranscription(
     const TranscriptionOptions& options) {
+    (void)options;
 
     real_time_active_ = true;
     audio_engine_->Start();
@@ -264,6 +270,7 @@ void LocalWhisperTranscriber::SetRealTimeCallback(RealTimeCallback callback) {
 }
 
 AudioBuffer LocalWhisperTranscriber::LoadAudioFile(const std::string& file_path) {
+    (void)file_path;
     // TODO: Implement using XER audio source loader
     AudioBuffer buffer;
     buffer.sample_rate = 16000;
@@ -274,11 +281,14 @@ AudioBuffer LocalWhisperTranscriber::LoadAudioFile(const std::string& file_path)
 }
 
 bool LocalWhisperTranscriber::SaveAudioFile(const AudioBuffer& buffer, const std::string& file_path) {
+    (void)buffer;
+    (void)file_path;
     // TODO: Implement using XER audio file writer
     return true;
 }
 
 AudioBuffer LocalWhisperTranscriber::ConvertFormat(const AudioBuffer& buffer, AudioFormat target_format) {
+    (void)target_format;
     // TODO: Implement using XER audio format converter
     return buffer;
 }
@@ -400,6 +410,7 @@ float AudioUtils::CalculateRMS(const AudioBuffer& buffer) {
 }
 
 std::vector<float> AudioUtils::ExtractMFCC(const AudioBuffer& buffer, int num_coefficients) {
+    (void)buffer;
     // TODO: Implement MFCC extraction using XER audio DSP algorithms
     // This would use the DSP algorithms in src/audio/dsp_algorithms/
     std::vector<float> mfcc(num_coefficients, 0.0f);

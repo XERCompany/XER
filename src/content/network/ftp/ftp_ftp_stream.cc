@@ -16,6 +16,12 @@
 
 #include <sstream>
 
+#if defined(_MSC_VER)
+#define xer_sscanf sscanf_s
+#else
+#define xer_sscanf sscanf
+#endif
+
 namespace Platform = XER::Network::Socket::Platform;
 
 namespace XER::Network::Ftp {
@@ -106,7 +112,7 @@ bool FtpStream::EnterPassive(std::string* data_host, uint16_t* data_port, std::s
     }
     std::string nums = text.substr(lp+1, rp-lp-1);
     int h1,h2,h3,h4,p1,p2;
-    if (std::sscanf(nums.c_str(), "%d,%d,%d,%d,%d,%d",
+    if (xer_sscanf(nums.c_str(), "%d,%d,%d,%d,%d,%d",
                     &h1,&h2,&h3,&h4,&p1,&p2) != 6) {
         if (error) *error = "FTP: PASV parse error";
         return false;

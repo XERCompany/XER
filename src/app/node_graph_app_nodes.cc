@@ -74,6 +74,17 @@ NG::PortSpec In(const std::string& name, VT type, NG::Value def = NG::Value()) {
 }
 NG::PortSpec Out(const std::string& name, VT type) { return {name, type, NG::Value()}; }
 
+// Node-graph arrays are doubles; audio pipelines consume float. Explicit
+// per-element conversion avoids the narrowing warnings of a range ctor.
+std::vector<float> ToFloatBuffer(const std::vector<double>& src) {
+    std::vector<float> out;
+    out.reserve(src.size());
+    for (const double v : src) {
+        out.push_back(static_cast<float>(v));
+    }
+    return out;
+}
+
 NG::NodeTypeDescriptor Make(std::string type, std::string title, std::string category,
                             std::string desc, std::vector<NG::PortSpec> inputs,
                             std::vector<NG::PortSpec> outputs, NG::EvaluateFn fn,
@@ -416,7 +427,7 @@ void RegisterFxNode(const std::string& algo) {
                 }
                 st.signature = sig;
             }
-            std::vector<float> in(sig_in.begin(), sig_in.end());
+            const std::vector<float> in = ToFloatBuffer(sig_in);
             std::vector<float> out;
             std::string err;
             if (!st.proc->ProcessBuffer(in, 1024, &out, &err)) {
@@ -469,7 +480,7 @@ bool EvalVst3Plugin(NG::EvalContext& c) {
     }
     auto sig = c.Input("signal").AsArray();
     if (sig.empty()) { c.Output("signal", std::move(sig)); return true; }
-    std::vector<float> in(sig.begin(), sig.end());
+    const std::vector<float> in = ToFloatBuffer(sig);
     std::vector<float> out(in.size());
     if (!st.host->Process(in.data(), out.data(),
                          static_cast<std::uint32_t>(in.size()))) {
@@ -589,7 +600,7 @@ void RegisterAppNodes() {
             const double max_sec = std::max(0.01, c.Param("maxSeconds").AsNumber());
             const std::size_t max_frames =
                 static_cast<std::size_t>(std::min<double>(
-                    pcm.size() / static_cast<std::size_t>(std::max(1, ch)),
+                    static_cast<double>(pcm.size() / static_cast<std::size_t>(std::max(1, ch))),
                     max_sec * static_cast<double>(std::max(1, sr))));
             const std::size_t keep = max_frames * static_cast<std::size_t>(std::max(1, ch));
             std::vector<float> trimmed(pcm.begin(), pcm.begin() +
@@ -621,7 +632,7 @@ void RegisterAppNodes() {
             const auto sig = c.Input("signal").AsArray();
             const int sr = static_cast<int>(std::clamp(
                 c.Param("sampleRate").AsNumber(), 1000.0, 768000.0));
-            std::vector<float> pcm(sig.begin(), sig.end());
+            const std::vector<float> pcm = ToFloatBuffer(sig);
             XER::Audio::CodecIO::WavPcmCodec codec;
             std::vector<std::uint8_t> wav;
             if (!codec.Encode16(pcm.data(), pcm.size(), wav, sr, 1)) {
