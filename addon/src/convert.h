@@ -16,8 +16,9 @@ namespace Str = XER::Helper::String;
 
 inline v8::Local<v8::Value> GetProp(v8::Local<v8::Object> obj,
                                     const char* key) {
-    return Nan::Get(obj, Nan::New(key).ToLocalChecked())
-        .FromMaybe(Nan::Undefined());
+    v8::Local<v8::Value> v;
+    Nan::Get(obj, Nan::New(key).ToLocalChecked()).ToLocal(&v);
+    return v.IsEmpty() ? Nan::Undefined() : v;
 }
 
 inline std::string StrProp(v8::Local<v8::Object> obj, const char* key) {
@@ -47,8 +48,9 @@ inline std::vector<std::string> StringArray(v8::Local<v8::Value> v) {
     const uint32_t n = arr->Length();
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        v8::Local<v8::Value> item =
-            arr->Get(Nan::GetCurrentContext(), i).FromMaybe(Nan::Undefined());
+        v8::Local<v8::Value> item;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&item);
+        if (item.IsEmpty()) item = Nan::Undefined();
         if (item->IsString()) {
             Nan::Utf8String s(item);
             out.emplace_back(*s, static_cast<std::size_t>(s.length()));
@@ -67,8 +69,9 @@ inline std::vector<int> IntArray(v8::Local<v8::Value> v) {
     const uint32_t n = arr->Length();
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        v8::Local<v8::Value> item =
-            arr->Get(Nan::GetCurrentContext(), i).FromMaybe(Nan::Undefined());
+        v8::Local<v8::Value> item;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&item);
+        if (item.IsEmpty()) item = Nan::Undefined();
         out.push_back(item->IsNumber()
                           ? static_cast<int>(item.As<v8::Number>()->Value())
                           : 0);
@@ -105,6 +108,10 @@ inline UIL::Rect RectFromJS(v8::Local<v8::Value> obj) {
     r.height = static_cast<float>(NumberOr(GetProp(o, "height"), 0));
     return r;
 }
+
+template <typename T>
+inline T EnumFromJS(v8::Local<v8::Value> v, T fallback,
+                    std::initializer_list<std::pair<const char*, T>> names);
 
 // EnumArg — EnumFromJS for a FunctionCallbackInfo argument slot.
 template <typename T>

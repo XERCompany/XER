@@ -76,8 +76,9 @@ std::vector<UIW::AppTitleBar::MenuItem> MenuItemsFromJS(
     const uint32_t n = arr->Length();
     out.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        v8::Local<v8::Value> el =
-            arr->Get(Nan::GetCurrentContext(), i).FromMaybe(Nan::Undefined());
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        if (el.IsEmpty()) el = Nan::Undefined();
         if (el->IsObject())
             out.push_back(MenuItemFromJS(el.As<v8::Object>(), store));
     }
@@ -151,8 +152,9 @@ NAN_METHOD(TitleBarSetMenus) {
     std::vector<UIW::AppTitleBar::Menu> menus;
     menus.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        v8::Local<v8::Value> el =
-            arr->Get(Nan::GetCurrentContext(), i).FromMaybe(Nan::Undefined());
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        if (el.IsEmpty()) el = Nan::Undefined();
         if (el->IsObject())
             menus.push_back(MenuFromJS(el.As<v8::Object>(), store));
     }

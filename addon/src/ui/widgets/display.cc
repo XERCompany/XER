@@ -230,8 +230,9 @@ NAN_METHOD(AccordionSetItems) {
     const uint32_t n = arr->Length();
     items.reserve(n);
     for (uint32_t i = 0; i < n; ++i) {
-        v8::Local<v8::Value> el =
-            arr->Get(Nan::GetCurrentContext(), i).FromMaybe(Nan::Undefined());
+        v8::Local<v8::Value> el;
+        arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+        if (el.IsEmpty()) el = Nan::Undefined();
         if (!el->IsObject()) continue;
         v8::Local<v8::Object> o = el.As<v8::Object>();
         UIW::Accordion::Item item;
@@ -365,9 +366,9 @@ void NewContextMenu(const Nan::FunctionCallbackInfo<v8::Value>& info) {
         const uint32_t n = arr->Length();
         items.reserve(n);
         for (uint32_t i = 0; i < n; ++i) {
-            v8::Local<v8::Value> el =
-                arr->Get(Nan::GetCurrentContext(), i)
-                    .FromMaybe(Nan::Undefined());
+            v8::Local<v8::Value> el;
+            arr->Get(Nan::GetCurrentContext(), i).ToLocal(&el);
+            if (el.IsEmpty()) el = Nan::Undefined();
             if (el->IsObject())
                 items.push_back(ContextMenuItemFromJS(el.As<v8::Object>(), store));
         }
