@@ -86,12 +86,16 @@ if(NOT EXISTS "${XER_NAN_ROOT}/nan.h")
 endif()
 
 # --- Module ------------------------------------------------------------------
+# Audio bindings are organized one .h/.cc pair per class under src/audio/
+# (dsp/, fx/, analysis/, codec/, midi/, synth/, core/, plugin/ subdirs) —
+# globbed so new classes are picked up without editing this file.
+file(GLOB_RECURSE XER_ADDON_AUDIO_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/*.cc")
+
 add_library(xeraddon MODULE
     src/addon.cc
     src/image/image.cc
-    src/audio/audio.cc
-    src/audio/buffer.cc
-    src/audio/player.cc
+    ${XER_ADDON_AUDIO_SOURCES}
     src/ui/ui.cc
     src/ui/widget.cc
     src/ui/window.cc

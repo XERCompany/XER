@@ -32,7 +32,11 @@ public:
     std::shared_ptr<Widget> GetOverlay() const { return overlay_; }
     void Layout(const Layout::Rect& bounds);
     void Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens);
-    void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) const;
+    // `damage` (optional, client coords): pixels that must be repainted.
+    // Renderers get it via SetFrameDamage and the traversal culls widgets
+    // fully outside it; nullptr means full repaint.
+    void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
+                const Layout::Rect* damage = nullptr) const;
     bool HandleEvent(const Event& event);
 
     // Per-frame tick for tree-level animation state (hover tooltips). Widget
@@ -44,6 +48,31 @@ public:
     bool ConsumeDirtyPaint();
     // Same for layout requests raised through Widget::RequestLayout().
     bool ConsumeLayoutRequest();
+
+    // --- Damage-region tracking (partial repaints) -------------------------
+    // Widgets report the bounds they invalidated; the union becomes the
+    // next InvalidateRect region instead of the whole client area.
+    // Coordinates are in widget (DIP) space.
+    void AddDamageRect(Layout::Rect rect);
+    // Returns the accumulated damage and clears it. `valid` is false when
+    // nothing was reported — callers should treat that as "repaint all".
+    struct DamageRect {
+        Layout::Rect rect{};
+        bool valid = false;
+    };
+    DamageRect ConsumeDamageRect();
+    // Structural changes (root/overlay swap) that can affect pixels outside
+    // any widget's recorded bounds — forces a full repaint once.
+    void RequestFullDamage() { full_damage_pending_ = true; }
+    bool ConsumeFullDamage() {
+        const bool v = full_damage_pending_;
+        full_damage_pending_ = false;
+        return v;
+    }
+    // True while WidgetTree::Layout runs — Invalidate/SetBounds skip
+    // damage recording because a layout request already forces a full
+    // repaint.
+    bool LayoutInProgress() const { return layout_in_progress_; }
     // Clears the hovered widget (e.g. on WM_MOUSELEAVE).
     void ClearHover();
     // Drops left-button mouse capture without a MouseUp (e.g. the OS
@@ -74,7 +103,8 @@ private:
     void RenderSubtree(
         const std::shared_ptr<Widget>& widget,
         Rendering::Renderer& renderer,
-        const Theme::Tokens& tokens
+        const Theme::Tokens& tokens,
+        const Layout::Rect* cull
     ) const;
     void CollectFocusable(
         const std::shared_ptr<Widget>& widget,
@@ -107,6 +137,11 @@ private:
     std::weak_ptr<Widget> hovered_widget_;
     Layout::Point synthesized_click_position_;
     bool suppress_duplicate_click_ = false;
+    // Union of invalidated widget bounds since the last ConsumeDamageRect.
+    Layout::Rect pending_damage_{};
+    bool pending_damage_valid_ = false;
+    bool full_damage_pending_ = false;
+    bool layout_in_progress_ = false;
     std::function<bool(const Event&)> context_menu_handler_;
     std::function<bool(const Event&)> key_handler_;
 };

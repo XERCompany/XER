@@ -7,7 +7,9 @@
 #undef DrawText
 #endif
 
-#include <d2d1.h>
+#include <d2d1_1.h>
+#include <d3d11.h>
+#include <dxgi1_2.h>
 #include <dwrite.h>
 #include <wrl/client.h>
 
@@ -18,6 +20,10 @@
 
 namespace XER::UI::Rendering::Windows {
 
+// GPU renderer: D3D11 device -> D2D1 device context -> DXGI flip-model
+// swapchain. The widget tree is rendered into a retained canvas bitmap and
+// blitted to the swapchain back buffer each frame, so partial (damage-rect)
+// repaints only re-fill the affected pixels instead of the whole window.
 class Direct2DRenderer final : public Renderer {
 public:
     explicit Direct2DRenderer(HWND hwnd);
@@ -28,6 +34,7 @@ public:
 
     void SetClearColor(Theme::Color color);
     void SetDpi(UINT dpi);
+    void SetFrameDamage(Layout::Rect damage) override;
     void BeginFrame(Layout::Rect bounds) override;
     void EndFrame() override;
     void FillRect(Layout::Rect rect, Theme::Color color, float radius) override;
@@ -49,7 +56,9 @@ public:
                        Layout::Rect dst_rect, float opacity) override;
 
 private:
-    void EnsureRenderTarget();
+    void EnsureDevice();
+    void EnsureTargets(UINT32 width, UINT32 height);
+    void ReleaseTargets();
     void RequireFrame() const;
     ID2D1SolidColorBrush* Brush();
     Microsoft::WRL::ComPtr<IDWriteTextFormat> CreateTextFormat(TextStyle style) const;
@@ -60,12 +69,36 @@ private:
     UINT dpi_;
     Theme::Color clear_color_{1.0f, 1.0f, 1.0f, 1.0f};
     bool frame_started_ = false;
+    // Damage rect for the current frame (client coords). When it does not
+    // cover the whole frame the canvas keeps its previous contents outside
+    // the damage area and only that region is re-rendered.
+    Layout::Rect frame_damage_{};
+    bool has_frame_damage_ = false;
+    // True once the retained canvas holds a complete presented frame;
+    // a fresh canvas must be fully cleared before partial damage applies.
+    bool canvas_valid_ = false;
+    // Whether EndFrame blits the whole canvas or only frame_damage_.
+    bool blit_full_frame_ = true;
     D2D1_SIZE_U target_size_{0, 0};
-    Microsoft::WRL::ComPtr<ID2D1Factory> d2d_factory_;
+
+    // D3D11 device shared by the DXGI swapchain and the D2D device.
+    Microsoft::WRL::ComPtr<ID3D11Device> d3d_device_;
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device_;
+    Microsoft::WRL::ComPtr<IDXGIFactory2> dxgi_factory_;
+    Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_chain_;
+    // D2D device + immediate context issuing all draw commands.
+    Microsoft::WRL::ComPtr<ID2D1Factory1> d2d_factory_;
+    Microsoft::WRL::ComPtr<ID2D1Device> d2d_device_;
+    Microsoft::WRL::ComPtr<ID2D1DeviceContext> dc_;
     Microsoft::WRL::ComPtr<IDWriteFactory> write_factory_;
-    Microsoft::WRL::ComPtr<ID2D1HwndRenderTarget> render_target_;
-    // Reusable drawing resources. The brush is bound to the current render
-    // target and is recreated whenever the target is.
+    // Retained scene: the full last-presented frame. Widget drawing targets
+    // this bitmap; the swapchain back buffer only receives a blit of it.
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> canvas_;
+    // Render target view of the current swapchain back buffer.
+    Microsoft::WRL::ComPtr<IDXGISurface> backbuffer_;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> backbuffer_target_;
+    // Reusable drawing resources. The brush is bound to the D2D device and
+    // works on any of its targets.
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush_;
     mutable std::unordered_map<std::string, Microsoft::WRL::ComPtr<IDWriteTextFormat>> text_formats_;
     mutable std::unordered_map<std::string, Microsoft::WRL::ComPtr<IDWriteTextLayout>> text_layouts_;

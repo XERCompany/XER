@@ -643,18 +643,50 @@ public:
 
 private:
     // Repaints only when widgets reported changes since the last flush.
+    // Paint-only changes invalidate just the union of the invalidated
+    // widget bounds (converted DIP->px) instead of the whole client area.
     void FlushDirtyState(HWND hwnd) {
         if (hwnd == nullptr) {
             return;
         }
         const bool layout_requested = widget_tree_.ConsumeLayoutRequest();
         const bool paint_requested = widget_tree_.ConsumeDirtyPaint();
+        const auto damage = widget_tree_.ConsumeDamageRect();
+        const bool full_damage = widget_tree_.ConsumeFullDamage();
         if (layout_requested) {
             LayoutContent(hwnd);
-        }
-        if (layout_requested || paint_requested) {
             InvalidateRect(hwnd, nullptr, FALSE);
+            return;
         }
+        if (!paint_requested && !damage.valid && !full_damage) {
+            return;
+        }
+        if (full_damage || !damage.valid) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return;
+        }
+        const float dip_to_px = static_cast<float>(dpi_) / 96.0f;
+        RECT rc = {
+            static_cast<LONG>(std::floor(damage.rect.x * dip_to_px)),
+            static_cast<LONG>(std::floor(damage.rect.y * dip_to_px)),
+            static_cast<LONG>(std::ceil(
+                (damage.rect.x + damage.rect.width) * dip_to_px)),
+            static_cast<LONG>(std::ceil(
+                (damage.rect.y + damage.rect.height) * dip_to_px)),
+        };
+        RECT client{};
+        if (!GetClientRect(hwnd, &client)) {
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return;
+        }
+        rc.left = std::max<LONG>(rc.left, client.left);
+        rc.top = std::max<LONG>(rc.top, client.top);
+        rc.right = std::min<LONG>(rc.right, client.right);
+        rc.bottom = std::min<LONG>(rc.bottom, client.bottom);
+        if (rc.right <= rc.left || rc.bottom <= rc.top) {
+            return;  // damage fell entirely outside the client area
+        }
+        InvalidateRect(hwnd, &rc, FALSE);
     }
 
     void UpdateFrameTimer() {
@@ -704,17 +736,43 @@ private:
     }
 
     void Paint(HWND hwnd, HDC hdc, const RECT& paint_rect) {
+        (void)hdc;  // presentation goes through the DXGI swapchain, not GDI
         try {
             const auto background = theme_.GetTokens().background;
             if (root_widget_ == nullptr || !root_widget_->IsVisible()) {
-                FillBackground(hdc, paint_rect, background);
+                // No widget tree: present a solid clear through the swapchain
+                // (GDI cannot draw on a flip-model swapchain surface).
+                if (renderer_ == nullptr) {
+                    renderer_ = std::make_unique<Rendering::Windows::Direct2DRenderer>(hwnd);
+                }
+                renderer_->SetDpi(dpi_);
+                renderer_->SetClearColor(background);
+                RECT client{};
+                if (GetClientRect(hwnd, &client)) {
+                    const float scale = 96.0f / static_cast<float>(dpi_);
+                    renderer_->BeginFrame(Layout::Rect{
+                        0.0f, 0.0f,
+                        static_cast<float>(client.right) * scale,
+                        static_cast<float>(client.bottom) * scale});
+                    renderer_->EndFrame();
+                }
             } else {
                 if (renderer_ == nullptr) {
                     renderer_ = std::make_unique<Rendering::Windows::Direct2DRenderer>(hwnd);
                 }
                 renderer_->SetDpi(dpi_);
                 renderer_->SetClearColor(background);
-                widget_tree_.Render(*renderer_, theme_.GetTokens());
+                // rcPaint (px) -> widget coords (DIP): the retained canvas
+                // keeps last frame's pixels outside this region.
+                const float px_to_dip = 96.0f / static_cast<float>(dpi_);
+                const Layout::Rect damage{
+                    static_cast<float>(paint_rect.left) * px_to_dip,
+                    static_cast<float>(paint_rect.top) * px_to_dip,
+                    static_cast<float>(paint_rect.right - paint_rect.left) *
+                        px_to_dip,
+                    static_cast<float>(paint_rect.bottom - paint_rect.top) *
+                        px_to_dip};
+                widget_tree_.Render(*renderer_, theme_.GetTokens(), &damage);
                 // Flush pending child-window paints (the NodeGraph canvas
                 // HWND) synchronously inside this WM_PAINT, right after the
                 // parent surface commits. Without this the two HWNDs can
@@ -735,25 +793,6 @@ private:
         } catch (...) {
             renderer_.reset();
             ReportRenderError("Unknown native renderer failure");
-        }
-    }
-
-    void FillBackground(HDC hdc, const RECT& paint_rect, Theme::Color color) {
-        const auto channel = [](float value) {
-            return static_cast<BYTE>(std::lround(std::clamp(value, 0.0f, 1.0f) * 255.0f));
-        };
-        HBRUSH brush = CreateSolidBrush(RGB(
-            channel(color.r),
-            channel(color.g),
-            channel(color.b)
-        ));
-        if (brush == nullptr) {
-            throw std::runtime_error("CreateSolidBrush failed while painting an empty window");
-        }
-        const int painted = FillRect(hdc, &paint_rect, brush);
-        DeleteObject(brush);
-        if (painted == 0) {
-            throw std::runtime_error("FillRect failed while painting an empty window");
         }
     }
 

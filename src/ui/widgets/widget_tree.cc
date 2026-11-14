@@ -17,6 +17,7 @@ void WidgetTree::SetRoot(std::shared_ptr<Widget> root) {
     // a bare weak_ptr reset would leave it stuck in the hover state.
     UpdateHover(nullptr);
     root_ = std::move(root);
+    RequestFullDamage();
     if (root_ != nullptr) {
         root_->SetTreeRecursive(this);
     }
@@ -29,6 +30,7 @@ void WidgetTree::ShowOverlay(std::shared_ptr<Widget> overlay) {
     // keeps a hover highlight while it is unreachable.
     UpdateHover(nullptr);
     overlay_ = std::move(overlay);
+    RequestFullDamage();
     if (overlay_ != nullptr) {
         overlay_->SetTreeRecursive(this);
         overlay_->SetBounds(last_bounds_);
@@ -52,6 +54,7 @@ void WidgetTree::HideOverlay() {
     ClearFocus(overlay_);
     UpdateHover(nullptr);
     overlay_.reset();
+    RequestFullDamage();
 }
 
 std::shared_ptr<Widget> WidgetTree::GetRoot() const {
@@ -65,6 +68,7 @@ void WidgetTree::Layout(const Layout::Rect& bounds) {
 void WidgetTree::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
     last_bounds_ = bounds;
     last_tokens_ = tokens;
+    layout_in_progress_ = true;
     if (root_ != nullptr) {
         root_->SetBounds(bounds);
         root_->Layout(bounds, tokens);
@@ -77,21 +81,38 @@ void WidgetTree::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
         passive_overlay_->SetBounds(bounds);
         passive_overlay_->Layout(bounds, tokens);
     }
+    layout_in_progress_ = false;
 }
 
-void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) const {
+void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
+                        const Layout::Rect* damage) const {
     if (root_ == nullptr || !root_->IsVisible()) {
         return;
     }
 
-    renderer.BeginFrame(root_->GetBounds());
-    RenderSubtree(root_, renderer, tokens);
+    const Layout::Rect bounds = root_->GetBounds();
+    // Clip = damage (or full bounds). A 1px margin keeps anti-aliased edges
+    // at the damage boundary from being shaved by the aliased clip.
+    Layout::Rect clip =
+        (damage != nullptr && damage->width > 0.0f && damage->height > 0.0f)
+            ? *damage
+            : bounds;
+    clip.x -= 1.0f;
+    clip.y -= 1.0f;
+    clip.width += 2.0f;
+    clip.height += 2.0f;
+
+    renderer.SetFrameDamage(clip);
+    renderer.BeginFrame(bounds);
+    renderer.PushClip(clip);
+    RenderSubtree(root_, renderer, tokens, &clip);
     if (overlay_ != nullptr) {
-        RenderSubtree(overlay_, renderer, tokens);
+        RenderSubtree(overlay_, renderer, tokens, &clip);
     }
     if (passive_overlay_ != nullptr) {
-        RenderSubtree(passive_overlay_, renderer, tokens);
+        RenderSubtree(passive_overlay_, renderer, tokens, &clip);
     }
+    renderer.PopClip();
     renderer.EndFrame();
 }
 
@@ -266,10 +287,24 @@ void WidgetTree::ClearFocus(const std::shared_ptr<Widget>& widget) {
 void WidgetTree::RenderSubtree(
     const std::shared_ptr<Widget>& widget,
     Rendering::Renderer& renderer,
-    const Theme::Tokens& tokens
+    const Theme::Tokens& tokens,
+    const Layout::Rect* cull
 ) const {
     if (widget == nullptr || !widget->IsVisible()) {
         return;
+    }
+
+    // Skip subtrees that cannot intersect the damage clip. The pad covers
+    // draw overflow beyond widget bounds (focus rings, popover shadows).
+    if (cull != nullptr) {
+        constexpr float kCullPad = 48.0f;
+        const Layout::Rect& b = widget->GetBounds();
+        if (b.x + b.width < cull->x - kCullPad ||
+            b.x > cull->x + cull->width + kCullPad ||
+            b.y + b.height < cull->y - kCullPad ||
+            b.y > cull->y + cull->height + kCullPad) {
+            return;
+        }
     }
 
     widget->Render(renderer, tokens);
@@ -278,7 +313,7 @@ void WidgetTree::RenderSubtree(
         renderer.PushClip(widget->bounds_);
     }
     for (const auto& child : widget->GetChildren()) {
-        RenderSubtree(child, renderer, tokens);
+        RenderSubtree(child, renderer, tokens, cull);
     }
     if (clips) {
         renderer.PopClip();
@@ -375,6 +410,28 @@ bool WidgetTree::ConsumeDirtyPaint() {
     ClearPaintDirty(overlay_);
     ClearPaintDirty(passive_overlay_);
     return true;
+}
+
+void WidgetTree::AddDamageRect(Layout::Rect rect) {
+    if (rect.width <= 0.0f || rect.height <= 0.0f) {
+        return;
+    }
+    // Inflate for focus rings, popover shadows (~16px) and AA fringe.
+    constexpr float kPad = 24.0f;
+    rect.x -= kPad;
+    rect.y -= kPad;
+    rect.width += 2.0f * kPad;
+    rect.height += 2.0f * kPad;
+    pending_damage_ =
+        pending_damage_valid_ ? pending_damage_.Union(rect) : rect;
+    pending_damage_valid_ = true;
+}
+
+WidgetTree::DamageRect WidgetTree::ConsumeDamageRect() {
+    DamageRect out{pending_damage_, pending_damage_valid_};
+    pending_damage_ = Layout::Rect{};
+    pending_damage_valid_ = false;
+    return out;
 }
 
 bool WidgetTree::ConsumeLayoutRequest() {

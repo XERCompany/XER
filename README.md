@@ -27,6 +27,7 @@ a full network stack, and FFmpeg integration.
 - [AsyncIO: threads, memory, hardware abstraction](#async_io)
 - [Cache, Helper, Wrappers](#misc)
 - [Code examples](#code-examples)
+- [Node.js addon](#node-addon)
 
 ---
 
@@ -857,6 +858,67 @@ XER::App::Crash::Install();          // before everything else
 // %TEMP%/XER/cache/crashes/<timestamp>/, auto-restart (--crash-depth<=2)
 // stackscan in crash.log shows return addresses without frame pointers.
 ```
+
+---
+
+## `<a id="node-addon"></a>`Node.js addon
+
+`addon/` builds `xer.node` — a NAN/V8 native module exposing the XER API to
+Node.js as ES classes (one wrapper class per file, grouped by subsystem).
+
+```js
+const xer = require('./addon/index.js');
+const { audio, UI } = xer;
+```
+
+### Audio class API (`xer.audio`)
+
+Top-level: `audio.info(path)`, `audio.convert(in, out, opts?)`,
+`audio.Buffer` (decoded PCM — the only input `audio.Player` accepts),
+`audio.Player` (WASAPI playback).
+
+Subsystem namespaces — every native class is a JS class:
+
+| Namespace | Classes / functions |
+|---|---|
+| `audio.dsp` | `Biquad`, `FFT`, `STFT`, `DelayLine`, `Convolution`, `PhaseVocoder`, `PitchShifter`, `SpectralShaper`, `FIRBank`, `IIRBank`; `Windowing` functions (`Hann`, `Hamming`, `Blackman`, `SqrtHann`, `Apply`, `Describe`) |
+| `audio.fx` | `Compressor`, `Expander`, `Gate`, `Limiter`, `Bitcrush`, `Tube`, `GraphicEQ`, `ParametricEQ`, `Chorus`, `Tremolo`, `Vibrato`, `RingMod`, `Flanger`, `Phaser`, `AutoTune`, `ReverbAlgo`, `ReverbConv`; `audio.fx.custom` — `List()`, `RenderExample(rate, samples)`, `Run(pkg, rate, samples)`, `RunInterleaved(pkg, rate, samples, channels)` |
+| `audio.analysis` | `BeatTracker`, `HarmonicContent`, `LoudnessMeter`, `OnsetDetector`, `PitchEstimator`, `RmsPeak`, `Spectrogram`, `FFTAnalyzer`, `PitchDetector` |
+| `audio.codec` | `WavPcm`, `WavFloat`, `Flac`, `Mp3`, `Ogg`, `Aac`, `Id3`, `FileStreamer` |
+| `audio.midi` | `Parser`, `Sequencer`, `Clock`, `Mapping`, `Dispatcher` (JS callbacks), `Sysex`, `Automation` |
+| `audio.synth` | `Adsr`, `MultistageEnv`, `Filter`, `Lfo`, `ModMatrix`, `OscAnalog`, `OscFm`, `OscNoise`, `OscWavetable`, `Polyphony`, `VoiceManager` |
+| `audio.core` | `Engine`, `EngineHost`, `ClockSync`, `Fifo`, `Interleave`, `BitDepth`, `Resample`, `NativeBuffer`, `Latency`, `SourceLoader`, `Logger`, `BufferManager`, `CacheManager`, `AsyncManager`; thread-priority functions (`SetCurrentThreadPriority`, `SetThreadAffinity`, `GetOptimalCore`, `GetPriorityName`, …) |
+| `audio.plugin` | `ParamBridge`, `BuiltinHost`, `Vst3Host`, `ClapHost`, `AuHost`, `Vst3External`, `ClapExternal`; `ScanVst3Plugins(roots?)`, `DefaultVst3SearchRoots()` |
+
+```js
+const buf = audio.Buffer.FromFile('song.mp3');        // or new audio.Buffer({...})
+const player = new audio.Player();
+player.Load(buf);                                     // Buffer ONLY
+
+const comp = new audio.fx.Compressor();
+comp.SetThresholdDb(-20); comp.SetRatio(4);
+const out = comp.ProcessBlock(pcm);                   // Float32Array -> Float32Array
+
+const src = new audio.core.SourceLoader();
+const decoded = src.Load({ path: 'in.wav', targetSampleRate: 48000 });
+
+const pkg = { label: 'my-chain', nodes: [
+  { label: 'comp', backend: 'builtin', algorithm: 'Compressor' }]};
+const res = audio.fx.custom.Run(pkg, 44100, pcm);     // {output, report}
+```
+
+Conventions: audio buffers are `Float32Array` (interleaved for multi-channel),
+byte streams `Uint8Array`. Methods taking `(samples, channels)` treat the
+array as interleaved frames×channels; mono DSP/FX methods take the array
+length as the frame count.
+
+### Design UI (`xer.UI`)
+
+`UI.Application`, `UI.Window`, `UI.Widget` subclasses plus ~60 themed widgets:
+primitives (`Button`, `Label`, `TextInput`, `Slider`, …), overlays
+(`Popover`, `DropdownMenu`, `HoverCard`, `Sheet`, `Drawer`, `Dialog`,
+`ContextMenu`, `Command`), data display (`Table`, `Chart`, `Calendar`,
+`Sidebar`), inputs (`Combobox`, `InputOTP`, `Select`, …).
 
 ---
 

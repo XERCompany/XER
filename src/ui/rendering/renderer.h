@@ -29,6 +29,12 @@ public:
 
     virtual void BeginFrame(Layout::Rect bounds) = 0;
     virtual void EndFrame() = 0;
+
+    // Optional damage rect (absolute client coords, same space as widget
+    // bounds) for the upcoming frame. Retained-mode renderers use it to
+    // skip clearing/redrawing unaffected areas; immediate renderers may
+    // ignore it. Called by WidgetTree::Render before BeginFrame.
+    virtual void SetFrameDamage(Layout::Rect damage) { (void)damage; }
     virtual void FillRect(Layout::Rect rect, Theme::Color color, float radius) = 0;
     virtual void StrokeRect(Layout::Rect rect, Theme::Color color, float width, float radius) = 0;
     virtual void DrawLine(

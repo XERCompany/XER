@@ -13,6 +13,7 @@
 #include "audio/audio_core/audio_source_loader.h"
 #include "buffer.h"
 #include "player.h"
+#include "registrations.h"
 #include "audio/file_io_codecs/codec_ffmpeg_encode_helper.h"
 #include "audio/file_io_codecs/codec_mp3_lame.h"
 #include "audio/file_io_codecs/codec_wav_pcm.h"
@@ -271,6 +272,122 @@ void InitAudio(v8::Local<v8::Object> exports) {
     Nan::SetMethod(exports, "convert", AudioConvert);
     audio::InitAudioBuffer(exports);
     audio::InitAudioPlayer(exports);
+
+    // Class API, grouped by subsystem: xer.audio.dsp.*, xer.audio.fx.*,
+    // xer.audio.analysis.*, xer.audio.codec.*, xer.audio.midi.*,
+    // xer.audio.synth.*, xer.audio.core.*, xer.audio.plugin.*.
+    v8::Local<v8::Object> dsp = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("dsp").ToLocalChecked(), dsp);
+    audio::dsp::InitDspBiquad(dsp);
+    audio::dsp::InitDspFFT(dsp);
+    audio::dsp::InitDspSTFT(dsp);
+    audio::dsp::InitDspWindowing(dsp);
+    audio::dsp::InitDspDelayLine(dsp);
+    audio::dsp::InitDspConvolution(dsp);
+    audio::dsp::InitDspPhaseVocoder(dsp);
+    audio::dsp::InitDspPitchShifter(dsp);
+    audio::dsp::InitDspSpectralShaper(dsp);
+    audio::dsp::InitDspFIRBank(dsp);
+    audio::dsp::InitDspIIRBank(dsp);
+
+    v8::Local<v8::Object> fx = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("fx").ToLocalChecked(), fx);
+    audio::fx::InitFxCompressor(fx);
+    audio::fx::InitFxExpander(fx);
+    audio::fx::InitFxGate(fx);
+    audio::fx::InitFxLimiter(fx);
+    audio::fx::InitFxBitcrush(fx);
+    audio::fx::InitFxTube(fx);
+    audio::fx::InitFxGraphicEQ(fx);
+    audio::fx::InitFxParametricEQ(fx);
+    audio::fx::InitFxChorus(fx);
+    audio::fx::InitFxTremolo(fx);
+    audio::fx::InitFxVibrato(fx);
+    audio::fx::InitFxRingMod(fx);
+    audio::fx::InitFxFlanger(fx);
+    audio::fx::InitFxPhaser(fx);
+    audio::fx::InitFxAutoTune(fx);
+    audio::fx::InitFxReverbAlgo(fx);
+    audio::fx::InitFxReverbConv(fx);
+    v8::Local<v8::Object> fx_custom = Nan::New<v8::Object>();
+    Nan::Set(fx, Nan::New("custom").ToLocalChecked(), fx_custom);
+    audio::fx::InitFxCustom(fx_custom);
+
+    v8::Local<v8::Object> analysis = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("analysis").ToLocalChecked(), analysis);
+    audio::analysis::InitAnalysisBeatTracker(analysis);
+    audio::analysis::InitAnalysisHarmonic(analysis);
+    audio::analysis::InitAnalysisLoudness(analysis);
+    audio::analysis::InitAnalysisOnset(analysis);
+    audio::analysis::InitAnalysisPitchEst(analysis);
+    audio::analysis::InitAnalysisRmsPeak(analysis);
+    audio::analysis::InitAnalysisSpectrogram(analysis);
+    audio::analysis::InitAnalysisFft(analysis);
+    audio::analysis::InitAnalysisPitchDet(analysis);
+
+    v8::Local<v8::Object> codec = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("codec").ToLocalChecked(), codec);
+    audio::codec::InitCodecWavPcm(codec);
+    audio::codec::InitCodecWavFloat(codec);
+    audio::codec::InitCodecFlac(codec);
+    audio::codec::InitCodecMp3(codec);
+    audio::codec::InitCodecOgg(codec);
+    audio::codec::InitCodecAac(codec);
+    audio::codec::InitCodecId3(codec);
+    audio::codec::InitCodecStreamer(codec);
+
+    v8::Local<v8::Object> midi = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("midi").ToLocalChecked(), midi);
+    audio::midi::InitMidiParser(midi);
+    audio::midi::InitMidiSequencer(midi);
+    audio::midi::InitMidiClock(midi);
+    audio::midi::InitMidiMapping(midi);
+    audio::midi::InitMidiDispatcher(midi);
+    audio::midi::InitMidiSysex(midi);
+    audio::midi::InitMidiAutomation(midi);
+
+    v8::Local<v8::Object> synth = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("synth").ToLocalChecked(), synth);
+    audio::synth::InitSynthAdsr(synth);
+    audio::synth::InitSynthMultistage(synth);
+    audio::synth::InitSynthFilter(synth);
+    audio::synth::InitSynthLfo(synth);
+    audio::synth::InitSynthModMatrix(synth);
+    audio::synth::InitSynthOscAnalog(synth);
+    audio::synth::InitSynthOscFm(synth);
+    audio::synth::InitSynthOscNoise(synth);
+    audio::synth::InitSynthOscWavetable(synth);
+    audio::synth::InitSynthPolyphony(synth);
+    audio::synth::InitSynthVoiceManager(synth);
+
+    v8::Local<v8::Object> core = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("core").ToLocalChecked(), core);
+    audio::core::InitCoreEngine(core);
+    audio::core::InitCoreEngineHost(core);
+    audio::core::InitCoreClockSync(core);
+    audio::core::InitCoreFifo(core);
+    audio::core::InitCoreInterleave(core);
+    audio::core::InitCoreBitDepth(core);
+    audio::core::InitCoreSampleRate(core);
+    audio::core::InitCoreBufferManager(core);
+    audio::core::InitCoreLatency(core);
+    audio::core::InitCoreSourceLoader(core);
+    audio::core::InitCoreLogger(core);
+    audio::core::InitCoreThreadPriority(core);
+    audio::core::InitCoreBufferPool(core);
+    audio::core::InitCoreCacheManager(core);
+    audio::core::InitCoreAsyncManager(core);
+
+    v8::Local<v8::Object> plugin = Nan::New<v8::Object>();
+    Nan::Set(exports, Nan::New("plugin").ToLocalChecked(), plugin);
+    audio::plugin::InitPluginParamBridge(plugin);
+    audio::plugin::InitPluginBuiltinHost(plugin);
+    audio::plugin::InitPluginVst3Host(plugin);
+    audio::plugin::InitPluginClapHost(plugin);
+    audio::plugin::InitPluginAuHost(plugin);
+    audio::plugin::InitPluginVst3External(plugin);
+    audio::plugin::InitPluginClapExternal(plugin);
+    audio::plugin::InitPluginVst3Scanner(plugin);
 }
 
 }  // namespace xer::addon

@@ -128,6 +128,7 @@ if(WIN32)
             user32
             gdi32
             d2d1
+            d3d11
             d3d12
             dxgi
             dwrite

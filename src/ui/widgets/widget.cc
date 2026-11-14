@@ -264,6 +264,13 @@ Layout::Rect Widget::GetBounds() const {
 }
 
 void Widget::SetBounds(const Layout::Rect& bounds) {
+    if (tree_ != nullptr && !tree_->LayoutInProgress() &&
+        (bounds.x != bounds_.x || bounds.y != bounds_.y ||
+         bounds.width != bounds_.width || bounds.height != bounds_.height)) {
+        // Moved/resized outside a layout pass: both old and new areas need
+        // repainting or stale pixels remain.
+        tree_->AddDamageRect(bounds_.Union(bounds));
+    }
     bounds_ = bounds;
 }
 
@@ -271,6 +278,11 @@ void Widget::Invalidate() {
     paint_dirty_ = true;
     for (auto ancestor = GetParent(); ancestor; ancestor = ancestor->GetParent()) {
         ancestor->paint_dirty_ = true;
+    }
+    // Report this widget's bounds as the repaint region. Skipped during
+    // layout — a layout request already forces a full repaint.
+    if (tree_ != nullptr && !tree_->LayoutInProgress()) {
+        tree_->AddDamageRect(bounds_);
     }
 }
 
