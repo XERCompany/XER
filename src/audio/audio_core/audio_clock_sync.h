@@ -4,6 +4,10 @@
 #include <chrono>
 #include <vector>
 
+// Defensive: if a TU defined the Win32 `GetCurrentTime()` macro before
+// including this header, the member below would be silently renamed.
+#undef GetCurrentTime
+
 namespace XER::Audio::Core {
 
 // Clock source types

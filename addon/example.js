@@ -1,28 +1,26 @@
-require('./index.js'); // loads xer.node and exposes the XER global
+const { UI } = require('./index.js'); // loads xer.node and exposes the XER global
 
-class ContentWidget extends XER.Widget {
+const app = new UI.Application();
+const window = new UI.Window();
+
+class ContentWidget extends UI.Widget {
     constructor() {
         super(); 
 
-        this.label1 = new XER.Label("Hello World");
+        this.label1 = new UI.Label("Hello World");  
 
-        this.label1.SetPosition(100, 100);
-        this.label1.SetSize(200, 50);
- 
-        this.addChild(this.label1); 
+        this.AddChild(this.label1); 
     }
 }
-
-const Application = XER.Application;
-
-const Window = XER.Window;
-
-const window = new Window();
+  
+ 
 window.Create("Example", 800, 600);
 
 const content = new ContentWidget();
 window.SetContent(content);
 
-const app = new Application();
+window.Show();
+
+// const app = new Application();
 app.Initialize();
 app.Run();
