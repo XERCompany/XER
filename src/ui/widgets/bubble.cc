@@ -82,10 +82,6 @@ void Bubble::Layout(const Layout::Rect& bounds) {
     SetBounds(bounds);
 }
 
-bool Bubble::HandleEvent(const Event&) {
-    return false;
-}
-
 Layout::Size Bubble::GetMinSize() const {
     return {60.0f, 30.0f};
 }

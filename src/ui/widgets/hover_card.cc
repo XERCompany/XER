@@ -6,6 +6,7 @@
 #include "motion/motion.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "widget_tree.h"
 
 namespace XER::UI::Widgets {
 namespace {
@@ -33,6 +34,8 @@ public:
         , action_label_(std::move(action_label)) {
         SetFocusable(false);
         open_t_.Set(1.0f, 0.14f);
+        // Real child so the tree renders + hit-tests the content.
+        if (content_) AddChild(content_);
     }
 
     void SetCallbacks(std::function<void()> on_action,
@@ -81,14 +84,8 @@ public:
             renderer.DrawText(description_, dr, style);
             y += h + 4.0f;
         }
-        if (content_) {
-            const float ch = std::max(0.0f, bounds.y + bounds.height - y -
-                                             (action_rect_.height > 0 ? 44.0f : pad));
-            Layout::Rect cr{bounds.x + pad, y, bounds.width - pad * 2.0f, ch};
-            content_->Layout(cr, tokens);
-            content_->Render(renderer, tokens);
-            y += ch;
-        }
+        // Content is a real child — RenderSubtree draws it; Layout()
+        // assigns its rect above the action button.
         if (!action_label_.empty()) {
             const float bh = 26.0f;
             Layout::Rect br{bounds.x + pad, bounds.y + bounds.height - pad - bh,
@@ -130,6 +127,18 @@ public:
         // Clamp horizontally inside the window.
         if (r.x < 8.0f) r.x = 8.0f;
         SetBounds(r);
+
+        // Position the content child inside the card, above the action row.
+        if (content_) {
+            const float pad = 14.0f;
+            float cy = r.y + pad;
+            if (!title_.empty()) cy += 14.0f * 1.4f + 4.0f;
+            if (!description_.empty()) cy += 12.0f * 2.6f + 4.0f;
+            const float reserve = action_label_.empty() ? pad : 44.0f;
+            Layout::Rect cr{r.x + pad, cy, r.width - pad * 2.0f,
+                            std::max(0.0f, r.y + r.height - cy - reserve)};
+            content_->Layout(cr, CachedLayoutTokens());
+        }
     }
 
     bool HandleEvent(const Event& event) override {
