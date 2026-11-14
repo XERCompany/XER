@@ -40,7 +40,10 @@ void PrintUsage() {
 
 bool EncodeForPath(const std::vector<float>& samples, int sample_rate, int channels,
                    const std::string& path, std::vector<uint8_t>* bytes, std::string* error) {
-    const std::string ext = Str::ToLowerAscii(path.substr(path.find_last_of('.')));
+    const size_t dot = path.find_last_of('.');
+    const std::string ext = dot == std::string::npos
+        ? std::string()
+        : Str::ToLowerAscii(path.substr(dot));
     const size_t frames = samples.size() / static_cast<size_t>(channels);
     const float* data = samples.data();
 
@@ -119,7 +122,8 @@ int main(int argc, char** argv) {
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kCyan),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "Loading audio: ", input_path
+            "Loading audio: ", input_path,
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 
@@ -179,7 +183,8 @@ int main(int argc, char** argv) {
         absl::StrCat(
             XER::Flux::Terminal::ForegroundSequence(XER::Flux::Terminal::TerminalColor::kGreen),
             XER::Flux::Terminal::BeginStyleSequence({.bold = true}),
-            "Successfully converted to: ", output_path, " (", encoded_bytes.size(), " bytes)"
+            "Successfully converted to: ", output_path, " (", encoded_bytes.size(), " bytes)",
+            XER::Flux::Terminal::ResetStyleSequence()
         )
     );
 

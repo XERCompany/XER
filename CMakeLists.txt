@@ -42,6 +42,17 @@ else()
     endif()
 endif()
 
+# Feature toggles (previously implicit -D cache vars; declared so they show
+# up in CMake GUIs and presets can override them cleanly).
+option(ENABLE_MEDIA "Enable media/content subsystems" ON)
+option(ENABLE_V8 "Enable the V8 JavaScript runtime" OFF)
+option(ENABLE_AI "Enable AI/ML content (ggml, ONNX, CUDA probes)" ON)
+option(ENABLE_CUDA "Enable CUDA kernels/toolkit paths (.cu sources, CUDA bridges)" OFF)
+option(ENABLE_CUDNN "Enable cuDNN paths" OFF)
+option(XER_BUILD_LLVM "Build the bundled LLVM/Clang" OFF)
+option(XER_BUILD_APP "Build the editor application" ON)
+option(XER_BUILD_XBUILD "Build the xbuild configuration utility" OFF)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 set(SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cc)
@@ -414,17 +425,28 @@ endif()
 set_target_properties(audioplayer PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
-# preview.exe — Image preview tool using XER image API
+# preview.exe — Image viewer/editor (GUI on Windows) + info tool
 add_executable(preview tools/preview/main.cc)
 target_include_directories(preview PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/preview
 )
+if(WIN32)
+    target_sources(preview PRIVATE
+        tools/preview/photo_browser.cc
+        tools/preview/photo_viewer_widget.cc
+        tools/preview/thumb_cache.cc
+    )
+endif()
 target_compile_features(preview PRIVATE cxx_std_23)
 target_link_libraries(preview PRIVATE
     XER_Image
     XER_Flux_Core
     XER_Helper
 )
+if(WIN32)
+    target_link_libraries(preview PRIVATE XER_UI_Core)
+endif()
 set_target_properties(preview PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
@@ -481,7 +503,7 @@ target_link_libraries(Editor
 )
 
 if(WIN32)
-    target_link_libraries(Editor
+    target_link_libraries(Editor PRIVATE
         Comctl32 dbghelp shlwapi winmm psapi advapi32 userenv shell32
         version ole32 ws2_32 crypt32 windowsapp wbemuuid)
 endif()

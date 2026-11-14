@@ -11,6 +11,7 @@ void Write(TerminalInterface& terminal, OutputStream stream, std::string_view te
 void Write(OutputStream stream, std::string_view text);
 void WriteLine(TerminalInterface& terminal, OutputStream stream, std::string_view text);
 void WriteLine(OutputStream stream, std::string_view text);
+void Flush(OutputStream stream);
 void ClearSnapshot();
 void ClearSnapshot(OutputStream stream);
 std::string Snapshot(OutputStream stream);

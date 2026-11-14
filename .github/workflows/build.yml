@@ -99,10 +99,12 @@ jobs:
           SKIA_BASE="avif,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp"
           FFMPEG_FEATURES="$FFMPEG_BASE,amf,nvcodec,qsv"
           SKIA_FEATURES="$SKIA_BASE,direct3d"
+          # ggml[cuda] builds the CUDA backend (ggml-cuda.dll) alongside the
+          # CPU one — the vcpkg cuda port supplies the toolkit on Windows.
           PACKAGES="cereal[*] boost-accumulators icu zlib \
             ffmpeg[$FFMPEG_FEATURES] libuv abseil fmt jsoncpp re2 tiff[*] \
             sqlite3[*] zstd brotli openssl curl pthreadpool fxdiv eigen3 \
-            range-v3 mimalloc ggml folly boost-headers fftw3 pugixml \
+            range-v3 mimalloc ggml[cuda] folly boost-headers fftw3 pugixml \
             mp3lame libraw[*] skia[$SKIA_FEATURES] intel-mkl dlfcn-win32"
           # Ports consumed via find_package across src/ that the base set
           # above does not cover. unofficial-* config names are provided
@@ -212,6 +214,8 @@ jobs:
           # Metal backend replaces gl/vulkan where supported.
           if [ "$RUNNER_OS" = "Linux" ]; then
             SKIA_HW=""
+            # ggml[cuda] needs the CUDA toolkit installed above (nvcc).
+            GGML_PORT="ggml[cuda]"
             # cudnn/cudnn-frontend need the vcpkg "cuda" port, which on Linux
             # requires a real CUDA toolkit (nvcc) — installed by the
             # "Install CUDA toolkit" step above. On Windows vcpkg downloads
@@ -219,6 +223,8 @@ jobs:
             EXTRA_PORTS="cudnn cudnn-frontend"
           else
             SKIA_HW="metal"
+            # Apple GPU backend for ggml.
+            GGML_PORT="ggml[metal]"
             EXTRA_PORTS=""
           fi
           SKIA_FEATURES="avif,dng,fontconfig,freetype,gl,graphite,harfbuzz,icu,jpeg,pdf,png,vulkan,webp${SKIA_HW:+,$SKIA_HW}"
@@ -226,7 +232,7 @@ jobs:
           # conservative: gl is deprecated but still builds; vulkan needs
           # molten-vk which vcpkg provides for osx.
           "$VCPKG_BIN" install --triplet="$TRIPLET" --clean-after-build \
-            "skia[$SKIA_FEATURES]" ggml folly pthreadpool fxdiv fp16 \
+            "skia[$SKIA_FEATURES]" "$GGML_PORT" folly pthreadpool fxdiv fp16 \
             date pffft tinyexr onnx onnxruntime $EXTRA_PORTS
 
       # ------------------------------------------------------------------

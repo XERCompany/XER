@@ -2104,11 +2104,25 @@ bool EncodeAudioFrames(const EncodeAudioParams& params,
         encoded_frame->pts = next_pts;
         next_pts += samples_to_read;
         const int bytes_per_sample = av_get_bytes_per_sample(codec_context->sample_fmt);
-        for (int channel = 0; samples_to_read < frame_samples && channel < fifo_channels; ++channel) {
-            std::memset(
-                encoded_frame->extended_data[channel] + static_cast<size_t>(samples_to_read) * static_cast<size_t>(bytes_per_sample),
-                0,
-                static_cast<size_t>(frame_samples - samples_to_read) * static_cast<size_t>(bytes_per_sample));
+        if (samples_to_read < frame_samples) {
+            // Pad the unread tail with silence. Planar formats have one
+            // buffer per channel in extended_data[]; packed formats have a
+            // single interleaved buffer in data[0] — extended_data[1..] are
+            // null there, so the per-channel memset would crash.
+            if (av_sample_fmt_is_planar(codec_context->sample_fmt)) {
+                for (int channel = 0; channel < fifo_channels; ++channel) {
+                    std::memset(
+                        encoded_frame->extended_data[channel] + static_cast<size_t>(samples_to_read) * static_cast<size_t>(bytes_per_sample),
+                        0,
+                        static_cast<size_t>(frame_samples - samples_to_read) * static_cast<size_t>(bytes_per_sample));
+                }
+            } else {
+                const size_t frame_bytes = static_cast<size_t>(fifo_channels) * static_cast<size_t>(bytes_per_sample);
+                std::memset(
+                    encoded_frame->data[0] + static_cast<size_t>(samples_to_read) * frame_bytes,
+                    0,
+                    static_cast<size_t>(frame_samples - samples_to_read) * frame_bytes);
+            }
         }
         result = avcodec_send_frame(codec_context, encoded_frame);
         av_frame_free(&encoded_frame);
