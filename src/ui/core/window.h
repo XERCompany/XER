@@ -7,6 +7,7 @@
 #include <string>
 #include <windows.h>
 
+#include "../layout/geometry.h"
 #include "../theme/theme.h"
 
 namespace XER::UI::Widgets {
@@ -38,11 +39,24 @@ public:
     void Show();
     void Hide();
     void Close();
+    void Minimize();
+    void ToggleMaximize();
+    bool IsWindowMaximized() const;
+
+    // Frameless IDE-style window chrome: removes the native caption bar while
+    // preserving DWM shadow, Aero Snap, resize borders, and rounded corners.
+    // `is_interactive` returns true for DIP client points inside the titlebar
+    // that belong to interactive widgets (menus, search bar, window buttons)
+    // so empty titlebar areas act as native HTCAPTION drag/snap regions.
+    void SetCustomTitleBar(bool enabled, float height_dip = 38.0f);
+    bool HasCustomTitleBar() const;
+    void SetTitleBarHitTest(std::function<bool(Layout::Point)> is_interactive);
 
     // Content management
     void SetContent(std::shared_ptr<Widgets::Widget> root);
     std::shared_ptr<Widgets::Widget> GetContent() const;
     void SetTheme(Theme::Variant variant);
+    Theme::Variant GetTheme() const;
     // Empty after a successful paint; otherwise returns the most recent native paint error.
     std::string GetLastRenderError() const;
 

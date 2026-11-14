@@ -85,6 +85,10 @@ void TextInput::SetPasswordMode(bool enabled) {
     Invalidate();
 }
 
+void TextInput::SetOnSubmit(std::function<void()> callback) {
+    on_submit_ = std::move(callback);
+}
+
 void TextInput::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
     constexpr float kHorizontalPadding = 12.0f;
@@ -236,6 +240,12 @@ bool TextInput::HandleEvent(const Event& event) {
     case KeyCode::End:
         MoveCaret(value_.size(), extend);
         return true;
+    case KeyCode::Enter:
+        if (on_submit_) {
+            on_submit_();
+            return true;
+        }
+        return false;
     default:
         return false;
     }

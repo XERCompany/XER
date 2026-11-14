@@ -23,6 +23,9 @@ public:
     // Renders the value as bullets (one per code point) for password
     // fields. GetValue() still returns the real text.
     void SetPasswordMode(bool enabled);
+    // Called when Enter is pressed while the field has focus (single-line
+    // inputs treat Enter as submit, not newline).
+    void SetOnSubmit(std::function<void()> callback);
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
@@ -66,6 +69,7 @@ private:
 
     std::string value_;
     std::string placeholder_;
+    std::function<void()> on_submit_;
     bool password_mode_ = false;
     std::size_t caret_ = 0;
     // Selection spans [min(anchor, caret), max(anchor, caret)).

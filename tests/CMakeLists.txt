@@ -6,6 +6,7 @@ add_executable(XER_UI_Tests
     ui/flux_backend_tests.cc
     ui/interactive_widget_tests.cc
     ui/presentation_widget_tests.cc
+    ui/flex_layout_tests.cc
     ui/ffmpeg_avatar_tests.cc
     ui/ffmpeg_video_decode_tests.cc
 )

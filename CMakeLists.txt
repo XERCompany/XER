@@ -332,6 +332,25 @@ endif()
 set_target_properties(sd PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+# HubCivitAIBrowser.exe — GUI Civitai model browser (search + filters +
+# download) built on the src/ui widget framework.
+add_executable(HubCivitAIBrowser
+    tools/HubCivitAIBrowser/main.cc
+    tools/HubCivitAIBrowser/hub_browser_widget.cc
+)
+target_include_directories(HubCivitAIBrowser PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/HubCivitAIBrowser
+)
+target_compile_features(HubCivitAIBrowser PRIVATE cxx_std_23)
+target_link_libraries(HubCivitAIBrowser PRIVATE
+    XER_UI_Core
+    XER_CivitaiModels
+)
+set_target_properties(HubCivitAIBrowser PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)

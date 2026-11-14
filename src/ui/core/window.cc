@@ -116,6 +116,7 @@ public:
             BOOL dark = TRUE;
             DwmSetWindowAttribute(hwnd_, DWMWA_USE_IMMERSIVE_DARK_MODE,
                                   &dark, sizeof(dark));
+            ApplyCustomFrame();
             UpdateFrameTimer();
         }
         return hwnd_ != nullptr;
@@ -161,8 +162,48 @@ public:
         }
     }
 
+    Theme::Variant GetTheme() const {
+        return theme_.GetVariant();
+    }
+
     std::string GetLastRenderError() const {
         return last_render_error_;
+    }
+
+    void SetCustomTitleBar(bool enabled, float height_dip) {
+        if (enabled && !(height_dip > 0.0f)) {
+            height_dip = 38.0f;
+        }
+        custom_title_bar_ = enabled;
+        title_bar_height_dip_ = enabled ? height_dip : 38.0f;
+        ApplyCustomFrame();
+    }
+
+    bool HasCustomTitleBar() const {
+        return custom_title_bar_;
+    }
+
+    void SetTitleBarHitTest(std::function<bool(Layout::Point)> hit_test) {
+        title_bar_hit_test_ = std::move(hit_test);
+    }
+
+    void Minimize() {
+        if (hwnd_ != nullptr) {
+            ShowWindow(hwnd_, SW_MINIMIZE);
+        }
+    }
+
+    void ToggleMaximize() {
+        if (hwnd_ == nullptr) {
+            return;
+        }
+        ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
+        LayoutContent(hwnd_);
+        InvalidateRect(hwnd_, nullptr, FALSE);
+    }
+
+    bool IsWindowMaximized() const {
+        return hwnd_ != nullptr && IsZoomed(hwnd_) != 0;
     }
 
     void SetOnClose(Callback callback) {
@@ -394,6 +435,80 @@ public:
                 return 0;
             }
 
+            case WM_NCCALCSIZE: {
+                if (custom_title_bar_ && wParam == TRUE && hwnd_ != nullptr) {
+                    auto* params = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                    if (params != nullptr) {
+                        RECT rect = params->rgrc[0];
+                        if (IsZoomed(hwnd_)) {
+                            const int cx_frame =
+                                GetSystemMetricsForDpi(SM_CXSIZEFRAME, dpi_);
+                            const int cy_frame =
+                                GetSystemMetricsForDpi(SM_CYSIZEFRAME, dpi_);
+                            const int cx_padded =
+                                GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi_);
+                            const int cy_padded =
+                                GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi_);
+                            rect.left += cx_frame + cx_padded;
+                            rect.right -= cx_frame + cx_padded;
+                            rect.top += cy_frame + cy_padded;
+                            rect.bottom -= cy_frame + cy_padded;
+                            params->rgrc[0] = rect;
+                        }
+                        return 0;
+                    }
+                }
+                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+            }
+
+            case WM_NCHITTEST: {
+                if (custom_title_bar_ && hwnd_ != nullptr &&
+                    message_hwnd != nullptr) {
+                    POINT pt{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+                    if (ScreenToClient(message_hwnd, &pt)) {
+                        const float scale = 96.0f / static_cast<float>(dpi_);
+                        const float dip_x = static_cast<float>(pt.x) * scale;
+                        const float dip_y = static_cast<float>(pt.y) * scale;
+                        RECT rect{};
+                        if (GetClientRect(message_hwnd, &rect)) {
+                            const float w =
+                                static_cast<float>(rect.right) * scale;
+                            const float h =
+                                static_cast<float>(rect.bottom) * scale;
+                            constexpr float kResizeBorder = 6.0f;
+                            if (!IsZoomed(message_hwnd) &&
+                                dip_x >= 0.0f && dip_x <= w &&
+                                dip_y >= 0.0f && dip_y <= h) {
+                                const bool left = dip_x < kResizeBorder;
+                                const bool right = dip_x > w - kResizeBorder;
+                                const bool top = dip_y < kResizeBorder;
+                                const bool bottom = dip_y > h - kResizeBorder;
+                                if (top && left) return HTTOPLEFT;
+                                if (top && right) return HTTOPRIGHT;
+                                if (bottom && left) return HTBOTTOMLEFT;
+                                if (bottom && right) return HTBOTTOMRIGHT;
+                                if (left) return HTLEFT;
+                                if (right) return HTRIGHT;
+                                if (top) return HTTOP;
+                                if (bottom) return HTBOTTOM;
+                            }
+                            if (dip_y >= 0.0f &&
+                                dip_y < title_bar_height_dip_) {
+                                if (title_bar_hit_test_ &&
+                                    title_bar_hit_test_(
+                                        Layout::Point{dip_x, dip_y})) {
+                                    return HTCLIENT;
+                                }
+                                widget_tree_.ClearHover();
+                                FlushDirtyState(message_hwnd);
+                                return HTCAPTION;
+                            }
+                        }
+                    }
+                }
+                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+            }
+
             case WM_GETMINMAXINFO: {
                 auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
                 if (info == nullptr) {
@@ -494,6 +609,28 @@ public:
     // When true, WM_CLOSE hides the window instead of closing it — used by
     // secondary windows that should not terminate the shared message loop.
     bool close_hides_ = false;
+
+    void ApplyCustomFrame() {
+        if (hwnd_ == nullptr) {
+            return;
+        }
+        if (custom_title_bar_) {
+            // Extend 1px of glass into the top edge so DWM keeps the native
+            // shadow while WM_NCCALCSIZE removes the caption area.
+            const MARGINS margins{0, 0, 1, 0};
+            DwmExtendFrameIntoClientArea(hwnd_, &margins);
+        } else {
+            const MARGINS margins{0, 0, 0, 0};
+            DwmExtendFrameIntoClientArea(hwnd_, &margins);
+        }
+        // Windows 11 rounded corners (DWMWCP_ROUND = 2) for both modes.
+        DWORD corner = 2;
+        DwmSetWindowAttribute(hwnd_, 33 /*DWMWA_WINDOW_CORNER_PREFERENCE*/,
+                              &corner, sizeof(corner));
+        SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE |
+                         SWP_NOZORDER | SWP_NOACTIVATE);
+    }
 
 private:
     // Repaints only when widgets reported changes since the last flush.
@@ -642,6 +779,10 @@ private:
     std::unique_ptr<Rendering::Windows::Direct2DRenderer> renderer_;
     std::string last_render_error_;
 
+    bool custom_title_bar_ = false;
+    float title_bar_height_dip_ = 38.0f;
+    std::function<bool(Layout::Point)> title_bar_hit_test_;
+
     Callback on_close_;
     std::function<void(int, int)> on_resize_;
     std::function<void()> frame_callback_;
@@ -673,6 +814,30 @@ void Window::Close() {
     impl_->Close();
 }
 
+void Window::Minimize() {
+    impl_->Minimize();
+}
+
+void Window::ToggleMaximize() {
+    impl_->ToggleMaximize();
+}
+
+bool Window::IsWindowMaximized() const {
+    return impl_->IsWindowMaximized();
+}
+
+void Window::SetCustomTitleBar(bool enabled, float height_dip) {
+    impl_->SetCustomTitleBar(enabled, height_dip);
+}
+
+bool Window::HasCustomTitleBar() const {
+    return impl_->HasCustomTitleBar();
+}
+
+void Window::SetTitleBarHitTest(std::function<bool(Layout::Point)> is_interactive) {
+    impl_->SetTitleBarHitTest(std::move(is_interactive));
+}
+
 void Window::SetContent(std::shared_ptr<Widgets::Widget> root) {
     impl_->SetContent(root);
 }
@@ -683,6 +848,10 @@ std::shared_ptr<Widgets::Widget> Window::GetContent() const {
 
 void Window::SetTheme(Theme::Variant variant) {
     impl_->SetTheme(variant);
+}
+
+Theme::Variant Window::GetTheme() const {
+    return impl_->GetTheme();
 }
 
 std::string Window::GetLastRenderError() const {
