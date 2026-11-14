@@ -213,6 +213,12 @@ void Direct2DRenderer::EnsureTargets(UINT32 width, UINT32 height) {
     }
 
     if (swap_chain_ != nullptr && target_size_.width != 0) {
+        // DXGI requires every reference to the back buffers released
+        // before ResizeBuffers — the D2D bitmap wrapping the surface, the
+        // DC's active target binding, and the surface itself all count.
+        dc_->SetTarget(nullptr);
+        backbuffer_target_.Reset();
+        backbuffer_.Reset();
         const HRESULT resize_hr = swap_chain_->ResizeBuffers(
             0, width, height, DXGI_FORMAT_UNKNOWN, 0);
         if (FAILED(resize_hr)) {
