@@ -3,10 +3,21 @@
 // Shared helpers for the xer.node NAN bindings.
 // nan.h / node.h must be included before any XER header: they pull in
 // windows.h and v8.h, which can collide with project headers.
+// NOMINMAX must be defined *before* the first windows.h inclusion or the
+// min/max macros break std::min/std::max inside the V8 headers.
+
+#if defined(_WIN32)
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#endif
 
 #include <nan.h>
 
-// Undo windows.h min/max macros if node headers already pulled them in.
+// Undo windows.h min/max macros if some earlier include already defined them.
 #ifdef min
 #undef min
 #endif

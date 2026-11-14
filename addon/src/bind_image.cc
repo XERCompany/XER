@@ -134,7 +134,7 @@ std::shared_ptr<image::ImageBuffer> LoadOrThrow(
 NAN_METHOD(ImageInfo) {
     image::ImageDescriptor desc;
     auto buf = LoadOrThrow(info, 0, &desc);
-    if (!buf) return info.GetReturnValue();
+    if (!buf) return;
 
     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
     Nan::Set(obj, Nan::New("width").ToLocalChecked(),
@@ -142,13 +142,13 @@ NAN_METHOD(ImageInfo) {
     Nan::Set(obj, Nan::New("height").ToLocalChecked(),
              Nan::New(static_cast<double>(buf->Height())));
     Nan::Set(obj, Nan::New("format").ToLocalChecked(),
-             Nan::New(image::PixelFormatName(buf->Format())));
+             Nan::New(image::PixelFormatName(buf->Format())).ToLocalChecked());
     Nan::Set(obj, Nan::New("pixelFormat").ToLocalChecked(),
-             Nan::New(image::PixelFormatName(desc.format)));
+             Nan::New(image::PixelFormatName(desc.format)).ToLocalChecked());
     Nan::Set(obj, Nan::New("formatName").ToLocalChecked(),
-             Nan::New(desc.format_name));
+             Nan::New(desc.format_name).ToLocalChecked());
     Nan::Set(obj, Nan::New("colorSpace").ToLocalChecked(),
-             Nan::New(image::ColorSpaceName(buf->GetColorSpace())));
+             Nan::New(image::ColorSpaceName(buf->GetColorSpace())).ToLocalChecked());
     Nan::Set(obj, Nan::New("channels").ToLocalChecked(),
              Nan::New(static_cast<double>(desc.channels)));
     Nan::Set(obj, Nan::New("depth").ToLocalChecked(),
@@ -166,7 +166,7 @@ NAN_METHOD(ImageInfo) {
 NAN_METHOD(ImageDecode) {
     image::ImageDescriptor desc;
     auto buf = LoadOrThrow(info, 0, &desc);
-    if (!buf) return info.GetReturnValue();
+    if (!buf) return;
 
     const bool want_rgba =
         info.Length() > 1 && info[1]->IsObject() &&
@@ -177,7 +177,7 @@ NAN_METHOD(ImageDecode) {
     if (want_rgba) {
         if (!NormalizeToRGBA8(*buf, out)) {
             Nan::ThrowError("Cannot normalize pixel format to RGBA8");
-            return info.GetReturnValue();
+            return;
         }
         result = &out;
     }
@@ -188,9 +188,9 @@ NAN_METHOD(ImageDecode) {
     Nan::Set(obj, Nan::New("height").ToLocalChecked(),
              Nan::New(static_cast<double>(result->Height())));
     Nan::Set(obj, Nan::New("format").ToLocalChecked(),
-             Nan::New(image::PixelFormatName(result->Format())));
+             Nan::New(image::PixelFormatName(result->Format())).ToLocalChecked());
     Nan::Set(obj, Nan::New("formatName").ToLocalChecked(),
-             Nan::New(desc.format_name));
+             Nan::New(desc.format_name).ToLocalChecked());
     Nan::Set(obj, Nan::New("bytesPerPixel").ToLocalChecked(),
              Nan::New(static_cast<double>(image::BytesPerPixel(result->Format()))));
     Nan::Set(obj, Nan::New("data").ToLocalChecked(),
@@ -205,28 +205,29 @@ NAN_METHOD(ImageSave) {
     if (info.Length() < 2 || !info[0]->IsObject() || !info[1]->IsString()) {
         xer::addon::ThrowUsage(
             "image.save({data,width,height,format?}, path, opts?)");
-        return info.GetReturnValue();
+        return;
     }
     v8::Local<v8::Object> px = info[0].As<v8::Object>();
 
     std::string path;
     if (!xer::addon::ArgUtf8(info, 1, &path)) {
         xer::addon::ThrowUsage("image.save path must be a string");
-        return info.GetReturnValue();
+        return;
     }
     const std::string upath = Path::NormalizeUtf8Path(path);
 
     v8::Local<v8::Value> data_v =
         Nan::Get(px, Nan::New("data").ToLocalChecked()).ToLocalChecked();
-    if (!node::Buffer::HasInstance(data_v) && !data_v->IsUint8Array()) {
+    // Buffer is a Uint8Array subclass, so one path covers both.
+    if (!data_v->IsUint8Array()) {
         Nan::ThrowError("image.save: 'data' must be a Buffer/Uint8Array");
-        return info.GetReturnValue();
+        return;
     }
     const int width = static_cast<int>(GetNumberProp(px, "width", 0));
     const int height = static_cast<int>(GetNumberProp(px, "height", 0));
     if (width <= 0 || height <= 0) {
         Nan::ThrowError("image.save: invalid width/height");
-        return info.GetReturnValue();
+        return;
     }
 
     image::PixelFormat fmt = image::PixelFormat::RGBA8;
@@ -236,7 +237,7 @@ NAN_METHOD(ImageSave) {
         if (fmt == image::PixelFormat::Unknown) {
             Nan::ThrowError(("image.save: unknown pixel format '" + fmt_name +
                              "'").c_str());
-            return info.GetReturnValue();
+            return;
         }
     }
 
@@ -244,17 +245,21 @@ NAN_METHOD(ImageSave) {
     img.Allocate(width, height, fmt, image::ColorSpace::sRGB);
     if (!img.IsValid()) {
         Nan::ThrowError("image.save: failed to allocate buffer");
-        return info.GetReturnValue();
+        return;
     }
 
-    const size_t src_len = data_v->IsUint8Array()
-        ? v8::Local<v8::Uint8Array>::Cast(data_v)->ByteLength()
-        : node::Buffer::Length(data_v.As<v8::Value>());
-    const uint8_t* src = data_v->IsUint8Array()
-        ? v8::Local<v8::Uint8Array>::Cast(data_v)->Data()
-        : reinterpret_cast<const uint8_t*>(node::Buffer::Data(data_v.As<v8::Value>()));
+    v8::Local<v8::Uint8Array> u8 =
+        v8::Local<v8::Uint8Array>::Cast(data_v);
+    const size_t src_len = u8->ByteLength();
+    // ->Data() collides with the v8::Data base-class name; go through the
+    // ArrayBuffer backing store instead.
+    std::shared_ptr<v8::BackingStore> bs = u8->Buffer()->GetBackingStore();
+    const uint8_t* src = bs == nullptr
+        ? nullptr
+        : reinterpret_cast<const uint8_t*>(bs->Data()) + u8->ByteOffset();
     const size_t copy_len = src_len < img.DataSize() ? src_len : img.DataSize();
-    if (copy_len > 0) std::memcpy(img.Data(), src, copy_len);
+    if (copy_len > 0 && src != nullptr)
+        std::memcpy(img.Data(), src, copy_len);
 
     // opts: {format?: 'png'|'jpg'|'jpeg'|'raw', quality?: number}
     int quality = 92;
@@ -276,13 +281,13 @@ NAN_METHOD(ImageSave) {
     } else if (!out_format.empty()) {
         Nan::ThrowError(("image.save: unknown output format '" + out_format +
                          "'").c_str());
-        return info.GetReturnValue();
+        return;
     } else {
         ok = saver.Save(img, upath, quality);
     }
     if (!ok) {
         Nan::ThrowError(("image.save failed: " + path).c_str());
-        return info.GetReturnValue();
+        return;
     }
     info.GetReturnValue().Set(Nan::New(true));
 }
