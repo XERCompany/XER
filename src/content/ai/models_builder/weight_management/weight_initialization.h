@@ -22,6 +22,9 @@ struct WeightTensor {
 	std::string name;
 	std::vector<uint32_t> shape;
 	std::vector<float> values;
+	// Optional per-output-channel bias (e.g. dense/conv layers). Empty when
+	// the tensor has no bias parameter.
+	std::vector<float> bias;
 };
 
 class WeightInitializer {

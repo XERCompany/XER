@@ -61,6 +61,7 @@ private:
     float latency_ms_;
     size_t num_threads_;
     bool xnnpack_ready_;
+    bool xnn_initialized_ = false;
     
     // Helper methods
     bool BuildSubgraph();

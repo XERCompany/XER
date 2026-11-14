@@ -15,6 +15,12 @@
 #  define LOADER_JSON_AVAILABLE 1
 #endif
 
+// nlohmann_json fallback when jsoncpp is unavailable.
+#if !defined(LOADER_JSON_AVAILABLE) && __has_include(<nlohmann/json.hpp>)
+#  include <nlohmann/json.hpp>
+#  define LOADER_JSON_NLOHMANN 1
+#endif
+
 namespace XER::ML::Loaders {
 
 Dataset LoaderJson::Load(const std::string& path) {
@@ -55,6 +61,50 @@ Dataset LoaderJson::Load(const std::string& path) {
             if (!row.isArray()) continue;
             std::vector<float> r;
             for (const auto& v : row) r.push_back(v.asFloat());
+            if (has_labels_ && !r.empty()) {
+                ds.y.push_back(static_cast<int>(r.back()));
+                r.pop_back();
+            }
+            ds.X.push_back(std::move(r));
+        }
+    }
+    StoreCachedDataset(Name(), path, ds);
+    return ds;
+#elif defined(LOADER_JSON_NLOHMANN)
+    Dataset cached;
+    if (TryLoadCachedDataset(Name(), path, &cached)) {
+        return cached;
+    }
+
+    std::ifstream f(path);
+    if (!f)
+        throw std::runtime_error("JsonLoader: cannot open " + path);
+
+    const auto root = nlohmann::json::parse(f, nullptr, false);
+    if (root.is_discarded())
+        throw std::runtime_error("JsonLoader: parse error in " + path);
+
+    Dataset ds;
+
+    // Format A: {"X": [[...], ...], "y": [...]}
+    if (root.is_object() && root.contains("X")) {
+        for (const auto& row : root["X"]) {
+            std::vector<float> r;
+            for (const auto& v : row) r.push_back(v.get<float>());
+            ds.X.push_back(std::move(r));
+        }
+        if (root.contains("y"))
+            for (const auto& v : root["y"]) ds.y.push_back(v.get<int>());
+        StoreCachedDataset(Name(), path, ds);
+        return ds;
+    }
+
+    // Format B: [[f0, f1, ...], ...] with optional last-column label
+    if (root.is_array()) {
+        for (const auto& row : root) {
+            if (!row.is_array()) continue;
+            std::vector<float> r;
+            for (const auto& v : row) r.push_back(v.get<float>());
             if (has_labels_ && !r.empty()) {
                 ds.y.push_back(static_cast<int>(r.back()));
                 r.pop_back();

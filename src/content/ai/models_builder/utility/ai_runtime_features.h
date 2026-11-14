@@ -35,11 +35,36 @@ struct ExternalLibraryAvailability {
     bool has_tesseract = false;
     bool has_yaml_cpp = false;
     bool has_blaze = false;
+    bool has_asmjit = false;
+    bool has_glslang = false;
+    bool has_shaderc = false;
+    bool has_spirv_tools = false;
+    bool has_vulkan = false;
+    bool has_vulkan_loader = false;
+    bool has_vulkan_util = false;
+    bool has_vma = false;
+    bool has_level_zero = false;
+    bool has_nlohmann_json = false;
+    bool has_rapidjson = false;
+    bool has_tinyxml2 = false;
+    bool has_date = false;
+    bool has_json_schema_validator = false;
+    bool has_lz4 = false;
+    bool has_snappy = false;
+    bool has_brotli = false;
+    bool has_tinyexr = false;
+    bool has_leptonica = false;
+    bool has_pffft = false;
+    bool has_curl = false;
+    bool has_re2 = false;
+    bool has_sqlite3 = false;
+    bool has_kineto = false;
 };
 
 ExternalLibraryAvailability DetectExternalLibraries();
 std::string BuildRuntimeBanner();
 std::string CompressStringFast(std::string_view text);
+std::string DecompressStringFast(std::string_view compressed);
 size_t SuggestedInferenceThreadCount();
 
 } // namespace XER::ModelsBuilder::Utility

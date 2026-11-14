@@ -2,9 +2,12 @@
 
 #include "weight_initialization.h"
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace XER::ModelsBuilder::Weights {
@@ -46,8 +49,16 @@ public:
     bool IsCudaAvailable() const { return cuda_available_; }
 
 private:
+    struct DeviceBuffer {
+        float* ptr = nullptr;
+        size_t floats = 0;
+    };
+
     bool cuda_available_ = false;
-    uint64_t pending_tasks_ = 0;
+    std::atomic<uint64_t> pending_tasks_{0};
+    std::mutex device_mutex_;
+    // tensor_name -> device allocation (CUDA path only).
+    std::unordered_map<std::string, DeviceBuffer> device_buffers_;
 };
 
 }  // namespace XER::ModelsBuilder::Weights

@@ -136,6 +136,50 @@ bool ReadArchive(const std::string& filepath, SerializedModel& dto) {
     return true;
 }
 
+std::string WriteArchiveToString(const SerializedModel& dto) {
+    std::ostringstream output;
+    cereal::JSONOutputArchive archive(output);
+    archive(cereal::make_nvp("model", dto));
+    return output.str();
+}
+
+bool ReadArchiveFromString(const std::string& data, SerializedModel& dto) {
+    std::istringstream input(data);
+    cereal::JSONInputArchive archive(input);
+    archive(cereal::make_nvp("model", dto));
+    return input.good() || input.eof();
+}
+
+std::shared_ptr<Model> BuildModelFromDto(const SerializedModel& dto) {
+    std::shared_ptr<Model> model = std::make_shared<Model>(dto.model_name);
+    model->SetModelType(static_cast<ModelType>(dto.model_type));
+    model->ClearLayers();
+
+    for (const SerializedLayer& layer_dto : dto.layers) {
+        std::shared_ptr<Layer> layer = DeserializeLayer(layer_dto);
+        if (!layer) {
+            std::ostringstream message;
+            message << "Unsupported layer type during load: " << layer_dto.layer_type;
+            ModelBuilderErrorHandler::GetInstance().ReportError(
+                ModelBuilderErrorCode::SerializationFailed,
+                message.str(),
+                "ModelsBuilder::Serialization::ModelSerializer::BuildModelFromDto");
+            return nullptr;
+        }
+        model->AddLayer(layer);
+    }
+
+    if (!dto.input_shape.empty() && !model->Build(dto.input_shape)) {
+        return nullptr;
+    }
+
+    if (dto.is_compiled && !model->Compile()) {
+        return nullptr;
+    }
+
+    return model;
+}
+
 } // namespace
 
 ModelSerializer& ModelSerializer::GetInstance() {
@@ -176,39 +220,49 @@ std::shared_ptr<Core::Model> ModelSerializer::LoadModel(const std::string& filep
             return nullptr;
         }
 
-        std::shared_ptr<Model> model = std::make_shared<Model>(dto.model_name);
-        model->SetModelType(static_cast<ModelType>(dto.model_type));
-        model->ClearLayers();
-
-        for (const SerializedLayer& layer_dto : dto.layers) {
-            std::shared_ptr<Layer> layer = DeserializeLayer(layer_dto);
-            if (!layer) {
-                std::ostringstream message;
-                message << "Unsupported layer type during load: " << layer_dto.layer_type;
-                ModelBuilderErrorHandler::GetInstance().ReportError(
-                    ModelBuilderErrorCode::SerializationFailed,
-                    message.str(),
-                    "ModelsBuilder::Serialization::ModelSerializer::LoadModel");
-                return nullptr;
-            }
-            model->AddLayer(layer);
+        std::shared_ptr<Model> model = BuildModelFromDto(dto);
+        if (model) {
+            ModelBuilderLogger::GetInstance().Info("Loaded model from " + filepath);
         }
-
-        if (!dto.input_shape.empty() && !model->Build(dto.input_shape)) {
-            return nullptr;
-        }
-
-        if (dto.is_compiled && !model->Compile()) {
-            return nullptr;
-        }
-
-        ModelBuilderLogger::GetInstance().Info("Loaded model from " + filepath);
         return model;
     } catch (const std::exception& exception) {
         ModelBuilderErrorHandler::GetInstance().ReportError(
             ModelBuilderErrorCode::SerializationFailed,
             exception.what(),
             "ModelsBuilder::Serialization::ModelSerializer::LoadModel");
+        return nullptr;
+    }
+}
+
+std::string ModelSerializer::SaveModelToString(const Core::Model& model) {
+    try {
+        const SerializedModel dto = SerializeModel(model);
+        return WriteArchiveToString(dto);
+    } catch (const std::exception& exception) {
+        ModelBuilderErrorHandler::GetInstance().ReportError(
+            ModelBuilderErrorCode::SerializationFailed,
+            exception.what(),
+            "ModelsBuilder::Serialization::ModelSerializer::SaveModelToString");
+        return {};
+    }
+}
+
+std::shared_ptr<Core::Model> ModelSerializer::LoadModelFromString(const std::string& data) {
+    try {
+        SerializedModel dto{};
+        if (!ReadArchiveFromString(data, dto)) {
+            ModelBuilderErrorHandler::GetInstance().ReportError(
+                ModelBuilderErrorCode::SerializationFailed,
+                "Failed to parse model data",
+                "ModelsBuilder::Serialization::ModelSerializer::LoadModelFromString");
+            return nullptr;
+        }
+        return BuildModelFromDto(dto);
+    } catch (const std::exception& exception) {
+        ModelBuilderErrorHandler::GetInstance().ReportError(
+            ModelBuilderErrorCode::SerializationFailed,
+            exception.what(),
+            "ModelsBuilder::Serialization::ModelSerializer::LoadModelFromString");
         return nullptr;
     }
 }

@@ -29,6 +29,23 @@ bool DenseLayer::Initialize() {
     return initialized_;
 }
 
+void DenseLayer::SetWeights(std::vector<float> weights, std::vector<float> bias) {
+    // Keep parameters only when they match the declared fan-in/fan-out once
+    // the input shape is known; before Build() any size is accepted and
+    // validated again at inference time.
+    if (!weights.empty() && input_units_ > 0U &&
+        weights.size() != static_cast<size_t>(units_) * input_units_) {
+        weights.clear();
+        bias.clear();
+        return;
+    }
+    if (!bias.empty() && bias.size() != units_) {
+        bias.clear();
+    }
+    weights_ = std::move(weights);
+    bias_ = std::move(bias);
+}
+
 std::string DenseLayer::Describe() const {
     std::ostringstream stream;
     stream << layer_name_
@@ -36,7 +53,8 @@ std::string DenseLayer::Describe() const {
            << " units=" << units_
            << " activation=" << static_cast<int>(activation_)
            << " input_units=" << input_units_
-           << " initialized=" << (initialized_ ? "true" : "false");
+           << " initialized=" << (initialized_ ? "true" : "false")
+           << " has_weights=" << (HasWeights() ? "true" : "false");
     return stream.str();
 }
 

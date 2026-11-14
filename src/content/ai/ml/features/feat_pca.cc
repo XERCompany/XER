@@ -3,6 +3,12 @@
 #include <cmath>
 #include <numeric>
 
+#if __has_include(<Eigen/Dense>)
+#  include <Eigen/Dense>
+#  include <Eigen/Eigenvalues>
+#  define FEAT_PCA_HAS_EIGEN 1
+#endif
+
 namespace XER::ML::Features {
 
 std::vector<float> FeatPCA::PowerIteration(const std::vector<float>& A, size_t n, int iters) {
@@ -42,12 +48,41 @@ bool FeatPCA::Fit(const std::vector<float>& X, size_t n_samples, size_t n_featur
     // Covariance matrix (n_features × n_features)
     auto C = FeatMathOps::CovarianceMatrix(Xc, n_samples, n_features);
 
+    float total_var = 0.0f;
+    for (size_t j = 0; j < n_features; ++j) total_var += C[j * n_features + j];
+
+#ifdef FEAT_PCA_HAS_EIGEN
+    // Exact eigendecomposition of the symmetric covariance matrix.
+    // Eigenvalues are returned in ascending order; take the top n_components.
+    using RowMat = Eigen::Matrix<float, Eigen::Dynamic, Eigen::Dynamic,
+                                 Eigen::RowMajor>;
+    Eigen::Map<const RowMat> Cmap(C.data(), static_cast<Eigen::Index>(n_features),
+                                  static_cast<Eigen::Index>(n_features));
+    Eigen::SelfAdjointEigenSolver<RowMat> solver(Cmap);
+    if (solver.info() != Eigen::Success) {
+        fitted_ = false;
+        return false;
+    }
+    const auto& evals = solver.eigenvalues();
+    const auto& evecs = solver.eigenvectors();
+
+    components_.resize(n_components * n_features);
+    explained_variance_ratio_.resize(n_components, 0.0f);
+    for (size_t k = 0; k < n_components; ++k) {
+        const Eigen::Index idx =
+            static_cast<Eigen::Index>(n_features) - 1 -
+            static_cast<Eigen::Index>(k);
+        const float eigen = std::max(0.0f, evals(idx));
+        for (size_t j = 0; j < n_features; ++j) {
+            components_[k * n_features + j] = evecs(j, idx);
+        }
+        explained_variance_ratio_[k] =
+            (total_var > 1e-9f) ? (eigen / total_var) : 0.0f;
+    }
+#else
     // Deflation: extract n_components eigenvectors via power iteration
     components_.resize(n_components * n_features);
     explained_variance_ratio_.resize(n_components, 0.0f);
-
-    float total_var = 0.0f;
-    for (size_t j = 0; j < n_features; ++j) total_var += C[j * n_features + j];
 
     std::vector<float> Cdefl = C;
     for (size_t k = 0; k < n_components; ++k) {
@@ -67,6 +102,7 @@ bool FeatPCA::Fit(const std::vector<float>& X, size_t n_samples, size_t n_featur
             for (size_t j = 0; j < n_features; ++j)
                 Cdefl[i * n_features + j] -= eigen * v[i] * v[j];
     }
+#endif
 
     fitted_ = true;
     return true;

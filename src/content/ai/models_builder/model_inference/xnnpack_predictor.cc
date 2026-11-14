@@ -80,6 +80,7 @@ XnnPackPredictor::XnnPackPredictor(const Core::Model& model)
 #if XER_AI_HAS_XNNPACK_HEADER
     const xnn_status init_status = xnn_initialize(nullptr);
     if (init_status == xnn_status_success) {
+        xnn_initialized_ = true;
         xnnpack_ready_ = BuildSubgraph() && CreateRuntime();
     }
 #endif
@@ -98,7 +99,7 @@ XnnPackPredictor::~XnnPackPredictor() {
     if (subgraph_ != nullptr) {
         xnn_delete_subgraph(subgraph_);
     }
-    if (xnnpack_ready_) {
+    if (xnn_initialized_) {
         xnn_deinitialize();
     }
 #endif
@@ -106,14 +107,20 @@ XnnPackPredictor::~XnnPackPredictor() {
 
 bool XnnPackPredictor::BuildSubgraph() {
 #if XER_AI_HAS_XNNPACK_HEADER
-    subgraph_ = nullptr;
+    // A real implementation builds the operator graph here; until weights are
+    // available on the model, readiness must reflect an actual subgraph.
+    return subgraph_ != nullptr;
+#else
+    return false;
 #endif
-    return true;
 }
 
 bool XnnPackPredictor::CreateRuntime() {
-    runtime_ = nullptr;
-    return true;
+#if XER_AI_HAS_XNNPACK_HEADER
+    return runtime_ != nullptr;
+#else
+    return false;
+#endif
 }
 
 std::vector<float> XnnPackPredictor::Predict(const std::vector<float>& input) {

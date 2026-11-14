@@ -7,6 +7,13 @@
 #include <limits>
 #include <stdexcept>
 
+#if __has_include(<fp16.h>)
+#include <fp16.h>
+#define XER_WQ_HAS_FP16 1
+#else
+#define XER_WQ_HAS_FP16 0
+#endif
+
 namespace XER::ModelsBuilder::Weights {
 
 QuantizationResult WeightQuantizer::Quantize(WeightTensor& tensor,
@@ -22,9 +29,17 @@ QuantizationResult WeightQuantizer::Quantize(WeightTensor& tensor,
     }
 
     if (mode == QuantizeMode::Float16) {
-        // FP16 simulation: round to 3 significant decimal digits
-        auto features = Utility::DetectExternalLibraries();
-        (void)features.has_fp16;  // runtime hint only; apply regardless
+#if XER_WQ_HAS_FP16
+        // Real IEEE-754 half round-trip via the fp16 library: value -> fp16
+        // bits -> fp32 gives the exact quantization error of fp16 storage.
+        for (auto& v : tensor.values) {
+            const uint16_t bits = fp16_ieee_from_fp32_value(v);
+            const float dequantized = fp16_ieee_to_fp32_value(bits);
+            result.max_error = std::max(result.max_error, std::abs(v - dequantized));
+            v = dequantized;
+        }
+#else
+        // FP16 simulation fallback: round to 3 significant decimal digits
         for (auto& v : tensor.values) {
             // Emulate fp16 range clamp (65504)
             v = std::max(-65504.0f, std::min(65504.0f, v));
@@ -33,6 +48,7 @@ QuantizationResult WeightQuantizer::Quantize(WeightTensor& tensor,
             result.max_error = std::max(result.max_error, std::abs(v - rounded));
             v = rounded;
         }
+#endif
         result.quantized_bytes = tensor.values.size() * 2;  // 16-bit
         result.scale = 1.0f;
         return result;

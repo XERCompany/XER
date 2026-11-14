@@ -16,6 +16,9 @@ enum class SdBackendKind : uint8_t {
     OpenVino,
     Onnx,
     Tensorflow,
+    Vulkan,
+    LevelZero,
+    Ggml,
 };
 
 class SdGpuDispatch {

@@ -1,5 +1,7 @@
 #include "loader_image.h"
 
+#include "helper/string_utils.h"
+
 #include <absl/strings/str_format.h>
 #include <absl/strings/string_view.h>
 #include <range/v3/view.hpp>
@@ -10,12 +12,58 @@
 #  define LOADER_IMAGE_HAS_OPENCV 1
 #endif
 
+// tinyexr: HDR EXR loading (OpenCV does not decode EXR reliably).
+#if __has_include(<tinyexr.h>)
+#  include <tinyexr.h>
+#  define LOADER_IMAGE_HAS_TINYEXR 1
+#endif
+
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 
 namespace XER::ML::Loaders {
 
+#ifdef LOADER_IMAGE_HAS_TINYEXR
+static bool IsExrPath(const std::string& path) {
+    const std::string ext = XER::Helper::String::ToLowerAscii(
+        std::filesystem::path(path).extension().string());
+    return ext == ".exr";
+}
+#endif
+
 Dataset LoaderImage::Load(const std::string& path) {
+#ifdef LOADER_IMAGE_HAS_TINYEXR
+    if (IsExrPath(path)) {
+        Dataset cached;
+        if (TryLoadCachedDataset(Name(), path, &cached)) {
+            return cached;
+        }
+
+        float* pixels = nullptr;
+        int width = 0, height = 0;
+        const char* err = nullptr;
+        const int status = LoadEXR(&pixels, &width, &height,
+                                   path.c_str(), &err);
+        if (status != TINYEXR_SUCCESS || !pixels || width <= 0 || height <= 0) {
+            const std::string msg =
+                err ? err : "tinyexr decode failed";
+            if (err) FreeEXRErrorMessage(err);
+            if (pixels) std::free(pixels);
+            throw std::runtime_error("ImageLoader: " + msg + " (" + path + ")");
+        }
+
+        // tinyexr returns RGBA float32; flatten to a single feature row.
+        const size_t total =
+            static_cast<size_t>(width) * static_cast<size_t>(height) * 4U;
+        Dataset ds{{{std::vector<float>(pixels, pixels + total)}}, {}};
+        std::free(pixels);
+        StoreCachedDataset(Name(), path, ds);
+        return ds;
+    }
+#endif
+
 #ifdef LOADER_IMAGE_HAS_OPENCV
     Dataset cached;
     if (TryLoadCachedDataset(Name(), path, &cached)) {

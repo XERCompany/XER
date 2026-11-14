@@ -28,6 +28,11 @@ class SchemaValidator {
   /// Check that the model has at least one layer
   bool CheckNonEmpty(const Core::Model& model,
                      std::vector<std::string>& errors) const;
+
+ private:
+  /// Weight/bias/shape consistency checks; fills warnings and errors.
+  void CheckWeightsAndShapes(const Core::Model& model,
+                             ValidationResult& result) const;
 };
 
 }  // namespace XER::ModelsBuilder::Reader::Schema
