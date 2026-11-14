@@ -190,6 +190,11 @@ jobs:
           sudo dpkg -i cuda-keyring_1.1-1_all.deb
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends cuda-toolkit-12-6
+          # cuDNN: the vcpkg "cudnn" port is a system-cuDNN finder on Linux
+          # (unlike Windows where vcpkg bundles it) — install the NVIDIA
+          # repo package matching the CUDA 12.6 toolkit.
+          sudo apt-get install -y --no-install-recommends \
+            libcudnn9-dev-cuda-12 libcudnn9-cuda-12
           echo "/usr/local/cuda/bin" >> "$GITHUB_PATH"
           /usr/local/cuda/bin/nvcc --version | tail -2
 

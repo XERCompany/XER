@@ -138,11 +138,26 @@ cmake --build --preset v8-xer
 
 ## Dependency Management
 
-### vcpkg Integration
-- **vcpkg Path**: C:/vcpkg
-- **Triplet**: x64-windows-release
-- **Toolchain**: C:/vcpkg/scripts/buildsystems/vcpkg.cmake
-- **Installation**: Manual via `vcpkg install <package>:x64-windows-release`
+### Dependency providers (hybrid, per-platform)
+- **Windows**: vcpkg toolchain covers ALL dependencies
+  (`C:/vcpkg`, triplet `x64-windows-release`; CI uses `x64-windows-static`).
+- **Linux / macOS**: system packages (apt / Homebrew) for everything the OS
+  provides, plus a *partial* vcpkg install for ports with no system
+  equivalent (skia, ggml, folly, pthreadpool, fxdiv, fp16, date, pffpt,
+  tinyexr, onnx, onnxruntime, cudnn on Linux).
+- The mapping lives in `cmake/deps/system_deps.cmake` +
+  `cmake/deps/configs/<pkg>/<pkg>Config.cmake` shims that translate vcpkg
+  package/target names (`unofficial-*`, `libuv`, `re2`, `FFTW3f`, `MKL`,
+  `lz4`, `opencl`, `libyuv`, `unofficial-xnnpack`, ...) onto system
+  libraries, so existing `find_package()` calls work unchanged.
+- `cmake/FindFFMPEG.cmake` provides pkg-config based FFmpeg discovery
+  (stock CMake has no FindFFMPEG).
+- Toolchain files: `cmake/platforms/linux-x64.cmake`,
+  `cmake/platforms/macos-arm64.cmake`, `cmake/platforms/macos-x64.cmake`.
+- Partial vcpkg is selected via `-DXER_VCPKG_ROOT=<path>` and
+  `-DXER_VCPKG_TRIPLET=<triplet>` (defaults: `$ENV{VCPKG_ROOT}` and
+  `x64-linux` / `arm64-osx` / `x64-osx`).
+- Presets: `linux-release`, `macos-arm64`, `macos-x64`.
 
 ### Currently Used vcpkg Libraries
 - libuv - Async I/O
@@ -156,13 +171,18 @@ cmake --build --preset v8-xer
 - FFmpeg, SDL2 - Media (optional)
 - OpenCV - Computer vision (optional)
 - pthreadpool, fxdiv - Parallel processing
+- skia, ggml, folly - UI / AI backends (heavy, vcpkg-only on all OS)
 
 ### Adding New Dependencies
-1. Install via vcpkg: `vcpkg install <package>:x64-windows-release`
-2. Add find_package() to CMakeLists.txt
-3. Link target with appropriate library
-4. Update documentation
-5. Test on target platform
+1. Windows: `vcpkg install <package>:x64-windows-release`, add to the CI
+   package list in `.github/workflows/build.yml`.
+2. Linux/macOS: prefer the OS package (apt `-dev` / brew formula); only add
+   a vcpkg port to the "heavy" list if no system package exists.
+3. If the package is only consumed via `find_package(<name>)`, add a shim
+   under `cmake/deps/configs/<name>/<name>Config.cmake` mapping it to the
+   system library (see existing shims for the pattern).
+4. Add find_package() to CMakeLists.txt if not already present.
+5. Link target with appropriate library; update documentation; test.
 
 ### Version Pinning
 - vcpkg handles versioning via manifest or latest stable
@@ -192,14 +212,20 @@ cmake --build --preset v8-xer
 - Use proper path separators
 
 ### Linux
-- GCC or Clang supported
-- System packages via apt/yum
-- pkg-config for detection
-- Standard filesystem layout
+- GCC or Clang supported (preset `linux-release`, toolchain
+  `cmake/platforms/linux-x64.cmake`)
+- Dependencies: `apt` packages (see the apt install step in
+  `.github/workflows/build.yml`) + partial vcpkg for heavy ports
+- pkg-config for detection; shims in `cmake/deps/configs/` map vcpkg names
+- cuDNN via vcpkg requires BOTH a CUDA toolkit AND system cuDNN on Linux:
+  `cuda-toolkit-12-6` + `libcudnn9-dev-cuda-12`/`libcudnn9-cuda-12` from the
+  NVIDIA apt repo — GPU not needed, only nvcc + headers/libs to build
+  (the vcpkg `cudnn` port is a system-cuDNN finder on Linux)
 
 ### macOS
-- Clang supported
-- Homebrew for dependencies
+- Clang supported (presets `macos-arm64` / `macos-x64`)
+- Dependencies: Homebrew + partial vcpkg (`arm64-osx` / `x64-osx`)
+- No CUDA/cuDNN on macOS — those paths stay disabled
 - Xcode command line tools
 - macOS-specific frameworks
 
