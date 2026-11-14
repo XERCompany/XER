@@ -97,6 +97,8 @@ add_library(xeraddon MODULE
     src/ui/widgets/controls.cc
     src/ui/widgets/display.cc
     src/ui/widgets/nav.cc
+    src/ui/widgets/kit.cc
+    src/notify/notify.cc
 )
 
 set_target_properties(xeraddon PROPERTIES

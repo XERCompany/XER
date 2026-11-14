@@ -57,6 +57,10 @@ NAN_MODULE_INIT(Init) {
     xer::addon::InitAudio(audio);
     Nan::Set(target, Nan::New("audio").ToLocalChecked(), audio);
 
+    v8::Local<v8::Object> notify = Nan::New<v8::Object>();
+    xer::addon::InitNotify(notify);
+    Nan::Set(target, Nan::New("notify").ToLocalChecked(), notify);
+
     v8::Local<v8::Object> ui_ns = Nan::New<v8::Object>();
     xer::addon::InitUI(ui_ns);
     Nan::Set(target, Nan::New("UI").ToLocalChecked(), ui_ns);

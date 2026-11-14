@@ -137,6 +137,7 @@ void RegisterWidgets(v8::Local<v8::Object> xer);   // Widget + Label
 void RegisterControls(v8::Local<v8::Object> xer);  // buttons/inputs/toggles
 void RegisterDisplay(v8::Local<v8::Object> xer);   // text/badges/layout
 void RegisterNav(v8::Local<v8::Object> xer);       // AppTitleBar
+void RegisterKit(v8::Local<v8::Object> xer);       // kit primitives
 void RegisterWindow(v8::Local<v8::Object> xer);
 void RegisterApplication(v8::Local<v8::Object> xer);
 

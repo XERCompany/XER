@@ -524,6 +524,14 @@ void RegisterDisplay(v8::Local<v8::Object> xer) {
                          {"SetOnClosed", DialogSetOnClosed},
                          {"Close", DialogClose},
                          {"WasConfirmed", DialogWasConfirmed}});
+    // Catalog alias: the modal confirm/cancel dialog covers alert-dialog.
+    RegisterWidgetClass(xer, "AlertDialog", NewDialog,
+                        {{"SetTitle", DialogSetTitle},
+                         {"SetContent", DialogSetContent},
+                         {"SetPanelWidth", DialogSetPanelWidth},
+                         {"SetOnClosed", DialogSetOnClosed},
+                         {"Close", DialogClose},
+                         {"WasConfirmed", DialogWasConfirmed}});
     RegisterWidgetClass(xer, "WaveformWidget", NewWaveformWidget,
                         {{"SetProgress", WaveformSetProgress},
                          {"SetPlaying", WaveformSetPlaying}});

@@ -588,6 +588,15 @@ void RegisterControls(v8::Local<v8::Object> xer) {
                          {"SetPlaceholder", SelectSetPlaceholder},
                          {"IsDropdownOpen", SelectIsDropdownOpen},
                          {"SetOnChanged", SelectSetOnChanged}});
+    // Catalog alias: the styled dropdown is Select.
+    RegisterWidgetClass(xer, "NativeSelect", NewSelect,
+                        {{"SetOptions", SelectSetOptions},
+                         {"SetSelectedIndex", SelectSetSelectedIndex},
+                         {"GetSelectedIndex", SelectGetSelectedIndex},
+                         {"GetSelectedText", SelectGetSelectedText},
+                         {"SetPlaceholder", SelectSetPlaceholder},
+                         {"IsDropdownOpen", SelectIsDropdownOpen},
+                         {"SetOnChanged", SelectSetOnChanged}});
     RegisterWidgetClass(xer, "Slider", NewSlider,
                         {{"SetRange", SliderSetRange},
                          {"SetValue", SliderSetValue},
@@ -619,6 +628,16 @@ void RegisterControls(v8::Local<v8::Object> xer) {
                          {"IsSelected", ToggleGroupIsSelected},
                          {"SetOnChanged", ToggleGroupSetOnChanged}});
     RegisterWidgetClass(xer, "TextInput", NewTextInput,
+                        {{"GetValue", TextInputGetValue},
+                         {"SetValue", TextInputSetValue},
+                         {"SetPlaceholder", TextInputSetPlaceholder},
+                         {"SetPasswordMode", TextInputSetPasswordMode},
+                         {"Undo", TextInputUndo},
+                         {"Redo", TextInputRedo},
+                         {"SetOnValueChanged", TextInputSetOnValueChanged},
+                         {"SetOnSubmit", TextInputSetOnSubmit}});
+    // Catalog alias: the styled single-line input is TextInput.
+    RegisterWidgetClass(xer, "Input", NewTextInput,
                         {{"GetValue", TextInputGetValue},
                          {"SetValue", TextInputSetValue},
                          {"SetPlaceholder", TextInputSetPlaceholder},
