@@ -1,0 +1,11 @@
+{
+  "name": "xer3",
+  "version": "0.1.0",
+  "description": "Node.js bindings for the XER engine (image/audio/media APIs)",
+  "main": "index.js",
+  "license": "UNLICENSED",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  }
+}

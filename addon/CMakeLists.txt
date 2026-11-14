@@ -1,0 +1,101 @@
+# addon/ — Node.js NAN native module (xer.node) exposing core XER APIs.
+#
+# Enabled via:  cmake -DXER_BUILD_NODE_ADDON=ON ...
+# Output:       <build>/bin/xer.node   (loaded by addon/index.js)
+#
+# Node headers are fetched from nodejs.org matching `node --version`;
+# NAN (Native Abstractions for Node.js) comes from the official repo.
+
+# --- Node.js headers ---------------------------------------------------------
+find_program(XER_NODE_EXECUTABLE NAMES node nodejs)
+if(NOT XER_NODE_EXECUTABLE)
+    message(FATAL_ERROR
+        "XER_BUILD_NODE_ADDON=ON but 'node' was not found on PATH")
+endif()
+
+execute_process(
+    COMMAND ${XER_NODE_EXECUTABLE} --version
+    OUTPUT_VARIABLE XER_NODE_VERSION_RAW
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE XER_NODE_VERSION_RC
+)
+if(NOT XER_NODE_VERSION_RC EQUAL 0)
+    message(FATAL_ERROR "Failed to query node version")
+endif()
+string(REGEX MATCH "v[0-9]+\\.[0-9]+\\.[0-9]+" XER_NODE_VERSION
+       "${XER_NODE_VERSION_RAW}")
+if(NOT XER_NODE_VERSION)
+    message(FATAL_ERROR "Cannot parse node version: '${XER_NODE_VERSION_RAW}'")
+endif()
+message(STATUS "Node.js addon: ${XER_NODE_VERSION} (${XER_NODE_EXECUTABLE})")
+
+include(FetchContent)
+FetchContent_Declare(
+    xer_node_headers
+    URL "https://nodejs.org/download/release/${XER_NODE_VERSION}/node-${XER_NODE_VERSION}-headers.tar.gz"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+)
+FetchContent_MakeAvailable(xer_node_headers)
+
+# NAN ships its own CMakeLists.txt whose "test" target clashes with CTest;
+# we only need the headers, so download + extract it manually instead of
+# add_subdirectory.
+set(XER_NAN_URL "https://github.com/nodejs/nan/archive/refs/tags/v2.30.0.tar.gz")
+set(XER_NAN_ROOT "${CMAKE_BINARY_DIR}/_deps/xer_nan")
+if(NOT EXISTS "${XER_NAN_ROOT}/nan.h")
+    file(MAKE_DIRECTORY "${CMAKE_BINARY_DIR}/_deps")
+    file(DOWNLOAD "${XER_NAN_URL}" "${CMAKE_BINARY_DIR}/_deps/xer_nan.tar.gz"
+         STATUS xer_nan_dl)
+    list(GET xer_nan_dl 0 xer_nan_dl_rc)
+    if(NOT xer_nan_dl_rc EQUAL 0)
+        list(GET xer_nan_dl 1 xer_nan_dl_msg)
+        message(FATAL_ERROR "Failed to download NAN: ${xer_nan_dl_msg}")
+    endif()
+    file(REMOVE_RECURSE "${XER_NAN_ROOT}")
+    file(ARCHIVE_EXTRACT
+        INPUT "${CMAKE_BINARY_DIR}/_deps/xer_nan.tar.gz"
+        DESTINATION "${CMAKE_BINARY_DIR}/_deps/xer_nan_extract")
+    file(GLOB xer_nan_dirs LIST_DIRECTORIES true
+         "${CMAKE_BINARY_DIR}/_deps/xer_nan_extract/*")
+    if(NOT xer_nan_dirs)
+        message(FATAL_ERROR "NAN archive extracted to an unexpected layout")
+    endif()
+    list(GET xer_nan_dirs 0 xer_nan_src)
+    file(RENAME "${xer_nan_src}" "${XER_NAN_ROOT}")
+    file(REMOVE_RECURSE "${CMAKE_BINARY_DIR}/_deps/xer_nan_extract")
+endif()
+
+# --- Module ------------------------------------------------------------------
+add_library(xeraddon MODULE
+    src/xer_addon.cc
+    src/bind_image.cc
+    src/bind_audio.cc
+)
+
+set_target_properties(xeraddon PROPERTIES
+    PREFIX ""
+    OUTPUT_NAME "xer"
+    SUFFIX ".node"
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+)
+
+target_compile_features(xeraddon PRIVATE cxx_std_20)
+
+if(MSVC)
+    # v8config.h gates on __cplusplus, which MSVC keeps at 199711L unless
+    # /Zc:__cplusplus is passed explicitly.
+    target_compile_options(xeraddon PRIVATE /Zc:__cplusplus)
+endif()
+
+target_include_directories(xeraddon PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${xer_node_headers_SOURCE_DIR}/include/node
+    ${XER_NAN_ROOT}
+)
+
+target_link_libraries(xeraddon PRIVATE
+    XER_Image
+    XER_AudioCore
+    XER_Flux_Core
+    XER_Helper
+)

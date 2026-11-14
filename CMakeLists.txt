@@ -450,6 +450,14 @@ endif()
 set_target_properties(preview PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
+# addon/ — Node.js NAN native module (xer.node). Opt-in: needs Node.js
+# headers + NAN fetched at configure time, so it stays OFF by default.
+option(XER_BUILD_NODE_ADDON
+    "Build the Node.js NAN addon (xer.node) in addon/" OFF)
+if(XER_BUILD_NODE_ADDON)
+    add_subdirectory(addon)
+endif()
+
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
