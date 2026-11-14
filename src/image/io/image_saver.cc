@@ -1,5 +1,6 @@
 #include "image_saver.h"
 #include "helper/string_utils.h"
+#include "helper/path_utils.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 #include "flux/core/logger.h"
 #include <filesystem>
@@ -41,20 +42,23 @@ void EnsureFrameLineSizes(XER::Bridge::FFmpeg::VideoFrameInfo* frame) {
 }  // namespace
 
 bool ImageSaver::Save(const ImageBuffer& img, const std::string& path, int quality) {
+    const std::string upath = XER::Helper::Path::NormalizeUtf8Path(path);
     const std::string ext = XER::Helper::String::ToLowerAscii(
-        std::filesystem::path(path).extension().string());
-    if (ext == ".jpg" || ext == ".jpeg") return SaveJpeg(img, path, quality);
-    if (ext == ".raw")  return SaveRaw(img, path);
-    return SavePng(img, path);  // default
+        XER::Helper::Path::ToUtf8(
+            XER::Helper::Path::FromUtf8(upath).extension()));
+    if (ext == ".jpg" || ext == ".jpeg") return SaveJpeg(img, upath, quality);
+    if (ext == ".raw")  return SaveRaw(img, upath);
+    return SavePng(img, upath);  // default
 }
 
 bool ImageSaver::SavePng(const ImageBuffer& img, const std::string& path) {
     if (!XER::Bridge::FFmpeg::IsAvailable()) return false;
     if (!img.IsValid()) return false;
+    const std::string upath = XER::Helper::Path::NormalizeUtf8Path(path);
     int w = img.Width(), h = img.Height();
     // Build VideoFrameInfo-compatible frame
     XER::Bridge::FFmpeg::EncodeVideoParams p;
-    p.output_path  = path;
+    p.output_path  = upath;
     p.codec_name   = "png";
     p.width        = w;
     p.height       = h;
@@ -80,9 +84,10 @@ bool ImageSaver::SaveJpeg(const ImageBuffer& img, const std::string& path,
                            int quality) {
     if (!XER::Bridge::FFmpeg::IsAvailable()) return false;
     if (!img.IsValid()) return false;
+    const std::string upath = XER::Helper::Path::NormalizeUtf8Path(path);
     int w = img.Width(), h = img.Height();
     XER::Bridge::FFmpeg::EncodeVideoParams p;
-    p.output_path  = path;
+    p.output_path  = upath;
     p.codec_name   = "mjpeg";
     p.width        = w;
     p.height       = h;
@@ -106,7 +111,8 @@ bool ImageSaver::SaveJpeg(const ImageBuffer& img, const std::string& path,
 }
 
 bool ImageSaver::SaveRaw(const ImageBuffer& img, const std::string& path) {
-    std::ofstream f(path, std::ios::binary);
+    const std::string upath = XER::Helper::Path::NormalizeUtf8Path(path);
+    std::ofstream f(XER::Helper::Path::FromUtf8(upath), std::ios::binary);
     if (!f) return false;
     f.write(reinterpret_cast<const char*>(img.Data()), img.DataSize());
     return f.good();
