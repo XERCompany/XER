@@ -27,6 +27,7 @@ public:
 
     void SetTitle(std::string title);
     void SetContent(std::shared_ptr<Widget> content);
+    void SetPanelWidth(float width);
     void SetOnClosed(std::function<void()> callback);
     void Close();
     // True only when the dialog was closed via the confirm button or Enter.
@@ -52,6 +53,7 @@ private:
     std::string confirm_label_;
     std::string cancel_label_;
     std::shared_ptr<Widget> content_;
+    float panel_width_ = 420.0f;
     Layout::Rect close_rect_;
     Layout::Rect confirm_rect_;
     Layout::Rect cancel_rect_;

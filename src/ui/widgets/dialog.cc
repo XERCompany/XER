@@ -56,6 +56,12 @@ void Dialog::SetContent(std::shared_ptr<Widget> content) {
     Invalidate();
 }
 
+void Dialog::SetPanelWidth(float width) {
+    panel_width_ = std::max(240.0f, width);
+    RequestLayout();
+    Invalidate();
+}
+
 void Dialog::SetOnClosed(std::function<void()> callback) {
     on_closed_ = std::move(callback);
 }
@@ -85,7 +91,7 @@ Layout::Rect Dialog::PanelRect(const Layout::Rect& bounds) const {
         : 0.0f;
     const float height = kHeaderHeight + content_h + kFooterHeight + kPadding;
     const float h = std::min(height, bounds.height - 32.0f);
-    const float w = std::min(kPanelWidth, bounds.width - 32.0f);
+    const float w = std::min(panel_width_, bounds.width - 32.0f);
     return Layout::Rect{
         bounds.x + (bounds.width - w) * 0.5f,
         bounds.y + (bounds.height - h) * 0.5f,
@@ -143,12 +149,14 @@ void Dialog::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
             renderer.StrokeRect(rect, tokens.border, 1.0f, tokens.radius_medium);
         }
         const Rendering::TextStyle s{text, tokens.font_body, 500};
-        const auto sz = renderer.MeasureText(label, s);
+        const auto sz = renderer.MeasureText(
+            label.empty() ? std::string_view("Ag") : std::string_view(label), s);
+        const float lw = label.empty() ? 0.0f : sz.width;
         renderer.DrawText(
             label,
-            Layout::Rect{rect.x + (rect.width - sz.width) * 0.5f,
-                         rect.y + (rect.height - s.size) * 0.5f,
-                         sz.width + 4.0f, s.size + 4.0f},
+            Layout::Rect{rect.x + std::max(0.0f, (rect.width - lw) * 0.5f),
+                         rect.y + std::max(0.0f, (rect.height - sz.height) * 0.5f),
+                         lw + 4.0f, sz.height + 2.0f},
             s);
     };
     if (!cancel_label_.empty()) {
@@ -172,8 +180,11 @@ void Dialog::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
 
     close_rect_ = Layout::Rect{panel.x + panel.width - 36.0f, panel.y + 8.0f, 28.0f, 28.0f};
 
-    const float confirm_w = 88.0f;
-    const float cancel_w = cancel_label_.empty() ? 0.0f : 76.0f;
+    const float confirm_w = std::max(
+        88.0f, static_cast<float>(confirm_label_.size()) * 7.5f + 28.0f);
+    const float cancel_w = cancel_label_.empty()
+        ? 0.0f
+        : std::max(76.0f, static_cast<float>(cancel_label_.size()) * 7.5f + 28.0f);
     const float gap = cancel_w > 0.0f ? 8.0f : 0.0f;
     const float btn_y = panel.y + panel.height - kFooterHeight + 10.0f;
     cancel_rect_ = Layout::Rect{
@@ -243,7 +254,7 @@ Layout::Size Dialog::GetMinSize() const {
 }
 
 Layout::Size Dialog::GetPreferredSize() const {
-    return {kPanelWidth, 240.0f};
+    return {panel_width_, kPanelWidth * 0.57f};
 }
 
 Layout::Size Dialog::GetMaxSize() const {
