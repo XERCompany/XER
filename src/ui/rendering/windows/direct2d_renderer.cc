@@ -79,6 +79,16 @@ Direct2DRenderer::Direct2DRenderer(HWND hwnd)
         ),
         "DWriteCreateFactory"
     );
+    // Factory must outlive the D2D device so geometries created for
+    // DrawImage rounded-clip masks share the device context's factory.
+    ThrowIfFailed(
+        D2D1CreateFactory(
+            D2D1_FACTORY_TYPE_SINGLE_THREADED,
+            __uuidof(ID2D1Factory1),
+            nullptr,
+            reinterpret_cast<void**>(d2d_factory_.GetAddressOf())),
+        "D2D1CreateFactory"
+    );
 }
 
 Direct2DRenderer::~Direct2DRenderer() = default;
@@ -161,9 +171,9 @@ void Direct2DRenderer::EnsureDevice() {
     }
 
     ThrowIfFailed(
-        D2D1CreateDevice(dxgi_device_.Get(), nullptr,
-                         d2d_device_.GetAddressOf()),
-        "D2D1CreateDevice");
+        d2d_factory_->CreateDevice(dxgi_device_.Get(),
+                                   d2d_device_.GetAddressOf()),
+        "ID2D1Factory1::CreateDevice");
     ThrowIfFailed(
         d2d_device_->CreateDeviceContext(
             D2D1_DEVICE_CONTEXT_OPTIONS_NONE, dc_.GetAddressOf()),
@@ -338,6 +348,12 @@ void Direct2DRenderer::EndFrame() {
         present_hr == DXGI_ERROR_DEVICE_RESET) {
         // Transient GPU reset (TDR etc.): drop all GPU state; the next
         // BeginFrame recreates device, swapchain and targets lazily.
+        // Cached bitmaps are device resources and die with the device.
+        image_cache_.clear();
+        frame_bitmap_.Reset();
+        frame_bitmap_size_ = {0, 0};
+        blur_bitmap_.Reset();
+        blur_bitmap_size_ = {0, 0};
         ReleaseTargets();
         swap_chain_.Reset();
         backbuffer_.Reset();
