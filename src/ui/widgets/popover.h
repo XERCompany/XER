@@ -1,6 +1,7 @@
 #ifndef XER_UI_WIDGETS_POPOVER_H
 #define XER_UI_WIDGETS_POPOVER_H
 
+#include <functional>
 #include <memory>
 #include <string>
 

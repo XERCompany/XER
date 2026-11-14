@@ -5,6 +5,7 @@
 #include <memory>
 #include <string>
 
+#include "motion/motion.h"
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {

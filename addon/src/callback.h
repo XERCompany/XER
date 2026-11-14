@@ -48,6 +48,12 @@ inline v8::Local<v8::Value> ToV8(const std::vector<int>& v) {
         Nan::Set(arr, i, Nan::New(v[i]));
     return arr;
 }
+inline v8::Local<v8::Value> ToV8(const std::vector<float>& v) {
+    v8::Local<v8::Array> arr = Nan::New<v8::Array>(v.size());
+    for (std::size_t i = 0; i < v.size(); ++i)
+        Nan::Set(arr, i, Nan::New(v[i]));
+    return arr;
+}
 inline v8::Local<v8::Value> ToV8(const std::vector<std::string>& v) {
     v8::Local<v8::Array> arr = Nan::New<v8::Array>(v.size());
     for (std::size_t i = 0; i < v.size(); ++i)
