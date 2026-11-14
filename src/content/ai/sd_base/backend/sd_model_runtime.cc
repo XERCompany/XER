@@ -1,8 +1,11 @@
 #include "content/ai/sd_base/backend/sd_model_runtime.h"
 
+#include "helper/env_utils.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <functional>
 
@@ -52,6 +55,23 @@ bool SdModelRuntime::Load(const SdBaseConfig& config,
     latent_h_ = static_cast<int>(std::max<uint32_t>(1, request.height / 8));
     latent_w_ = static_cast<int>(std::max<uint32_t>(1, request.width / 8));
     unet_real_ = false;
+    vae_path_.clear();
+    if (!vae.empty() && HasSuffixCI(vae, ".safetensors")) {
+        vae_path_ = vae;
+    }
+
+    // Real CLIP text encoder: safetensors weights + vocab.json/merges.txt
+    // expected in the same directory as the checkpoint.
+    clip_real_ = false;
+    if (!text_encoder.empty() && HasSuffixCI(text_encoder, ".safetensors")) {
+        const auto te_dir = std::filesystem::path(text_encoder).parent_path();
+        std::string cerr;
+        clip_.Load(text_encoder, te_dir.string(), &cerr);
+        clip_real_ = clip_.IsLoaded();
+        if (!clip_real_ && error_out && !cerr.empty()) {
+            // non-fatal: falls back to deterministic embeddings
+        }
+    }
 
     // Real UNet weights: safetensors checkpoints load directly; .ckpt/.pth/.gguf
     // need conversion first (kept as existence-check only for now).
@@ -87,6 +107,18 @@ bool SdModelRuntime::Load(const SdBaseConfig& config,
 }
 
 std::vector<float> SdModelRuntime::EncodeText(const std::string& prompt, uint32_t dim) const {
+    // Real CLIP path: only when output dims match what the UNet expects.
+    if (clip_real_ && clip_.ContextDim() == ctx_dim_ &&
+        clip_.ContextLen() == ctx_len_) {
+        auto emb = clip_.Encode(prompt);
+        if (!emb.empty()) {
+            if (!XER::Helper::GetEnv("SD_DEBUG_EMB").empty() && emb.size() >= 4) {
+                std::fprintf(stderr, "[emb] %.4f %.4f %.4f %.4f\n",
+                             emb[0], emb[1], emb[2], emb[3]);
+            }
+            return emb;
+        }
+    }
     if (unet_real_) {
         // Context-token layout expected by UNet cross-attention:
         // [ctx_len_, ctx_dim_] row-major (token-major). Deterministic
@@ -176,6 +208,10 @@ void SdModelRuntime::PredictNoiseCfg(
 
     for (size_t i = 0; i < need; ++i) {
         latent[i] = eps_uncond[i] + g * (eps_cond[i] - eps_uncond[i]);
+    }
+    if (!XER::Helper::GetEnv("SD_DEBUG_EPS").empty() && need > 0) {
+        std::fprintf(stderr, "[eps] %.5f %.5f %.5f %.5f\n",
+                     eps_cond[0], eps_cond[1], eps_uncond[0], latent[0]);
     }
     (void)timestep;
 }

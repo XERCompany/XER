@@ -3,6 +3,7 @@
 #include "content/ai/sd_base/core/sd_base_config.h"
 #include "content/ai/sd_base/core/sd_base_types.h"
 #include "content/ai/sd_base/gpu/sd_gpu_dispatch.h"
+#include "content/ai/sd_base/text/sd_clip_text_encoder.h"
 #include "content/ai/sd_base/unet/sd_unet.h"
 
 #include <string>
@@ -46,6 +47,10 @@ public:
                          float guidance) const;
 
     bool HasRealUnet() const { return unet_real_; }
+    bool HasRealTextEncoder() const { return clip_.IsLoaded(); }
+    // Path to VAE weights when they are a .safetensors checkpoint (empty
+    // otherwise); SdVaeDecoder::SetWeightsPath performs the actual load.
+    const std::string& vae_weights_path() const { return vae_path_; }
     const SdLoadedModelSet& loaded() const { return loaded_; }
 
 private:
@@ -65,6 +70,9 @@ private:
     int latent_w_ = 0;
     int ctx_len_ = 77;
     int ctx_dim_ = 768;
+    std::string vae_path_;
+    SdClipTextEncoder clip_;
+    bool clip_real_ = false;
 };
 
 }  // namespace XER::AI::SDBase
