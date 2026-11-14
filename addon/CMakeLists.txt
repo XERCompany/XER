@@ -90,6 +90,8 @@ add_library(xeraddon MODULE
     src/addon.cc
     src/image/image.cc
     src/audio/audio.cc
+    src/audio/buffer.cc
+    src/audio/player.cc
     src/ui/ui.cc
     src/ui/widget.cc
     src/ui/window.cc
@@ -127,6 +129,7 @@ target_link_libraries(xeraddon PRIVATE
     ${XER_NODE_LIB}
     XER_Image
     XER_AudioCore
+    XER_ContentAudio
     XER_Flux_Core
     XER_Helper
     XER_UI_Core

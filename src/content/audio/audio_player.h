@@ -15,6 +15,12 @@
 
 #include "audio/audio_core/audio_source_loader.h"
 
+// windows.h (WinBase.h) defines `GetCurrentTime()` as a macro alias for
+// GetTickCount() on Desktop — it would silently rename the member below to
+// `GetTickCount`, making the API name TU-dependent. Undef so the member
+// keeps a stable name in every translation unit.
+#undef GetCurrentTime
+
 namespace XER::Content::Audio {
 
 class WasapiDeviceNotifier;

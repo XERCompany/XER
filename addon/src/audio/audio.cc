@@ -11,6 +11,8 @@
 #include <vector>
 
 #include "audio/audio_core/audio_source_loader.h"
+#include "buffer.h"
+#include "player.h"
 #include "audio/file_io_codecs/codec_ffmpeg_encode_helper.h"
 #include "audio/file_io_codecs/codec_mp3_lame.h"
 #include "audio/file_io_codecs/codec_wav_pcm.h"
@@ -267,6 +269,8 @@ namespace xer::addon {
 void InitAudio(v8::Local<v8::Object> exports) {
     Nan::SetMethod(exports, "info", AudioInfo);
     Nan::SetMethod(exports, "convert", AudioConvert);
+    audio::InitAudioBuffer(exports);
+    audio::InitAudioPlayer(exports);
 }
 
 }  // namespace xer::addon

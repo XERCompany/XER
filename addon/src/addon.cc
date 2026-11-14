@@ -63,9 +63,7 @@ NAN_MODULE_INIT(Init) {
 
     v8::Local<v8::Object> ui_ns = Nan::New<v8::Object>();
     xer::addon::InitUI(ui_ns);
-    Nan::Set(target, Nan::New("UI").ToLocalChecked(), ui_ns);
-    // Back-compat alias: example.js and early scripts use `XER.*`.
-    Nan::Set(target, Nan::New("XER").ToLocalChecked(), ui_ns);
+    Nan::Set(target, Nan::New("UI").ToLocalChecked(), ui_ns); 
 }
 
 NODE_MODULE(xeraddon, Init)
