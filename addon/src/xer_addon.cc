@@ -33,10 +33,10 @@ constexpr const char* kArch = "unknown";
 NAN_METHOD(XerInfo) {
     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
     Nan::Set(obj, Nan::New("node").ToLocalChecked(),
-             Nan::New(NODE_VERSION_STRING));
-    Nan::Set(obj, Nan::New("platform").ToLocalChecked(), Nan::New(kPlatform));
-    Nan::Set(obj, Nan::New("arch").ToLocalChecked(), Nan::New(kArch));
-    Nan::Set(obj, Nan::New("xer").ToLocalChecked(), Nan::New("xer3-addon"));
+             Nan::New(NODE_VERSION_STRING).ToLocalChecked());
+    Nan::Set(obj, Nan::New("platform").ToLocalChecked(), Nan::New(kPlatform).ToLocalChecked());
+    Nan::Set(obj, Nan::New("arch").ToLocalChecked(), Nan::New(kArch).ToLocalChecked());
+    Nan::Set(obj, Nan::New("xer").ToLocalChecked(), Nan::New("xer3-addon").ToLocalChecked());
     info.GetReturnValue().Set(obj);
 }
 

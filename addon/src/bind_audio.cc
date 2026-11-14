@@ -136,12 +136,12 @@ NAN_METHOD(AudioInfo) {
     std::string path;
     if (!xer::addon::ArgUtf8(info, 0, &path)) {
         xer::addon::ThrowUsage("audio.info(path)");
-        return info.GetReturnValue();
+        return;
     }
 
     AudioCore::AudioSourceBuffer buffer;
     if (!LoadOrThrow(info, path, 0, 0, &buffer)) {
-        return info.GetReturnValue();
+        return;
     }
 
     const double duration = buffer.sample_rate > 0
@@ -152,11 +152,11 @@ NAN_METHOD(AudioInfo) {
 
     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
     Nan::Set(obj, Nan::New("format").ToLocalChecked(),
-             Nan::New(buffer.source_format));
+             Nan::New(buffer.source_format).ToLocalChecked());
     Nan::Set(obj, Nan::New("codec").ToLocalChecked(),
-             Nan::New(buffer.codec_name));
+             Nan::New(buffer.codec_name).ToLocalChecked());
     Nan::Set(obj, Nan::New("backend").ToLocalChecked(),
-             Nan::New(buffer.decode_backend));
+             Nan::New(buffer.decode_backend).ToLocalChecked());
     Nan::Set(obj, Nan::New("sampleRate").ToLocalChecked(),
              Nan::New(static_cast<double>(buffer.sample_rate)));
     Nan::Set(obj, Nan::New("originalSampleRate").ToLocalChecked(),
@@ -183,7 +183,7 @@ NAN_METHOD(AudioConvert) {
     if (!xer::addon::ArgUtf8(info, 0, &in_path) ||
         !xer::addon::ArgUtf8(info, 1, &out_path)) {
         xer::addon::ThrowUsage("audio.convert(input, output, opts?)");
-        return info.GetReturnValue();
+        return;
     }
 
     int target_rate = 0;
@@ -196,7 +196,7 @@ NAN_METHOD(AudioConvert) {
 
     AudioCore::AudioSourceBuffer buffer;
     if (!LoadOrThrow(info, in_path, target_rate, target_channels, &buffer)) {
-        return info.GetReturnValue();
+        return;
     }
 
     // Keep the original sample rate when the caller did not request one
@@ -214,7 +214,7 @@ NAN_METHOD(AudioConvert) {
         if (!AudioCore::AudioSourceLoader::Load(options, &buffer, &error)) {
             Nan::ThrowError(
                 ("Failed to reload audio at original rate: " + error).c_str());
-            return info.GetReturnValue();
+            return;
         }
     }
 
@@ -223,7 +223,7 @@ NAN_METHOD(AudioConvert) {
     if (!EncodeForPath(buffer.samples, buffer.sample_rate, buffer.channels,
                        out_path, &encoded, &error)) {
         Nan::ThrowError(("audio.convert encode failed: " + error).c_str());
-        return info.GetReturnValue();
+        return;
     }
 
     const std::string upath_out = Path::NormalizeUtf8Path(out_path);
@@ -232,7 +232,7 @@ NAN_METHOD(AudioConvert) {
         Nan::ThrowError(("audio.convert: cannot open output '" + out_path +
                          "'")
                             .c_str());
-        return info.GetReturnValue();
+        return;
     }
     out.write(reinterpret_cast<const char*>(encoded.data()),
               static_cast<std::streamsize>(encoded.size()));
@@ -240,7 +240,7 @@ NAN_METHOD(AudioConvert) {
     if (!out.good()) {
         Nan::ThrowError(("audio.convert: write failed for '" + out_path + "'")
                             .c_str());
-        return info.GetReturnValue();
+        return;
     }
 
     v8::Local<v8::Object> obj = Nan::New<v8::Object>();
