@@ -38,18 +38,24 @@ Rect CenteredTextRect(Rendering::Renderer& renderer,
                       const Rect& container,
                       float h_padding,
                       bool center_horizontal) {
-    const float text_h = renderer.MeasureText(text, style).height;
+    const float pad = std::max(0.0f, h_padding);
+    const auto measured = renderer.MeasureText(
+        text.empty() ? std::string_view("Ag") : text, style);
+    const float text_w = text.empty() ? 0.0f : measured.width;
+    const float text_h = measured.height;
     const float y = container.y +
         std::max(0.0f, (container.height - text_h) * 0.5f);
-    if (center_horizontal && h_padding <= 0.0f) {
-        const float text_w = renderer.MeasureText(text, style).width;
-        const float x = container.x +
-            std::max(0.0f, (container.width - text_w) * 0.5f);
-        return Rect{x, y, text_w, text_h};
+    const float draw_h = std::min(container.height, text_h + 1.0f);
+    const float avail_w = std::max(0.0f, container.width - 2.0f * pad);
+    if (center_horizontal) {
+        if (text_w < avail_w) {
+            const float x = container.x + pad + (avail_w - text_w) * 0.5f;
+            const float max_w = std::max(0.0f, container.Right() - pad - x);
+            return Rect{x, y, std::min(max_w, text_w + 2.0f), draw_h};
+        }
+        return Rect{container.x + pad, y, avail_w, draw_h};
     }
-    const float x = container.x + h_padding;
-    const float w = std::max(0.0f, container.width - 2.0f * h_padding);
-    return Rect{x, y, w, text_h};
+    return Rect{container.x + pad, y, avail_w, draw_h};
 }
 
 Rect VerticallyCentered(const Rect& container, float element_height) noexcept {
@@ -131,11 +137,9 @@ std::vector<Rect> DistributeRow(
         float cur_x = start_x;
         for (std::size_t i = 0; i < n; ++i) {
             const float x0 = Snap(cur_x, scale);
-            // Uniform right edge: width plus the inter-item gap (none after
-            // the last item). Rows that don't fill the container (Center,
-            // SpaceAround, ...) keep their natural trailing space.
-            const float right = Snap(
-                cur_x + widths[i] + (i + 1 == n ? 0.0f : gap), scale);
+            const float right = (i + 1 == n && align == FlexAlign::SpaceBetween && n > 1)
+                ? container_x1
+                : Snap(cur_x + widths[i], scale);
             const float item_w = std::max(0.0f, right - x0);
             result.push_back(Rect{x0, y, item_w, h});
             cur_x = cur_x + widths[i] + gap;
@@ -190,10 +194,10 @@ std::vector<Rect> DistributeRow(
     float cur_x = container_x0;
     for (std::size_t i = 0; i < n; ++i) {
         const float x0 = Snap(cur_x, scale);
-        const float next_x = (i + 1 == n)
+        const float right = (i + 1 == n)
             ? container_x1
-            : Snap(cur_x + widths_shrunk[i] + eff_gap, scale);
-        const float w = std::max(0.0f, next_x - x0);
+            : Snap(cur_x + widths_shrunk[i], scale);
+        const float w = std::max(0.0f, right - x0);
         result.push_back(Rect{x0, y, w, h});
         cur_x += widths_shrunk[i] + eff_gap;
     }

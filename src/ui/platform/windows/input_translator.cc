@@ -24,6 +24,7 @@ Widgets::KeyCode TranslateKey(WPARAM key) {
     case VK_PRIOR: return Widgets::KeyCode::PageUp;
     case VK_NEXT: return Widgets::KeyCode::PageDown;
     case VK_ESCAPE: return Widgets::KeyCode::Escape;
+    case VK_F5: return Widgets::KeyCode::F5;
     default: return Widgets::KeyCode::None;
     }
 }
@@ -32,6 +33,10 @@ Widgets::KeyCode TranslateShortcutKey(WPARAM key) {
     switch (key) {
     case 'A': return Widgets::KeyCode::A;
     case 'C': return Widgets::KeyCode::C;
+    case 'F': return Widgets::KeyCode::F;
+    case 'K': return Widgets::KeyCode::K;
+    case 'N': return Widgets::KeyCode::N;
+    case 'P': return Widgets::KeyCode::P;
     case 'V': return Widgets::KeyCode::V;
     case 'X': return Widgets::KeyCode::X;
     case 'Y': return Widgets::KeyCode::Y;
