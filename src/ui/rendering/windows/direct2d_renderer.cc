@@ -255,6 +255,7 @@ void Direct2DRenderer::EnsureTargets(UINT32 width, UINT32 height) {
         "ID2D1DeviceContext::CreateBitmap(canvas)");
     // A recreated canvas has no previous frame to retain.
     canvas_valid_ = false;
+    targets_recreated_ = true;
 
     target_size_ = D2D1::SizeU(width, height);
 }
@@ -267,6 +268,7 @@ void Direct2DRenderer::BeginFrame(Layout::Rect bounds) {
         throw std::invalid_argument("Frame bounds cannot have negative dimensions");
     }
 
+    targets_recreated_ = false;
     EnsureDevice();
     RECT client_rect{};
     if (!GetClientRect(hwnd_, &client_rect)) {

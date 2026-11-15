@@ -123,7 +123,7 @@ table.SetRows([
     ['Max', 'Reviewer', 'Away'],
     ['Sara', 'PM', 'Active'],
 ]);
-table.SetOnRowClick((cell) =>
+table.SetOnCellClick((cell) =>
     console.log('[table] cell:', cell.row, '/', cell.col));
 
 const chart = new UI.Chart('Line');
@@ -245,6 +245,10 @@ const root = new UI.Form(1, 14);
 ].forEach((w) => root.AddChild(w));
 
 const scroll = new UI.ScrollArea(root);
+if (process.env.XER_DEMO_DEBUG) {
+    console.log('[debug] root preferred =', JSON.stringify(root.GetPreferredSize()));
+    console.log('[debug] scroll contentHeight =', scroll.GetContentHeight());
+}
 win.Create('XER Design System — demo_design.js', 1120, 760);
 win.SetTheme('dark');
 win.SetContent(scroll);
@@ -260,8 +264,10 @@ win.SetFrameCallback(() => {
     spinner.SetPhase(t % (Math.PI * 2));
     loading.SetValue((Math.sin(t * 0.7) + 1) / 2);
     if (autoFrames > 0 && ++frames >= autoFrames) {
+        const st = win.GetRenderStats();
         console.log('[demo] frames =', frames,
-                    'renderError =', JSON.stringify(win.GetLastRenderError()));
+                    'renderError =', JSON.stringify(win.GetLastRenderError()),
+                    'stats =', JSON.stringify(st));
         win.Close();
     }
 }, 50);

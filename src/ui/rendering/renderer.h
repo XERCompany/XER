@@ -35,6 +35,13 @@ public:
     // skip clearing/redrawing unaffected areas; immediate renderers may
     // ignore it. Called by WidgetTree::Render before BeginFrame.
     virtual void SetFrameDamage(Layout::Rect damage) { (void)damage; }
+
+    // True for exactly one frame after the renderer recreated its draw
+    // targets (first frame, resize, DPI or device change). A fresh retained
+    // canvas has no previous pixels, so WidgetTree must ignore damage
+    // culling and repaint everything — otherwise undrawn regions keep the
+    // clear color until they happen to be invalidated again.
+    virtual bool TakeTargetsRecreated() { return false; }
     virtual void FillRect(Layout::Rect rect, Theme::Color color, float radius) = 0;
     virtual void StrokeRect(Layout::Rect rect, Theme::Color color, float width, float radius) = 0;
     virtual void DrawLine(

@@ -7,6 +7,7 @@
 #include "helper/string_utils.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
@@ -168,6 +169,10 @@ public:
 
     std::string GetLastRenderError() const {
         return last_render_error_;
+    }
+
+    RenderStats GetRenderStats() const {
+        return render_stats_;
     }
 
     void SetCustomTitleBar(bool enabled, float height_dip) {
@@ -738,6 +743,8 @@ private:
     void Paint(HWND hwnd, HDC hdc, const RECT& paint_rect) {
         (void)hdc;  // presentation goes through the DXGI swapchain, not GDI
         try {
+            const auto frame_start = std::chrono::steady_clock::now();
+            float damage_pct = 100.0f;
             const auto background = theme_.GetTokens().background;
             if (root_widget_ == nullptr || !root_widget_->IsVisible()) {
                 // No widget tree: present a solid clear through the swapchain
@@ -773,6 +780,22 @@ private:
                     static_cast<float>(paint_rect.bottom - paint_rect.top) *
                         px_to_dip};
                 widget_tree_.Render(*renderer_, theme_.GetTokens(), &damage);
+                // Damage coverage: union of this paint's DIP rect vs the
+                // client area. ~100% means a full repaint (resize, layout,
+                // explicit Invalidate); small values mean a regional update.
+                RECT client_px{};
+                if (GetClientRect(hwnd, &client_px)) {
+                    const float client_w =
+                        (client_px.right - client_px.left) * px_to_dip;
+                    const float client_h =
+                        (client_px.bottom - client_px.top) * px_to_dip;
+                    const float client_area = client_w * client_h;
+                    if (client_area > 0.0f) {
+                        damage_pct = std::clamp(
+                            damage.width * damage.height / client_area * 100.0f,
+                            0.0f, 100.0f);
+                    }
+                }
                 // Flush pending child-window paints (the NodeGraph canvas
                 // HWND) synchronously inside this WM_PAINT, right after the
                 // parent surface commits. Without this the two HWNDs can
@@ -786,6 +809,15 @@ private:
                 widget_tree_.ConsumeDirtyPaint();
                 widget_tree_.ConsumeLayoutRequest();
             }
+            const double frame_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - frame_start).count();
+            render_stats_.avg_frame_ms = render_stats_.frames == 0
+                ? frame_ms
+                : render_stats_.avg_frame_ms * 0.9 + frame_ms * 0.1;
+            render_stats_.frames += 1;
+            render_stats_.last_frame_ms = frame_ms;
+            render_stats_.last_damage_pct = damage_pct;
+            render_stats_.last_frame_full = damage_pct >= 99.5f;
             last_render_error_.clear();
         } catch (const std::exception& error) {
             renderer_.reset();
@@ -826,6 +858,7 @@ private:
     Platform::Windows::InputTranslator input_translator_;
     std::unique_ptr<Rendering::Windows::Direct2DRenderer> renderer_;
     std::string last_render_error_;
+    RenderStats render_stats_;
 
     bool custom_title_bar_ = false;
     float title_bar_height_dip_ = 38.0f;
@@ -904,6 +937,10 @@ Theme::Variant Window::GetTheme() const {
 
 std::string Window::GetLastRenderError() const {
     return impl_->GetLastRenderError();
+}
+
+RenderStats Window::GetRenderStats() const {
+    return impl_->GetRenderStats();
 }
 
 void Window::SetOnClose(Callback callback) {

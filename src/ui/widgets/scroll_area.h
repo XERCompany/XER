@@ -53,7 +53,14 @@ public:
     Layout::Size GetMinSize() const override { return {120.0f, 80.0f}; }
     Layout::Size GetPreferredSize() const override { return {480.0f, 360.0f}; }
     Layout::Size GetMaxSize() const override { return {100000.0f, 100000.0f}; }
-    float GetContentHeight() const override { return content_height_; }
+    // Before the first layout content_height_ is still 0 — fall back to the
+    // content's preferred height so callers get a useful value immediately.
+    float GetContentHeight() const override {
+        if (content_height_ > 0.0f) {
+            return content_height_;
+        }
+        return content_ != nullptr ? content_->GetContentHeight() : 0.0f;
+    }
 
 private:
     friend class ScrollBarWidget;

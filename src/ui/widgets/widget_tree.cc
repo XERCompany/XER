@@ -104,13 +104,19 @@ void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& toke
 
     renderer.SetFrameDamage(clip);
     renderer.BeginFrame(bounds);
+    // A freshly recreated canvas has no retained pixels: ignoring the
+    // damage clip for this one frame prevents clear-color voids.
+    const bool fresh_targets = renderer.TakeTargetsRecreated();
+    if (fresh_targets) {
+        clip = bounds;
+    }
     renderer.PushClip(clip);
-    RenderSubtree(root_, renderer, tokens, &clip);
+    RenderSubtree(root_, renderer, tokens, fresh_targets ? nullptr : &clip);
     if (overlay_ != nullptr) {
-        RenderSubtree(overlay_, renderer, tokens, &clip);
+        RenderSubtree(overlay_, renderer, tokens, fresh_targets ? nullptr : &clip);
     }
     if (passive_overlay_ != nullptr) {
-        RenderSubtree(passive_overlay_, renderer, tokens, &clip);
+        RenderSubtree(passive_overlay_, renderer, tokens, fresh_targets ? nullptr : &clip);
     }
     renderer.PopClip();
     renderer.EndFrame();

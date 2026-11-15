@@ -36,6 +36,7 @@ public:
     void SetDpi(UINT dpi);
     void BeginFrame(Layout::Rect bounds) override;
     void EndFrame() override;
+    bool TakeTargetsRecreated() override { return targets_recreated_; }
     void FillRect(Layout::Rect rect, Theme::Color color, float radius) override;
     void StrokeRect(Layout::Rect rect, Theme::Color color, float width, float radius) override;
     void DrawLine(
@@ -71,6 +72,9 @@ private:
     // True once the retained canvas holds a complete presented frame;
     // a fresh canvas must be fully cleared before reuse.
     bool canvas_valid_ = false;
+    // Set by EnsureTargets when it (re)creates the canvas/backbuffer pair;
+    // cleared at the start of each BeginFrame. Read via TakeTargetsRecreated.
+    bool targets_recreated_ = false;
     D2D1_SIZE_U target_size_{0, 0};
 
     // D3D11 device shared by the DXGI swapchain and the D2D device.

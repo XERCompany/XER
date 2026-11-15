@@ -16,6 +16,17 @@ class Widget;
 
 namespace XER::UI::Core {
 
+// Per-painted-frame render diagnostics. Updated on every successful WM_PAINT;
+// use it to quantify "broken frames" (frame time, repaint coverage) instead of
+// guessing from screenshots.
+struct RenderStats {
+    std::uint64_t frames = 0;        // completed paints since window creation
+    double last_frame_ms = 0.0;      // last paint incl. Present/vsync wait
+    double avg_frame_ms = 0.0;       // exponential moving average (alpha 0.1)
+    float last_damage_pct = 100.0f;  // % of client area repainted last frame
+    bool last_frame_full = true;     // last paint covered (nearly) the client
+};
+
 /**
  * Window - Main window class with small interface
  *
@@ -59,6 +70,8 @@ public:
     Theme::Variant GetTheme() const;
     // Empty after a successful paint; otherwise returns the most recent native paint error.
     std::string GetLastRenderError() const;
+    // Frame-time and damage-coverage counters for the last painted frames.
+    RenderStats GetRenderStats() const;
 
     // Schedules a full client-area repaint on the next WM_PAINT.
     void Invalidate();

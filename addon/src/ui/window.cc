@@ -275,6 +275,25 @@ NAN_METHOD(WindowGetHWND) {
     info.GetReturnValue().Set(Nan::New(static_cast<double>(hwnd)));
 }
 
+NAN_METHOD(WindowGetRenderStats) {
+    // {frames, lastFrameMs, avgFrameMs, lastDamagePct, lastFrameFull}
+    auto* self = UnwrapWindow(info.This());
+    const UICore::RenderStats s =
+        self ? self->Get()->GetRenderStats() : UICore::RenderStats{};
+    auto obj = Nan::New<v8::Object>();
+    Nan::Set(obj, Nan::New("frames").ToLocalChecked(),
+             Nan::New(static_cast<double>(s.frames)));
+    Nan::Set(obj, Nan::New("lastFrameMs").ToLocalChecked(),
+             Nan::New(s.last_frame_ms));
+    Nan::Set(obj, Nan::New("avgFrameMs").ToLocalChecked(),
+             Nan::New(s.avg_frame_ms));
+    Nan::Set(obj, Nan::New("lastDamagePct").ToLocalChecked(),
+             Nan::New(s.last_damage_pct));
+    Nan::Set(obj, Nan::New("lastFrameFull").ToLocalChecked(),
+             Nan::New(s.last_frame_full));
+    info.GetReturnValue().Set(obj);
+}
+
 // --- callbacks ----------------------------------------------------------------
 
 // Stores a JS function under `key` (or clears the C++ callback when the arg
@@ -387,6 +406,7 @@ void RegisterWindow(v8::Local<v8::Object> xer) {
     Nan::SetMethod(proto, "SetCloseHides", WindowSetCloseHides);
     Nan::SetMethod(proto, "Invalidate", WindowInvalidate);
     Nan::SetMethod(proto, "GetLastRenderError", WindowGetLastRenderError);
+    Nan::SetMethod(proto, "GetRenderStats", WindowGetRenderStats);
     Nan::SetMethod(proto, "GetHWND", WindowGetHWND);
     Nan::SetMethod(proto, "SetOnClose", WindowSetOnClose);
     Nan::SetMethod(proto, "SetOnResize", WindowSetOnResize);
