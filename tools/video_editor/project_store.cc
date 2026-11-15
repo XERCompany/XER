@@ -6,6 +6,7 @@
 #include "project_store.h"
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -439,8 +440,27 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
         }
     }
 
-    // transitions: lenient — missing endpoints drop via
-    // DropInvalidTransitions below; unknown type strings are errors.
+    // Corrupt-primary-data check: the model's core invariant is that
+    // no two clips overlap on the same track — ValidateClipPlacement
+    // enforces it on every mutation, so a hand-edited file must not
+    // load into a state the mutators would reject. Adjacency
+    // (end == start) is allowed; this is a hard error like duplicate
+    // ids, NOT self-heal.
+    for (std::size_t i = 0; i < project.clips.size(); ++i) {
+        for (std::size_t j = i + 1; j < project.clips.size(); ++j) {
+            const Clip& a = project.clips[i];
+            const Clip& b = project.clips[j];
+            if (a.track == b.track && ClipsOverlap(a, b)) {
+                return Fail(error_out,
+                            "clip '" + a.id + "' overlaps clip '" + b.id +
+                                "' on track " + std::to_string(a.track));
+            }
+        }
+    }
+
+    // transitions: lenient — missing endpoints and non-positive
+    // durations drop (self-heal below / at parse); unknown type
+    // strings are errors.
     if (root.isMember("transitions")) {
         const Json::Value& tv = root["transitions"];
         if (!tv.isArray()) {
@@ -472,6 +492,14 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             if (!r.GetF64("duration", transition.duration,
                          &transition.duration)) {
                 return false;
+            }
+            // Non-positive/non-finite duration → invalid transition:
+            // drop it (self-heal, same class as missing endpoints —
+            // AddTransition requires duration > 0). Unknown `type`
+            // strings above remain hard errors.
+            if (!std::isfinite(transition.duration) ||
+                transition.duration <= 0.0) {
+                continue;
             }
             project.transitions.push_back(transition);
         }

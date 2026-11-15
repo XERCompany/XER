@@ -85,6 +85,9 @@ Clip*        FindClip(Project&, const std::string& clip_id);
 const Track* FindTrack(const Project&, int track_index);
 double       ClipEndSeconds(const Clip&);                    // start + duration
 bool         ClipActiveAt(const Clip&, double t);            // start <= t < end
+// Strict [start, end) interval overlap — adjacency (end == start) is
+// NOT overlap. Track equality is the caller's concern.
+bool         ClipsOverlap(const Clip& a, const Clip& b);
 std::vector<const Clip*> ClipsOnTrack(const Project&, int track_index);  // by start
 std::vector<Clip*>       ClipsOnTrack(Project&, int track_index);
 // Sorted unique snap candidates: 0, every clip start/end on

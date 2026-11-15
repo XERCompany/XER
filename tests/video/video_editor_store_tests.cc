@@ -407,6 +407,26 @@ int XER_VideoEditor_RunStoreTests() {
             v["transitions"][0]["type"] = "warp_drive";
             expect_fail(v, "err_bad_transition_type.xerproj");
         }
+        // Overlap on the same track violates the model's core
+        // invariant → hard error (corrupt primary data, like dup ids).
+        {
+            Json::Value v = base;
+            v["clips"][1]["timeline_start"] = 5.0;  // overlaps clip-a
+            expect_fail(v, "err_overlap.xerproj");
+        }
+        // Adjacency (end == start) is NOT overlap → loads fine; the
+        // fixture's clip-c already overlaps clip-a in time on a
+        // DIFFERENT track, proving the track check too.
+        {
+            Json::Value v = base;
+            v["clips"][1]["timeline_start"] = 10.0;  // == clip-a end
+            Project p;
+            std::string lerr;
+            XER_VE_CHECK(
+                TryLoadJson(dir, "ok_adjacent.xerproj", v, &p, &lerr));
+            XER_VE_CHECK(p.clips.size() == 3);
+            XER_VE_CHECK(p.transitions.size() == 1);  // a->b still valid
+        }
     }
 
     // -- 6. self-heal: broken transitions drop, load still succeeds ------
@@ -444,6 +464,19 @@ int XER_VideoEditor_RunStoreTests() {
             Json::Value v = base;
             v["transitions"][0].removeMember("from");
             expect_healed(v, "heal_no_from.xerproj");
+        }
+        // non-positive transition duration → dropped (AddTransition
+        // requires duration > 0; DropInvalidTransitions doesn't check
+        // it, so the store must — self-heal, not a hard error)
+        {
+            Json::Value v = base;
+            v["transitions"][0]["duration"] = 0.0;
+            expect_healed(v, "heal_duration_zero.xerproj");
+        }
+        {
+            Json::Value v = base;
+            v["transitions"][0]["duration"] = -1.5;
+            expect_healed(v, "heal_duration_neg.xerproj");
         }
     }
 

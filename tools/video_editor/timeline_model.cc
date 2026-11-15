@@ -99,6 +99,11 @@ bool ClipActiveAt(const Clip& clip, double t) {
     return clip.timeline_start <= t && t < ClipEndSeconds(clip);
 }
 
+bool ClipsOverlap(const Clip& a, const Clip& b) {
+    return a.timeline_start < ClipEndSeconds(b) &&
+           b.timeline_start < ClipEndSeconds(a);
+}
+
 std::vector<const Clip*> ClipsOnTrack(const Project& project,
                                       int track_index) {
     std::vector<const Clip*> out;
@@ -202,14 +207,11 @@ bool ValidateClipPlacement(const Project& project, const Clip& clip,
             bounds.duration_seconds + kEpsilon) {
         return Fail(error_out, "clip exceeds the media duration");
     }
-    const double new_start = clip.timeline_start;
-    const double new_end = clip.timeline_start + clip.duration;
     for (const auto& other : project.clips) {
         if (other.id == exclude_clip_id || other.track != clip.track) {
             continue;
         }
-        if (other.timeline_start < new_end &&
-            new_start < ClipEndSeconds(other)) {
+        if (ClipsOverlap(clip, other)) {
             return Fail(error_out,
                         "clip overlaps another clip on the same track");
         }
