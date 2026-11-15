@@ -458,6 +458,10 @@ if(XER_BUILD_NODE_ADDON)
     add_subdirectory(addon)
 endif()
 
+# VideoEditor (XER Studio Phase 1) — headless core lib; the exe lands in
+# 1C/1D inside this same directory.
+add_subdirectory(tools/video_editor)
+
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)

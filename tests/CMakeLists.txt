@@ -73,3 +73,23 @@ if(MSVC)
     target_compile_features(XER_Video_Smoke PRIVATE cxx_std_23)
     add_test(NAME XER_Video_Smoke COMMAND XER_Video_Smoke)
 endif()
+
+# VideoEditor headless core — model/history/store/catalog/poster unit
+# tests. Plain-assert style like XER_Video_Smoke; FFmpeg-backed checks
+# self-skip via XER::Bridge::FFmpeg::IsAvailable(). Registered
+# unconditionally: XER_VideoEditor_Core's FFmpeg deps degrade to stubs
+# off-Windows and unused XER_Video objects are never pulled from the
+# static lib (if a non-MSVC link ever breaks, gate with if(MSVC) like
+# XER_Video_Smoke).
+add_executable(XER_VideoEditor_Tests
+    video/video_editor_test_util.h
+    video/video_editor_test_main.cc
+    video/video_editor_model_tests.cc
+    video/video_editor_history_tests.cc
+    video/video_editor_store_tests.cc
+    video/video_editor_catalog_tests.cc
+    video/video_editor_poster_tests.cc
+)
+target_link_libraries(XER_VideoEditor_Tests PRIVATE XER_VideoEditor_Core)
+target_compile_features(XER_VideoEditor_Tests PRIVATE cxx_std_23)
+add_test(NAME XER_VideoEditor_Tests COMMAND XER_VideoEditor_Tests)
