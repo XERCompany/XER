@@ -38,7 +38,7 @@ struct RenderStats {
  *
  * All WinAPI details (WNDCLASS, CreateWindowEx, message handling) hidden.
  */
-class Window {
+class Window : public std::enable_shared_from_this<Window> {
 public:
     using Callback = std::function<void()>;
 

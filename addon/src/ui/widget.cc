@@ -9,6 +9,7 @@
 #include "widgets/card.h"
 #include "widgets/label.h"
 #include "layout/geometry.h"
+#include "debug/debug_map_ui.h"
 
 namespace {
 
@@ -288,6 +289,17 @@ NAN_METHOD(WidgetGetContentHeight) {
         Nan::New(self ? self->Get()->GetContentHeight() : 0.0));
 }
 
+NAN_METHOD(WidgetDumpXml) {
+    auto* self = UnwrapWidget(info.This());
+    if (!self) {
+        info.GetReturnValue().Set(Nan::New("").ToLocalChecked());
+        return;
+    }
+    info.GetReturnValue().Set(Nan::New(
+        XER::UI::Debug::DebugMapUI::Dump(self->Get().get()))
+                              .ToLocalChecked());
+}
+
 namespace {
 
 v8::Local<v8::Value> SizeToJS(const UIL::Size& s) {
@@ -386,6 +398,7 @@ void AddProtoMethods(v8::Local<v8::FunctionTemplate> tpl) {
     Nan::SetMethod(tpl->PrototypeTemplate(), "TickTree", WidgetTickTree);
     Nan::SetMethod(tpl->PrototypeTemplate(), "GetContentHeight",
                    WidgetGetContentHeight);
+    Nan::SetMethod(tpl->PrototypeTemplate(), "DumpXml", WidgetDumpXml);
     Nan::SetMethod(tpl->PrototypeTemplate(), "GetMinSize", WidgetGetMinSize);
     Nan::SetMethod(tpl->PrototypeTemplate(), "GetPreferredSize",
                    WidgetGetPreferredSize);

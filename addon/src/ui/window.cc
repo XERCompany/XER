@@ -7,6 +7,7 @@
 #include <string>
 
 #include "core/window.h"
+#include "debug/dev_tools.h"
 #include "theme/theme.h"
 #include "layout/geometry.h"
 
@@ -294,6 +295,16 @@ NAN_METHOD(WindowGetRenderStats) {
     info.GetReturnValue().Set(obj);
 }
 
+NAN_METHOD(WindowOpenDevTools) {
+    auto* self = UnwrapWindow(info.This());
+    if (!self || !self->Get()->GetContent()) {
+        Nan::ThrowError("window.OpenDevTools() requires window content");
+        return;
+    }
+    auto devtools = XER::UI::Debug::DevTools::Inspect(*self->Get());
+    info.GetReturnValue().Set(Nan::New(devtools != nullptr));
+}
+
 // --- callbacks ----------------------------------------------------------------
 
 // Stores a JS function under `key` (or clears the C++ callback when the arg
@@ -407,6 +418,7 @@ void RegisterWindow(v8::Local<v8::Object> xer) {
     Nan::SetMethod(proto, "Invalidate", WindowInvalidate);
     Nan::SetMethod(proto, "GetLastRenderError", WindowGetLastRenderError);
     Nan::SetMethod(proto, "GetRenderStats", WindowGetRenderStats);
+    Nan::SetMethod(proto, "OpenDevTools", WindowOpenDevTools);
     Nan::SetMethod(proto, "GetHWND", WindowGetHWND);
     Nan::SetMethod(proto, "SetOnClose", WindowSetOnClose);
     Nan::SetMethod(proto, "SetOnResize", WindowSetOnResize);

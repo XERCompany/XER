@@ -148,9 +148,7 @@ v8::Local<v8::Value> MakeVerifyFunction(AuthDecision* decision) {
             d->called = true;
             d->allowed =
                 info.Length() > 0 &&
-                info[0]
-                    ->BooleanValue(info.GetIsolate()->GetCurrentContext())
-                    .FromMaybe(false);
+                info[0]->BooleanValue(info.GetIsolate());
         },
         data);
     if (!maybe.ToLocal(&fn)) return v8::Local<v8::Value>();
@@ -387,9 +385,9 @@ public:
         routes_.clear();
         if (!auth_fn_.IsEmpty()) auth_fn_.Reset();
         if (st.async != nullptr) {
-            uv_close(st.async,
+            uv_close(reinterpret_cast<uv_handle_t*>(st.async),
                      [](uv_handle_t* h) {
-                         delete static_cast<uv_async_t*>(h);
+                         delete reinterpret_cast<uv_async_t*>(h);
                      });
             st.async = nullptr;
         }
@@ -420,7 +418,7 @@ public:
 
         v8::Isolate* iso = v8::Isolate::GetCurrent();
         v8::Local<v8::Context> context = iso->GetCurrentContext();
-        v8::Local<v8::Value> global = context->Global();
+        v8::Local<v8::Object> global = context->Global();
 
         // Auth gate probe: the native auth validator marshals one of these
         // per request. route_key "@auth" runs the onHandlerKey callback and
@@ -437,7 +435,7 @@ public:
                 return;
             }
             v8::Local<v8::Value> argv[] = {
-                Nan::New(ExtractApiKey(call->request)), verify};
+                Nan::New(ExtractApiKey(call->request)).ToLocalChecked(), verify};
             {
                 v8::TryCatch tc(iso);
                 Nan::Call(Nan::New(auth_fn_), global, 2, argv);
@@ -466,8 +464,8 @@ public:
                      .ToLocal(&result) ||
                 tc.HasCaught()) {
                 std::string msg = "handler threw an exception";
-                if (tc.HasCaught() && tc.Message()) {
-                    msg = Utf8(tc.Message());
+                if (tc.HasCaught() && !tc.Message().IsEmpty()) {
+                    Nan::Utf8String _m(tc.Message()->Get()); msg = std::string(*_m ? *_m : "handler error");
                 }
                 finish(H::HttpResponse::JsonError(500, msg));
                 return;
@@ -507,11 +505,11 @@ public:
         auto set = [&obj](const char* name, v8::Local<v8::Value> v) {
             Nan::Set(obj, Nan::New(name).ToLocalChecked(), v);
         };
-        set("method", Nan::New(req.method_string));
-        set("path", Nan::New(req.path));
-        set("query", Nan::New(req.query));
-        set("version", Nan::New(req.version));
-        set("remote", Nan::New(req.remote));
+        set("method", Nan::New(req.method_string).ToLocalChecked());
+        set("path", Nan::New(req.path).ToLocalChecked());
+        set("query", Nan::New(req.query).ToLocalChecked());
+        set("version", Nan::New(req.version).ToLocalChecked());
+        set("remote", Nan::New(req.remote).ToLocalChecked());
 
         auto headers = Nan::New<v8::Object>();
         for (const auto& [name, value] : req.headers.MapView()) {
@@ -540,7 +538,7 @@ public:
         }
         set("params", pp);
 
-        set("body", Nan::New(req.body));
+        set("body", Nan::New(req.body).ToLocalChecked());
         if (!req.body.empty()) set("rawBody", BytesToUint8Array(req.body));
 
         std::string ct = req.headers.Get("content-type");
@@ -549,7 +547,7 @@ public:
         }
         if (ct.find("json") != std::string::npos && !req.body.empty()) {
             v8::Local<v8::Value> parsed;
-            if (v8::JSON::Parse(context, Nan::New(req.body)).ToLocal(&parsed)) {
+            if (v8::JSON::Parse(context, Nan::New(req.body).ToLocalChecked()).ToLocal(&parsed)) {
                 set("json", parsed);
             }
         }

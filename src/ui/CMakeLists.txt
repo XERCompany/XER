@@ -78,6 +78,15 @@ if(TARGET MKL::MKL)
     target_compile_definitions(XER_UI_Core PUBLIC XER_HAVE_MKL)
 endif()
 
+# libxml2: XML document model for the DevTools widget-tree dump
+# (src/ui/debug/debug_map_ui.cc). Optional — without it the debug module
+# is compiled out and DumpXml returns an empty string.
+find_package(libxml2 CONFIG QUIET)
+if(TARGET LibXml2::LibXml2)
+    target_link_libraries(XER_UI_Core PUBLIC LibXml2::LibXml2)
+    target_compile_definitions(XER_UI_Core PUBLIC XER_UI_HAS_LIBXML2=1)
+endif()
+
 # Project avatars are transcoded to icons/<id>/icon.jpg through the FFmpeg
 # wrapper (engine::bridge::ffmpeg::ImageToJpeg).
 if(TARGET XER_FFmpeg)
