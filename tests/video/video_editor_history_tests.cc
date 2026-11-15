@@ -500,5 +500,88 @@ int XER_VideoEditor_RunHistoryTests() {
         XER_VE_CHECK(p.tracks.size() == 4);
     }
 
+    // -- 12. Merge declined when a move changed transitions -------------
+    // Reviewer repro: x|a|y adjacent + T(x,a),T(a,y); MoveClip a→20 then
+    // a→5. Sequential end-state keeps transitions EMPTY (first move
+    // dropped them; second cannot resurrect). A merged command would
+    // redo a single no-op-ish move and wrongly restore both.
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("x", 0, 0.0, 0.0, 5.0), video_bounds, &err);
+        AddClip(p, MakeClip("a", 0, 5.0, 0.0, 5.0), video_bounds, &err);
+        AddClip(p, MakeClip("y", 0, 10.0, 0.0, 5.0), video_bounds, &err);
+        AddTransition(p, "x", "a", Transition::Type::Crossfade, 1.0, &err);
+        AddTransition(p, "a", "y", Transition::Type::WipeLeft, 1.0, &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        XER_VE_CHECK(history.MoveClip("a", 20.0, video_bounds, &err));
+        XER_VE_CHECK(history.MoveClip("a", 5.0, video_bounds, &err));
+        const Project sequential_end = p;
+        XER_VE_CHECK(p.transitions.empty());
+        XER_VE_CHECK(std::abs(FindClip(p, "a")->timeline_start - 5.0) < 1e-9);
+        // NOT coalesced: first undo lands on the intermediate state.
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(std::abs(FindClip(p, "a")->timeline_start - 20.0) < 1e-9);
+        XER_VE_CHECK(p.transitions.empty());
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before));
+        // Redo must replay BOTH steps → identical to sequential end.
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, sequential_end));
+        XER_VE_CHECK(p.transitions.empty());
+    }
+
+    // -- 13. Merge still coalesces when transitions are untouched -------
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 5.0), video_bounds, &err);
+        AddClip(p, MakeClip("m", 0, 10.0, 0.0, 5.0), video_bounds, &err);
+        AddClip(p, MakeClip("n", 0, 15.0, 0.0, 5.0), video_bounds, &err);
+        AddTransition(p, "m", "n", Transition::Type::Crossfade, 1.0, &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        // "a" never participates in the m->n transition → moves merge.
+        XER_VE_CHECK(history.MoveClip("a", 5.0, video_bounds, &err));
+        XER_VE_CHECK(history.MoveClip("a", 22.0, video_bounds, &err));
+        XER_VE_CHECK(history.Undo());               // single merged step
+        XER_VE_CHECK(ProjectsEqual(p, before));
+        XER_VE_CHECK(!history.CanUndo());
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(std::abs(FindClip(p, "a")->timeline_start - 22.0) < 1e-9);
+        XER_VE_CHECK(p.transitions.size() == 1);
+    }
+
+    // -- 14. Trim merge declined when it dropped a transition ------------
+    // Same bug class via TrimClip: two out-trims shorten "a" past the
+    // a->y adjacency; the first drops the transition, so they must not
+    // coalesce.
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 10.0), video_bounds, &err);
+        AddClip(p, MakeClip("y", 0, 10.0, 0.0, 5.0), video_bounds, &err);
+        AddTransition(p, "a", "y", Transition::Type::Crossfade, 1.0, &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        XER_VE_CHECK(history.TrimClip("a", TrimEdge::Out, 8.0,
+                                      video_bounds, &err));
+        XER_VE_CHECK(history.TrimClip("a", TrimEdge::Out, 6.0,
+                                      video_bounds, &err));
+        const Project sequential_end = p;
+        XER_VE_CHECK(p.transitions.empty());
+        XER_VE_CHECK(history.Undo());               // → dur 8, no transition
+        const Clip* c = FindClip(p, "a");
+        XER_VE_CHECK(std::abs(c->duration - 8.0) < 1e-9);
+        XER_VE_CHECK(p.transitions.empty());
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before));
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, sequential_end));
+    }
+
     return 0;
 }

@@ -76,6 +76,26 @@ void RestoreSlice(Project& p, const TimelineSlice& s) {
     }
 }
 
+// Exact transition-vector equality (fields compared with == — transition
+// doubles are only ever copied or erased, never recomputed, so identical
+// content is bit-identical). Used by MergeWith to detect whether a
+// command's Apply changed the transition set.
+bool TransitionsEqual(const std::vector<Transition>& a,
+                      const std::vector<Transition>& b) {
+    if (a.size() != b.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        const Transition& x = a[i];
+        const Transition& y = b[i];
+        if (x.from_clip != y.from_clip || x.to_clip != y.to_clip ||
+            x.type != y.type || x.duration != y.duration) {
+            return false;
+        }
+    }
+    return true;
+}
+
 // Base for every clip/track mutation: captures the TimelineSlice once
 // (first Apply — redo re-applies ApplyOp against the reverted state,
 // which is exactly the before-state the slice describes), delegates
@@ -100,6 +120,9 @@ public:
             return false;
         }
         last_error_.clear();
+        // Post-apply transition snapshot — MergeWith consults it to
+        // decide whether coalescing is replay-safe.
+        after_transitions_ = project.transitions;
         return true;
     }
 
@@ -123,7 +146,17 @@ protected:
         return affected_ids_;
     }
 
+    // True when this command's Apply changed project.transitions
+    // (DropInvalidTransitions side-effects). A merged command replays
+    // only ONE ApplyOp on redo — it cannot reproduce intermediate
+    // transition drops, so MergeWith must decline in that case.
+    bool TransitionsChanged() const {
+        return !TransitionsEqual(slice_.before_transitions,
+                                 after_transitions_);
+    }
+
     TimelineSlice slice_;
+    std::vector<Transition> after_transitions_;
     bool captured_ = false;
     std::string last_error_;
 
@@ -187,10 +220,15 @@ public:
     std::string Label() const override { return "Move clip"; }
     // Consecutive moves of the same clip are one gesture (drag) — the
     // merged command keeps the FIRST captured slice (original state)
-    // and adopts the LATEST target.
+    // and adopts the LATEST target. Decline when either side changed
+    // the transition set: merged redo replays a single ApplyOp and
+    // cannot reproduce intermediate DropInvalidTransitions drops.
     bool MergeWith(const Command& other) override {
         const auto* m = dynamic_cast<const MoveClipCommand*>(&other);
         if (m == nullptr || m->id_ != id_) {
+            return false;
+        }
+        if (TransitionsChanged() || m->TransitionsChanged()) {
             return false;
         }
         new_start_ = m->new_start_;
@@ -221,10 +259,14 @@ public:
     }
     std::string Label() const override { return "Trim clip"; }
     // Coalesce only same-edge trims of the same clip — an in-trim
-    // followed by an out-trim is two gestures.
+    // followed by an out-trim is two gestures. Decline when either
+    // side changed the transition set (see MoveClipCommand::MergeWith).
     bool MergeWith(const Command& other) override {
         const auto* t = dynamic_cast<const TrimClipCommand*>(&other);
         if (t == nullptr || t->id_ != id_ || t->edge_ != edge_) {
+            return false;
+        }
+        if (TransitionsChanged() || t->TransitionsChanged()) {
             return false;
         }
         new_point_ = t->new_point_;
@@ -283,10 +325,14 @@ public:
     }
     std::string Label() const override { return "Replace clip"; }
     // Inspector edits coalesce: the last replacement wins, the first
-    // captured slice (pre-edit state) is kept for Revert.
+    // captured slice (pre-edit state) is kept for Revert. Decline when
+    // either side changed the transition set (see MoveClipCommand).
     bool MergeWith(const Command& other) override {
         const auto* r = dynamic_cast<const ReplaceClipCommand*>(&other);
         if (r == nullptr || r->id_ != id_) {
+            return false;
+        }
+        if (TransitionsChanged() || r->TransitionsChanged()) {
             return false;
         }
         replacement_ = r->replacement_;
