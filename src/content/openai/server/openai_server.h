@@ -7,6 +7,7 @@
 #include "../sandbox/sandbox.h"
 #include "../image/image_processor.h"
 #include "../text/text_processor.h"
+#include "content/network/http/http_router.h"
 #include <memory>
 #include <string>
 #include <map>
@@ -143,6 +144,21 @@ public:
     // Request handling
     std::future<ServerResponse> HandleRequest(const ServerRequest& request);
 
+    // HTTP transport (content/network HttpServer). Start()/Stop() bring up
+    // a real listening socket on config_.host:config_.port and dispatch the
+    // built-in OpenAI routes to HandleRequest.
+    //
+    // AddRoute registers a transport-level route that is matched BEFORE the
+    // built-in OpenAI endpoints — use it for custom handlers, mocks, or
+    // protocol extensions. Must be called before Start().
+    bool AddRoute(const std::string& method, const std::string& pattern,
+                  XER::Network::Http::HttpHandler handler);
+    // Optional per-request auth gate evaluated before routing (runs on the
+    // HTTP worker thread; keep it fast). Return false to reject with 401.
+    // Called in addition to the built-in config_.enable_auth token check.
+    void SetAuthValidator(
+        std::function<bool(const XER::Network::Http::HttpRequest&)> validator);
+
 private:
     class Impl;
     std::unique_ptr<Impl> impl_;
@@ -154,6 +170,12 @@ private:
     ServerResponse HandleAgentProcess(const ServerRequest& request);
     ServerResponse HandleSkillExecute(const ServerRequest& request);
     ServerResponse HandleSandboxExecute(const ServerRequest& request);
+
+    // HTTP transport internals (see openai_server.cc).
+    XER::Network::Http::HttpHandler WrapRoute(
+        XER::Network::Http::HttpHandler handler);
+    XER::Network::Http::HttpResponse DispatchHttp(
+        const XER::Network::Http::HttpRequest& req, RequestType type);
 };
 
 // Server factory

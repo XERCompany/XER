@@ -91,11 +91,14 @@ endif()
 # globbed so new classes are picked up without editing this file.
 file(GLOB_RECURSE XER_ADDON_AUDIO_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/src/audio/*.cc")
+file(GLOB_RECURSE XER_ADDON_OPENAI_SOURCES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/openai/*.cc")
 
 add_library(xeraddon MODULE
     src/addon.cc
     src/image/image.cc
     ${XER_ADDON_AUDIO_SOURCES}
+    ${XER_ADDON_OPENAI_SOURCES}
     src/ui/ui.cc
     src/ui/widget.cc
     src/ui/window.cc
@@ -137,4 +140,5 @@ target_link_libraries(xeraddon PRIVATE
     XER_Flux_Core
     XER_Helper
     XER_UI_Core
+    XER_OpenAI
 )

@@ -1,10 +1,66 @@
 #include "openai_server.h"
 #include "../../../async_io/io_thread_pool.h"
+#include "content/network/http/http_message.h"
+#include "content/network/http/http_server.h"
+#include <json/json.h>
 #include <chrono>
 #include <sstream>
 #include <random>
+#include <thread>
 
 namespace Content::OpenAI::Server {
+
+namespace H = XER::Network::Http;
+
+namespace {
+
+// Flattened header map for ServerRequest (multimap -> joined values).
+std::map<std::string, std::string> FlattenHeaders(const H::HttpHeaders& headers) {
+    std::map<std::string, std::string> out;
+    for (const auto& [name, value] : headers.MapView()) {
+        auto it = out.find(name);
+        if (it == out.end()) {
+            out.emplace(name, value);
+        } else {
+            it->second += ", " + value;
+        }
+    }
+    return out;
+}
+
+// JSON request bodies carry their fields in ServerRequest::parameters so the
+// per-type handlers don't each re-parse the payload.
+std::map<std::string, std::string> ParseParameters(const std::string& body) {
+    std::map<std::string, std::string> out;
+    if (body.empty()) return out;
+    Json::CharReaderBuilder rb;
+    std::string errs;
+    std::unique_ptr<Json::CharReader> reader(rb.newCharReader());
+    Json::Value root;
+    if (!reader->parse(body.data(), body.data() + body.size(), &root, &errs) ||
+        !root.isObject()) {
+        return out;
+    }
+    for (const auto& member : root.getMemberNames()) {
+        const Json::Value& v = root[member];
+        if (v.isString()) {
+            out[member] = v.asString();
+        } else {
+            out[member] = v.toStyledString();
+        }
+    }
+    return out;
+}
+
+std::string NextRequestId() {
+    static std::atomic<uint64_t> counter{0};
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    return "req_" + std::to_string(ms) + "_" +
+           std::to_string(counter.fetch_add(1));
+}
+
+}  // namespace
 
 class OpenAIServer::Impl {
 public:
@@ -25,13 +81,114 @@ public:
     std::shared_ptr<Text::ITextProcessor> text_processor_;
     std::shared_ptr<Sandbox::ISandbox> sandbox_;
     mutable std::mutex agents_mutex_;
+
+    // HTTP transport state (content/network).
+    struct PendingRoute {
+        std::string method;
+        std::string pattern;
+        H::HttpHandler handler;
+    };
+    std::vector<PendingRoute> custom_routes_;
+    std::function<bool(const H::HttpRequest&)> auth_validator_;
+    mutable std::mutex transport_mutex_;
+    std::unique_ptr<H::HttpServer> http_server_;
+    std::thread http_thread_;
 };
 
 OpenAIServer::OpenAIServer(const ServerConfig& config)
     : impl_(std::make_unique<Impl>(config)) {
 }
 
-OpenAIServer::~OpenAIServer() = default;
+OpenAIServer::~OpenAIServer() {
+    Stop();
+    // HttpServer::Run detaches one thread per connection which captures the
+    // raw HttpServer pointer; keep-alive sockets can outlive Stop(). Leak the
+    // server object rather than risk a use-after-free on those threads.
+    if (impl_->http_server_) {
+        impl_->http_server_.release();
+    }
+}
+
+// Wraps a route handler with CORS headers, the built-in token check, and the
+// custom auth validator. Runs on the HttpServer worker thread.
+H::HttpHandler OpenAIServer::WrapRoute(H::HttpHandler handler) {
+    return [this, handler = std::move(handler)](
+               const H::HttpRequest& req,
+               const std::map<std::string, std::string>& params)
+               -> H::HttpResponse {
+        const bool cors = impl_->config_.enable_cors;
+        auto add_cors = [&req, cors](H::HttpResponse& r) {
+            if (!cors) return;
+            r.headers.Set("Access-Control-Allow-Origin", "*");
+            r.headers.Set("Access-Control-Allow-Methods",
+                          "GET, POST, PUT, PATCH, DELETE, HEAD, OPTIONS");
+            r.headers.Set("Access-Control-Allow-Headers",
+                          "Content-Type, Authorization, x-api-key");
+        };
+
+        // CORS preflight short-circuits before auth.
+        if (cors && req.method == H::HttpMethod::kOptions) {
+            H::HttpResponse r;
+            r.status = 204;
+            add_cors(r);
+            return r;
+        }
+
+        bool authorized = true;
+        if (impl_->config_.enable_auth &&
+            !impl_->config_.auth_token.empty()) {
+            const std::string auth = req.headers.Get("authorization");
+            authorized =
+                (auth.size() > 7 && auth.substr(0, 7) == "Bearer " &&
+                 auth.substr(7) == impl_->config_.auth_token) ||
+                req.headers.Get("x-api-key") == impl_->config_.auth_token;
+        }
+        if (authorized) {
+            std::function<bool(const H::HttpRequest&)> validator;
+            {
+                std::lock_guard<std::mutex> lk(impl_->transport_mutex_);
+                validator = impl_->auth_validator_;
+            }
+            if (validator && !validator(req)) authorized = false;
+        }
+        if (!authorized) {
+            H::HttpResponse r =
+                H::HttpResponse::JsonError(401, "unauthorized");
+            add_cors(r);
+            return r;
+        }
+
+        H::HttpResponse resp = handler(req, params);
+        add_cors(resp);
+        return resp;
+    };
+}
+
+// Maps an HTTP request onto a ServerRequest, dispatches through
+// HandleRequest, and converts the ServerResponse back to HTTP.
+H::HttpResponse OpenAIServer::DispatchHttp(
+    const H::HttpRequest& req, RequestType type) {
+    ServerRequest sreq;
+    sreq.type = type;
+    sreq.request_id = NextRequestId();
+    sreq.client_id = req.remote;
+    sreq.headers = FlattenHeaders(req.headers);
+    sreq.body = req.body;
+    sreq.parameters = ParseParameters(req.body);
+
+    ServerResponse sresp = HandleRequest(sreq).get();
+
+    H::HttpResponse resp;
+    resp.status = sresp.status_code;
+    resp.body = sresp.body;
+    for (const auto& [name, value] : sresp.headers) {
+        resp.headers.Set(name, value);
+    }
+    if (!sresp.content_type.empty()) {
+        resp.headers.Set("Content-Type", sresp.content_type);
+    }
+    return resp;
+}
 
 bool OpenAIServer::Start() {
     if (impl_->is_running_) {
@@ -41,8 +198,60 @@ bool OpenAIServer::Start() {
     impl_->is_running_ = true;
     impl_->stats_.start_time = std::chrono::system_clock::now();
 
-    // TODO: Start actual HTTP server
-    // For now, just mark as running
+    auto router = std::make_shared<H::HttpRouter>();
+
+    // Custom routes first — first match wins in HttpRouter, so embedders
+    // can shadow the built-in OpenAI endpoints with their own handlers.
+    {
+        std::lock_guard<std::mutex> lk(impl_->transport_mutex_);
+        for (const auto& route : impl_->custom_routes_) {
+            router->AddRoute(
+                H::HttpMethodFromString(route.method), route.pattern,
+                WrapRoute(route.handler));
+        }
+    }
+
+    auto dispatch = [this](RequestType type) {
+        return [this, type](const H::HttpRequest& req,
+                            const std::map<std::string, std::string>&)
+                   -> H::HttpResponse { return DispatchHttp(req, type); };
+    };
+    router->AddRoute("POST", "/v1/chat/completions",
+                     WrapRoute(dispatch(RequestType::kChatCompletion)));
+    router->AddRoute("POST", "/v1/completions",
+                     WrapRoute(dispatch(RequestType::kChatCompletion)));
+    router->AddRoute("POST", "/v1/images/generations",
+                     WrapRoute(dispatch(RequestType::kImageGeneration)));
+    router->AddRoute("POST", "/v1/images/edits",
+                     WrapRoute(dispatch(RequestType::kImageGeneration)));
+    router->AddRoute("POST", "/v1/audio/transcriptions",
+                     WrapRoute(dispatch(RequestType::kAudioTranscription)));
+    router->AddRoute("POST", "/v1/audio/speech",
+                     WrapRoute(dispatch(RequestType::kAudioTranscription)));
+    // Minimal OpenAI-compat liveness endpoint for client probes.
+    router->AddRoute(
+        "GET", "/v1/models",
+        WrapRoute([](const H::HttpRequest&,
+                     const std::map<std::string, std::string>&) {
+            return H::HttpResponse::Json(
+                "{\"object\":\"list\",\"data\":[{\"id\":\"xer-local\","
+                "\"object\":\"model\",\"created\":0,\"owned_by\":\"xer\"}]}");
+        }));
+
+    impl_->http_server_ = std::make_unique<H::HttpServer>();
+    impl_->http_server_->SetRouter(router);
+    impl_->http_server_->SetMaxBodyBytes(64ull * 1024 * 1024);
+
+    std::string error;
+    if (!impl_->http_server_->Listen(impl_->config_.host,
+                                     static_cast<uint16_t>(impl_->config_.port),
+                                     impl_->config_.max_connections, &error)) {
+        impl_->is_running_ = false;
+        impl_->http_server_.reset();
+        return false;
+    }
+
+    impl_->http_thread_ = std::thread([this] { impl_->http_server_->Run(); });
     return true;
 }
 
@@ -50,14 +259,34 @@ void OpenAIServer::Stop() {
     if (!impl_->is_running_) {
         return;
     }
-
     impl_->is_running_ = false;
-
-    // TODO: Stop HTTP server
+    if (impl_->http_server_) {
+        impl_->http_server_->Stop();
+    }
+    if (impl_->http_thread_.joinable()) {
+        impl_->http_thread_.join();
+    }
+    impl_->http_thread_ = std::thread();
 }
 
 bool OpenAIServer::IsRunning() const {
-    return impl_->is_running_;
+    return impl_->is_running_ && impl_->http_server_ &&
+           impl_->http_server_->IsRunning();
+}
+
+bool OpenAIServer::AddRoute(const std::string& method,
+                            const std::string& pattern,
+                            H::HttpHandler handler) {
+    if (impl_->is_running_) return false;
+    std::lock_guard<std::mutex> lk(impl_->transport_mutex_);
+    impl_->custom_routes_.push_back({method, pattern, std::move(handler)});
+    return true;
+}
+
+void OpenAIServer::SetAuthValidator(
+    std::function<bool(const H::HttpRequest&)> validator) {
+    std::lock_guard<std::mutex> lk(impl_->transport_mutex_);
+    impl_->auth_validator_ = std::move(validator);
 }
 
 void OpenAIServer::SetConfig(const ServerConfig& config) {

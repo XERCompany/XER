@@ -63,7 +63,14 @@ NAN_MODULE_INIT(Init) {
 
     v8::Local<v8::Object> ui_ns = Nan::New<v8::Object>();
     xer::addon::InitUI(ui_ns);
-    Nan::Set(target, Nan::New("UI").ToLocalChecked(), ui_ns); 
+    Nan::Set(target, Nan::New("UI").ToLocalChecked(), ui_ns);
+    // XER.* is the documented alias for the UI toolkit (see header comment
+    // and index.js, which mirrors it onto globalThis.XER).
+    Nan::Set(target, Nan::New("XER").ToLocalChecked(), ui_ns);
+
+    v8::Local<v8::Object> openai = Nan::New<v8::Object>();
+    xer::addon::InitOpenAI(openai);
+    Nan::Set(target, Nan::New("OpenAI").ToLocalChecked(), openai);
 }
 
 NODE_MODULE(xeraddon, Init)
