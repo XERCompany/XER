@@ -253,6 +253,10 @@ struct VideoDecoder::Impl {
         position_seconds = -1.0;
     }
 #else
+    // EnableAudioTap() assigns impl_->audio_tap unconditionally, so the
+    // member must exist off-Windows too. It is never read there (every
+    // reader is _WIN32-only) — a pure compile sink, zero behavior change.
+    bool audio_tap = false;
     struct Dummy {};
     Dummy dummy;
 #endif

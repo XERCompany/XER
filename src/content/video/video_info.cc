@@ -32,28 +32,43 @@ bool ProbeVideo(const std::string& path, VideoInfo* info,
         }
     }
     if (video == nullptr) {
-        if (error_out != nullptr) *error_out = "no video stream";
-        return false;
+        if (audio == nullptr) {
+            if (error_out != nullptr)
+                *error_out = "no decodable audio/video streams";
+            return false;
+        }
+        // Audio-only container: succeed with width/height = 0 —
+        // matches the header contract and the decoder's audio-only
+        // mode. Callers that need pictures check those fields.
     }
 
-    info->width = video->width;
-    info->height = video->height;
-    info->video_codec = video->codec_name;
+    if (video != nullptr) {
+        info->width = video->width;
+        info->height = video->height;
+        info->video_codec = video->codec_name;
+    }
     info->has_audio = audio != nullptr;
     info->audio_codec = audio != nullptr ? audio->codec_name : "";
 
-    // Container duration is in AV_TIME_BASE units (microseconds).
+    // Container duration is in AV_TIME_BASE units (microseconds); the
+    // per-stream fallback uses the video stream, or the audio stream
+    // for audio-only containers.
+    const auto* duration_stream = video != nullptr ? video : audio;
     if (media.duration > 0) {
         info->duration_seconds =
             static_cast<double>(media.duration) / 1000000.0;
-    } else if (video->duration > 0 && video->time_base_den > 0) {
-        info->duration_seconds = static_cast<double>(video->duration) *
-                                 video->time_base_num /
-                                 static_cast<double>(video->time_base_den);
+    } else if (duration_stream != nullptr && duration_stream->duration > 0 &&
+               duration_stream->time_base_den > 0) {
+        info->duration_seconds =
+            static_cast<double>(duration_stream->duration) *
+            duration_stream->time_base_num /
+            static_cast<double>(duration_stream->time_base_den);
     }
-    // Frame-rate estimate from the stream header; the decoder reports the
-    // authoritative value once opened.
-    if (video->frame_count > 0 && info->duration_seconds > 0.0) {
+    // Frame-rate estimate from the video stream header; the decoder
+    // reports the authoritative value once opened. Audio-only files
+    // keep fps = 0.
+    if (video != nullptr && video->frame_count > 0 &&
+        info->duration_seconds > 0.0) {
         info->fps = video->frame_count / info->duration_seconds;
     }
 
