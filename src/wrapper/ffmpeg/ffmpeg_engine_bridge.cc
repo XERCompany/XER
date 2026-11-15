@@ -2253,6 +2253,172 @@ bool EncodeAudioFrames(const EncodeAudioParams& params,
 #endif
 }
 
+bool EncodeAudioVideoStream(const EncodeAudioVideoParams& params,
+                            std::size_t video_frame_count,
+                            const VideoFrameProvider& video_provider,
+                            std::size_t audio_frame_count,
+                            const AudioFrameStreamProvider& audio_provider,
+                            std::string* out_error) {
+#if ENGINE_HAS_FFMPEG_BRIDGE
+    if (video_frame_count == 0u) {
+        SetError(out_error, "EncodeAudioVideoStream requires at least one video frame");
+        return false;
+    }
+    if (!video_provider) {
+        SetError(out_error, "EncodeAudioVideoStream requires a video frame provider");
+        return false;
+    }
+    if (params.video.output_path.empty()) {
+        SetError(out_error, "EncodeAudioVideoStream requires an output path");
+        return false;
+    }
+    const bool has_audio = audio_frame_count > 0u;
+    if (has_audio && !audio_provider) {
+        SetError(out_error, "EncodeAudioVideoStream requires an audio frame provider");
+        return false;
+    }
+
+    VideoFrameInfo first_video_frame;
+    if (!video_provider(0u, &first_video_frame, out_error)) {
+        return false;
+    }
+    AudioFrameInfo first_audio_frame;
+    if (has_audio && !audio_provider(0u, &first_audio_frame, out_error)) {
+        return false;
+    }
+
+    const int width = params.video.width > 0 ? params.video.width : first_video_frame.width;
+    const int height = params.video.height > 0 ? params.video.height : first_video_frame.height;
+    if (width <= 0 || height <= 0) {
+        SetError(out_error, "EncodeAudioVideoStream received invalid width/height");
+        return false;
+    }
+    if (first_video_frame.width != width || first_video_frame.height != height ||
+        first_video_frame.line_sizes.empty() || first_video_frame.data.empty()) {
+        SetError(out_error, "First video frame contains invalid data or inconsistent dimensions");
+        return false;
+    }
+
+    AVFormatContext* output_context = nullptr;
+    int result = avformat_alloc_output_context2(&output_context, nullptr, nullptr,
+                                              params.video.output_path.c_str());
+    if (result < 0 || output_context == nullptr) {
+        SetError(out_error, "avformat_alloc_output_context2 failed: " + ErrorString(result));
+        return false;
+    }
+
+    VideoEncodeState video_state;
+    AudioEncodeState audio_state;
+    AVPacket* packet = nullptr;
+    bool success = SetupVideoEncoder(output_context, params.video, width, height,
+                                     first_video_frame, &video_state, out_error);
+    if (success && has_audio) {
+        success = SetupAudioEncoder(output_context, params.audio, first_audio_frame,
+                                    &audio_state, out_error);
+    }
+    if (success) {
+        success = OpenOutputAndWriteHeader(output_context, params.video.output_path, out_error);
+    }
+    const bool header_written = success;
+    if (success) {
+        packet = av_packet_alloc();
+        if (packet == nullptr) {
+            success = false;
+            SetError(out_error, "av_packet_alloc failed");
+        }
+    }
+    if (success) {
+        const int fps_num = params.video.fps_num > 0 ? params.video.fps_num : 25;
+        const int fps_den = params.video.fps_den > 0 ? params.video.fps_den : 1;
+        const double video_frame_seconds =
+            static_cast<double>(fps_den) / static_cast<double>(fps_num);
+        std::size_t video_done = 0;
+        std::size_t audio_done = 0;
+        double video_next_time = 0.0;
+        double audio_next_time = 0.0;
+        while (video_done < video_frame_count || audio_done < audio_frame_count) {
+            const bool take_video = video_done < video_frame_count &&
+                (audio_done >= audio_frame_count || video_next_time <= audio_next_time);
+            if (take_video) {
+                VideoFrameInfo input;
+                if (video_done == 0u) {
+                    input = std::move(first_video_frame);
+                } else if (!video_provider(video_done, &input, out_error)) {
+                    success = false;
+                    break;
+                }
+                if (!FeedVideoEncoderFrame(output_context, &video_state, input,
+                                           packet, out_error)) {
+                    success = false;
+                    break;
+                }
+                video_next_time += video_frame_seconds;
+                ++video_done;
+            } else {
+                AudioFrameInfo input;
+                if (audio_done == 0u) {
+                    input = std::move(first_audio_frame);
+                } else if (!audio_provider(audio_done, &input, out_error)) {
+                    success = false;
+                    break;
+                }
+                if (!FeedAudioEncoderFrame(output_context, &audio_state, input,
+                                           packet, out_error)) {
+                    success = false;
+                    break;
+                }
+                if (input.sample_rate > 0) {
+                    audio_next_time += static_cast<double>(input.sample_count) /
+                                       static_cast<double>(input.sample_rate);
+                }
+                ++audio_done;
+            }
+        }
+        if (success &&
+            !FlushEncoderCodec(output_context, video_state.codec_context,
+                               video_state.stream, packet, out_error)) {
+            success = false;
+        }
+        if (success && has_audio &&
+            !FlushAudioEncoderFifo(output_context, &audio_state, packet, out_error)) {
+            success = false;
+        }
+        if (success && has_audio &&
+            !FlushEncoderCodec(output_context, audio_state.codec_context,
+                               audio_state.stream, packet, out_error)) {
+            success = false;
+        }
+    }
+
+    if (header_written) {
+        result = av_write_trailer(output_context);
+        if (success && result < 0) {
+            success = false;
+            SetError(out_error, "av_write_trailer failed: " + ErrorString(result));
+        }
+    }
+
+    if (packet != nullptr) {
+        av_packet_free(&packet);
+    }
+    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0 && output_context->pb != nullptr) {
+        avio_closep(&output_context->pb);
+    }
+    ReleaseVideoEncodeState(&video_state);
+    ReleaseAudioEncodeState(&audio_state);
+    avformat_free_context(output_context);
+    return success;
+#else
+    (void)params;
+    (void)video_frame_count;
+    (void)video_provider;
+    (void)audio_frame_count;
+    (void)audio_provider;
+    SetError(out_error, "FFmpeg bridge unavailable");
+    return false;
+#endif
+}
+
 bool ImageToJpeg(const std::string& input_path,
                  const std::string& output_path,
                  int max_size,

@@ -10,6 +10,7 @@ add_executable(XER_UI_Tests
     ui/ffmpeg_avatar_tests.cc
     ui/ffmpeg_video_decode_tests.cc
     ui/ffmpeg_audio_tap_tests.cc
+    ui/ffmpeg_av_mux_tests.cc
 )
 
 target_link_libraries(XER_UI_Tests

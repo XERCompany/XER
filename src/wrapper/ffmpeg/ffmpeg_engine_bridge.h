@@ -234,6 +234,28 @@ bool EncodeVideoFrameStream(const EncodeVideoParams& params,
 bool EncodeAudioFrames(const EncodeAudioParams& params,
                        const std::vector<AudioFrameInfo>& frames,
                        std::string* out_error);
+struct EncodeAudioVideoParams {
+    EncodeVideoParams video;
+    EncodeAudioParams audio;
+};
+
+// Streams interleaved video+audio into ONE container: a single
+// AVFormatContext with one video stream (params.video) and, when
+// audio_frame_count > 0, one audio stream (params.audio). Output path
+// comes from params.video.output_path; params.audio.output_path is
+// ignored. video_frame_count == 0 is an error; audio_frame_count == 0
+// produces a video-only file. Providers are invoked with frame_index in
+// [0, count) exactly once; a false return aborts with error_out set.
+using AudioFrameStreamProvider =
+    std::function<bool(std::size_t frame_index, AudioFrameInfo* out_frame,
+                       std::string* error)>;
+
+bool EncodeAudioVideoStream(
+    const EncodeAudioVideoParams& params,
+    std::size_t video_frame_count, const VideoFrameProvider& video_provider,
+    std::size_t audio_frame_count,
+    const AudioFrameStreamProvider& audio_provider,
+    std::string* error_out);
 bool RunFilterGraph(const std::string& input_path,
                     const std::string& output_path,
                     const std::string& filter_graph,
