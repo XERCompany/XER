@@ -61,3 +61,13 @@ if(WIN32)
         endif()
     endforeach()
 endif()
+
+# XER_Video smoke — first real consumer of the (formerly orphan) video
+# pipeline lib. MSVC-gated like the rest of the video path; the test
+# itself also skips FFmpeg-backed checks when the bridge is stubbed.
+if(MSVC)
+    add_executable(XER_Video_Smoke video/xer_video_smoke.cc)
+    target_link_libraries(XER_Video_Smoke PRIVATE XER_Video)
+    target_compile_features(XER_Video_Smoke PRIVATE cxx_std_23)
+    add_test(NAME XER_Video_Smoke COMMAND XER_Video_Smoke)
+endif()
