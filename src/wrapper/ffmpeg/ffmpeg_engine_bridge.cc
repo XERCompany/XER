@@ -803,6 +803,570 @@ bool DecodeFramesImpl(const std::string& path,
     return success;
 }
 
+AVPixelFormat ParseInputPixelFormat(std::string text) {
+    text = XER::Helper::String::ToLowerAscii(text);
+    if (text == "rgba") return AV_PIX_FMT_RGBA;
+    if (text == "bgra") return AV_PIX_FMT_BGRA;
+    if (text == "rgb" || text == "rgb24") return AV_PIX_FMT_RGB24;
+    if (text == "bgr" || text == "bgr24") return AV_PIX_FMT_BGR24;
+    if (text == "gray" || text == "gray8" || text == "y") return AV_PIX_FMT_GRAY8;
+    return AV_PIX_FMT_NONE;
+}
+
+struct VideoEncodeState {
+    AVStream* stream = nullptr;
+    AVCodecContext* codec_context = nullptr;
+    SwsContext* sws_context = nullptr;   // input -> encoder pix fmt
+    AVPixelFormat input_pix_fmt = AV_PIX_FMT_NONE;
+    int width = 0;
+    int height = 0;
+    int64_t next_pts = 0;
+};
+
+struct AudioEncodeState {
+    AVStream* stream = nullptr;
+    AVCodecContext* codec_context = nullptr;
+    SwrContext* swr_context = nullptr;   // input -> encoder sample fmt
+    AVAudioFifo* fifo = nullptr;
+    AVSampleFormat input_sample_format = AV_SAMPLE_FMT_NONE;
+    int input_sample_rate = 0;
+    int input_channels = 0;
+    int64_t next_pts = 0;
+    int preferred_frame_size = 0;
+};
+
+void ReleaseVideoEncodeState(VideoEncodeState* state) {
+    if (state == nullptr) {
+        return;
+    }
+    avcodec_free_context(&state->codec_context);
+    if (state->sws_context != nullptr) {
+        sws_freeContext(state->sws_context);
+        state->sws_context = nullptr;
+    }
+    state->stream = nullptr;
+    state->input_pix_fmt = AV_PIX_FMT_NONE;
+}
+
+void ReleaseAudioEncodeState(AudioEncodeState* state) {
+    if (state == nullptr) {
+        return;
+    }
+    avcodec_free_context(&state->codec_context);
+    if (state->swr_context != nullptr) {
+        swr_free(&state->swr_context);
+    }
+    if (state->fifo != nullptr) {
+        av_audio_fifo_free(state->fifo);
+        state->fifo = nullptr;
+    }
+    state->stream = nullptr;
+    state->input_sample_format = AV_SAMPLE_FMT_NONE;
+}
+
+bool OpenOutputAndWriteHeader(AVFormatContext* output_context,
+                              const std::string& output_path,
+                              std::string* out_error) {
+    int result = 0;
+    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
+        result = avio_open(&output_context->pb, output_path.c_str(), AVIO_FLAG_WRITE);
+        if (result < 0) {
+            SetError(out_error, "avio_open failed: " + ErrorString(result));
+            return false;
+        }
+    }
+
+    result = avformat_write_header(output_context, nullptr);
+    if (result < 0) {
+        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
+            avio_closep(&output_context->pb);
+        }
+        SetError(out_error, "avformat_write_header failed: " + ErrorString(result));
+        return false;
+    }
+    return true;
+}
+
+bool SetupVideoEncoder(AVFormatContext* output_context,
+                       const EncodeVideoParams& params,
+                       int width,
+                       int height,
+                       const VideoFrameInfo& first_frame,
+                       VideoEncodeState* state,
+                       std::string* out_error) {
+    const AVCodec* codec = params.codec_name.empty()
+        ? avcodec_find_encoder(output_context->oformat->video_codec)
+        : avcodec_find_encoder_by_name(params.codec_name.c_str());
+    if (codec == nullptr) {
+        SetError(out_error, "video encoder not found: " + params.codec_name);
+        return false;
+    }
+
+    state->stream = avformat_new_stream(output_context, nullptr);
+    state->codec_context = avcodec_alloc_context3(codec);
+    if (state->stream == nullptr || state->codec_context == nullptr) {
+        SetError(out_error, "failed to allocate video encoder stream/context");
+        return false;
+    }
+
+    AVStream* stream = state->stream;
+    AVCodecContext* codec_context = state->codec_context;
+
+    codec_context->codec_type = AVMEDIA_TYPE_VIDEO;
+    codec_context->width = width;
+    codec_context->height = height;
+    codec_context->time_base = AVRational{params.fps_den > 0 ? params.fps_den : 1,
+                                          params.fps_num > 0 ? params.fps_num : 1};
+    codec_context->framerate = AVRational{params.fps_num > 0 ? params.fps_num : 1,
+                                          params.fps_den > 0 ? params.fps_den : 1};
+    codec_context->bit_rate = params.bit_rate > 0 ? params.bit_rate : 4000000;
+
+    AVPixelFormat encoder_pix_fmt = AV_PIX_FMT_YUV420P;
+    int pixel_format_count = 0;
+    const AVPixelFormat* pixel_formats = SupportedPixelFormats(codec, &pixel_format_count);
+    if (pixel_formats != nullptr && pixel_format_count > 0) {
+        encoder_pix_fmt = pixel_formats[0];
+        for (int index = 0; index < pixel_format_count; ++index) {
+            if (pixel_formats[index] == AV_PIX_FMT_RGBA) {
+                encoder_pix_fmt = pixel_formats[index];
+                break;
+            }
+        }
+    }
+    codec_context->pix_fmt = encoder_pix_fmt;
+
+    if ((output_context->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
+        codec_context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+
+    int result = avcodec_open2(codec_context, codec, nullptr);
+    if (result < 0) {
+        SetError(out_error, "avcodec_open2 failed: " + ErrorString(result));
+        return false;
+    }
+
+    result = avcodec_parameters_from_context(stream->codecpar, codec_context);
+    if (result < 0) {
+        SetError(out_error, "avcodec_parameters_from_context failed: " + ErrorString(result));
+        return false;
+    }
+    stream->time_base = codec_context->time_base;
+
+    state->input_pix_fmt = ParseInputPixelFormat(first_frame.pixel_format);
+    if (state->input_pix_fmt == AV_PIX_FMT_NONE) {
+        SetError(out_error, "unsupported input pixel format: " + first_frame.pixel_format);
+        return false;
+    }
+
+    if (state->input_pix_fmt != codec_context->pix_fmt) {
+        state->sws_context = sws_getContext(width,
+                                            height,
+                                            state->input_pix_fmt,
+                                            width,
+                                            height,
+                                            codec_context->pix_fmt,
+                                            SWS_BILINEAR,
+                                            nullptr,
+                                            nullptr,
+                                            nullptr);
+        if (state->sws_context == nullptr) {
+            SetError(out_error, "sws_getContext failed");
+            return false;
+        }
+    }
+
+    state->width = width;
+    state->height = height;
+    state->next_pts = 0;
+    return true;
+}
+
+bool FeedVideoEncoderFrame(AVFormatContext* output_context,
+                           VideoEncodeState* state,
+                           const VideoFrameInfo& input,
+                           AVPacket* packet,
+                           std::string* out_error) {
+    AVCodecContext* codec_context = state->codec_context;
+    AVStream* stream = state->stream;
+    const int width = state->width;
+    const int height = state->height;
+    const AVPixelFormat input_pix_fmt = state->input_pix_fmt;
+    SwsContext* sws_context = state->sws_context;
+
+    if (input.width != width || input.height != height || input.line_sizes.empty() || input.data.empty()) {
+        SetError(out_error, "Streamed video frame contains invalid data or inconsistent dimensions");
+        return false;
+    }
+
+    AVFrame* frame = av_frame_alloc();
+    if (frame == nullptr) {
+        SetError(out_error, "av_frame_alloc failed");
+        return false;
+    }
+
+    frame->format = codec_context->pix_fmt;
+    frame->width = width;
+    frame->height = height;
+    frame->pts = state->next_pts++;
+
+    int result = av_frame_get_buffer(frame, 0);
+    if (result < 0 || av_frame_make_writable(frame) < 0) {
+        av_frame_free(&frame);
+        SetError(out_error, "failed to allocate writable video frame");
+        return false;
+    }
+
+    uint8_t* src_data[4] = {nullptr, nullptr, nullptr, nullptr};
+    int src_linesize[4] = {0, 0, 0, 0};
+    const int fill_result = av_image_fill_arrays(src_data,
+                                                 src_linesize,
+                                                 input.data.data(),
+                                                 input_pix_fmt,
+                                                 width,
+                                                 height,
+                                                 1);
+    if (fill_result < 0) {
+        av_frame_free(&frame);
+        SetError(out_error, "av_image_fill_arrays failed: " + ErrorString(fill_result));
+        return false;
+    }
+
+    if (!input.line_sizes.empty()) {
+        src_linesize[0] = input.line_sizes[0];
+        for (size_t i = 1; i < input.line_sizes.size() && i < 4; ++i) {
+            src_linesize[i] = input.line_sizes[i];
+        }
+    }
+
+    if (sws_context != nullptr) {
+        const int scaled = sws_scale(sws_context,
+                                     src_data,
+                                     src_linesize,
+                                     0,
+                                     height,
+                                     frame->data,
+                                     frame->linesize);
+        if (scaled <= 0) {
+            av_frame_free(&frame);
+            SetError(out_error, "sws_scale failed");
+            return false;
+        }
+    } else {
+        av_image_copy(frame->data,
+                      frame->linesize,
+                      const_cast<const uint8_t**>(src_data),
+                      src_linesize,
+                      codec_context->pix_fmt,
+                      width,
+                      height);
+    }
+
+    result = avcodec_send_frame(codec_context, frame);
+    av_frame_free(&frame);
+    if (result < 0) {
+        SetError(out_error, "avcodec_send_frame failed: " + ErrorString(result));
+        return false;
+    }
+    return PushEncoderPackets(output_context, codec_context, stream, packet, out_error);
+}
+
+bool FlushEncoderCodec(AVFormatContext* output_context,
+                       AVCodecContext* codec_context,
+                       AVStream* stream,
+                       AVPacket* packet,
+                       std::string* out_error) {
+    const int result = avcodec_send_frame(codec_context, nullptr);
+    if (result < 0) {
+        SetError(out_error, "avcodec_send_frame(nullptr) failed: " + ErrorString(result));
+        return false;
+    }
+    return PushEncoderPackets(output_context, codec_context, stream, packet, out_error);
+}
+
+bool SetupAudioEncoder(AVFormatContext* output_context,
+                       const EncodeAudioParams& params,
+                       const AudioFrameInfo& first_frame,
+                       AudioEncodeState* state,
+                       std::string* out_error) {
+    const int input_sample_rate = params.sample_rate > 0 ? params.sample_rate : first_frame.sample_rate;
+    const int input_channels = params.channels > 0 ? params.channels : first_frame.channels;
+    if (input_sample_rate <= 0 || input_channels <= 0) {
+        SetError(out_error, "EncodeAudioFrames received invalid sample rate or channel count");
+        return false;
+    }
+
+    const AVCodec* codec = params.codec_name.empty()
+        ? avcodec_find_encoder(output_context->oformat->audio_codec)
+        : avcodec_find_encoder_by_name(params.codec_name.c_str());
+    if (codec == nullptr) {
+        SetError(out_error, "audio encoder not found: " + params.codec_name);
+        return false;
+    }
+
+    state->stream = avformat_new_stream(output_context, nullptr);
+    state->codec_context = avcodec_alloc_context3(codec);
+    if (state->stream == nullptr || state->codec_context == nullptr) {
+        SetError(out_error, "failed to allocate audio encoder stream/context");
+        return false;
+    }
+
+    AVStream* stream = state->stream;
+    AVCodecContext* codec_context = state->codec_context;
+
+    codec_context->codec_type = AVMEDIA_TYPE_AUDIO;
+    codec_context->sample_rate = SelectEncoderSampleRate(codec, input_sample_rate);
+    codec_context->sample_fmt = SelectEncoderSampleFormat(codec, params.sample_format);
+    codec_context->bit_rate = params.bit_rate > 0 ? params.bit_rate : 192000;
+    codec_context->time_base = AVRational{1, codec_context->sample_rate};
+    const int encoder_channels = SelectEncoderChannels(codec, input_channels);
+    if (!SetDefaultChannelLayout(encoder_channels, &codec_context->ch_layout, out_error)) {
+        return false;
+    }
+    if ((output_context->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
+        codec_context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+    }
+
+    int result = avcodec_open2(codec_context, codec, nullptr);
+    if (result < 0) {
+        SetError(out_error, "avcodec_open2 failed: " + ErrorString(result));
+        return false;
+    }
+    result = avcodec_parameters_from_context(stream->codecpar, codec_context);
+    if (result < 0) {
+        SetError(out_error, "avcodec_parameters_from_context failed: " + ErrorString(result));
+        return false;
+    }
+    stream->time_base = codec_context->time_base;
+
+    state->input_sample_format = ResolveSampleFormat(first_frame.sample_format, first_frame.planar);
+    if (state->input_sample_format == AV_SAMPLE_FMT_NONE) {
+        SetError(out_error, "unsupported input audio sample format: " + first_frame.sample_format);
+        return false;
+    }
+
+    AVChannelLayout input_layout{};
+    if (!SetDefaultChannelLayout(input_channels, &input_layout, out_error)) {
+        return false;
+    }
+    result = swr_alloc_set_opts2(
+        &state->swr_context,
+        &codec_context->ch_layout,
+        codec_context->sample_fmt,
+        codec_context->sample_rate,
+        &input_layout,
+        state->input_sample_format,
+        input_sample_rate,
+        0,
+        nullptr);
+    av_channel_layout_uninit(&input_layout);
+    if (result < 0 || state->swr_context == nullptr) {
+        SetError(out_error, "swr_alloc_set_opts2 failed: " + ErrorString(result));
+        return false;
+    }
+    result = swr_init(state->swr_context);
+    if (result < 0) {
+        SetError(out_error, "swr_init failed: " + ErrorString(result));
+        return false;
+    }
+
+    state->fifo = av_audio_fifo_alloc(codec_context->sample_fmt,
+                                      codec_context->ch_layout.nb_channels,
+                                      1);
+    if (state->fifo == nullptr) {
+        SetError(out_error, "failed to allocate audio FIFO");
+        return false;
+    }
+
+    state->input_sample_rate = input_sample_rate;
+    state->input_channels = input_channels;
+    state->preferred_frame_size = codec_context->frame_size > 0 ? codec_context->frame_size : 1152;
+    state->next_pts = 0;
+    return true;
+}
+
+bool FeedAudioEncoderFrame(AVFormatContext* output_context,
+                           AudioEncodeState* state,
+                           const AudioFrameInfo& input,
+                           AVPacket* packet,
+                           std::string* out_error) {
+    if (input.sample_rate != state->input_sample_rate ||
+        input.channels != state->input_channels ||
+        ResolveSampleFormat(input.sample_format, input.planar) != state->input_sample_format ||
+        input.sample_count <= 0) {
+        SetError(out_error, "EncodeAudioFrames requires a consistent audio stream");
+        return false;
+    }
+
+    AVCodecContext* codec_context = state->codec_context;
+    AVStream* stream = state->stream;
+    SwrContext* swr_context = state->swr_context;
+    AVAudioFifo* fifo = state->fifo;
+    const int input_sample_rate = state->input_sample_rate;
+    const int fifo_channels = codec_context->ch_layout.nb_channels;
+    const int preferred_audio_frame_size = state->preferred_frame_size;
+
+    AVFrame* source_frame = av_frame_alloc();
+    if (source_frame == nullptr || !CopyAudioFrameToAvFrame(input, source_frame, out_error)) {
+        av_frame_free(&source_frame);
+        return false;
+    }
+    const int destination_samples = static_cast<int>(av_rescale_rnd(
+        swr_get_delay(swr_context, input_sample_rate) + input.sample_count,
+        codec_context->sample_rate,
+        input_sample_rate,
+        AV_ROUND_UP));
+    uint8_t** converted_data = nullptr;
+    int converted_linesize = 0;
+    int result = av_samples_alloc_array_and_samples(
+        &converted_data,
+        &converted_linesize,
+        fifo_channels,
+        destination_samples,
+        codec_context->sample_fmt,
+        0);
+    if (result < 0) {
+        av_frame_free(&source_frame);
+        SetError(out_error, "av_samples_alloc_array_and_samples failed: " + ErrorString(result));
+        return false;
+    }
+    const int converted_samples = swr_convert(
+        swr_context,
+        converted_data,
+        destination_samples,
+        const_cast<const uint8_t**>(source_frame->extended_data),
+        source_frame->nb_samples);
+    av_frame_free(&source_frame);
+    if (converted_samples < 0) {
+        av_freep(&converted_data[0]);
+        av_freep(&converted_data);
+        SetError(out_error, "swr_convert failed: " + ErrorString(converted_samples));
+        return false;
+    }
+    if (av_audio_fifo_realloc(fifo, av_audio_fifo_size(fifo) + converted_samples) < 0) {
+        av_freep(&converted_data[0]);
+        av_freep(&converted_data);
+        SetError(out_error, "av_audio_fifo_realloc failed");
+        return false;
+    }
+    if (av_audio_fifo_write(fifo, reinterpret_cast<void**>(converted_data), converted_samples) < converted_samples) {
+        av_freep(&converted_data[0]);
+        av_freep(&converted_data);
+        SetError(out_error, "av_audio_fifo_write failed");
+        return false;
+    }
+    av_freep(&converted_data[0]);
+    av_freep(&converted_data);
+
+    while (av_audio_fifo_size(fifo) >= preferred_audio_frame_size) {
+        const int frame_samples = preferred_audio_frame_size;
+        AVFrame* encoded_frame = av_frame_alloc();
+        if (encoded_frame == nullptr) {
+            SetError(out_error, "av_frame_alloc failed for encoder frame");
+            return false;
+        }
+        encoded_frame->nb_samples = frame_samples;
+        encoded_frame->format = codec_context->sample_fmt;
+        encoded_frame->sample_rate = codec_context->sample_rate;
+        av_channel_layout_copy(&encoded_frame->ch_layout, &codec_context->ch_layout);
+        if (av_frame_get_buffer(encoded_frame, 0) < 0 || av_frame_make_writable(encoded_frame) < 0) {
+            av_frame_free(&encoded_frame);
+            SetError(out_error, "failed to allocate encoder frame buffer");
+            return false;
+        }
+        if (av_audio_fifo_read(fifo, reinterpret_cast<void**>(encoded_frame->data), frame_samples) < frame_samples) {
+            av_frame_free(&encoded_frame);
+            SetError(out_error, "av_audio_fifo_read failed");
+            return false;
+        }
+        encoded_frame->pts = state->next_pts;
+        state->next_pts += frame_samples;
+        result = avcodec_send_frame(codec_context, encoded_frame);
+        av_frame_free(&encoded_frame);
+        if (result < 0) {
+            SetError(out_error, "avcodec_send_frame failed: " + ErrorString(result));
+            return false;
+        }
+        if (!PushEncoderPackets(output_context, codec_context, stream, packet, out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool FlushAudioEncoderFifo(AVFormatContext* output_context,
+                           AudioEncodeState* state,
+                           AVPacket* packet,
+                           std::string* out_error) {
+    AVCodecContext* codec_context = state->codec_context;
+    AVStream* stream = state->stream;
+    AVAudioFifo* fifo = state->fifo;
+    const AVCodec* codec = codec_context->codec;
+    const int fifo_channels = codec_context->ch_layout.nb_channels;
+    const int preferred_audio_frame_size = state->preferred_frame_size;
+    int result = 0;
+
+    while (av_audio_fifo_size(fifo) > 0) {
+        const bool variable_frame_size = (codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE) != 0;
+        const int remaining = av_audio_fifo_size(fifo);
+        const int frame_samples = (codec_context->frame_size > 0 && !variable_frame_size)
+            ? codec_context->frame_size
+            : std::min(remaining, preferred_audio_frame_size);
+        AVFrame* encoded_frame = av_frame_alloc();
+        if (encoded_frame == nullptr) {
+            SetError(out_error, "av_frame_alloc failed for final encoder frame");
+            return false;
+        }
+        encoded_frame->nb_samples = frame_samples;
+        encoded_frame->format = codec_context->sample_fmt;
+        encoded_frame->sample_rate = codec_context->sample_rate;
+        av_channel_layout_copy(&encoded_frame->ch_layout, &codec_context->ch_layout);
+        if (av_frame_get_buffer(encoded_frame, 0) < 0 || av_frame_make_writable(encoded_frame) < 0) {
+            av_frame_free(&encoded_frame);
+            SetError(out_error, "failed to allocate final encoder frame buffer");
+            return false;
+        }
+        const int samples_to_read = std::min(frame_samples, remaining);
+        if (av_audio_fifo_read(fifo, reinterpret_cast<void**>(encoded_frame->data), samples_to_read) < samples_to_read) {
+            av_frame_free(&encoded_frame);
+            SetError(out_error, "av_audio_fifo_read failed during flush");
+            return false;
+        }
+        encoded_frame->pts = state->next_pts;
+        state->next_pts += samples_to_read;
+        const int bytes_per_sample = av_get_bytes_per_sample(codec_context->sample_fmt);
+        if (samples_to_read < frame_samples) {
+            // Pad the unread tail with silence. Planar formats have one
+            // buffer per channel in extended_data[]; packed formats have a
+            // single interleaved buffer in data[0] — extended_data[1..] are
+            // null there, so the per-channel memset would crash.
+            if (av_sample_fmt_is_planar(codec_context->sample_fmt)) {
+                for (int channel = 0; channel < fifo_channels; ++channel) {
+                    std::memset(
+                        encoded_frame->extended_data[channel] + static_cast<size_t>(samples_to_read) * static_cast<size_t>(bytes_per_sample),
+                        0,
+                        static_cast<size_t>(frame_samples - samples_to_read) * static_cast<size_t>(bytes_per_sample));
+                }
+            } else {
+                const size_t frame_bytes = static_cast<size_t>(fifo_channels) * static_cast<size_t>(bytes_per_sample);
+                std::memset(
+                    encoded_frame->data[0] + static_cast<size_t>(samples_to_read) * frame_bytes,
+                    0,
+                    static_cast<size_t>(frame_samples - samples_to_read) * frame_bytes);
+            }
+        }
+        result = avcodec_send_frame(codec_context, encoded_frame);
+        av_frame_free(&encoded_frame);
+        if (result < 0) {
+            SetError(out_error, "avcodec_send_frame failed during flush: " + ErrorString(result));
+            return false;
+        }
+        if (!PushEncoderPackets(output_context, codec_context, stream, packet, out_error)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 #endif
 
 }  // namespace
@@ -1524,16 +2088,6 @@ bool EncodeVideoFrameStream(const EncodeVideoParams& params,
         return false;
     }
 
-    auto parse_input_pix_fmt = [](std::string text) -> AVPixelFormat {
-        text = XER::Helper::String::ToLowerAscii(text);
-        if (text == "rgba") return AV_PIX_FMT_RGBA;
-        if (text == "bgra") return AV_PIX_FMT_BGRA;
-        if (text == "rgb" || text == "rgb24") return AV_PIX_FMT_RGB24;
-        if (text == "bgr" || text == "bgr24") return AV_PIX_FMT_BGR24;
-        if (text == "gray" || text == "gray8" || text == "y") return AV_PIX_FMT_GRAY8;
-        return AV_PIX_FMT_NONE;
-    };
-
     AVFormatContext* output_context = nullptr;
     int result = avformat_alloc_output_context2(&output_context, nullptr, nullptr, params.output_path.c_str());
     if (result < 0 || output_context == nullptr) {
@@ -1541,264 +2095,61 @@ bool EncodeVideoFrameStream(const EncodeVideoParams& params,
         return false;
     }
 
-    const AVCodec* codec = params.codec_name.empty()
-        ? avcodec_find_encoder(output_context->oformat->video_codec)
-        : avcodec_find_encoder_by_name(params.codec_name.c_str());
-    if (codec == nullptr) {
-        avformat_free_context(output_context);
-        SetError(out_error, "video encoder not found: " + params.codec_name);
-        return false;
+    VideoEncodeState encode_state;
+    AVPacket* packet = nullptr;
+    bool success = SetupVideoEncoder(output_context, params, width, height,
+                                     first_frame, &encode_state, out_error);
+    if (success) {
+        success = OpenOutputAndWriteHeader(output_context, params.output_path, out_error);
     }
-
-    AVStream* stream = avformat_new_stream(output_context, nullptr);
-    AVCodecContext* codec_context = avcodec_alloc_context3(codec);
-    if (stream == nullptr || codec_context == nullptr) {
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "failed to allocate video encoder stream/context");
-        return false;
-    }
-
-    codec_context->codec_type = AVMEDIA_TYPE_VIDEO;
-    codec_context->width = width;
-    codec_context->height = height;
-    codec_context->time_base = AVRational{params.fps_den > 0 ? params.fps_den : 1,
-                                          params.fps_num > 0 ? params.fps_num : 1};
-    codec_context->framerate = AVRational{params.fps_num > 0 ? params.fps_num : 1,
-                                          params.fps_den > 0 ? params.fps_den : 1};
-    codec_context->bit_rate = params.bit_rate > 0 ? params.bit_rate : 4000000;
-
-    AVPixelFormat encoder_pix_fmt = AV_PIX_FMT_YUV420P;
-    int pixel_format_count = 0;
-    const AVPixelFormat* pixel_formats = SupportedPixelFormats(codec, &pixel_format_count);
-    if (pixel_formats != nullptr && pixel_format_count > 0) {
-        encoder_pix_fmt = pixel_formats[0];
-        for (int index = 0; index < pixel_format_count; ++index) {
-            if (pixel_formats[index] == AV_PIX_FMT_RGBA) {
-                encoder_pix_fmt = pixel_formats[index];
-                break;
-            }
-        }
-    }
-    codec_context->pix_fmt = encoder_pix_fmt;
-
-    if ((output_context->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
-        codec_context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
-
-    result = avcodec_open2(codec_context, codec, nullptr);
-    if (result < 0) {
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "avcodec_open2 failed: " + ErrorString(result));
-        return false;
-    }
-
-    result = avcodec_parameters_from_context(stream->codecpar, codec_context);
-    if (result < 0) {
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "avcodec_parameters_from_context failed: " + ErrorString(result));
-        return false;
-    }
-    stream->time_base = codec_context->time_base;
-
-    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-        result = avio_open(&output_context->pb, params.output_path.c_str(), AVIO_FLAG_WRITE);
-        if (result < 0) {
-            avcodec_free_context(&codec_context);
-            avformat_free_context(output_context);
-            SetError(out_error, "avio_open failed: " + ErrorString(result));
-            return false;
-        }
-    }
-
-    result = avformat_write_header(output_context, nullptr);
-    if (result < 0) {
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "avformat_write_header failed: " + ErrorString(result));
-        return false;
-    }
-
-    AVPacket* packet = av_packet_alloc();
-    if (packet == nullptr) {
-        av_write_trailer(output_context);
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "av_packet_alloc failed");
-        return false;
-    }
-
-    const AVPixelFormat input_pix_fmt = parse_input_pix_fmt(first_frame.pixel_format);
-    if (input_pix_fmt == AV_PIX_FMT_NONE) {
-        av_packet_free(&packet);
-        av_write_trailer(output_context);
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "unsupported input pixel format: " + first_frame.pixel_format);
-        return false;
-    }
-
-    SwsContext* sws_context = nullptr;
-    if (input_pix_fmt != codec_context->pix_fmt) {
-        sws_context = sws_getContext(width,
-                                     height,
-                                     input_pix_fmt,
-                                     width,
-                                     height,
-                                     codec_context->pix_fmt,
-                                     SWS_BILINEAR,
-                                     nullptr,
-                                     nullptr,
-                                     nullptr);
-        if (sws_context == nullptr) {
-            av_packet_free(&packet);
-            av_write_trailer(output_context);
-            if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-                avio_closep(&output_context->pb);
-            }
-            avcodec_free_context(&codec_context);
-            avformat_free_context(output_context);
-            SetError(out_error, "sws_getContext failed");
-            return false;
-        }
-    }
-
-    bool success = true;
-    int64_t next_pts = 0;
-    for (std::size_t frame_index = 0; frame_index < frame_count; ++frame_index) {
-        VideoFrameInfo input;
-        if (frame_index == 0u) {
-            input = std::move(first_frame);
-        } else if (!provider(frame_index, &input, out_error)) {
+    const bool header_written = success;
+    if (success) {
+        packet = av_packet_alloc();
+        if (packet == nullptr) {
             success = false;
-            break;
+            SetError(out_error, "av_packet_alloc failed");
         }
-
-        if (input.width != width || input.height != height || input.line_sizes.empty() || input.data.empty()) {
-            success = false;
-            SetError(out_error, "Streamed video frame contains invalid data or inconsistent dimensions");
-            break;
-        }
-
-        AVFrame* frame = av_frame_alloc();
-        if (frame == nullptr) {
-            success = false;
-            SetError(out_error, "av_frame_alloc failed");
-            break;
-        }
-
-        frame->format = codec_context->pix_fmt;
-        frame->width = width;
-        frame->height = height;
-        frame->pts = next_pts++;
-
-        result = av_frame_get_buffer(frame, 0);
-        if (result < 0 || av_frame_make_writable(frame) < 0) {
-            av_frame_free(&frame);
-            success = false;
-            SetError(out_error, "failed to allocate writable video frame");
-            break;
-        }
-
-        uint8_t* src_data[4] = {nullptr, nullptr, nullptr, nullptr};
-        int src_linesize[4] = {0, 0, 0, 0};
-        const int fill_result = av_image_fill_arrays(src_data,
-                                                     src_linesize,
-                                                     input.data.data(),
-                                                     input_pix_fmt,
-                                                     width,
-                                                     height,
-                                                     1);
-        if (fill_result < 0) {
-            av_frame_free(&frame);
-            success = false;
-            SetError(out_error, "av_image_fill_arrays failed: " + ErrorString(fill_result));
-            break;
-        }
-
-        if (!input.line_sizes.empty()) {
-            src_linesize[0] = input.line_sizes[0];
-            for (size_t i = 1; i < input.line_sizes.size() && i < 4; ++i) {
-                src_linesize[i] = input.line_sizes[i];
-            }
-        }
-
-        if (sws_context != nullptr) {
-            const int scaled = sws_scale(sws_context,
-                                         src_data,
-                                         src_linesize,
-                                         0,
-                                         height,
-                                         frame->data,
-                                         frame->linesize);
-            if (scaled <= 0) {
-                av_frame_free(&frame);
+    }
+    if (success) {
+        for (std::size_t frame_index = 0; frame_index < frame_count; ++frame_index) {
+            VideoFrameInfo input;
+            if (frame_index == 0u) {
+                input = std::move(first_frame);
+            } else if (!provider(frame_index, &input, out_error)) {
                 success = false;
-                SetError(out_error, "sws_scale failed");
                 break;
+            }
+            if (!FeedVideoEncoderFrame(output_context, &encode_state, input, packet, out_error)) {
+                success = false;
+                break;
+            }
+        }
+        if (success &&
+            !FlushEncoderCodec(output_context, encode_state.codec_context,
+                               encode_state.stream, packet, out_error)) {
+            success = false;
+        }
+    }
+
+    if (header_written) {
+        if (success) {
+            result = av_write_trailer(output_context);
+            if (result < 0) {
+                success = false;
+                SetError(out_error, "av_write_trailer failed: " + ErrorString(result));
             }
         } else {
-            av_image_copy(frame->data,
-                          frame->linesize,
-                          const_cast<const uint8_t**>(src_data),
-                          src_linesize,
-                          codec_context->pix_fmt,
-                          width,
-                          height);
-        }
-
-        result = avcodec_send_frame(codec_context, frame);
-        av_frame_free(&frame);
-        if (result < 0) {
-            success = false;
-            SetError(out_error, "avcodec_send_frame failed: " + ErrorString(result));
-            break;
-        }
-        if (!PushEncoderPackets(output_context, codec_context, stream, packet, out_error)) {
-            success = false;
-            break;
+            av_write_trailer(output_context);
         }
     }
 
-    if (success) {
-        result = avcodec_send_frame(codec_context, nullptr);
-        if (result < 0) {
-            success = false;
-            SetError(out_error, "avcodec_send_frame(nullptr) failed: " + ErrorString(result));
-        } else if (!PushEncoderPackets(output_context, codec_context, stream, packet, out_error)) {
-            success = false;
-        }
+    if (packet != nullptr) {
+        av_packet_free(&packet);
     }
-
-    if (success) {
-        result = av_write_trailer(output_context);
-        if (result < 0) {
-            success = false;
-            SetError(out_error, "av_write_trailer failed: " + ErrorString(result));
-        }
-    } else {
-        av_write_trailer(output_context);
-    }
-
-    if (sws_context != nullptr) {
-        sws_freeContext(sws_context);
-    }
-    av_packet_free(&packet);
-    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
+    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0 && output_context->pb != nullptr) {
         avio_closep(&output_context->pb);
     }
-    avcodec_free_context(&codec_context);
+    ReleaseVideoEncodeState(&encode_state);
     avformat_free_context(output_context);
 
     return success;
@@ -1845,338 +2196,55 @@ bool EncodeAudioFrames(const EncodeAudioParams& params,
         return false;
     }
 
-    const AVCodec* codec = params.codec_name.empty()
-        ? avcodec_find_encoder(output_context->oformat->audio_codec)
-        : avcodec_find_encoder_by_name(params.codec_name.c_str());
-    if (codec == nullptr) {
-        avformat_free_context(output_context);
-        SetError(out_error, "audio encoder not found: " + params.codec_name);
-        return false;
-    }
-
-    AVStream* stream = avformat_new_stream(output_context, nullptr);
-    AVCodecContext* codec_context = avcodec_alloc_context3(codec);
-    if (stream == nullptr || codec_context == nullptr) {
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "failed to allocate audio encoder stream/context");
-        return false;
-    }
-
-    codec_context->codec_type = AVMEDIA_TYPE_AUDIO;
-    codec_context->sample_rate = SelectEncoderSampleRate(codec, input_sample_rate);
-    codec_context->sample_fmt = SelectEncoderSampleFormat(codec, params.sample_format);
-    codec_context->bit_rate = params.bit_rate > 0 ? params.bit_rate : 192000;
-    codec_context->time_base = AVRational{1, codec_context->sample_rate};
-    const int encoder_channels = SelectEncoderChannels(codec, input_channels);
-    if (!SetDefaultChannelLayout(encoder_channels, &codec_context->ch_layout, out_error)) {
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        return false;
-    }
-    if ((output_context->oformat->flags & AVFMT_GLOBALHEADER) != 0) {
-        codec_context->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
-    }
-
-    result = avcodec_open2(codec_context, codec, nullptr);
-    if (result < 0) {
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "avcodec_open2 failed: " + ErrorString(result));
-        return false;
-    }
-    result = avcodec_parameters_from_context(stream->codecpar, codec_context);
-    if (result < 0) {
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "avcodec_parameters_from_context failed: " + ErrorString(result));
-        return false;
-    }
-    stream->time_base = codec_context->time_base;
-
-    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-        result = avio_open(&output_context->pb, params.output_path.c_str(), AVIO_FLAG_WRITE);
-        if (result < 0) {
-            avcodec_free_context(&codec_context);
-            avformat_free_context(output_context);
-            SetError(out_error, "avio_open failed: " + ErrorString(result));
-            return false;
-        }
-    }
-    result = avformat_write_header(output_context, nullptr);
-    if (result < 0) {
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "avformat_write_header failed: " + ErrorString(result));
-        return false;
-    }
-
-    const AVSampleFormat input_sample_format = ResolveSampleFormat(frames.front().sample_format, frames.front().planar);
-    if (input_sample_format == AV_SAMPLE_FMT_NONE) {
-        av_write_trailer(output_context);
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "unsupported input audio sample format: " + frames.front().sample_format);
-        return false;
-    }
-
-    AVChannelLayout input_layout{};
-    if (!SetDefaultChannelLayout(input_channels, &input_layout, out_error)) {
-        av_write_trailer(output_context);
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        return false;
-    }
-    SwrContext* swr_context = nullptr;
-    result = swr_alloc_set_opts2(
-        &swr_context,
-        &codec_context->ch_layout,
-        codec_context->sample_fmt,
-        codec_context->sample_rate,
-        &input_layout,
-        input_sample_format,
-        input_sample_rate,
-        0,
-        nullptr);
-    av_channel_layout_uninit(&input_layout);
-    if (result < 0 || swr_context == nullptr) {
-        av_write_trailer(output_context);
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "swr_alloc_set_opts2 failed: " + ErrorString(result));
-        return false;
-    }
-    result = swr_init(swr_context);
-    if (result < 0) {
-        swr_free(&swr_context);
-        av_write_trailer(output_context);
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "swr_init failed: " + ErrorString(result));
-        return false;
-    }
-
-    const int fifo_channels = codec_context->ch_layout.nb_channels;
-    AVAudioFifo* fifo = av_audio_fifo_alloc(codec_context->sample_fmt, fifo_channels, 1);
-    AVPacket* packet = av_packet_alloc();
-    if (fifo == nullptr || packet == nullptr) {
-        av_packet_free(&packet);
-        av_audio_fifo_free(fifo);
-        swr_free(&swr_context);
-        av_write_trailer(output_context);
-        if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
-            avio_closep(&output_context->pb);
-        }
-        avcodec_free_context(&codec_context);
-        avformat_free_context(output_context);
-        SetError(out_error, "failed to allocate audio FIFO or packet");
-        return false;
-    }
-
-    int64_t next_pts = 0;
-    bool success = true;
-    const int preferred_audio_frame_size = codec_context->frame_size > 0 ? codec_context->frame_size : 1152;
-    for (const auto& input_frame : frames) {
-        AVFrame* source_frame = av_frame_alloc();
-        if (source_frame == nullptr || !CopyAudioFrameToAvFrame(input_frame, source_frame, out_error)) {
-            av_frame_free(&source_frame);
-            success = false;
-            break;
-        }
-        const int destination_samples = static_cast<int>(av_rescale_rnd(
-            swr_get_delay(swr_context, input_sample_rate) + input_frame.sample_count,
-            codec_context->sample_rate,
-            input_sample_rate,
-            AV_ROUND_UP));
-        uint8_t** converted_data = nullptr;
-        int converted_linesize = 0;
-        result = av_samples_alloc_array_and_samples(
-            &converted_data,
-            &converted_linesize,
-            fifo_channels,
-            destination_samples,
-            codec_context->sample_fmt,
-            0);
-        if (result < 0) {
-            av_frame_free(&source_frame);
-            success = false;
-            SetError(out_error, "av_samples_alloc_array_and_samples failed: " + ErrorString(result));
-            break;
-        }
-        const int converted_samples = swr_convert(
-            swr_context,
-            converted_data,
-            destination_samples,
-            const_cast<const uint8_t**>(source_frame->extended_data),
-            source_frame->nb_samples);
-        av_frame_free(&source_frame);
-        if (converted_samples < 0) {
-            av_freep(&converted_data[0]);
-            av_freep(&converted_data);
-            success = false;
-            SetError(out_error, "swr_convert failed: " + ErrorString(converted_samples));
-            break;
-        }
-        if (av_audio_fifo_realloc(fifo, av_audio_fifo_size(fifo) + converted_samples) < 0) {
-            av_freep(&converted_data[0]);
-            av_freep(&converted_data);
-            success = false;
-            SetError(out_error, "av_audio_fifo_realloc failed");
-            break;
-        }
-        if (av_audio_fifo_write(fifo, reinterpret_cast<void**>(converted_data), converted_samples) < converted_samples) {
-            av_freep(&converted_data[0]);
-            av_freep(&converted_data);
-            success = false;
-            SetError(out_error, "av_audio_fifo_write failed");
-            break;
-        }
-        av_freep(&converted_data[0]);
-        av_freep(&converted_data);
-
-        while (success && av_audio_fifo_size(fifo) >= preferred_audio_frame_size) {
-            const int frame_samples = preferred_audio_frame_size;
-            AVFrame* encoded_frame = av_frame_alloc();
-            if (encoded_frame == nullptr) {
-                success = false;
-                SetError(out_error, "av_frame_alloc failed for encoder frame");
-                break;
-            }
-            encoded_frame->nb_samples = frame_samples;
-            encoded_frame->format = codec_context->sample_fmt;
-            encoded_frame->sample_rate = codec_context->sample_rate;
-            av_channel_layout_copy(&encoded_frame->ch_layout, &codec_context->ch_layout);
-            if (av_frame_get_buffer(encoded_frame, 0) < 0 || av_frame_make_writable(encoded_frame) < 0) {
-                av_frame_free(&encoded_frame);
-                success = false;
-                SetError(out_error, "failed to allocate encoder frame buffer");
-                break;
-            }
-            if (av_audio_fifo_read(fifo, reinterpret_cast<void**>(encoded_frame->data), frame_samples) < frame_samples) {
-                av_frame_free(&encoded_frame);
-                success = false;
-                SetError(out_error, "av_audio_fifo_read failed");
-                break;
-            }
-            encoded_frame->pts = next_pts;
-            next_pts += frame_samples;
-            result = avcodec_send_frame(codec_context, encoded_frame);
-            av_frame_free(&encoded_frame);
-            if (result < 0) {
-                success = false;
-                SetError(out_error, "avcodec_send_frame failed: " + ErrorString(result));
-                break;
-            }
-            if (!PushEncoderPackets(output_context, codec_context, stream, packet, out_error)) {
-                success = false;
-                break;
-            }
-        }
-    }
-
-    while (success && av_audio_fifo_size(fifo) > 0) {
-        const bool variable_frame_size = (codec->capabilities & AV_CODEC_CAP_VARIABLE_FRAME_SIZE) != 0;
-        const int remaining = av_audio_fifo_size(fifo);
-        const int frame_samples = (codec_context->frame_size > 0 && !variable_frame_size)
-            ? codec_context->frame_size
-            : std::min(remaining, preferred_audio_frame_size);
-        AVFrame* encoded_frame = av_frame_alloc();
-        if (encoded_frame == nullptr) {
-            success = false;
-            SetError(out_error, "av_frame_alloc failed for final encoder frame");
-            break;
-        }
-        encoded_frame->nb_samples = frame_samples;
-        encoded_frame->format = codec_context->sample_fmt;
-        encoded_frame->sample_rate = codec_context->sample_rate;
-        av_channel_layout_copy(&encoded_frame->ch_layout, &codec_context->ch_layout);
-        if (av_frame_get_buffer(encoded_frame, 0) < 0 || av_frame_make_writable(encoded_frame) < 0) {
-            av_frame_free(&encoded_frame);
-            success = false;
-            SetError(out_error, "failed to allocate final encoder frame buffer");
-            break;
-        }
-        const int samples_to_read = std::min(frame_samples, remaining);
-        if (av_audio_fifo_read(fifo, reinterpret_cast<void**>(encoded_frame->data), samples_to_read) < samples_to_read) {
-            av_frame_free(&encoded_frame);
-            success = false;
-            SetError(out_error, "av_audio_fifo_read failed during flush");
-            break;
-        }
-        encoded_frame->pts = next_pts;
-        next_pts += samples_to_read;
-        const int bytes_per_sample = av_get_bytes_per_sample(codec_context->sample_fmt);
-        if (samples_to_read < frame_samples) {
-            // Pad the unread tail with silence. Planar formats have one
-            // buffer per channel in extended_data[]; packed formats have a
-            // single interleaved buffer in data[0] — extended_data[1..] are
-            // null there, so the per-channel memset would crash.
-            if (av_sample_fmt_is_planar(codec_context->sample_fmt)) {
-                for (int channel = 0; channel < fifo_channels; ++channel) {
-                    std::memset(
-                        encoded_frame->extended_data[channel] + static_cast<size_t>(samples_to_read) * static_cast<size_t>(bytes_per_sample),
-                        0,
-                        static_cast<size_t>(frame_samples - samples_to_read) * static_cast<size_t>(bytes_per_sample));
-                }
-            } else {
-                const size_t frame_bytes = static_cast<size_t>(fifo_channels) * static_cast<size_t>(bytes_per_sample);
-                std::memset(
-                    encoded_frame->data[0] + static_cast<size_t>(samples_to_read) * frame_bytes,
-                    0,
-                    static_cast<size_t>(frame_samples - samples_to_read) * frame_bytes);
-            }
-        }
-        result = avcodec_send_frame(codec_context, encoded_frame);
-        av_frame_free(&encoded_frame);
-        if (result < 0) {
-            success = false;
-            SetError(out_error, "avcodec_send_frame failed during flush: " + ErrorString(result));
-            break;
-        }
-        if (!PushEncoderPackets(output_context, codec_context, stream, packet, out_error)) {
-            success = false;
-            break;
-        }
-    }
-
+    AudioEncodeState encode_state;
+    AVPacket* packet = nullptr;
+    bool success = SetupAudioEncoder(output_context, params, frames.front(),
+                                     &encode_state, out_error);
     if (success) {
-        result = avcodec_send_frame(codec_context, nullptr);
-        if (result < 0) {
+        success = OpenOutputAndWriteHeader(output_context, params.output_path, out_error);
+    }
+    const bool header_written = success;
+    if (success) {
+        packet = av_packet_alloc();
+        if (packet == nullptr) {
             success = false;
-            SetError(out_error, "avcodec_send_frame(nullptr) failed: " + ErrorString(result));
-        } else if (!PushEncoderPackets(output_context, codec_context, stream, packet, out_error)) {
+            SetError(out_error, "av_packet_alloc failed");
+        }
+    }
+    if (success) {
+        for (const auto& input_frame : frames) {
+            if (!FeedAudioEncoderFrame(output_context, &encode_state, input_frame,
+                                       packet, out_error)) {
+                success = false;
+                break;
+            }
+        }
+        if (success &&
+            !FlushAudioEncoderFifo(output_context, &encode_state, packet, out_error)) {
+            success = false;
+        }
+        if (success &&
+            !FlushEncoderCodec(output_context, encode_state.codec_context,
+                               encode_state.stream, packet, out_error)) {
             success = false;
         }
     }
 
-    const int trailer_result = av_write_trailer(output_context);
-    if (success && trailer_result < 0) {
-        success = false;
-        SetError(out_error, "av_write_trailer failed: " + ErrorString(trailer_result));
+    if (header_written) {
+        const int trailer_result = av_write_trailer(output_context);
+        if (success && trailer_result < 0) {
+            success = false;
+            SetError(out_error, "av_write_trailer failed: " + ErrorString(trailer_result));
+        }
     }
 
-    av_packet_free(&packet);
-    av_audio_fifo_free(fifo);
-    swr_free(&swr_context);
-    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0) {
+    if (packet != nullptr) {
+        av_packet_free(&packet);
+    }
+    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0 && output_context->pb != nullptr) {
         avio_closep(&output_context->pb);
     }
-    avcodec_free_context(&codec_context);
+    ReleaseAudioEncodeState(&encode_state);
     avformat_free_context(output_context);
     return success;
 #else
