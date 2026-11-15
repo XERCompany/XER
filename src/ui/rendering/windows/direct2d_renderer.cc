@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -40,7 +41,10 @@ D2D1_RECT_F ToRect(Layout::Rect rect) {
 
 void ValidateRect(Layout::Rect rect) {
     if (rect.width < 0.0f || rect.height < 0.0f) {
-        throw std::invalid_argument("Drawing rectangles cannot have negative dimensions");
+        throw std::invalid_argument(std::format(
+            "Drawing rectangles cannot have negative dimensions "
+            "(x={:.1f} y={:.1f} w={:.1f} h={:.1f})",
+            rect.x, rect.y, rect.width, rect.height));
     }
 }
 

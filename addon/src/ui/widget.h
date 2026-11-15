@@ -140,5 +140,6 @@ void RegisterNav(v8::Local<v8::Object> xer);       // AppTitleBar
 void RegisterKit(v8::Local<v8::Object> xer);       // kit primitives
 void RegisterWindow(v8::Local<v8::Object> xer);
 void RegisterApplication(v8::Local<v8::Object> xer);
+void RegisterXml(v8::Local<v8::Object> xer);        // parseXml/parseXmlFile
 
 }  // namespace xer::addon::ui

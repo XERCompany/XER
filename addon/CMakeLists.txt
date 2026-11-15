@@ -107,6 +107,7 @@ add_library(xeraddon MODULE
     src/ui/widgets/display.cc
     src/ui/widgets/nav.cc
     src/ui/widgets/kit.cc
+    src/ui/xml.cc
     src/notify/notify.cc
 )
 

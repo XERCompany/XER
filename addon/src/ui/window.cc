@@ -19,8 +19,9 @@ using xer::addon::CallbackStore;
 
 class WindowWrap : public Nan::ObjectWrap {
 public:
-    WindowWrap() : window_(std::make_shared<UICore::Window>()),
-                   callbacks_(std::make_shared<CallbackStore>()) {}
+    explicit WindowWrap(std::shared_ptr<UICore::Window> w = nullptr)
+        : window_(w ? std::move(w) : std::make_shared<UICore::Window>()),
+          callbacks_(std::make_shared<CallbackStore>()) {}
     ~WindowWrap() override {
         // Same teardown hazard as WidgetWrap: ~Window / Nan::Persistent::Reset
         // are unsafe once the isolate is disposing. Leak both.
@@ -33,6 +34,7 @@ public:
     }
 
     static void New(const Nan::FunctionCallbackInfo<v8::Value>& info);
+    static v8::Local<v8::Object> ToJS(std::shared_ptr<UICore::Window> w);
     std::shared_ptr<UICore::Window> Get() const { return window_; }
     std::shared_ptr<CallbackStore> Callbacks() const { return callbacks_; }
 
@@ -50,6 +52,31 @@ void WindowWrap::New(const Nan::FunctionCallbackInfo<v8::Value>& info) {
 WindowWrap* UnwrapWindow(v8::Local<v8::Value> v) {
     if (v.IsEmpty() || !v->IsObject()) return nullptr;
     return Nan::ObjectWrap::Unwrap<WindowWrap>(v.As<v8::Object>());
+}
+
+namespace {
+v8::Global<v8::FunctionTemplate>& WindowTemplateStore() {
+    // Heap-allocated on purpose: a v8::Global destroyed during/after isolate
+    // teardown calls DisposeGlobal on a dead isolate -> segfault at exit.
+    static auto* tpl = new v8::Global<v8::FunctionTemplate>();
+    return *tpl;
+}
+}  // namespace
+
+v8::Local<v8::FunctionTemplate> WindowTemplate() {
+    return v8::Local<v8::FunctionTemplate>::New(
+        v8::Isolate::GetCurrent(), WindowTemplateStore());
+}
+
+v8::Local<v8::Object> WindowWrap::ToJS(std::shared_ptr<UICore::Window> w) {
+    v8::Local<v8::Context> ctx = Nan::GetCurrentContext();
+    v8::Local<v8::Object> obj = WindowTemplate()
+                                   ->InstanceTemplate()
+                                   ->NewInstance(ctx)
+                                   .ToLocalChecked();
+    auto* wrap = new WindowWrap(std::move(w));
+    wrap->Wrap(obj);
+    return obj;
 }
 
 // --- argument helpers ---------------------------------------------------------
@@ -302,7 +329,14 @@ NAN_METHOD(WindowOpenDevTools) {
         return;
     }
     auto devtools = XER::UI::Debug::DevTools::Inspect(*self->Get());
-    info.GetReturnValue().Set(Nan::New(devtools != nullptr));
+    if (!devtools) {
+        info.GetReturnValue().Set(Nan::Undefined());
+        return;
+    }
+    // The DevTools object stays alive in the debug registry until its
+    // window closes; the returned Window handle lets JS drive it too.
+    info.GetReturnValue().Set(WindowWrap::ToJS(
+        devtools->GetWindow().shared_from_this()));
 }
 
 // --- callbacks ----------------------------------------------------------------
@@ -390,6 +424,7 @@ void RegisterWindow(v8::Local<v8::Object> xer) {
         Nan::New<v8::FunctionTemplate>(WindowWrap::New);
     win_tpl->InstanceTemplate()->SetInternalFieldCount(1);
     win_tpl->SetClassName(Nan::New("Window").ToLocalChecked());
+    WindowTemplateStore().Reset(v8::Isolate::GetCurrent(), win_tpl);
 
     auto proto = win_tpl->PrototypeTemplate();
     Nan::SetMethod(proto, "Create", WindowCreate);

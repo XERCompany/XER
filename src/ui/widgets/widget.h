@@ -138,6 +138,11 @@ public:
     void SetTooltip(std::string text);
     const std::string& GetTooltip() const { return tooltip_text_; }
 
+    // DevTools/inspector hook: short human-readable content of the widget
+    // (label text, button caption, input value...). Empty by default;
+    // DebugMapUI emits it as the `text` attribute when non-empty.
+    virtual std::string GetDebugText() const { return {}; }
+
     // Text direction for this widget and (through EffectiveTextDirection)
     // its descendants. Inherit resolves to the nearest ancestor's
     // direction, defaulting to Ltr at the root.

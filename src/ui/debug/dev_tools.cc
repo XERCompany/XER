@@ -1,5 +1,6 @@
 #include "dev_tools.h"
 
+#include "debug_map_ui.h"
 #include "elements_view.h"
 #include "debug_internal.h"
 #include "../core/window.h"
@@ -14,8 +15,10 @@
 #include "../widgets/scroll_area.h"
 #include "../widgets/tabs.h"
 #include "../layout/geometry.h"
+#include "helper/string_utils.h"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <memory>
 #include <string>
@@ -65,6 +68,82 @@ void CollectStats(const Widgets::Widget& w, int depth,
 class DevToolsView;
 
 // ---------------------------------------------------------------------------
+// DebugTextView — read-only multi-line text dump (DebugMapUI XML output).
+// Like ElementsView it reports full content height and relies on the
+// parent ScrollArea for scrolling/clipping; rows outside the visible
+// rect are culled in Render().
+// ---------------------------------------------------------------------------
+
+class DebugTextView final : public Widgets::Widget {
+public:
+    DebugTextView() { SetClipsChildren(true); }
+
+    void SetText(std::string text) {
+        if (text == text_) return;
+        text_ = std::move(text);
+        lines_ = XER::Helper::String::SplitLines(text_);
+        if (lines_.empty()) lines_.emplace_back("(empty)");
+        Invalidate();
+    }
+    const std::string& GetText() const { return text_; }
+
+    void Render(Rendering::Renderer& renderer,
+                const Theme::Tokens& tokens) override {
+        const Layout::Rect b = GetBounds();
+        if (b.width <= 0.0f || b.height <= 0.0f) return;
+        renderer.FillRect(b, tokens.surface, tokens.radius_small);
+
+        const Layout::Rect view = GetVisibleRect();
+        const float lh = LineHeight();
+        int i0 = static_cast<int>(
+            std::floor((view.y - b.y) / lh)) - 1;
+        int i1 = static_cast<int>(
+            std::ceil((view.y + view.height - b.y) / lh)) + 1;
+        const int count = static_cast<int>(lines_.size());
+        i0 = std::max(0, i0);
+        i1 = std::min(count, i1);
+
+        Rendering::TextStyle style;
+        style.size = tokens.font_small;
+        style.weight = 400;
+        style.color = tokens.foreground;
+        Rendering::TextStyle decl_style = style;
+        decl_style.color = tokens.muted;
+
+        const float pad = 8.0f;
+        for (int i = i0; i < i1; ++i) {
+            const std::string& line = lines_[static_cast<std::size_t>(i)];
+            // XML prolog / comments render muted; elements stay bright.
+            const bool decl = line.find("<?") != std::string::npos ||
+                              line.find("<!--") != std::string::npos;
+            renderer.DrawText(
+                line,
+                Layout::Rect{b.x + pad, b.y + static_cast<float>(i) * lh,
+                             b.width - 2.0f * pad, lh},
+                decl ? decl_style : style);
+        }
+    }
+
+    void Layout(const Layout::Rect& bounds) override { SetBounds(bounds); }
+    using Widget::Layout;
+    bool HandleEvent(const Widgets::Event&) override { return false; }
+
+    Layout::Size GetMinSize() const override { return {120.0f, 80.0f}; }
+    Layout::Size GetPreferredSize() const override { return {420.0f, 320.0f}; }
+    Layout::Size GetMaxSize() const override {
+        return {100000.0f, 100000.0f};
+    }
+    float GetContentHeight() const override {
+        return static_cast<float>(lines_.size()) * LineHeight();
+    }
+
+private:
+    static constexpr float LineHeight() { return 18.0f; }
+    std::string text_;
+    std::vector<std::string> lines_;
+};
+
+// ---------------------------------------------------------------------------
 // DevTools::Impl — declared before DevToolsView so the view can call back
 // into it; method bodies that touch the view are defined after the view.
 // ---------------------------------------------------------------------------
@@ -74,10 +153,12 @@ class DevToolsView;
 class DevTools::Impl {
 public:
     explicit Impl(Core::Window& target) : target_(target.shared_from_this()) {}
+    ~Impl();
 
     bool Init();
     void Poll();
     void OnWindowClose();
+    void OnTargetClosing();
 
     std::shared_ptr<Widgets::Widget> target_content() const {
         if (auto t = target_.lock()) return t->GetContent();
@@ -95,8 +176,18 @@ public:
     std::shared_ptr<Core::Window> window_;
     std::shared_ptr<DevToolsView> view_;
     bool auto_refresh_ = true;
+    bool close_requested_ = false;
+    std::uint64_t close_hook_id_ = 0;
     int poll_count_ = 0;
 };
+
+DevTools::Impl::~Impl() {
+    // Unregister the target close hook; if the target is already gone
+    // its hook table died with it and there is nothing to remove.
+    if (close_hook_id_ != 0) {
+        if (auto t = target_.lock()) t->RemoveCloseHook(close_hook_id_);
+    }
+}
 
 namespace {
 
@@ -113,9 +204,13 @@ public:
 
     void Build();
     void SetElementsRoot(std::shared_ptr<Widgets::Widget> root);
+    // Re-points the Elements tree (and XML dump) when the target window's
+    // content widget is replaced; no-op while the root is unchanged.
+    void EnsureElementsRoot(std::shared_ptr<Widgets::Widget> root);
 
     // Panel refresh entry points called by DevTools::Impl::Poll().
     void RefreshElements();
+    void UpdateDebugPanel(const Widgets::Widget* root);
     void UpdateRenderPanel(const Core::Window* target);
     void UpdateStatsPanel(const Widgets::Widget* root);
     void SetTargetTitle(const std::string& title);
@@ -148,6 +243,10 @@ private:
     std::shared_ptr<Widgets::Label> auto_label_;
     std::shared_ptr<Widgets::Tabs> tabs_;
 
+    // Debug tab: DebugMapUI XML dump of the whole widget tree.
+    std::shared_ptr<Widgets::ScrollArea> debug_scroll_;
+    std::shared_ptr<DebugTextView> debug_view_;
+
     // Elements tab: tree + selected-subtree detail.
     std::shared_ptr<Widgets::ScrollArea> elem_scroll_;
     std::shared_ptr<ElementsView> elements_view_;
@@ -175,6 +274,16 @@ std::unordered_set<std::shared_ptr<DevTools>>& Registry() {
     return r;
 }
 
+// Closed DevTools are moved here instead of being destroyed inside the
+// WM_CLOSE/on_close_ callback — dropping the last reference there would
+// run ~Window re-entrantly inside its own WndProc. Entries are released
+// on the next Inspect() call (user thread, outside message handling) or
+// at process exit.
+std::vector<std::shared_ptr<DevTools>>& Graveyard() {
+    static std::vector<std::shared_ptr<DevTools>> g;
+    return g;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -196,6 +305,12 @@ bool DevTools::Impl::Init() {
     view_->SetElementsRoot(content);
     window_->SetContent(view_);
     window_->SetOnClose([this] { OnWindowClose(); });
+    // Synchronously close the DevTools window when the inspected window
+    // starts closing — covers WM_CLOSE and ~Window teardown alike, so a
+    // dead frame callback can never orphan this window.
+    if (auto t = target_.lock()) {
+        close_hook_id_ = t->AddCloseHook([this] { OnTargetClosing(); });
+    }
     window_->SetFrameCallback([this] { Poll(); }, 250);
     window_->Show();
     return true;
@@ -205,26 +320,40 @@ void DevTools::Impl::Poll() {
     if (!view_) return;
     ++poll_count_;
     auto target = target_.lock();
-    if (!target) {
-        view_->SetTargetClosed();
+    if (!target || target->IsClosed()) {
+        OnTargetClosing();
         return;
     }
+    auto content = target_content();
+    view_->EnsureElementsRoot(content);
     view_->UpdateRenderPanel(target.get());
-    view_->UpdateStatsPanel(target_content().get());
-    // Elements auto-refresh ~1s (every 4th 250ms poll).
+    view_->UpdateStatsPanel(content.get());
+    // Elements + XML auto-refresh ~1s (every 4th 250ms poll).
     if (auto_refresh_ && (poll_count_ % 4) == 0) {
         view_->RefreshElements();
     }
 }
 
+void DevTools::Impl::OnTargetClosing() {
+    // Close() only posts WM_CLOSE; destruction happens later in
+    // OnWindowClose via the window's own message handling.
+    if (window_ && !close_requested_ && !window_->IsClosed()) {
+        close_requested_ = true;
+        window_->Close();
+    }
+}
+
 void DevTools::Impl::OnWindowClose() {
-    // Erase the registry entry; if the caller dropped its reference the
-    // DevTools (and its window) is destroyed here.
+    // Move the registry entry to the graveyard; actual destruction is
+    // deferred to the next Inspect() call — never inside WM_CLOSE.
     auto it = std::find_if(Registry().begin(), Registry().end(),
                            [this](const std::shared_ptr<DevTools>& d) {
                                return d->impl_.get() == this;
                            });
-    if (it != Registry().end()) Registry().erase(it);
+    if (it != Registry().end()) {
+        Graveyard().push_back(*it);
+        Registry().erase(it);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -246,11 +375,15 @@ void DevToolsView::Build() {
     auto_label_ = std::make_shared<Widgets::Label>("auto", true);
 
     tabs_ = std::make_shared<Widgets::Tabs>();
+    tabs_->AddTab("Debug");
     tabs_->AddTab("Elements");
     tabs_->AddTab("Render");
     tabs_->AddTab("Stats");
-    tabs_->SetActiveIndex(0);
+    tabs_->SetActiveIndex(1);
     tabs_->SetOnChanged([this](int index) { ShowTab(index); });
+
+    debug_view_ = std::make_shared<DebugTextView>();
+    debug_scroll_ = std::make_shared<Widgets::ScrollArea>(debug_view_);
 
     elements_view_ = std::make_shared<ElementsView>();
     elements_view_->SetOnSelect(
@@ -282,30 +415,49 @@ void DevToolsView::Build() {
     AddChild(auto_chk_);
     AddChild(auto_label_);
     AddChild(tabs_);
+    AddChild(debug_scroll_);
     AddChild(elem_scroll_);
     AddChild(det_label_);
     AddChild(det_scroll_);
     AddChild(render_scroll_);
     AddChild(stats_scroll_);
 
-    ShowTab(0);
+    ShowTab(1);
 }
 
 void DevToolsView::SetElementsRoot(std::shared_ptr<Widgets::Widget> root) {
     if (elements_view_) {
         elements_view_->SetRoot(std::move(root));
         elements_view_->Refresh();
+        UpdateDebugPanel(elements_view_->GetRoot().get());
     }
 }
 
+void DevToolsView::EnsureElementsRoot(std::shared_ptr<Widgets::Widget> root) {
+    if (!elements_view_) return;
+    if (elements_view_->GetRoot().get() ==
+        (root ? root.get() : nullptr)) {
+        return;
+    }
+    SetElementsRoot(std::move(root));
+}
+
+void DevToolsView::UpdateDebugPanel(const Widgets::Widget* root) {
+    if (!debug_view_) return;
+    debug_view_->SetText(root ? DebugMapUI::Dump(root)
+                              : std::string("<DebugMapUI nodes=\"0\"/>"));
+}
+
 void DevToolsView::ShowTab(int index) {
-    const bool elements = index == 0;
-    const bool render = index == 1;
+    const bool debug = index == 0;
+    const bool elements = index == 1;
+    const bool render = index == 2;
+    debug_scroll_->SetVisible(debug);
     elem_scroll_->SetVisible(elements);
     det_label_->SetVisible(elements);
     det_scroll_->SetVisible(elements);
     render_scroll_->SetVisible(render);
-    stats_scroll_->SetVisible(index == 2);
+    stats_scroll_->SetVisible(index == 3);
     Invalidate();
 }
 
@@ -317,9 +469,17 @@ void DevToolsView::OnElementsSelect(std::shared_ptr<Widgets::Widget> w) {
         return;
     }
     const auto b = w->GetBounds();
-    det_label_->SetText(std::format(
-        "{} — {:.0f},{:.0f} {:.0f}x{:.0f}", internal::QualifiedName(*w), b.x,
-        b.y, b.width, b.height));
+    std::string info = std::format("{} — {:.0f},{:.0f} {:.0f}x{:.0f}",
+                                   internal::QualifiedName(*w), b.x, b.y,
+                                   b.width, b.height);
+    const std::string dt = w->GetDebugText();
+    if (!dt.empty()) {
+        constexpr std::size_t kMax = 72;
+        info += "  \"" +
+                (dt.size() > kMax ? dt.substr(0, kMax - 3) + "..." : dt) +
+                "\"";
+    }
+    det_label_->SetText(std::move(info));
     det_view_->SetRoot(w);
     det_view_->Refresh();
 }
@@ -327,6 +487,8 @@ void DevToolsView::OnElementsSelect(std::shared_ptr<Widgets::Widget> w) {
 void DevToolsView::RefreshElements() {
     if (elements_view_) elements_view_->Refresh();
     if (det_view_) det_view_->Refresh();
+    UpdateDebugPanel(elements_view_ ? elements_view_->GetRoot().get()
+                                    : nullptr);
 }
 
 void DevToolsView::SetTargetTitle(const std::string& title) {
@@ -337,6 +499,7 @@ void DevToolsView::SetTargetClosed() {
     if (target_closed_) return;
     target_closed_ = true;
     title_label_->SetText("DevTools — target closed");
+    if (debug_view_) debug_view_->SetText("");
     render_labels_[0]->SetText("target window is gone");
     for (std::size_t i = 1; i < render_labels_.size(); ++i) {
         render_labels_[i]->SetText("");
@@ -439,6 +602,12 @@ void DevToolsView::Layout(const Layout::Rect& bounds) {
     tabs_->Layout(Layout::Rect{bounds.x + gap, bounds.y + header_h,
                                w - gap * 2.0f, tabs_h});
 
+    const Layout::Rect content_rect{bounds.x + gap, content_y,
+                                    w - gap * 2.0f, content_h};
+    debug_scroll_->Layout(content_rect);
+    render_scroll_->Layout(content_rect);
+    stats_scroll_->Layout(content_rect);
+
     const float elem_w = w * 0.58f;
     const float det_x = bounds.x + elem_w + gap * 2.0f;
     const float det_w = w - elem_w - gap * 3.0f;
@@ -448,10 +617,6 @@ void DevToolsView::Layout(const Layout::Rect& bounds) {
     det_label_->Layout(Layout::Rect{det_x, content_y, det_w, 22.0f});
     det_scroll_->Layout(Layout::Rect{det_x, content_y + 26.0f, det_w,
                                      content_h - 26.0f});
-    render_scroll_->Layout(Layout::Rect{bounds.x + gap, content_y,
-                                        w - gap * 2.0f, content_h});
-    stats_scroll_->Layout(Layout::Rect{bounds.x + gap, content_y,
-                                       w - gap * 2.0f, content_h});
 }
 
 void DevToolsView::Layout(const Layout::Rect& bounds,
@@ -472,6 +637,10 @@ Core::Window& DevTools::GetWindow() const { return *impl_->window_; }
 
 std::shared_ptr<DevTools> DevTools::Inspect(Core::Window& target) {
     if (!target.GetContent()) return nullptr;
+    // Release graveyard entries from previously closed DevTools windows —
+    // safe here because Inspect runs on the caller's thread, never inside
+    // a window message callback.
+    Graveyard().clear();
     auto impl = std::make_unique<Impl>(target);
     auto devtools = std::shared_ptr<DevTools>(new DevTools(std::move(impl)));
     if (!devtools->impl_->Init()) return nullptr;

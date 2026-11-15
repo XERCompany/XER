@@ -14,11 +14,16 @@ namespace XER::UI::Debug {
  * Opens a separate top-level window attached to the same UI application
  * that visualizes another Window's widget tree:
  *
+ *  - Debug:    DebugMapUI XML dump of the whole widget tree (type,
+ *    geometry, state of every node) in a scrollable text view.
  *  - Elements: collapsible tree of every widget (type, bounds, state)
  *    with a detail pane showing the selected subtree.
  *  - Render:   live frame stats from Window::GetRenderStats() plus the
  *    last native paint error.
  *  - Stats:    aggregate counters collected from the widget tree.
+ *
+ * The DevTools window closes itself when the inspected window closes,
+ * so it never keeps the application alive as an orphan.
  *
  * Usage:
  *   auto devtools = Debug::DevTools::Inspect(*window);

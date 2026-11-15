@@ -28,6 +28,19 @@ const stats = win.GetRenderStats();
 const avgMs: number = stats.avgFrameMs;
 const fullFrame: boolean = stats.lastFrameFull;
 const hwnd: number = win.GetHWND();
+const devtools: boolean = win.OpenDevTools();
+
+const xmlDump: string = widget.DumpXml();
+const parsed = UI.parseXml('<Widget><Label text="hi"/></Widget>');
+if (parsed.ok && parsed.widget) {
+    win.SetContent(parsed.widget);
+    const warns: string[] = parsed.warnings;
+    const perr: string = parsed.error;
+    void warns; void perr;
+}
+const parsedFile = UI.parseXmlFile('ui/main.xml');
+void parsedFile;
+const tags: string = UI.xmlSupportedTags();
 
 class MyWidget extends UI.Widget {
     constructor() {

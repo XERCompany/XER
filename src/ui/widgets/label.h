@@ -13,6 +13,7 @@ public:
 
     void SetText(std::string text);
     const std::string& GetText() const;
+    std::string GetDebugText() const override { return text_; }
     void SetMuted(bool muted);
     bool IsMuted() const;
 

@@ -12,6 +12,7 @@ void InitUI(v8::Local<v8::Object> exports) {
     ui::RegisterKit(exports);
     ui::RegisterWindow(exports);
     ui::RegisterApplication(exports);
+    ui::RegisterXml(exports);
 }
 
 }  // namespace xer::addon

@@ -84,6 +84,14 @@ public:
     void SetOnClose(Callback callback);
     void SetOnResize(std::function<void(int, int)> callback);
 
+    // Additional close observers, invoked while the window is still
+    // alive during WM_CLOSE teardown (and once more if the Window object
+    // is destroyed without a prior WM_CLOSE). Used by DevTools to shut
+    // down inspector windows synchronously with their target.
+    // Returns a handle for RemoveCloseHook.
+    std::uint64_t AddCloseHook(Callback callback);
+    void RemoveCloseHook(std::uint64_t id);
+
     // Properties
     void SetTitle(const std::string& title);
     std::string GetTitle() const;

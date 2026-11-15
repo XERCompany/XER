@@ -25,6 +25,7 @@ public:
 
     void SetText(std::string text);
     const std::string& GetText() const;
+    std::string GetDebugText() const override { return text_; }
     void SetOnClick(std::function<void()> callback);
     void SetStyle(ButtonStyle style);
     // Busy state: draws a spinner inside the button, keeps its width and

@@ -4,13 +4,17 @@
 #include "../widgets/widget_tree.h"
 #include "../rendering/windows/direct2d_renderer.h"
 #include "../platform/windows/input_translator.h"
+#include "application.h"
 #include "helper/string_utils.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <stdexcept>
+#include <utility>
+#include <vector>
 
 #include <windowsx.h>
 #include <dwmapi.h>
@@ -21,6 +25,11 @@ namespace XER::UI::Core {
 
 // Static window class registration
 static const wchar_t* WINDOW_CLASS_NAME = L"XER_UI_WINDOW";
+
+// Number of live top-level windows. The app message loop quits only when
+// the last window is destroyed, so secondary windows (DevTools, dialogs)
+// can come and go without killing the application.
+static std::atomic<int> g_open_windows{0};
 
 // Window procedure - the Window instance is stored in GWLP_USERDATA so lookup
 // stays a single pointer read with no locking on the message path.
@@ -62,10 +71,34 @@ public:
         , window_(nullptr) {}
 
     ~Impl() {
+        // Run close hooks for destruction paths that bypass WM_CLOSE
+        // (e.g. the Window object being dropped while the app runs).
+        RunCloseHooks();
         if (hwnd_) {
             renderer_.reset();
             DestroyWindow(hwnd_);
         }
+    }
+
+    // Detaches and invokes every registered close hook. The vector is
+    // swapped out first so hooks may safely register/remove hooks.
+    void RunCloseHooks() {
+        auto hooks = std::exchange(close_hooks_, {});
+        for (auto& [id, cb] : hooks) {
+            (void)id;
+            if (cb) cb();
+        }
+    }
+
+    std::uint64_t AddCloseHook(Callback cb) {
+        const std::uint64_t id = next_hook_id_++;
+        close_hooks_.emplace_back(id, std::move(cb));
+        return id;
+    }
+
+    void RemoveCloseHook(std::uint64_t id) {
+        std::erase_if(close_hooks_,
+                      [id](const auto& entry) { return entry.first == id; });
     }
 
     bool Create(const std::string& title, int width, int height) {
@@ -119,6 +152,7 @@ public:
                                   &dark, sizeof(dark));
             ApplyCustomFrame();
             UpdateFrameTimer();
+            g_open_windows.fetch_add(1, std::memory_order_release);
         }
         return hwnd_ != nullptr;
     }
@@ -328,19 +362,32 @@ public:
                     return 0;
                 }
                 KillFrameTimer();
-                if (on_close_) {
-                    on_close_();
-                }
                 closed_ = true;
+                // Close hooks run while the window is still alive so
+                // observers (e.g. DevTools) can react synchronously.
+                RunCloseHooks();
                 renderer_.reset();
                 DestroyWindow(message_hwnd);
                 hwnd_ = nullptr;
+                // on_close_ runs last: it may drop the last shared_ptr
+                // owning this Window (e.g. DevTools registry cleanup),
+                // destroying Impl — no member access is allowed after it.
+                if (on_close_) {
+                    on_close_();
+                }
                 return 0;
 
-            case WM_DESTROY:
+            case WM_DESTROY: {
                 KillFrameTimer();
-                PostQuitMessage(0);
+                // Quit the message loop only when the last top-level
+                // window goes away; guard on IsRunning so windows torn
+                // down after Application::Shutdown don't repost WM_QUIT.
+                if (g_open_windows.fetch_sub(1, std::memory_order_acq_rel) <= 1 &&
+                    Application::Instance().IsRunning()) {
+                    PostQuitMessage(0);
+                }
                 return 0;
+            }
 
             case WM_TIMER:
                 if (wParam == kFrameTimerId) {
@@ -867,6 +914,8 @@ private:
     Callback on_close_;
     std::function<void(int, int)> on_resize_;
     std::function<void()> frame_callback_;
+    std::vector<std::pair<std::uint64_t, Callback>> close_hooks_;
+    std::uint64_t next_hook_id_ = 1;
     std::uint32_t frame_interval_ms_ = 33;
     bool frame_timer_active_ = false;
     static constexpr UINT_PTR kFrameTimerId = 0x4552; // 'ER'
@@ -949,6 +998,14 @@ void Window::SetOnClose(Callback callback) {
 
 void Window::SetOnResize(std::function<void(int, int)> callback) {
     impl_->SetOnResize(callback);
+}
+
+std::uint64_t Window::AddCloseHook(Callback callback) {
+    return impl_->AddCloseHook(std::move(callback));
+}
+
+void Window::RemoveCloseHook(std::uint64_t id) {
+    impl_->RemoveCloseHook(id);
 }
 
 void Window::Invalidate() {

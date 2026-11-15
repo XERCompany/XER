@@ -1,9 +1,12 @@
 #include "widget_tree.h"
 
 #include <algorithm>
+#include <format>
 #include <iterator>
+#include <stdexcept>
 #include <utility>
 
+#include "../debug/debug_internal.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widgets/tooltip.h"
@@ -313,7 +316,18 @@ void WidgetTree::RenderSubtree(
         }
     }
 
-    widget->Render(renderer, tokens);
+    try {
+        widget->Render(renderer, tokens);
+    } catch (const std::exception& error) {
+        // Tag the failure with the widget so render errors are
+        // self-diagnosing (type, bounds, debug text).
+        const auto& b = widget->GetBounds();
+        throw std::runtime_error(std::format(
+            "{} render failed at ({:.1f},{:.1f} {:.1f}x{:.1f}) "
+            "text='{}': {}",
+            Debug::internal::QualifiedName(*widget), b.x, b.y,
+            b.width, b.height, widget->GetDebugText(), error.what()));
+    }
     const bool clips = widget->clips_children_;
     if (clips) {
         renderer.PushClip(widget->bounds_);

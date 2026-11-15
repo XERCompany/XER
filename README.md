@@ -280,6 +280,10 @@ Input/render callbacks, clip stack, `DrawImageBgra` persistent texture.
 - `rendering/renderer.h` — renderer interface
 - `rendering/windows/direct2d_renderer.*` — D2D backend
 - `platform/windows/input_translator.*` — Win32 input → events
+- `debug/` — DevTools: `debug_map_ui.*` (widget tree → XML via libxml2),
+  `elements_view.*` (collapsible tree panel), `dev_tools.*` (inspector
+  window: Elements / Render / Stats tabs)
+- `xml/xml_ui.*` — declarative widget trees from XML markup (libxml2)
 - `backends/flux/` — Flux adapters: `FluxRenderer`, `FluxInputAdapter`
 - `demo/audio_player_demo.cc` — demo
 
@@ -919,6 +923,74 @@ primitives (`Button`, `Label`, `TextInput`, `Slider`, …), overlays
 (`Popover`, `DropdownMenu`, `HoverCard`, `Sheet`, `Drawer`, `Dialog`,
 `ContextMenu`, `Command`), data display (`Table`, `Chart`, `Calendar`,
 `Sidebar`), inputs (`Combobox`, `InputOTP`, `Select`, …).
+
+#### DevTools (`src/ui/debug/`)
+
+Two developer-facing inspectors built on the widget tree:
+
+- **`win.OpenDevTools()`** (addon) / `Debug::DevTools::Inspect(window)`
+  (C++) — opens a separate DevTools window with three tabs:
+  **Elements** (collapsible widget tree with type, bounds and state,
+  plus a detail pane showing the selected subtree), **Render** (live
+  `GetRenderStats()` frame timing, damage coverage, last paint error)
+  and **Stats** (widget counts by type, visibility/enabled totals,
+  max depth). Auto-refreshes ~1 s; the window lives until closed.
+- **`widget.DumpXml()`** (addon) / `Debug::DebugMapUI::Dump(widget)`
+  (C++) — serializes the widget subtree to an XML document via libxml2:
+  element per widget (`<Button type="XER::UI::Widgets::Button" …>`)
+  with geometry (`x/y/w/h`), state (`visible/shown/enabled/focused/
+  hovered/focusable/clips/dir`) and `text`/`tooltip` attributes
+  (`Widget::GetDebugText()` supplies caption text for Label/Button).
+  XML escaping and depth/cycle guards are built in.
+
+#### XML UI markup (`src/ui/xml/`)
+
+`Xml::Load` / `Xml::LoadFile` (C++) and `UI.parseXml` / `UI.parseXmlFile`
+(addon) instantiate widget trees from XML — "HTML, but XML": element
+names map to widget classes, attributes to properties, nested elements
+to children:
+
+```xml
+<ScrollArea><Form columns="2" gap="8">
+  <Label text="Name"/>
+  <TextInput placeholder="Enter name"/>
+  <Button text="Save" style="primary"/>
+</Form></ScrollArea>
+```
+
+Common attributes on every element: `x`/`y`/`width`/`height` (DIP
+bounds), `visible`, `enabled`, `tooltip`, `dir`. Containers interpret
+children specially (`Tabs` takes `Tab`, `Table` takes `Column`/`Row`,
+`ScrollArea` takes one content child, … — see `xml_ui.cc`).
+
+The loader never throws: it returns `{ ok, widget, warnings, error }`.
+Unknown elements are skipped with a `line N:` warning; an unknown or
+malformed root is fatal (`ok === false`). Check `warnings` for typos —
+`UI.xmlSupportedTags()` lists all ~50 supported tags for tooling.
+Requires libxml2 (vcpkg `libxml2` port; without it the API returns a
+descriptive `error` instead of a tree).
+
+---
+
+### OpenAI-compatible server (`xer.OpenAI`)
+
+`xer.OpenAI.Server` wraps `Content::OpenAI::OpenAIServer` — the local
+OpenAI-compat endpoint (`/v1/chat/completions`, `/v1/images/generations`,
+`/v1/audio/*`, `/v1/models`) backed by `content/network`'s HTTP stack.
+JS handlers register on the same router and are marshalled onto the
+Node main thread automatically:
+
+```js
+const srv = new xer.OpenAI.Server({ host: '127.0.0.1', port: 8080 });
+srv.on('/hello', (req, res) => res.json({ ok: true }));
+srv.on('POST', '/echo', (req, res) => res.json({ body: req.body }));
+srv.onHandleCompletion((req, res) => res.json({ choices: [] }));
+srv.onHandlerKey((req, verify) => verify(true));   // optional auth gate
+srv.start();
+```
+
+Request objects expose `method/path/query/headers/body/json/rawBody`;
+responses expose `status()/setHeader()/json()/send()/end()`.
 
 ---
 

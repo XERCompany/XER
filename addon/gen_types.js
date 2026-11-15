@@ -18,6 +18,12 @@ const OVERRIDES = {
   'UI.Window.IsVisible': '(): boolean',
   'UI.Window.IsWindowMaximized': '(): boolean',
   'UI.Window.HasCustomTitleBar': '(): boolean',
+  'UI.Window.OpenDevTools': '(): boolean',
+  'UI.Widget.DumpXml': '(): string',
+  'UI.Label.DumpXml': '(): string',
+  'UI.parseXml': '(markup: string): XmlLoadResult',
+  'UI.parseXmlFile': '(path: string): XmlLoadResult',
+  'UI.xmlSupportedTags': '(): string',
   'UI.Widget.IsVisible': '(): boolean',
   'UI.Widget.IsEnabled': '(): boolean',
   'UI.Widget.IsFocusable': '(): boolean',
@@ -149,6 +155,12 @@ ${body}
       avgFrameMs: number;
       lastDamagePct: number;
       lastFrameFull: boolean;
+    }
+    interface XmlLoadResult {
+      ok: boolean;
+      widget?: Widget;
+      warnings: string[];
+      error: string;
     }
   }
 

@@ -77,6 +77,31 @@ std::vector<std::string> DemangleComponents(const char* mangled) {
         if (!out.empty()) return out;
     }
 
+    // Readable form: "class XER::UI::Widgets::Card" (some toolchains
+    // return undecorated names). Split on "::" and reverse so the
+    // vector stays innermost-first like the other branches.
+    {
+        std::string_view t = s;
+        for (std::string_view p : {"class ", "struct ", "union ", "enum "}) {
+            if (t.substr(0, p.size()) == p) { t.remove_prefix(p.size()); break; }
+        }
+        if (t.find("::") != std::string_view::npos) {
+            std::vector<std::string> fwd;
+            std::size_t pos = 0;
+            while (pos <= t.size()) {
+                const std::size_t c = t.find("::", pos);
+                const std::size_t end =
+                    (c == std::string_view::npos) ? t.size() : c;
+                if (end > pos) fwd.emplace_back(t.substr(pos, end - pos));
+                if (c == std::string_view::npos) break;
+                pos = c + 2;
+            }
+            for (auto it = fwd.rbegin(); it != fwd.rend(); ++it)
+                out.push_back(*it);
+            return out;
+        }
+    }
+
     // Fallback: the raw name may still carry usable text.
     if (!s.empty()) out.emplace_back(std::string(s));
     return out;
@@ -144,7 +169,10 @@ void SetProp(xmlNodePtr node, const char* name, float v) {
 }
 
 void SetProp(xmlNodePtr node, const char* name, bool v) {
-    SetProp(node, name, v ? "true" : "false");
+    // Self-contained: a const char* argument would resolve back to this
+    // overload (pointer->bool beats pointer->std::string).
+    xmlNewProp(node, reinterpret_cast<const xmlChar*>(name),
+               reinterpret_cast<const xmlChar*>(v ? "true" : "false"));
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +224,10 @@ xmlNodePtr DumpNode(const Widgets::Widget& w, int depth, DumpCtx& ctx) {
     if (!w.GetTooltip().empty()) {
         SetProp(node, "tooltip", w.GetTooltip());
     }
+    const std::string debug_text = w.GetDebugText();
+    if (!debug_text.empty()) {
+        SetProp(node, "text", debug_text);
+    }
     const float content_h = w.GetContentHeight();
     if (content_h > 0.0f) SetProp(node, "contentH", content_h);
     if (w.GetTree() != nullptr) SetProp(node, "inTree", true);
@@ -244,12 +276,10 @@ std::string DebugMapUI::ToXml(const Widgets::Widget* override_root,
         return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                "<DebugMapUI nodes=\"0\"/>\n";
     }
-
     xmlDocPtr doc = xmlNewDoc(BAD_CAST "1.0");
     if (doc == nullptr) return {};
     xmlNodePtr wrapper = xmlNewNode(nullptr, BAD_CAST "DebugMapUI");
     xmlDocSetRootElement(doc, wrapper);
-
     DumpCtx ctx{options, {}, 0};
     if (xmlNodePtr body = DumpNode(*root, 0, ctx)) {
         xmlAddChild(wrapper, body);
