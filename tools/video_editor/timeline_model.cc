@@ -540,6 +540,21 @@ void DropInvalidTransitions(Project& project) {
     });
 }
 
+std::pair<double, double> ClipTransitionHandles(
+    const Project& project, const std::string& clip_id) {
+    double in_handle = 0.0;
+    double out_handle = 0.0;
+    for (const auto& transition : project.transitions) {
+        if (transition.to_clip == clip_id) {
+            in_handle = std::max(in_handle, transition.duration * 0.5);
+        }
+        if (transition.from_clip == clip_id) {
+            out_handle = std::max(out_handle, transition.duration * 0.5);
+        }
+    }
+    return {in_handle, out_handle};
+}
+
 Transform FitTransformToCanvas(int src_w, int src_h, int canvas_w,
                                int canvas_h) {
     Transform transform;

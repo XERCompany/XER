@@ -172,6 +172,34 @@ int XER_VideoEditor_RunModelTests() {
         // same cut duplicate rejected (pair-level, any type)
         XER_VE_CHECK(!AddTransition(p, "a", "b", Transition::Type::WipeLeft,
                                     1.0, &err));
+        // ClipTransitionHandles: the a->b cut at t=5 with D=1.0 gives
+        // each endpoint duration/2 = 0.5 s of handle on the cut side;
+        // clip "c" sits on the audio track (no transitions) -> {0,0}.
+        {
+            const auto ha = ClipTransitionHandles(p, "a");
+            const auto hb = ClipTransitionHandles(p, "b");
+            const auto hc = ClipTransitionHandles(p, "c");
+            const auto h_missing = ClipTransitionHandles(p, "nope");
+            XER_VE_CHECK(ha.first == 0.0 && ha.second == 0.5);
+            XER_VE_CHECK(hb.first == 0.5 && hb.second == 0.0);
+            XER_VE_CHECK(hc.first == 0.0 && hc.second == 0.0);
+            XER_VE_CHECK(h_missing.first == 0.0 &&
+                         h_missing.second == 0.0);
+        }
+        // A clip between TWO transitions gets both handles: "v" sits
+        // adjacent after "b" on the video track; b->v D=2.0 adds a
+        // 1.0 s out-handle to "b" and a 1.0 s in-handle to "v".
+        AddClip(p, MakeClip("v", 0, 10.0, 0.0, 5.0), bounds, &err);
+        XER_VE_CHECK(AddTransition(p, "b", "v",
+                                   Transition::Type::SlideLeft, 2.0,
+                                   &err));
+        {
+            const auto hb = ClipTransitionHandles(p, "b");
+            const auto hv = ClipTransitionHandles(p, "v");
+            XER_VE_CHECK(hb.first == 0.5 && hb.second == 1.0);
+            XER_VE_CHECK(hv.first == 1.0 && hv.second == 0.0);
+        }
+        XER_VE_CHECK(RemoveTransition(p, "b", "v"));
         // audio track clips can't take transitions (kind check): use two
         // adjacent audio clips
         AddClip(p, MakeClip("d", 1, 5.0, 0.0, 5.0, "D:/m/y.mp3"),

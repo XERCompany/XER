@@ -17,6 +17,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace XER::VideoEditor {
@@ -152,6 +153,20 @@ bool RemoveTransition(Project&, const std::string& from_clip,
 // endpoint, on different tracks, or non-adjacent (to.start ≈
 // from.end). Called by every mutating op and by project_store load.
 void DropInvalidTransitions(Project&);
+
+// Handle seconds a clip's contribution window extends past its
+// nominal [timeline_start, end) range: {in_handle, out_handle} where
+// in_handle = duration/2 of the transition where clip is `to`,
+// out_handle = duration/2 where clip is `from` (0 when none). Both
+// compositor (video) and audio_mixer (audio) consume this — the
+// transition window is centered on the cut and reaches into source
+// handles per the spec's handle model. `max` is used per side so a
+// degenerate project with two transitions sharing an endpoint (model
+// invariants prevent it, but loaded/self-healed projects could
+// theoretically contain it) gets the larger handle — the safer
+// monotone choice. Unknown clip ids return {0, 0}.
+std::pair<double, double> ClipTransitionHandles(
+    const Project& project, const std::string& clip_id);
 
 // Centered letterbox fit: scale = min(canvas_w/src_w,
 // canvas_h/src_h); offset = (canvas - src*scale)/2 as a fraction of
