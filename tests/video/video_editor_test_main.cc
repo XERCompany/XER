@@ -12,6 +12,8 @@ int XER_VideoEditor_RunStoreTests();
 int XER_VideoEditor_RunCatalogTests();
 int XER_VideoEditor_RunPosterTests();
 int XER_VideoEditor_RunDecoderTests();
+int XER_VideoEditor_RunCompositorTests();
+int XER_VideoEditor_RunMixerTests();
 
 int main() {
     XER_VideoEditor_RunModelTests();
@@ -20,6 +22,8 @@ int main() {
     XER_VideoEditor_RunCatalogTests();
     XER_VideoEditor_RunPosterTests();
     XER_VideoEditor_RunDecoderTests();
+    XER_VideoEditor_RunCompositorTests();
+    XER_VideoEditor_RunMixerTests();
     const int failures = XER::VideoEditor::Test::Failures();
     if (failures == 0) {
         std::printf("xer_video_editor_tests: all checks passed\n");
