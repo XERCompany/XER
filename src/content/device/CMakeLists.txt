@@ -47,5 +47,6 @@ else()
 endif()
 
 if(WIN32)
-    target_link_libraries(XER_ContentDevice PRIVATE ws2_32 crypt32 bcrypt)
+    target_link_libraries(XER_ContentDevice PRIVATE
+        ws2_32 crypt32 bcrypt ole32 bthprops setupapi wlanapi iphlpapi)
 endif()
