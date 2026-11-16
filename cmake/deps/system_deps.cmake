@@ -1,12 +1,14 @@
-# XER system dependency provider (Linux / macOS).
+# XER system dependency provider (Linux / macOS / Windows-MSYS2).
 #
-# Included from the root CMakeLists.txt on non-Windows platforms when
-# XER_USE_SYSTEM_DEPS=ON (the default there). It resolves the project's
-# dependencies from OS packages instead of vcpkg:
+# Included from the root CMakeLists.txt when XER_USE_SYSTEM_DEPS=ON — the
+# default on Linux/macOS, opt-in on Windows via the windows-clang-msys2
+# preset. It resolves the project's dependencies from OS packages instead
+# of vcpkg:
 #
-#   * "Normal" libraries come from apt (Ubuntu/Debian) or Homebrew (macOS)
-#     and are discovered through their own CMake package configs, pkg-config
-#     .pc files or find_library — whichever the distro ships.
+#   * "Normal" libraries come from apt (Ubuntu/Debian), Homebrew (macOS) or
+#     MSYS2 clang64 packages (Windows) and are discovered through their own
+#     CMake package configs, pkg-config .pc files or find_library —
+#     whichever the distro ships.
 #   * vcpkg-*named* dependencies (unofficial-*, libuv, re2, FFTW3f, MKL, ...)
 #     are satisfied by thin shim configs under cmake/deps/configs/ that map
 #     the vcpkg package/target names onto the system equivalents, so the
@@ -18,7 +20,9 @@
 #     only the heavy ports are installed there, everything else resolves
 #     from the system first.
 #
-# Windows never includes this file: the vcpkg toolchain covers everything.
+# Windows only includes this file when XER_USE_SYSTEM_DEPS=ON (the
+# windows-clang-msys2 preset); the default Windows presets keep using the
+# vcpkg toolchain, which covers everything.
 
 # ---------------------------------------------------------------------------
 # Search paths
@@ -45,6 +49,11 @@ if(NOT DEFINED XER_VCPKG_TRIPLET)
         else()
             set(XER_VCPKG_TRIPLET "x64-osx")
         endif()
+    elseif(WIN32)
+        # Windows system-deps builds target MSYS2 clang64; if a partial
+        # vcpkg is ever used here it must be a mingw triplet (the MSVC
+        # triplets are ABI-incompatible with clang64 packages).
+        set(XER_VCPKG_TRIPLET "x64-mingw-dynamic")
     else()
         set(XER_VCPKG_TRIPLET "x64-linux")
     endif()
