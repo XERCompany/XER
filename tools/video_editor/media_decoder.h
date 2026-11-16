@@ -25,7 +25,8 @@ namespace XER::VideoEditor {
 // Mirrors its contract exactly: NextFrame() decodes forward and
 // reports the decoded frame's media time via GetPositionSeconds()
 // (call it AFTER a successful NextFrame — Seek() presets it to the
-// requested target until the next frame lands); with the audio tap
+// clamped target until the next frame lands; when
+// GetDurationSeconds()==0 no clamp occurs); with the audio tap
 // enabled, NextFrame() also pumps demux packets into the tap queue —
 // audio-only files return false but still pump (bounded batch/call);
 // drive audio by alternating NextFrame()/ReadAudioFrames() until
@@ -56,11 +57,18 @@ public:
     // ---- audio tap (EnableAudioTap BEFORE Open) ----
     // EnableAudioTap must be called before Open() to route the
     // container's audio stream into the tap queue; calling it after
-    // Open has no effect on the already-probed session.
+    // Open has no effect on the already-probed session. Without the
+    // tap, HasAudio()/AudioDrained()/ReadAudioFrames() are inert —
+    // on audio-bearing files AudioDrained() may never become true,
+    // so never drain-loop without EnableAudioTap first.
     virtual void EnableAudioTap(bool enable = true) = 0;
     virtual bool HasAudio() const = 0;
     virtual double GetAudioStartSeconds() const = 0;
     virtual double GetAudioTimeBase() const = 0;  // s per pts tick; 0 none
+    // Returns false on null `out` or empty queue; fills up to
+    // `max_frames` queued AudioFrameInfo. Callers drop stale chunks by
+    // comparing pts*GetAudioTimeBase() against GetAudioEpoch changes —
+    // the epoch bumps on Seek() ONLY (not Close/Open).
     virtual bool ReadAudioFrames(
         std::vector<XER::Bridge::FFmpeg::AudioFrameInfo>* out,
         int max_frames) = 0;
