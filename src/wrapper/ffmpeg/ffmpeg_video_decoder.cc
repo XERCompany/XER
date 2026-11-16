@@ -560,7 +560,13 @@ bool VideoDecoder::Seek(double seconds) {
             p.video_stream_index >= 0 ? p.video_stream_index
                                       : p.audio_stream_index;
         if (fallback_stream >= 0) {
-            ret = av_seek_frame(p.fmt, fallback_stream, ts,
+            // av_seek_frame with a stream index expects the timestamp
+            // in that stream's time_base — rescale from AV_TIME_BASE
+            // (was: raw AV_TIME_BASE ts -> ~1e6/tb_ratio too far).
+            const AVStream* fs = p.fmt->streams[fallback_stream];
+            const int64_t stream_ts = av_rescale_q(
+                ts, AV_TIME_BASE_Q, fs->time_base);
+            ret = av_seek_frame(p.fmt, fallback_stream, stream_ts,
                                 AVSEEK_FLAG_BACKWARD);
         }
     }

@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -402,5 +403,71 @@ XER_UI_TEST(ffmpeg_decoder_audio_only_truncated_still_drains) {
 
     const long long total = DrainAudio(&decoder);
     XER_UI_EXPECT_TRUE(total > 0);  // ~60% of the 2 s fixture survives
+    XER_UI_EXPECT_TRUE(decoder.AudioDrained());
+}
+
+// Regression for the Seek fallback bug: av_seek_frame with a stream
+// index expects the STREAM time_base, but the fallback passed the
+// AV_TIME_BASE timestamp unchanged — on audio-only files the seek
+// landed at ~time_base_ratio x the target (e.g. 0.5 s requested could
+// seek to ~10 s in a 1/48000 stream). After the fix, the first decoded
+// audio frame's media time must be <= target + one AAC-ish frame and
+// the drained total must match a from-target decode.
+XER_UI_TEST(ffmpeg_decoder_audio_only_seek_position) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
+        return;
+    }
+    std::string err;
+    const auto path = (TempDir() / "seek_pos.wav").string();
+    // ~2 s stereo 48 kHz sine WAV (pcm_s16le — always available).
+    XER::Bridge::FFmpeg::EncodeAudioParams params;
+    params.output_path = path;
+    params.codec_name = "pcm_s16le";
+    params.sample_rate = kSampleRate;
+    params.channels = kChannels;
+    params.sample_format = "s16";
+    const auto frames = MakeSineFrames(kSampleRate * 2);
+    if (!XER::Bridge::FFmpeg::EncodeAudioFrames(params, frames, &err)) {
+        return;  // fixture unavailable — skip.
+    }
+
+    XER::Bridge::FFmpeg::VideoDecoder decoder;
+    decoder.EnableAudioTap();
+    XER_UI_EXPECT_TRUE(decoder.Open(path, &err));
+    if (!decoder.IsOpen()) return;
+
+    XER_UI_EXPECT_TRUE(decoder.Seek(1.0));
+    // First decoded frame's media time must be near 1.0 s — NOT near
+    // the end of file (a mis-scaled seek timestamp would land at EOF
+    // and drain ~0 samples).
+    std::vector<std::uint8_t> bgra;
+    int w = 0;
+    int h = 0;
+    decoder.NextFrame(bgra, w, h);  // pump
+    std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> chunk;
+    XER_UI_EXPECT_TRUE(decoder.ReadAudioFrames(&chunk, 4));
+    bool saw_near_target = false;
+    long long consumed = 0;  // samples already pulled for the pos check
+    for (const auto& f : chunk) {
+        consumed += f.sample_count;
+        const double tb = decoder.GetAudioTimeBase();
+        const std::int64_t pts =
+            f.best_effort_timestamp != std::numeric_limits<std::int64_t>::min()
+                ? f.best_effort_timestamp : f.pts;
+        if (tb > 0.0) {
+            const double media_t = pts * tb;
+            // Keyframe-less PCM seek lands within ~one packet of the
+            // target — require <= target + 0.1 s and >= 0 (never past
+            // EOF for a 2 s file).
+            if (media_t >= 0.9 && media_t <= 1.1) saw_near_target = true;
+        }
+    }
+    XER_UI_EXPECT_TRUE(saw_near_target);
+    // DrainAudio counts only frames decoded after the probe chunk — add
+    // the consumed samples back so `total` is the full post-seek decode.
+    const long long total = consumed + DrainAudio(&decoder);
+    // ~1 s of 48 kHz stereo remains after seeking to 1.0 s of 2 s.
+    XER_UI_EXPECT_TRUE(total > 40000);
+    XER_UI_EXPECT_TRUE(total < 70000);
     XER_UI_EXPECT_TRUE(decoder.AudioDrained());
 }

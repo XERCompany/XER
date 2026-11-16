@@ -112,18 +112,17 @@ int main() {
         video::Frame src = MakeSolidFrame(4, 4, 200, 100, 50, 255);
         video::MixSystem mix;
         XER_VIDEO_CHECK(mix.Mix(dst, src, video::MixMode::Alpha, 0.5f));
-        // Two backends, two self-consistent outputs for partial alpha:
-        //  - CPU fallback: dst*(1-a) + src*a with a = 0.5 → BGRA ≈ (105,60,40)
-        //  - Skia src_over (XER::Bridge::Skia::BlendSrcOver): blends in
-        //    premultiplied space without un-premultiplying, so src channels
-        //    pass through ~unattenuated → BGRA ≈ (205,110,65)
-        // Accept either (±4 LSB); a third, unexpected result still fails.
+        // Correct straight-alpha src-over (both backends must agree):
+        // dst=(B10,G20,R30,A255), src=(B200,G100,R50,A255), w=0.5 →
+        // a≈0.5 → out ≈ (105,60,40). The pre-fix Skia path blended in
+        // premultiplied space and produced ≈(205,110,65) — regression
+        // guard for the BlendSrcOver fix.
         const int mB = Channel(dst, 0, 0, 0);
         const int mG = Channel(dst, 0, 0, 1);
         const int mR = Channel(dst, 0, 0, 2);
-        XER_VIDEO_CHECK(std::abs(mB - 105) <= 4 || std::abs(mB - 205) <= 4);
-        XER_VIDEO_CHECK(std::abs(mG - 60)  <= 4 || std::abs(mG - 110) <= 4);
-        XER_VIDEO_CHECK(std::abs(mR - 40)  <= 4 || std::abs(mR - 65)  <= 4);
+        XER_VIDEO_CHECK(std::abs(mB - 105) <= 4);
+        XER_VIDEO_CHECK(std::abs(mG - 60)  <= 4);
+        XER_VIDEO_CHECK(std::abs(mR - 40)  <= 4);
 
         video::Frame a = MakeSolidFrame(4, 4, 0, 0, 0, 255);
         video::Frame b = MakeSolidFrame(4, 4, 100, 150, 200, 255);
@@ -133,10 +132,13 @@ int main() {
             XER_VIDEO_CHECK(blended->IsValid());
             XER_VIDEO_CHECK(blended->Width() == 4);
             XER_VIDEO_CHECK(blended->Height() == 4);
-            // CPU: black under 25% of b → B ≈ 25. Skia path: B = 100
-            // (same premultiplied-domain divergence as above).
+            // a=black under b at t=0.25 → ≈(B25,G38,R50); both backends.
             const int bB = Channel(*blended, 0, 0, 0);
-            XER_VIDEO_CHECK(std::abs(bB - 25) <= 4 || std::abs(bB - 100) <= 4);
+            const int bG = Channel(*blended, 0, 0, 1);
+            const int bR = Channel(*blended, 0, 0, 2);
+            XER_VIDEO_CHECK(std::abs(bB - 25) <= 4);
+            XER_VIDEO_CHECK(std::abs(bG - 38) <= 4);
+            XER_VIDEO_CHECK(std::abs(bR - 50) <= 4);
         }
     }
 

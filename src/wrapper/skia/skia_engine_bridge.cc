@@ -544,22 +544,28 @@ std::string NormalizeBlendModeName(const std::string& mode_name) {
 }
 
 uint32_t BlendSrcOver(uint32_t dst_rgba, uint32_t src_rgba) {
-    const uint8_t sr = GetR(src_rgba);
-    const uint8_t sg = GetG(src_rgba);
-    const uint8_t sb = GetB(src_rgba);
-    const uint8_t sa = GetA(src_rgba);
-
-    const uint8_t dr = GetR(dst_rgba);
-    const uint8_t dg = GetG(dst_rgba);
-    const uint8_t db = GetB(dst_rgba);
-    const uint8_t da = GetA(dst_rgba);
-
-    const int inv_sa = 255 - sa;
-    const uint8_t out_a = static_cast<uint8_t>(sa + ((da * inv_sa + 127) / 255));
-    const uint8_t out_r = static_cast<uint8_t>(sr + ((dr * inv_sa + 127) / 255));
-    const uint8_t out_g = static_cast<uint8_t>(sg + ((dg * inv_sa + 127) / 255));
-    const uint8_t out_b = static_cast<uint8_t>(sb + ((db * inv_sa + 127) / 255));
-    return PackRGBA(out_r, out_g, out_b, out_a);
+    // Straight-alpha src-over producing straight-alpha output:
+    //   oa = sa + da*(1-sa)
+    //   oc = (sc*sa + dc*da*(1-sa)) / oa        for c in {r,g,b}
+    // The previous implementation used the premultiplied-src formula on
+    // straight-alpha channels and let uint8 wrap past 255 — partial-alpha
+    // blends (MixMode::Alpha, transitions) were visibly wrong.
+    const float sa = GetA(src_rgba) / 255.0f;
+    const float da = GetA(dst_rgba) / 255.0f;
+    const float oa = sa + da * (1.0f - sa);
+    if (oa <= 1e-6f) {
+        return 0;
+    }
+    auto channel = [&](int shift) -> uint8_t {
+        const float sv = ((src_rgba >> shift) & 0xFF) / 255.0f;
+        const float dv = ((dst_rgba >> shift) & 0xFF) / 255.0f;
+        const float v = (sv * sa + dv * da * (1.0f - sa)) / oa;
+        return static_cast<uint8_t>(std::clamp(v * 255.0f + 0.5f,
+                                               0.0f, 255.0f));
+    };
+    const uint8_t out_a = static_cast<uint8_t>(
+        std::clamp(oa * 255.0f + 0.5f, 0.0f, 255.0f));
+    return PackRGBA(channel(24), channel(16), channel(8), out_a);
 }
 
 uint32_t BlendModeApply(const std::string& mode_name, uint32_t dst_rgba, uint32_t src_rgba) {
