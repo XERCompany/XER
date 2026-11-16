@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include "video_editor_test_util.h"
 #include "timeline_model.h"
@@ -262,6 +263,98 @@ int XER_VideoEditor_RunModelTests() {
         XER_VE_CHECK(std::abs(SnapTime(p, 0, 4.9, 0.5, -1.0) - 5.0) < 1e-9);
         XER_VE_CHECK(SnapTime(p, 0, 4.9, 0.05, -1.0) == 4.9);  // too far
         XER_VE_CHECK(std::abs(SnapTime(p, 0, 3.4, 0.5, 3.3) - 3.3) < 1e-9);
+    }
+
+    // -- non-finite input rejection (NaN / ±Inf) ----------------------
+    {
+        const double nan = std::numeric_limits<double>::quiet_NaN();
+        const double inf = std::numeric_limits<double>::infinity();
+        const float fnan = std::numeric_limits<float>::quiet_NaN();
+        const float finf = std::numeric_limits<float>::infinity();
+        Project p = MakeProject();
+        std::string err;
+        MediaBounds bounds{100.0, true};
+
+        // AddClip: ValidateClipPlacement guards every double field —
+        // NaN defeats all relational checks, so it must be rejected
+        // explicitly or it would also evade overlap detection forever.
+        XER_VE_CHECK(!AddClip(p, MakeClip("n1", 0, nan, 0.0, 5.0), bounds,
+                              &err));
+        XER_VE_CHECK(!AddClip(p, MakeClip("n2", 0, 0.0, nan, 5.0), bounds,
+                              &err));
+        XER_VE_CHECK(!AddClip(p, MakeClip("n3", 0, 0.0, 0.0, nan), bounds,
+                              &err));
+        XER_VE_CHECK(!AddClip(p, MakeClip("i1", 0, inf, 0.0, 5.0), bounds,
+                              &err));
+        XER_VE_CHECK(!AddClip(p, MakeClip("i2", 0, 0.0, inf, 5.0), bounds,
+                              &err));
+        XER_VE_CHECK(!AddClip(p, MakeClip("i3", 0, 0.0, 0.0, inf), bounds,
+                              &err));
+        XER_VE_CHECK(!AddClip(p, MakeClip("i4", 0, -inf, 0.0, 5.0),
+                              bounds, &err));
+        XER_VE_CHECK(p.clips.empty());   // nothing committed
+
+        // Finite fields whose sum overflows to inf are rejected too —
+        // with unknown media bounds there is no upper clamp otherwise.
+        XER_VE_CHECK(!AddClip(p, MakeClip("big", 0, 0.0, 1e308, 1e308),
+                              MediaBounds{0.0, true}, &err));
+        XER_VE_CHECK(p.clips.empty());
+
+        // Presentation fields persist through Save — same contract.
+        Clip fx = MakeClip("fx", 0, 0.0, 0.0, 5.0);
+        fx.gain_db = fnan;
+        XER_VE_CHECK(!AddClip(p, fx, bounds, &err));
+        fx.gain_db = 0.0f;
+        fx.fade_in = inf;
+        XER_VE_CHECK(!AddClip(p, fx, bounds, &err));
+        fx.fade_in = 0.0;
+        fx.transform.opacity = fnan;
+        XER_VE_CHECK(!AddClip(p, fx, bounds, &err));
+        fx.transform = Transform{};
+        fx.effects.push_back(ClipEffect{"blur", {finf}});
+        XER_VE_CHECK(!AddClip(p, fx, bounds, &err));
+        XER_VE_CHECK(p.clips.empty());
+
+        // The remaining mutators inherit the guard (directly or via
+        // ValidateClipPlacement).
+        XER_VE_CHECK(AddClip(p, MakeClip("m", 0, 0.0, 0.0, 5.0), bounds,
+                             &err));
+        XER_VE_CHECK(AddClip(p, MakeClip("m2", 0, 5.0, 0.0, 5.0), bounds,
+                             &err));
+        XER_VE_CHECK(!MoveClip(p, "m", nan, bounds, &err));
+        XER_VE_CHECK(!MoveClip(p, "m", inf, bounds, &err));
+        XER_VE_CHECK(!TrimClip(p, "m", TrimEdge::In, nan, bounds, &err));
+        XER_VE_CHECK(!TrimClip(p, "m", TrimEdge::Out, nan, bounds, &err));
+        XER_VE_CHECK(!TrimClip(p, "m", TrimEdge::In, inf, bounds, &err));
+        XER_VE_CHECK(!TrimClip(p, "m", TrimEdge::Out, -inf, bounds, &err));
+        XER_VE_CHECK(!SplitClip(p, "m", nan, "s1", &err));
+        XER_VE_CHECK(!SplitClip(p, "m", inf, "s1", &err));
+        XER_VE_CHECK(FindClip(p, "s1") == nullptr);
+        XER_VE_CHECK(p.clips.size() == 2);   // unsplit, unmoved
+        XER_VE_CHECK(!AddTransition(p, "m", "m2",
+                                    Transition::Type::Crossfade, nan,
+                                    &err));
+        XER_VE_CHECK(!AddTransition(p, "m", "m2",
+                                    Transition::Type::Crossfade, inf,
+                                    &err));
+        XER_VE_CHECK(!AddTransition(p, "m", "m2",
+                                    Transition::Type::Crossfade, -inf,
+                                    &err));
+        XER_VE_CHECK(p.transitions.empty());
+
+        // ReplaceClip re-validates the whole replacement clip — a
+        // non-finite field is rejected and the stored clip is untouched.
+        Clip repl = *FindClip(p, "m");
+        repl.transform.rotation_deg = fnan;
+        XER_VE_CHECK(!ReplaceClip(p, "m", repl, bounds, &err));
+        repl = *FindClip(p, "m");
+        repl.gain_db = finf;
+        XER_VE_CHECK(!ReplaceClip(p, "m", repl, bounds, &err));
+        const Clip* m = FindClip(p, "m");
+        XER_VE_CHECK(m->transform.rotation_deg == 0.0f &&
+                     m->gain_db == 0.0f);
+        XER_VE_CHECK(std::isfinite(m->timeline_start) &&
+                     std::isfinite(m->duration));
     }
     return 0;
 }

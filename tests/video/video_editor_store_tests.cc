@@ -494,5 +494,30 @@ int XER_VideoEditor_RunStoreTests() {
                      loaded.fps_num == 30 && loaded.fps_den == 1);
     }
 
+    // -- 8. deeply nested JSON: parser stack-limit must not throw -------
+    {
+        // jsoncpp throws Json::RuntimeError once readValue() recursion
+        // exceeds its stack limit (~1000 levels). Load's contract is
+        // never-throw — a crafted .xerproj must come back as a normal
+        // false + error, not an exception escaping to a noexcept UI
+        // caller. (If Load ever regresses to throwing, this check
+        // crashes the suite instead of failing cleanly.)
+        const std::string deep_path = dir + "/deep_nesting.xerproj";
+        std::string deep;
+        deep.reserve(2000 * 6);
+        for (int i = 0; i < 2000; ++i) {
+            deep += "{\"a\":";
+        }
+        deep += "1";
+        for (int i = 0; i < 2000; ++i) {
+            deep += "}";
+        }
+        XER_VE_CHECK(WriteTextFile(deep_path, deep));
+        Project out;
+        std::string lerr;
+        XER_VE_CHECK(!ProjectStore::Load(deep_path, &out, &lerr));
+        XER_VE_CHECK(!lerr.empty());
+    }
+
     return 0;
 }

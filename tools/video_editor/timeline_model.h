@@ -102,9 +102,13 @@ double SnapTime(const Project&, int track_index, double candidate,
 // ---- mutations (validate-then-mutate; transactional; error_out) ----
 // Shared placement validation: track index valid; has_video==false
 // requires TrackKind::Audio; id non-empty/unique (unless it equals
-// exclude_clip_id); duration > kMinClipDuration; start >= 0;
-// in_point >= 0; in_point + duration <= media duration when known;
-// no overlap on the track excluding exclude_clip_id.
+// exclude_clip_id); every double/float field finite — timeline_start,
+// in_point, duration, gain_db, fade_in/out, transform, effect params
+// (NaN defeats all relational checks and would persist as NaN/Infinity
+// literals that ProjectStore::Save emits but its own Load rejects);
+// duration > kMinClipDuration; start >= 0; in_point >= 0;
+// in_point + duration <= media duration when known; no overlap on the
+// track excluding exclude_clip_id.
 bool ValidateClipPlacement(const Project&, const Clip&, const MediaBounds&,
                            const std::string& exclude_clip_id,
                            std::string* error_out);

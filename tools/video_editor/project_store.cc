@@ -678,7 +678,20 @@ bool ProjectStore::Load(const std::string& utf8_path,
     Json::CharReaderBuilder reader_builder;
     Json::Value root;
     std::string parse_errors;
-    if (!Json::parseFromStream(reader_builder, in, &root, &parse_errors)) {
+    bool parsed = false;
+    try {
+        parsed = Json::parseFromStream(reader_builder, in, &root,
+                                       &parse_errors);
+    } catch (...) {
+        // jsoncpp throws Json::RuntimeError when the input exceeds the
+        // parser stack limit (deeply nested JSON ~>1000 levels). The
+        // store contract is never-throw — a crafted .xerproj must not
+        // escape as an exception into a noexcept UI caller.
+        return Fail(error_out,
+                    "invalid JSON in " + utf8_path +
+                        ": document too deeply nested or malformed");
+    }
+    if (!parsed) {
         return Fail(error_out, "invalid JSON in " + utf8_path + ": " +
                                  parse_errors);
     }

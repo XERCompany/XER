@@ -27,6 +27,13 @@ public:
     // internally with std::error_code, never throws.
     static bool Save(const Project& project, const std::string& utf8_path,
                      std::string* error_out = nullptr);
+    // Replaces project_out's ENTIRE contents — canvas, tracks, clips,
+    // transitions. If that Project is bound to a TimelineHistory, the
+    // caller MUST call history.Clear() before the load (or rebuild
+    // history afterwards): pending commands capture slices of
+    // apply-time state, so Undo() after a load would restore pre-load
+    // clips into the new project. Undo history is not migrated
+    // across loads.
     static bool Load(const std::string& utf8_path, Project* project_out,
                      std::string* error_out = nullptr);
 };

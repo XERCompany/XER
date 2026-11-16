@@ -193,19 +193,64 @@ bool ValidateClipPlacement(const Project& project, const Clip& clip,
         FindClip(project, clip.id) != nullptr) {
         return Fail(error_out, "clip id already exists");
     }
+    // Every comparison below is relational — NaN makes them all false,
+    // so finiteness is checked explicitly first. Non-finite values
+    // would also persist: Save emits NaN/Infinity literals that Load's
+    // strict parser rejects, leaving a .xerproj the model cannot
+    // reload.
+    if (!std::isfinite(clip.duration)) {
+        return Fail(error_out, "clip duration must be finite");
+    }
     if (clip.duration <= kMinClipDuration) {
         return Fail(error_out, "clip duration is too small");
+    }
+    if (!std::isfinite(clip.timeline_start)) {
+        return Fail(error_out, "clip start must be finite");
     }
     if (clip.timeline_start < 0.0) {
         return Fail(error_out, "clip start is before zero");
     }
+    if (!std::isfinite(clip.in_point)) {
+        return Fail(error_out, "clip in-point must be finite");
+    }
     if (clip.in_point < 0.0) {
         return Fail(error_out, "clip in-point is before zero");
+    }
+    // Finite fields can still overflow to ±inf when summed — reject
+    // extents that are not representable for the same reason.
+    if (!std::isfinite(clip.in_point + clip.duration) ||
+        !std::isfinite(ClipEndSeconds(clip))) {
+        return Fail(error_out, "clip extent is not representable");
     }
     if (bounds.duration_seconds > 0.0 &&
         clip.in_point + clip.duration >
             bounds.duration_seconds + kEpsilon) {
         return Fail(error_out, "clip exceeds the media duration");
+    }
+    // Presentation fields ride along in the same Clip and persist
+    // through Save — they get the same finiteness contract so a
+    // ReplaceClip/AddClip cannot smuggle NaN into a .xerproj either.
+    if (!std::isfinite(clip.gain_db)) {
+        return Fail(error_out, "clip gain must be finite");
+    }
+    if (!std::isfinite(clip.fade_in) || !std::isfinite(clip.fade_out)) {
+        return Fail(error_out, "clip fades must be finite");
+    }
+    const Transform& transform = clip.transform;
+    if (!std::isfinite(transform.offset_x) ||
+        !std::isfinite(transform.offset_y) ||
+        !std::isfinite(transform.scale) ||
+        !std::isfinite(transform.rotation_deg) ||
+        !std::isfinite(transform.opacity)) {
+        return Fail(error_out, "clip transform must be finite");
+    }
+    for (const ClipEffect& effect : clip.effects) {
+        for (const float param : effect.params) {
+            if (!std::isfinite(param)) {
+                return Fail(error_out,
+                            "clip effect params must be finite");
+            }
+        }
     }
     for (const auto& other : project.clips) {
         if (other.id == exclude_clip_id || other.track != clip.track) {
@@ -305,6 +350,11 @@ bool TrimClip(Project& project, const std::string& clip_id, TrimEdge edge,
     if (clip == nullptr) {
         return Fail(error_out, "clip not found");
     }
+    // NaN new_point would poison new_in/new_out/new_start — every
+    // relational check below is false for NaN, so reject up front.
+    if (!std::isfinite(new_point)) {
+        return Fail(error_out, "trim point must be finite");
+    }
     const double old_in = clip->in_point;
     const double old_out = old_in + clip->duration;
     double new_in = old_in;
@@ -350,6 +400,11 @@ bool SplitClip(Project& project, const std::string& clip_id,
     if (clip == nullptr) {
         return Fail(error_out, "clip not found");
     }
+    // NaN split_timeline_t defeats the range check below (every
+    // comparison is false) and would commit two NaN clips.
+    if (!std::isfinite(split_timeline_t)) {
+        return Fail(error_out, "split point must be finite");
+    }
     const double start = clip->timeline_start;
     const double end = ClipEndSeconds(*clip);
     if (split_timeline_t <= start + kMinClipDuration ||
@@ -372,6 +427,18 @@ bool SplitClip(Project& project, const std::string& clip_id,
     second.timeline_start = split_timeline_t;
     second.duration = end - split_timeline_t;
     second.fade_in = 0.0;   // fade_out stays on the second half
+
+    // Validate the split-off half before committing anything (the
+    // model's validate-then-mutate contract). The source clip still
+    // occupies the same span, so it is excluded from the overlap scan
+    // via exclude_clip_id; both halves are strict subsets of its
+    // already-validated extent. MediaBounds{} disables the
+    // media-duration clamp — SplitClip has no bounds parameter and the
+    // halves inherit the source clip's in/out bounds by construction.
+    if (!ValidateClipPlacement(project, second, MediaBounds{}, clip_id,
+                               error_out)) {
+        return false;
+    }
 
     clip->duration = split_timeline_t - start;
     clip->fade_out = 0.0;   // fade_in stays on the first half
@@ -427,6 +494,12 @@ bool AddTransition(Project& project, const std::string& from_clip,
         project.tracks[static_cast<std::size_t>(from->track)].kind !=
             TrackKind::Video) {
         return Fail(error_out, "transitions require a video track");
+    }
+    // NaN duration defeats `<= 0` (comparison is false) and would also
+    // make the adjacency check below pass vacuously — reject non-finite
+    // explicitly, consistent with the positive-duration rule.
+    if (!std::isfinite(duration)) {
+        return Fail(error_out, "transition duration must be finite");
     }
     if (duration <= 0.0) {
         return Fail(error_out, "transition duration must be positive");

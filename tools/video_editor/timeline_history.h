@@ -35,6 +35,13 @@ public:
 // Undo/redo stack. All edits made through TimelineHistory are
 // reversible; a drag/trim gesture is grouped via BeginMacro/EndMacro
 // into a single undo step.
+//
+// Load contract: this history is bound to ONE Project& and its pending
+// commands capture slices of apply-time state. Loading a different
+// project into that Project (e.g. ProjectStore::Load) while commands
+// are pending lets Undo() restore pre-load clips into the new project
+// — call Clear() before the load (or reconstruct history after it).
+// Undo history is not migrated across loads.
 class TimelineHistory {
 public:
     explicit TimelineHistory(Project& project, std::size_t max_depth = 50);
@@ -49,6 +56,8 @@ public:
     bool CanRedo() const { return !redo_.empty(); }
     std::string UndoLabel() const;
     std::string RedoLabel() const;
+    // Drops undo/redo/macro state. REQUIRED before loading a different
+    // project into the bound Project& — see the class comment.
     void Clear();
 
     // Groups subsequent commands into one undo step. Nestable: ending
