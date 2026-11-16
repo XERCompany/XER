@@ -89,6 +89,7 @@ add_executable(XER_VideoEditor_Tests
     video/video_editor_store_tests.cc
     video/video_editor_catalog_tests.cc
     video/video_editor_poster_tests.cc
+    video/video_editor_decoder_tests.cc
 )
 target_link_libraries(XER_VideoEditor_Tests PRIVATE XER_VideoEditor_Core)
 target_compile_features(XER_VideoEditor_Tests PRIVATE cxx_std_23)
