@@ -176,6 +176,10 @@ struct AudioFrameInfo {
 	std::vector<uint8_t> data;
 };
 
+using AudioFrameStreamProvider =
+    std::function<bool(std::size_t frame_index, AudioFrameInfo* out_frame,
+                       std::string* error)>;
+
 // FFmpeg log verbosity (maps to av_log levels). Libraries stay quiet by
 // default at AV_LOG_INFO; tools can raise/lower per process.
 enum class LogLevel {
@@ -234,6 +238,20 @@ bool EncodeVideoFrameStream(const EncodeVideoParams& params,
 bool EncodeAudioFrames(const EncodeAudioParams& params,
                        const std::vector<AudioFrameInfo>& frames,
                        std::string* out_error);
+// Streams provider-produced PCM chunks into a single audio-only
+// container (params.output_path authoritative). frame_count chunks are
+// requested with frame_index in [0, frame_count) exactly once; chunk 0
+// is fetched during encoder setup to fix the input format, and EVERY
+// chunk must share sample_rate/channels/sample_format/planar (the
+// encoder rejects inconsistent streams, same contract as
+// EncodeAudioFrames). frame_count == 0 is an error; a false provider
+// return aborts with error_out set. On failure a partial file may
+// remain at output_path — callers doing atomic output must encode to a
+// temp path (ExportEngine does).
+bool EncodeAudioStream(const EncodeAudioParams& params,
+                       std::size_t frame_count,
+                       const AudioFrameStreamProvider& provider,
+                       std::string* error_out);
 struct EncodeAudioVideoParams {
     EncodeVideoParams video;
     EncodeAudioParams audio;
@@ -246,10 +264,6 @@ struct EncodeAudioVideoParams {
 // ignored. video_frame_count == 0 is an error; audio_frame_count == 0
 // produces a video-only file. Providers are invoked with frame_index in
 // [0, count) exactly once; a false return aborts with error_out set.
-using AudioFrameStreamProvider =
-    std::function<bool(std::size_t frame_index, AudioFrameInfo* out_frame,
-                       std::string* error)>;
-
 bool EncodeAudioVideoStream(
     const EncodeAudioVideoParams& params,
     std::size_t video_frame_count, const VideoFrameProvider& video_provider,

@@ -2253,6 +2253,115 @@ bool EncodeAudioFrames(const EncodeAudioParams& params,
 #endif
 }
 
+bool EncodeAudioStream(const EncodeAudioParams& params,
+                       std::size_t frame_count,
+                       const AudioFrameStreamProvider& provider,
+                       std::string* out_error) {
+#if ENGINE_HAS_FFMPEG_BRIDGE
+    if (frame_count == 0u) {
+        SetError(out_error, "EncodeAudioStream requires at least one audio frame");
+        return false;
+    }
+    if (!provider) {
+        SetError(out_error, "EncodeAudioStream requires an audio frame provider");
+        return false;
+    }
+    if (params.output_path.empty()) {
+        SetError(out_error, "EncodeAudioStream requires an output path");
+        return false;
+    }
+
+    AudioFrameInfo first_frame;
+    if (!provider(0u, &first_frame, out_error)) {
+        return false;
+    }
+    if (first_frame.sample_rate <= 0 || first_frame.channels <= 0 ||
+        first_frame.sample_count <= 0) {
+        SetError(out_error, "EncodeAudioStream received invalid first audio frame");
+        return false;
+    }
+
+    AVFormatContext* output_context = nullptr;
+    int result = avformat_alloc_output_context2(&output_context, nullptr,
+                                              nullptr,
+                                              params.output_path.c_str());
+    if (result < 0 || output_context == nullptr) {
+        SetError(out_error, "avformat_alloc_output_context2 failed: " +
+                            ErrorString(result));
+        return false;
+    }
+
+    AudioEncodeState encode_state;
+    AVPacket* packet = nullptr;
+    bool success = SetupAudioEncoder(output_context, params, first_frame,
+                                     &encode_state, out_error);
+    if (success) {
+        success = OpenOutputAndWriteHeader(output_context,
+                                           params.output_path, out_error);
+    }
+    const bool header_written = success;
+    if (success) {
+        packet = av_packet_alloc();
+        if (packet == nullptr) {
+            success = false;
+            SetError(out_error, "av_packet_alloc failed");
+        }
+    }
+    if (success) {
+        for (std::size_t i = 0; i < frame_count; ++i) {
+            AudioFrameInfo input;
+            if (i == 0u) {
+                input = std::move(first_frame);
+            } else if (!provider(i, &input, out_error)) {
+                success = false;
+                break;
+            }
+            if (!FeedAudioEncoderFrame(output_context, &encode_state, input,
+                                       packet, out_error)) {
+                success = false;
+                break;
+            }
+        }
+        if (success &&
+            !FlushAudioEncoderFifo(output_context, &encode_state, packet,
+                                   out_error)) {
+            success = false;
+        }
+        if (success &&
+            !FlushEncoderCodec(output_context, encode_state.codec_context,
+                               encode_state.stream, packet, out_error)) {
+            success = false;
+        }
+    }
+
+    if (header_written) {
+        const int trailer_result = av_write_trailer(output_context);
+        if (success && trailer_result < 0) {
+            success = false;
+            SetError(out_error, "av_write_trailer failed: " +
+                                ErrorString(trailer_result));
+        }
+    }
+
+    if (packet != nullptr) {
+        av_packet_free(&packet);
+    }
+    if ((output_context->oformat->flags & AVFMT_NOFILE) == 0 &&
+        output_context->pb != nullptr) {
+        avio_closep(&output_context->pb);
+    }
+    ReleaseAudioEncodeState(&encode_state);
+    avformat_free_context(output_context);
+    return success;
+#else
+    (void)params;
+    (void)frame_count;
+    (void)provider;
+    SetError(out_error, "FFmpeg bridge unavailable");
+    return false;
+#endif
+}
+
 bool EncodeAudioVideoStream(const EncodeAudioVideoParams& params,
                             std::size_t video_frame_count,
                             const VideoFrameProvider& video_provider,

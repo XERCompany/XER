@@ -23,6 +23,7 @@ constexpr int kFrames = 90;        // 3 s @ 30 fps
 constexpr int kFps = 30;
 constexpr int kRate = 48000;
 constexpr int kAudioChunks = 141;  // ceil(3 s * 48000 / 1024) = 140.6
+constexpr std::size_t kAudioOnlyChunks = 71;  // ~1.5 s: 71*1024/48000
 
 std::filesystem::path TempDir() {
     const auto dir = std::filesystem::temp_directory_path() /
@@ -228,4 +229,139 @@ XER_UI_TEST(ffmpeg_encode_audio_video_stream_provider_error) {
     };
     XER_UI_EXPECT_FALSE(XER::Bridge::FFmpeg::EncodeAudioVideoStream(
         params, kFrames, bad_video, kAudioChunks, AudioProvider, &err));
+}
+
+// ---- EncodeAudioStream (audio-only streaming encode) ----
+// ~1.5 s stereo 48 kHz sine in <=1024-sample chunks through the new
+// streaming API -> ProbeMedia shows exactly one AUDIO stream; decode a
+// few frames via DecodeAudioFrames and check sample_rate/channels.
+XER_UI_TEST(ffmpeg_encode_audio_stream_muxes_audio_only) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
+        return;
+    }
+    const auto path = (TempDir() / "audio_only.mp4").string();
+    std::string err;
+
+    XER::Bridge::FFmpeg::EncodeAudioParams params;
+    params.output_path = path;
+    params.codec_name = "aac";
+    params.sample_rate = kRate;
+    params.channels = 2;
+    params.sample_format = "s16";
+    params.bit_rate = 128000;
+
+    // 71 chunks x 1024 samples = 72704 samples ~= 1.51 s @ 48 kHz.
+    // The counting wrapper pins the provider contract: indices
+    // [0, frame_count) are each requested exactly once.
+    std::vector<int> seen(kAudioOnlyChunks, 0);
+    auto provider = [&](std::size_t index,
+                        XER::Bridge::FFmpeg::AudioFrameInfo* out,
+                        std::string* perr) {
+        if (index >= kAudioOnlyChunks) {
+            *perr = "provider index out of range";
+            return false;
+        }
+        ++seen[index];
+        return AudioProvider(index, out, perr);
+    };
+
+    XER_UI_EXPECT_TRUE(XER::Bridge::FFmpeg::EncodeAudioStream(
+        params, kAudioOnlyChunks, provider, &err));
+    for (std::size_t i = 0; i < kAudioOnlyChunks; ++i) {
+        XER_UI_EXPECT_EQ(seen[i], 1);
+    }
+
+    XER::Bridge::FFmpeg::MediaInfo info;
+    XER_UI_EXPECT_TRUE(XER::Bridge::FFmpeg::ProbeMedia(path, &info, &err));
+    XER_UI_EXPECT_EQ(info.stream_count, 1);
+    XER_UI_EXPECT_EQ(info.streams.front().media_type, "audio");
+
+    std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> aframes;
+    XER_UI_EXPECT_TRUE(XER::Bridge::FFmpeg::DecodeAudioFrames(
+        path, info.streams.front().index, 8, &aframes, &err));
+    XER_UI_EXPECT_TRUE(!aframes.empty());
+    if (!aframes.empty()) {
+        XER_UI_EXPECT_EQ(aframes.front().sample_rate, kRate);
+        XER_UI_EXPECT_EQ(aframes.front().channels, 2);
+        XER_UI_EXPECT_TRUE(aframes.front().sample_count > 0);
+    }
+}
+
+// frame_count == 0 -> false + non-empty error (mirrors the
+// video_frame_count==0 contract of EncodeAudioVideoStream).
+XER_UI_TEST(ffmpeg_encode_audio_stream_rejects_empty) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
+        return;
+    }
+    const auto path = (TempDir() / "audio_empty.mp4").string();
+    std::string err;
+    XER::Bridge::FFmpeg::EncodeAudioParams params;
+    params.output_path = path;
+    params.codec_name = "aac";
+    params.sample_rate = kRate;
+    params.channels = 2;
+    params.sample_format = "s16";
+    XER_UI_EXPECT_FALSE(XER::Bridge::FFmpeg::EncodeAudioStream(
+        params, 0, AudioProvider, &err));
+    XER_UI_EXPECT_TRUE(!err.empty());
+}
+
+// Provider dies at chunk 3 -> false; file may exist partially (do NOT
+// assert absence — atomic cleanup is the caller's job).
+XER_UI_TEST(ffmpeg_encode_audio_stream_provider_error) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
+        return;
+    }
+    const auto path = (TempDir() / "audio_fail.mp4").string();
+    std::string err;
+    XER::Bridge::FFmpeg::EncodeAudioParams params;
+    params.output_path = path;
+    params.codec_name = "aac";
+    params.sample_rate = kRate;
+    params.channels = 2;
+    params.sample_format = "s16";
+
+    auto bad_audio = [](std::size_t index,
+                        XER::Bridge::FFmpeg::AudioFrameInfo* out,
+                        std::string* perr) {
+        if (index >= 3) {
+            *perr = "injected provider failure";
+            return false;
+        }
+        return AudioProvider(index, out, perr);
+    };
+    XER_UI_EXPECT_FALSE(XER::Bridge::FFmpeg::EncodeAudioStream(
+        params, kAudioOnlyChunks, bad_audio, &err));
+    XER_UI_EXPECT_TRUE(!err.empty());
+}
+
+// Consistency: chunk 5 reports a different sample_rate -> false
+// ("requires a consistent audio stream" via FeedAudioEncoderFrame).
+XER_UI_TEST(ffmpeg_encode_audio_stream_rejects_inconsistent_format) {
+    if (!XER::Bridge::FFmpeg::IsAvailable()) {
+        return;
+    }
+    const auto path = (TempDir() / "audio_inconsistent.mp4").string();
+    std::string err;
+    XER::Bridge::FFmpeg::EncodeAudioParams params;
+    params.output_path = path;
+    params.codec_name = "aac";
+    params.sample_rate = kRate;
+    params.channels = 2;
+    params.sample_format = "s16";
+
+    auto inconsistent = [](std::size_t index,
+                           XER::Bridge::FFmpeg::AudioFrameInfo* out,
+                           std::string* perr) {
+        if (!AudioProvider(index, out, perr)) {
+            return false;
+        }
+        if (index == 5) {
+            out->sample_rate = kRate + 1;
+        }
+        return true;
+    };
+    XER_UI_EXPECT_FALSE(XER::Bridge::FFmpeg::EncodeAudioStream(
+        params, kAudioOnlyChunks, inconsistent, &err));
+    XER_UI_EXPECT_TRUE(err.find("consistent") != std::string::npos);
 }
