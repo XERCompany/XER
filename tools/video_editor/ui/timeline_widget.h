@@ -76,6 +76,9 @@ public:
         std::function<void(const std::string&, double)> on_slide_clip;
         // Rate stretch (R): new playback_rate (Speed/Duration).
         std::function<void(const std::string&, double)> on_rate_stretch;
+        // Clip junction context menu (right-click on a clip's
+        // out-edge): add a transition to the next clip on the track.
+        std::function<void(const std::string&)> on_add_transition;
         // Marker lane: (time_seconds, name — "" lets the shell pick a
         // default label) / remove the marker at `time`.
         std::function<void(double, const std::string&)> on_add_marker;
@@ -121,6 +124,12 @@ public:
     ToolId ActiveTool() const { return active_tool_; }
     const char* ActiveToolName() const;
     const char* ActiveToolCursorHint() const;
+
+    // Context menu for the point under the cursor — the shell calls this
+    // from its tree-level context-menu handler when a right-click falls
+    // through. Hit-tests marker lane / ruler / track headers / clips and
+    // shows the matching menu. Returns true when a menu was shown.
+    bool ShowContextMenu(XER::UI::Layout::Point position);
 
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
@@ -261,6 +270,10 @@ private:
     bool snap_enabled_ = true;
     double px_per_second_ = 72.0;
     double scroll_seconds_ = 0.0;
+    // Vertical track scroll in pixels (Alt+wheel) — lets many-track
+    // projects scroll under the fixed ruler/marker lanes.
+    float track_scroll_ = 0.0f;
+    bool ruler_scrub_ = false;   // ruler press-drag emits on_seek
 
     // Tool model — one instance per ToolId, active_tool_ picks the
     // receiver of pointer events.

@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "presets": [
+    {
+      "name": "Mobile 540p",
+      "video_codec": "libx264",
+      "video_bit_rate": 2000000,
+      "audio_codec": "aac",
+      "audio_bit_rate": 128000,
+      "resolution_scale": 0.28125
+    },
+    {
+      "name": "Archive Master",
+      "video_codec": "libx264",
+      "video_bit_rate": 40000000,
+      "audio_codec": "aac",
+      "audio_bit_rate": 320000,
+      "resolution_scale": 1.0
+    }
+  ]
+}

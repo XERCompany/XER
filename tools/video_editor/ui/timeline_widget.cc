@@ -13,6 +13,7 @@
 #include "media_catalog.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "widgets/context_menu.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
@@ -77,10 +78,25 @@ std::vector<Color> ClipPalette() {
 }
 
 // The three header toggle buttons: 0 = mute, 1 = hidden/eye, 2 = lock.
+// Kind gate mirroring ShowContextMenu's track menu: mute is an
+// audio-track concept (Track::muted is ignored on video), the
+// hidden/eye a video-track one (Track::hidden is ignored on audio);
+// lock applies to both.
+bool HeaderButtonApplies(const Track& track, int button) {
+    switch (button) {
+        case 0: return track.kind == TrackKind::Audio;   // M = muted
+        case 1: return track.kind == TrackKind::Video;   // H = hidden
+        default: return true;                            // L = locked
+    }
+}
+
 Rect HeaderButtonRect(const Rect& label_rect, int button) {
-    return Rect{label_rect.x + label_rect.width - 4.0f -
+    // Chips sit on their own strip at the header's bottom edge with
+    // consistent margins (right 8 / bottom 6 / 4px gaps via step 20).
+    return Rect{label_rect.x + label_rect.width - 8.0f -
                     (3 - button) * kHeaderButtonStep,
-                label_rect.y + label_rect.height - 22.0f,
+                label_rect.y + label_rect.height -
+                    kHeaderButtonSize - 6.0f,
                 kHeaderButtonSize, kHeaderButtonSize};
 }
 
@@ -219,7 +235,7 @@ int TimelineWidget::TrackAtY(float y) const {
 Rect TimelineWidget::TrackRect(int index) const {
     return Rect{timeline_area_.x + kHeaderWidth,
                 timeline_area_.y + kMarkerLaneHeight + kRulerHeight +
-                    index * (kTrackHeight + kTrackGap),
+                    index * (kTrackHeight + kTrackGap) - track_scroll_,
                 std::max(0.0f, timeline_area_.width - kHeaderWidth),
                 kTrackHeight};
 }
@@ -277,10 +293,19 @@ TimelineWidget::HeaderHit TimelineWidget::HitHeaderButton(
         p.x >= timeline_area_.x + kHeaderWidth) {
         return {};
     }
+    const float ruler_bottom =
+        timeline_area_.y + kMarkerLaneHeight + kRulerHeight;
     for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
         const Rect label = HeaderRect(static_cast<int>(i));
-        if (p.y < label.y || p.y >= label.y + label.height) continue;
+        // Scrolled-off / partially-hidden headers aren't clickable.
+        if (label.y < ruler_bottom || p.y < label.y ||
+            p.y >= label.y + label.height) {
+            continue;
+        }
         for (int button = 0; button < 3; ++button) {
+            if (!HeaderButtonApplies(project_->tracks[i], button)) {
+                continue;
+            }
             if (HeaderButtonRect(label, button).Contains(p)) {
                 return HeaderHit{static_cast<int>(i), button};
             }
@@ -558,6 +583,13 @@ void TimelineWidget::Render(
     RenderWorkArea(renderer, tokens, bounds);
 
     const auto palette = ClipPalette();
+    // Track rows + headers scroll vertically under the fixed
+    // ruler/marker lanes — clip the whole band (header column and
+    // track area alike) to the region below the ruler.
+    renderer.PushClip({timeline_area_.x, ruler_bottom,
+                       timeline_area_.width,
+                       std::max(0.0f, bounds.y + bounds.height -
+                                          ruler_bottom)});
     for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
         const Track& track = project_->tracks[i];
         const Rect row = TrackRect(static_cast<int>(i));
@@ -566,12 +598,31 @@ void TimelineWidget::Render(
                           tokens.radius_medium);
         renderer.StrokeRect(label_rect, tokens.border, 1.0f,
                             tokens.radius_medium);
+        // Colored type badge: accent fill for video, green for audio —
+        // the CapCut/Premiere convention of an instant kind glyph.
+        const bool is_video = track.kind == TrackKind::Video;
+        const Color badge_color =
+            is_video ? tokens.accent
+                     : Color{0.18f, 0.62f, 0.36f, 1.0f};
+        const Rect badge{label_rect.x + 5.0f,
+                         label_rect.y +
+                             (label_rect.height - 18.0f) * 0.5f,
+                         18.0f, 18.0f};
+        renderer.FillRect(badge, badge_color, 4.0f);
+        renderer.DrawText(is_video ? "V" : "A",
+                          Rect{badge.x, badge.y + 1.0f, badge.width,
+                               badge.height},
+                          {tokens.accent_foreground,
+                           tokens.font_small, 700});
         const std::string name =
-            (track.kind == TrackKind::Video ? "V" : "A") +
             std::to_string(i + 1) + "  " + track.name;
-        renderer.DrawText(name, label_rect,
-                          {track.locked ? tokens.muted : tokens.foreground,
-                           tokens.font_small, 600});
+        renderer.DrawText(
+            name,
+            Rect{label_rect.x + badge.width + 10.0f, label_rect.y,
+                 label_rect.width - badge.width - 14.0f,
+                 label_rect.height},
+            {track.locked ? tokens.muted : tokens.foreground,
+             tokens.font_small, 600});
         std::string flags;
         if (track.muted) flags += "muted ";
         if (track.hidden) flags += "hidden ";
@@ -595,6 +646,7 @@ void TimelineWidget::Render(
         renderer.StrokeRect(row, tokens.border, 1.0f,
                             tokens.radius_small);
     }
+    renderer.PopClip();   // rows/header scroll band
 
     // Clips render inside the track-area viewport only — a clip that
     // starts before the scroll offset must not bleed under the header
@@ -778,6 +830,7 @@ void TimelineWidget::RenderHeaderButtons(
     const Rect& label_rect) {
     const bool active[3] = {track.muted, track.hidden, track.locked};
     for (int button = 0; button < 3; ++button) {
+        if (!HeaderButtonApplies(track, button)) continue;
         const Rect r = HeaderButtonRect(label_rect, button);
         const Color fill = active[button]
             ? (button == 2 ? tokens.danger : tokens.accent)
@@ -890,6 +943,24 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     if (!IsEnabled() || project_ == nullptr) return false;
 
     if (event.type == Event::Type::MouseWheel) {
+        if (event.is_alt) {
+            // Alt+wheel scrolls the track stack vertically — plain
+            // wheel stays zoom, Shift+wheel stays horizontal scroll.
+            const float ruler_h = kMarkerLaneHeight + kRulerHeight;
+            const float viewport =
+                std::max(0.0f, timeline_area_.height - ruler_h);
+            const float content =
+                project_->tracks.size() * (kTrackHeight + kTrackGap);
+            const float max_scroll =
+                std::max(0.0f, content - viewport);
+            track_scroll_ = std::clamp(
+                track_scroll_ -
+                    event.wheel_delta / 120.0f *
+                        (kTrackHeight + kTrackGap),
+                0.0f, max_scroll);
+            Invalidate();
+            return true;
+        }
         const double anchor = TimeAtX(event.position.x);
         if (event.is_shift) {
             scroll_seconds_ -= event.wheel_delta / 120.0;
@@ -920,16 +991,10 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
 
     if (event.type == Event::Type::MouseDown &&
         event.mouse_button == MouseButton::Right) {
-        // Right-click a marker diamond to remove it.
-        if (in_lane) {
-            if (const Marker* marker = MarkerAtX(p.x)) {
-                if (hooks_.on_remove_marker) {
-                    hooks_.on_remove_marker(marker->time);
-                }
-            }
-            return true;
-        }
-        return in_top_strip;
+        // Right-clicks fall through to the shell's tree-level
+        // context-menu handler, which calls back into
+        // ShowContextMenu() for geometry-aware items.
+        return false;
     }
 
     if (event.type == Event::Type::MouseDown &&
@@ -940,6 +1005,9 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         if (const HeaderHit hit = HitHeaderButton(p);
             hit.track >= 0 && hit.button >= 0) {
             const Track& track = project_->tracks[hit.track];
+            if (!HeaderButtonApplies(track, hit.button)) {
+                return true;   // dead chip — swallow, never toggles
+            }
             if (hit.button == 0 && hooks_.on_track_mute) {
                 hooks_.on_track_mute(hit.track, !track.muted);
             } else if (hit.button == 1 && hooks_.on_track_hidden) {
@@ -988,6 +1056,7 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 }
             }
             if (hooks_.on_seek) hooks_.on_seek(t);
+            ruler_scrub_ = true;   // keep scrubbing while held
             return true;
         }
 
@@ -1001,6 +1070,10 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     }
 
     if (event.type == Event::Type::MouseMove) {
+        if (ruler_scrub_) {
+            if (hooks_.on_seek) hooks_.on_seek(TimeAtX(p.x));
+            return true;
+        }
         if (work_drag_ != WorkDrag::None) {
             const double t = SnapCandidate(TimeAtX(p.x), -1);
             switch (work_drag_) {
@@ -1038,6 +1111,10 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
 
     if (event.type == Event::Type::MouseUp &&
         event.mouse_button == MouseButton::Left) {
+        if (ruler_scrub_) {
+            ruler_scrub_ = false;
+            return true;
+        }
         if (work_drag_ != WorkDrag::None) {
             work_drag_ = WorkDrag::None;
             const double in =
@@ -1208,5 +1285,191 @@ void TimelineWidget::ZoomToRange(double t0, double t1) {
 }
 
 void TimelineWidget::Tick(double dt_seconds) { (void)dt_seconds; }
+
+bool TimelineWidget::ShowContextMenu(
+    const XER::UI::Layout::Point p) {
+    namespace Widgets = XER::UI::Widgets;
+    if (project_ == nullptr || !timeline_area_.Contains(p)) return false;
+
+    std::vector<Widgets::ContextMenu::Item> items;
+    const float lane_bottom = timeline_area_.y + kMarkerLaneHeight;
+    const float ruler_bottom = lane_bottom + kRulerHeight;
+    const bool in_header = p.x < timeline_area_.x + kHeaderWidth;
+    const double t = TimeAtX(p.x);
+
+    if (in_header && p.y >= ruler_bottom) {
+        // Track header: state toggles for the track under the cursor.
+        const int track = TrackAtY(p.y);
+        if (track < 0 ||
+            track >= static_cast<int>(project_->tracks.size())) {
+            return false;
+        }
+        const Track& tr = project_->tracks[track];
+        if (tr.kind == TrackKind::Audio) {
+            Widgets::ContextMenu::Item mute;
+            mute.label = "Mute Track";
+            mute.checked = tr.muted;
+            mute.action = [this, track, on = !tr.muted] {
+                if (hooks_.on_track_mute) {
+                    hooks_.on_track_mute(track, on);
+                }
+            };
+            items.push_back(std::move(mute));
+        } else {
+            Widgets::ContextMenu::Item hide;
+            hide.label = "Hide Track";
+            hide.checked = tr.hidden;
+            hide.action = [this, track, on = !tr.hidden] {
+                if (hooks_.on_track_hidden) {
+                    hooks_.on_track_hidden(track, on);
+                }
+            };
+            items.push_back(std::move(hide));
+        }
+        Widgets::ContextMenu::Item lock;
+        lock.label = "Lock Track";
+        lock.checked = tr.locked;
+        lock.action = [this, track, on = !tr.locked] {
+            if (hooks_.on_track_locked) {
+                hooks_.on_track_locked(track, on);
+            }
+        };
+        items.push_back(std::move(lock));
+    } else if (in_header) {
+        return false;  // ruler/header corner box — no menu
+    } else if (p.y < lane_bottom) {
+        // Marker lane: clear the marker under the cursor or add one.
+        if (const Marker* marker = MarkerAtX(p.x); marker != nullptr) {
+            Widgets::ContextMenu::Item clear;
+            clear.label = "Clear Marker";
+            clear.danger = true;
+            clear.action = [this, tm = marker->time] {
+                if (hooks_.on_remove_marker) hooks_.on_remove_marker(tm);
+            };
+            items.push_back(std::move(clear));
+        }
+        Widgets::ContextMenu::Item add;
+        add.label = "Add Marker Here";
+        add.separator_before = !items.empty();
+        add.action = [this, t] {
+            if (hooks_.on_add_marker) hooks_.on_add_marker(t, "");
+        };
+        items.push_back(std::move(add));
+    } else if (p.y < ruler_bottom) {
+        // Ruler / work-area bar.
+        Widgets::ContextMenu::Item add;
+        add.label = "Add Marker Here";
+        add.action = [this, t] {
+            if (hooks_.on_add_marker) hooks_.on_add_marker(t, "");
+        };
+        Widgets::ContextMenu::Item win;
+        win.label = "Set Work Area In";
+        win.separator_before = true;
+        win.action = [this, t] {
+            if (hooks_.on_set_work_area) {
+                hooks_.on_set_work_area(t, project_->work_out);
+            }
+        };
+        Widgets::ContextMenu::Item wout;
+        wout.label = "Set Work Area Out";
+        wout.action = [this, t] {
+            if (hooks_.on_set_work_area) {
+                hooks_.on_set_work_area(project_->work_in, t);
+            }
+        };
+        Widgets::ContextMenu::Item reset;
+        reset.label = "Reset Work Area";
+        reset.enabled =
+            project_->work_out > project_->work_in;
+        reset.action = [this] {
+            if (hooks_.on_set_work_area) hooks_.on_set_work_area(0.0, 0.0);
+        };
+        items.push_back(std::move(add));
+        items.push_back(std::move(win));
+        items.push_back(std::move(wout));
+        items.push_back(std::move(reset));
+    } else {
+        // Track lanes: clip menu or an "add marker" fallback on empty space.
+        const ClipHit hit = HitClip(p);
+        if (hit.clip == nullptr) {
+            Widgets::ContextMenu::Item add;
+            add.label = "Add Marker at Cursor";
+            add.action = [this, t] {
+                if (hooks_.on_add_marker) hooks_.on_add_marker(t, "");
+            };
+            items.push_back(std::move(add));
+        } else {
+            const Clip& clip = *hit.clip;
+            if (hooks_.on_select_clip) hooks_.on_select_clip(clip.id);
+            const std::string id = clip.id;
+
+            Widgets::ContextMenu::Item split;
+            split.label = "Split at Cursor";
+            split.shortcut = "C";
+            split.enabled = t > clip.timeline_start &&
+                            t < clip.timeline_start + clip.duration;
+            split.action = [this, id, t] {
+                if (hooks_.on_split_clip) hooks_.on_split_clip(id, t);
+            };
+            items.push_back(std::move(split));
+
+            // Junction pick: right-click on a clip's out-edge offers
+            // the crossfade to the next clip (the shell resolves the
+            // adjacent clip, same as Inspector's "Add Transition").
+            if (hit.part == ClipPart::EdgeOut) {
+                Widgets::ContextMenu::Item trans;
+                trans.label = "Add Crossfade";
+                trans.action = [this, id] {
+                    if (hooks_.on_add_transition) {
+                        hooks_.on_add_transition(id);
+                    }
+                };
+                items.push_back(std::move(trans));
+            }
+
+            if (!clip.is_adjustment) {
+                for (const double rate : {0.5, 1.0, 2.0}) {
+                    Widgets::ContextMenu::Item speed;
+                    char buf[32];
+                    std::snprintf(buf, sizeof(buf), "Speed %g%%",
+                                  rate * 100.0);
+                    speed.label = buf;
+                    speed.checked =
+                        std::abs(clip.playback_rate - rate) < 0.001;
+                    speed.action = [this, id, rate] {
+                        if (hooks_.on_rate_stretch) {
+                            hooks_.on_rate_stretch(id, rate);
+                        }
+                    };
+                    if (rate == 0.5) speed.separator_before = true;
+                    items.push_back(std::move(speed));
+                }
+            }
+
+            Widgets::ContextMenu::Item del;
+            del.label = "Delete";
+            del.shortcut = "Del";
+            del.danger = true;
+            del.separator_before = true;
+            del.action = [this, id] {
+                if (hooks_.on_delete_clip) hooks_.on_delete_clip(id);
+            };
+            Widgets::ContextMenu::Item ripple;
+            ripple.label = "Ripple Delete";
+            ripple.danger = true;
+            ripple.action = [this, id] {
+                if (hooks_.on_ripple_delete) hooks_.on_ripple_delete(id);
+            };
+            items.push_back(std::move(del));
+            items.push_back(std::move(ripple));
+        }
+    }
+
+    if (items.empty()) return false;
+    auto menu = Widgets::ContextMenu::Create(std::move(items));
+    menu->SetAnchor(p);
+    ShowOverlay(menu);
+    return true;
+}
 
 }  // namespace XER::VideoEditor::Ui

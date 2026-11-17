@@ -19,7 +19,11 @@ namespace {
 // ~30 ms of device buffering: short enough for editor-preview latency,
 // long enough that a ~21 ms (1024-frame @ 48 kHz) mixer chunk fits per
 // Write.
-constexpr REFERENCE_TIME kBufferDuration100ns = 300000;
+// 200 ms device buffer — enough cushion that a slow compositor tick
+// (heavy effects, first-frame decode) drains buffered audio instead of
+// underrunning. The pump tops the buffer up with a ~120 ms lead, so
+// Write() almost never blocks on a full buffer and never stalls video.
+constexpr REFERENCE_TIME kBufferDuration100ns = 2000000;
 // Cap for one WaitForSingleObject on the buffer event. The event is
 // signaled every device period while the stream runs, so a timeout
 // means the endpoint stalled — shed the chunk instead of hanging the

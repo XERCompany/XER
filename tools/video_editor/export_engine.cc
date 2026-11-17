@@ -69,6 +69,12 @@ bool ExportEngine::Start(
     if (project.fps_num <= 0 || project.fps_den <= 0) {
         return FailStart(error_out, "invalid project fps");
     }
+    if (!std::isfinite(options.resolution_scale) ||
+        options.resolution_scale <= 0.0 ||
+        project.width * options.resolution_scale < 2.0 ||
+        project.height * options.resolution_scale < 2.0) {
+        return FailStart(error_out, "invalid resolution_scale");
+    }
     if (!FFmpeg::IsAvailable()) {
         return FailStart(error_out, "FFmpeg bridge unavailable");
     }
@@ -137,11 +143,41 @@ bool ExportEngine::Start(
             has_audio = true;
         }
     }
+    // Audio-only convention (export_preset.cc "Audio only AAC"): an
+    // empty video_codec means "mux audio only" — the clip probes still
+    // describe the source media, but the export must not init the
+    // compositor or feed the video encoder.
+    if (options.video_codec.empty()) {
+        has_video = false;
+    }
     if (!has_video && !has_audio) {
         return FailStart(error_out, "project has no exportable media");
     }
 
     project_ = project;
+    // resolution_scale resizes the output canvas. Transform offsets
+    // and masks are canvas-relative, so only the canvas dims and the
+    // pixel-absolute transform.scale (plus Scale keyframes, which
+    // multiply it) need adjusting — the snapshot makes it export-local.
+    if (options.resolution_scale != 1.0) {
+        const double s = options.resolution_scale;
+        const auto even_dim = [s](int dim) {
+            return std::max(2, static_cast<int>(std::lround(dim * s)) &
+                                   ~1);
+        };
+        project_.width = even_dim(project.width);
+        project_.height = even_dim(project.height);
+        for (auto& clip : project_.clips) {
+            clip.transform.scale =
+                static_cast<float>(clip.transform.scale * s);
+            const auto keys = clip.keyframes.find(KeyProp::Scale);
+            if (keys != clip.keyframes.end()) {
+                for (auto& key : keys->second) {
+                    key.value = static_cast<float>(key.value * s);
+                }
+            }
+        }
+    }
     options_ = options;
     options_.output_path = output_path;
     progress_cb_ = std::move(progress);
@@ -248,6 +284,7 @@ void ExportEngine::RunImpl() {
         return;
     }
     AudioMixerOptions mixer_options;
+    mixer_options.master_gain_db = options_.master_gain_db;
     if (has_audio_ &&
         !mixer_.Init(project_, mixer_options, &error)) {
         FinishError(error.empty() ? "audio mixer init failed" : error);

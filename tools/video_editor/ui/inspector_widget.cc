@@ -44,6 +44,7 @@ const std::set<std::string>& KnownEffects() {
         "sharpen",            "edge_detect", "emboss",
         "vignette",           "chromatic_aberration",
         "pixelate",           "oil_paint",   "motion_blur",
+        "chroma_key",         "color_balance", "posterize",
     };
     return types;
 }
@@ -169,6 +170,7 @@ void InspectorWidget::EnsureChildren() {
     effects_input_ = std::make_shared<Widgets::TextInput>("");
     effects_input_->SetPlaceholder(
         "Effects: gaussian_blur:8; brightness_contrast:12,1.2");
+    effects_input_->SetOnSubmit([this] { Apply(); });
     apply_btn_ = std::make_shared<Widgets::Button>(
         "Apply", Widgets::ButtonStyle::Primary);
     apply_btn_->SetOnClick([this] { Apply(); });
@@ -210,6 +212,7 @@ void InspectorWidget::EnsureChildren() {
 
     link_input_ = std::make_shared<Widgets::TextInput>("");
     link_input_->SetPlaceholder("Link group (empty = unlinked)");
+    link_input_->SetOnSubmit([this] { Apply(); });
 
     const std::pair<Field, const char*> fields[] = {
         {Field::Start, "Start (s)"},
@@ -728,16 +731,31 @@ bool InspectorWidget::ParseEffects(std::vector<ClipEffect>* effects,
     for (const std::string& raw_item : Split(text, ';')) {
         const std::string item = Trim(raw_item);
         if (item.empty()) continue;
-        const std::size_t colon = item.find(':');
+        // "plugin:<id>" / "ocio:<name>" carry a ':' inside the type
+        // itself — for those, the params boundary is the ':' AFTER the
+        // prefix (FormatEffects writes "type:p1,p2", so an id with a
+        // trailing ":p1,p2" still splits cleanly).
+        std::size_t colon = item.find(':');
+        if (item.rfind("plugin:", 0) == 0) {
+            colon = item.find(':', 7);
+        } else if (item.rfind("ocio:", 0) == 0) {
+            colon = item.find(':', 5);
+        }
         ClipEffect effect;
         effect.type = Trim(item.substr(0, colon));
-        if (effect.type.empty() || KnownEffects().count(effect.type) == 0) {
+        const bool prefixed =
+            effect.type.rfind("plugin:", 0) == 0 ||
+            effect.type.rfind("ocio:", 0) == 0;
+        if (effect.type.empty() ||
+            (!prefixed && KnownEffects().count(effect.type) == 0)) {
             if (error_out != nullptr) {
                 *error_out = "Unknown effect '" + effect.type + "'";
             }
             return false;
         }
         if (colon != std::string::npos) {
+            bool params_ok = true;
+            std::vector<float> parsed;
             for (const std::string& raw_param :
                  Split(item.substr(colon + 1), ',')) {
                 const std::string param = Trim(raw_param);
@@ -747,13 +765,25 @@ bool InspectorWidget::ParseEffects(std::vector<ClipEffect>* effects,
                 const float value = std::strtof(param.c_str(), &end);
                 if (end == param.c_str() || *end != '\0' ||
                     errno == ERANGE || !std::isfinite(value)) {
-                    if (error_out != nullptr) {
-                        *error_out = "Invalid parameter for '" +
-                                     effect.type + "'";
-                    }
-                    return false;
+                    params_ok = false;
+                    break;
                 }
-                effect.params.push_back(value);
+                parsed.push_back(value);
+            }
+            if (!params_ok && prefixed) {
+                // e.g. "ocio:filmic:look" — the colon was part of the
+                // name, not a params boundary. Prefixed types are
+                // opaque pass-throughs: keep the whole token as the
+                // type so FormatEffects round-trips it verbatim.
+                effect.type = Trim(item);
+            } else if (!params_ok) {
+                if (error_out != nullptr) {
+                    *error_out = "Invalid parameter for '" +
+                                 effect.type + "'";
+                }
+                return false;
+            } else {
+                effect.params = std::move(parsed);
             }
         }
         effects->push_back(std::move(effect));
@@ -878,10 +908,15 @@ void InspectorWidget::Apply() {
     }
 
     clip_ = next;
-    if (rate_changed && hooks_.on_set_rate) {
+    // One undo step per Apply: ReplaceClip already carries the new
+    // rate + the pre-adjusted duration, so firing on_set_rate as well
+    // would stack a second history op for the same edit. on_set_rate
+    // stays as the fallback for a host with no ApplyClip hook wired.
+    if (hooks_.on_apply_clip) {
+        hooks_.on_apply_clip(next);
+    } else if (rate_changed && hooks_.on_set_rate) {
         hooks_.on_set_rate(clip_.id, rate);
     }
-    if (hooks_.on_apply_clip) hooks_.on_apply_clip(next);
     if (key_editor_ != nullptr) key_editor_->SetClip(&clip_, active_prop_);
     // clip_ changed under the rows (effects may have been dropped,
     // masks re-validated) — resync for immediate consistency; the app's
@@ -964,6 +999,37 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     place(source_, 22.0f);
     gap(10.0f);
 
+    // ---- details (CapCut-style clip summary, read-only) ----
+    if (has_clip_) {
+        label("DETAILS", 18.0f, 0.0f, true);
+        const char* kind = "media";
+        if (clip_.is_adjustment) kind = "adjustment";
+        else if (clip_.source.kind == SourceKind::ColorMatte)
+            kind = "color matte";
+        else if (clip_.source.kind == SourceKind::ColorBars)
+            kind = "color bars";
+        else if (clip_.source.kind == SourceKind::Text)
+            kind = "title";
+        char line[160];
+        std::snprintf(line, sizeof(line), "type      %s", kind);
+        label(line, 16.0f);
+        std::snprintf(line, sizeof(line), "rate      %.2fx",
+                      clip_.playback_rate);
+        label(line, 16.0f);
+        std::snprintf(line, sizeof(line), "blend     %s",
+                      BlendModeName(clip_.blend_mode));
+        label(line, 16.0f);
+        int key_count = 0;
+        for (const auto& [prop, keys] : clip_.keyframes) {
+            key_count += static_cast<int>(keys.size());
+        }
+        std::snprintf(line, sizeof(line), "masks %d   fx %d   keys %d",
+                      static_cast<int>(clip_.masks.size()),
+                      static_cast<int>(clip_.effects.size()), key_count);
+        label(line, 16.0f);
+        gap(6.0f);
+    }
+
     const auto input_row = [&](Field field) {
         for (Row& row : rows_) {
             if (row.field == field) {
@@ -991,8 +1057,9 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     input_row(Field::Opacity);
     // Blend mode: drawn label + combobox inline.
     drawn_.push_back({{inner_x, y, 90.0f, 30.0f}, "Blend", false});
-    blend_combo_->Layout({inner_x + 92.0f, y, inner_w - 92.0f, 30.0f},
-                         tokens);
+    blend_combo_->Layout(
+        {inner_x + 92.0f, y, std::max(40.0f, inner_w - 92.0f), 30.0f},
+        tokens);
     y += 36.0f;
     gap(4.0f);
 

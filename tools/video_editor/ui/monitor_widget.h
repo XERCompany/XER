@@ -36,6 +36,9 @@ public:
     struct Hooks {
         std::function<void(double)> on_time_changed;
         std::function<void(const std::string&, bool)> on_status;
+        // Focus-mode toggle: hide side panels so the monitor spans the
+        // whole central row (the host restores them on a second hit).
+        std::function<void()> on_toggle_focus;
     };
 
     explicit MonitorWidget(Hooks hooks = {});
@@ -89,6 +92,22 @@ public:
     void SetExternalFrame(const std::vector<std::uint8_t>& bgra,
                           int width, int height);
 
+    // When set, transport playback actions route to the app (PreviewEngine)
+    // instead of the internal draft compositor. Unset = old local behavior.
+    void SetOnPlayToggle(std::function<void()> cb);
+    void SetOnSeekRequest(std::function<void(double time)> cb);
+    void SetOnFrameStep(std::function<void(int dir)> cb);  // dir = -1|+1
+    // Context-menu "Playback quality" pick: scale in (0,1] (Full=1,
+    // 1/2, 1/4). The widget updates the badge/checkmark itself; the
+    // host routes the scale to PreviewEngine::SetQuality.
+    void SetOnQualityChange(std::function<void(float scale)> cb);
+    // App reports engine playing state for button/context-menu labels.
+    void SetEnginePlaying(bool playing);
+
+    // Right-click overlay menu (playback + display toggles). Called by
+    // the shell's tree context-menu handler. Returns true when shown.
+    bool ShowContextMenu(XER::UI::Layout::Point position);
+
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
     void Layout(const XER::UI::Layout::Rect& bounds) override;
@@ -108,12 +127,25 @@ public:
 
 private:
     // Overlay transport buttons, hit-tested in HandleEvent.
-    enum class OverlayButton { Play, SafeMargins, Grid, Loop };
+    enum class OverlayButton {
+        Play,
+        PrevFrame,
+        NextFrame,
+        SafeMargins,
+        Grid,
+        Loop,
+        Focus
+    };
 
     void RebuildCompositor();
     bool RenderCurrentFrame(std::string* error_out);
     void SetStatus(const std::string& text, bool is_error = false);
     void EmitTime(double t);
+    // Play/pause label + glyph state: engine-reported while transport
+    // hooks are wired, else the internal draft flag.
+    bool TransportPlaying() const {
+        return on_play_toggle_ ? engine_playing_ : playing_;
+    }
 
     // Geometry helpers — pure functions of GetBounds() so hit-testing
     // works before the first Render.
@@ -169,6 +201,14 @@ private:
     bool playing_ = false;
     bool external_playback_ = false;
     double play_accumulator_ = 0.0;
+
+    // App-driven transport hooks (PreviewEngine). While set, transport
+    // actions emit these instead of mutating playing_/time_ locally.
+    std::function<void()> on_play_toggle_;
+    std::function<void(double)> on_seek_request_;
+    std::function<void(int)> on_frame_step_;
+    std::function<void(float)> on_quality_;
+    bool engine_playing_ = false;
 
     // --- audio meters ---
     // Raw pushed peaks (linear) plus displayed dB values with ballistics.

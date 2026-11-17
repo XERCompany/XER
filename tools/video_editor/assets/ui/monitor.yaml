@@ -1,0 +1,10 @@
+# Program monitor setup. Transport.buttons names map to the overlay
+# button strip (order = left→right): play, prev_frame, next_frame,
+# safe_margins, grid, loop, focus, scopes.
+Monitor:
+  Transport:
+    buttons: [play, prev_frame, next_frame, safe_margins, grid, loop, focus, scopes]
+  Overlays:
+    safe_margins: false
+    grid: false
+  default_quality: full    # full | half | quarter — preview scaling

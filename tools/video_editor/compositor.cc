@@ -10,11 +10,15 @@
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <filesystem>
 #include <limits>
 #include <map>
 #include <set>
 
+#include "app_runtime/app_runtime.h"
+#include "color/ocio_transform.h"
 #include "generated_source.h"
+#include "plugin_host.h"
 #include "video_effects.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
@@ -546,7 +550,19 @@ struct Compositor::Impl {
         // re-warn through the same dedup set.
         for (const auto& clip : project_.clips) {
             for (const auto& effect : clip.effects) {
-                if (KnownEffectTypes().count(effect.type) == 0) {
+                if (effect.type.rfind("plugin:", 0) == 0) {
+                    if (PluginHost::ForEffectType(effect.type) ==
+                        nullptr) {
+                        Warn("plugin effect '" + effect.type +
+                             "' not loaded");
+                    }
+                } else if (effect.type.rfind("ocio:", 0) == 0) {
+                    if (Color::FindOcioProfile(effect.type.substr(5)) ==
+                        nullptr) {
+                        Warn("ocio profile '" + effect.type.substr(5) +
+                             "' not found");
+                    }
+                } else if (KnownEffectTypes().count(effect.type) == 0) {
                     Warn("unknown clip effect type '" + effect.type + "'");
                 } else if (EffectRequiresSkia(effect.type) &&
                            !skia_available) {
@@ -823,6 +839,47 @@ struct Compositor::Impl {
                 return;
             }
             const std::string& type = effect.type;
+            if (type.rfind("plugin:", 0) == 0) {
+                // External plugin effect (sdk/xer_plugin.h) — applied
+                // in place to the BGRA8 frame.
+                const PluginDesc* desc = PluginHost::ForEffectType(type);
+                if (desc != nullptr &&
+                    frame.Format() == video::PixelFormat::BGRA8) {
+                    PluginHost::ApplyVideo(*desc, frame.Data(),
+                                           frame.Width(), frame.Height(),
+                                           frame.Stride(), effect.params);
+                }
+                continue;
+            }
+            if (type.rfind("ocio:", 0) == 0) {
+                // Named OCIO profile (color.yaml Profiles:) — LUT or
+                // colorspace conversion applied in place. The config
+                // loads once per process; unknown profile names and
+                // failed transforms leave the frame untouched
+                // (identity) — warned at Init, silent here.
+                const Color::OcioProfile* profile =
+                    Color::FindOcioProfile(type.substr(5));
+                if (profile != nullptr &&
+                    frame.Format() == video::PixelFormat::BGRA8) {
+                    static bool ocio_loaded = false;
+                    static Color::OcioConfig ocio_cfg;
+                    static std::filesystem::path ocio_assets_dir;
+                    if (!ocio_loaded) {
+                        ocio_loaded = true;
+                        const std::filesystem::path yaml_path(
+                            AppRuntime::SharedAssetsConfig().color_yaml);
+                        std::string load_error;
+                        Color::LoadOcioConfig(yaml_path, &ocio_cfg,
+                                              &load_error);
+                        ocio_assets_dir = yaml_path.parent_path();
+                    }
+                    Color::ApplyProfileTransform(
+                        frame.Data(), frame.Width(), frame.Height(),
+                        frame.Stride(), *profile, ocio_cfg,
+                        ocio_assets_dir);
+                }
+                continue;
+            }
             if (KnownEffectTypes().count(type) == 0) {
                 continue;   // warned at Init
             }

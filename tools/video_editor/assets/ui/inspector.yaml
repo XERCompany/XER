@@ -1,0 +1,62 @@
+# Inspector sections per selection kind. `kind` picks the field
+# editor: text | number | slider | toggle | combo | list.
+Inspector:
+  - selection: clip.video
+    sections:
+      - id: clip
+        title: Clip
+        fields:
+          - {id: name,           label: Name,           kind: text}
+          - {id: source,         label: Source,         kind: text}
+          - {id: timeline_start, label: Start (s),      kind: number}
+          - {id: duration,       label: Duration (s),   kind: number}
+          - {id: playback_rate,  label: Speed,          kind: number}
+      - id: video
+        title: Video
+        fields:
+          - {id: opacity,    label: Opacity,    kind: slider}
+          - {id: blend_mode, label: Blend Mode, kind: combo}
+      - id: effects
+        title: Effects
+        fields:
+          - {id: effects, label: Effects, kind: list}
+  - selection: clip.audio
+    sections:
+      - id: clip
+        title: Clip
+        fields:
+          - {id: name,           label: Name,         kind: text}
+          - {id: source,         label: Source,       kind: text}
+          - {id: timeline_start, label: Start (s),    kind: number}
+          - {id: duration,       label: Duration (s), kind: number}
+          - {id: playback_rate,  label: Speed,        kind: number}
+      - id: audio
+        title: Audio
+        fields:
+          - {id: volume, label: Volume (dB), kind: number}
+          - {id: pan,    label: Pan,         kind: slider}
+      - id: effects
+        title: Effects
+        fields:
+          - {id: effects, label: Effects, kind: list}
+  - selection: track
+    sections:
+      - id: track
+        title: Track
+        fields:
+          - {id: name,   label: Name,        kind: text}
+          - {id: muted,  label: Muted,       kind: toggle}
+          - {id: hidden, label: Hidden,      kind: toggle}
+          - {id: locked, label: Locked,      kind: toggle}
+          - {id: gain,   label: Gain (dB),   kind: number}
+          - {id: pan,    label: Pan,         kind: slider}
+  - selection: project
+    sections:
+      - id: sequence
+        title: Sequence
+        fields:
+          - {id: name,            label: Name,           kind: text}
+          - {id: width,           label: Width,          kind: number}
+          - {id: height,          label: Height,         kind: number}
+          - {id: fps,             label: Frame Rate,     kind: number}
+          - {id: master_gain_db,  label: Master (dB),    kind: number}

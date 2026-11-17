@@ -4,8 +4,10 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
 #include <utility>
 
+#include "app_runtime/icon_pack.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widgets/button.h"
@@ -18,11 +20,52 @@ namespace {
 using XER::UI::Theme::Color;
 
 constexpr float kRowHeight = 38.0f;
+constexpr float kRowIcon = 16.0f;
 constexpr auto kDoubleClickWindow = std::chrono::milliseconds(450);
 
 Color WithAlpha(Color color, float alpha) {
     color.a *= alpha;
     return color;
+}
+
+// Theme float color → packed AARRGGBB tint for the icon pack.
+std::uint32_t ToArgb(Color color) {
+    const auto byte = [](float v) {
+        return static_cast<std::uint32_t>(
+            std::clamp(std::lround(v * 255.0f), 0L, 255L));
+    };
+    return (byte(color.a) << 24) | (byte(color.r) << 16) |
+           (byte(color.g) << 8) | byte(color.b);
+}
+
+// Rasterized SVG icon from the shared pack, drawn centered in `box`.
+// Returns false when the icon is missing or the renderer can't blit
+// it — the caller then keeps the text-only fallback layout.
+bool DrawIcon(XER::UI::Rendering::Renderer& renderer, const char* name,
+              int px, Color tint, const XER::UI::Layout::Rect& box) {
+    const auto* bmp =
+        AppRuntime::SharedIconPack().Get(name, px, ToArgb(tint));
+    if (bmp == nullptr) return false;
+    const XER::UI::Layout::Rect dst{
+        box.x + (box.width - bmp->width) * 0.5f,
+        box.y + (box.height - bmp->height) * 0.5f,
+        static_cast<float>(bmp->width),
+        static_cast<float>(bmp->height)};
+    return renderer.DrawFrameBgra(bmp->bgra.data(), bmp->width,
+                                  bmp->height, dst, 1.0f);
+}
+
+// Logical icon name (assets/icons.yaml) per built-in effect type.
+// Unmapped names fall back to "<name>.svg" — every file used here
+// exists under assets/icons/.
+const char* IconForEffectType(const std::string& type) {
+    if (type.find("flip") != std::string::npos) {
+        return "compare_arrows";
+    }
+    if (type.find("blur") != std::string::npos) return "shadow";
+    if (type == "chroma_key") return "select_window";
+    if (type == "vignette" || type == "pixelate") return "tile_medium";
+    return "tab.effects";   // polymer.svg — generic effects glyph
 }
 
 std::string Lower(std::string text) {
@@ -209,14 +252,22 @@ void EffectsPanelWidget::Render(
         } else if (idx == hovered_) {
             renderer.FillRect(row, tokens.hover, tokens.radius_small);
         }
+        float text_x = row.x + 8.0f;
+        if (DrawIcon(renderer, IconForEffectType(info.type),
+                     static_cast<int>(kRowIcon), tokens.foreground,
+                     {row.x + 6.0f,
+                      row.y + (row.height - kRowIcon) * 0.5f,
+                      kRowIcon, kRowIcon})) {
+            text_x = row.x + 6.0f + kRowIcon + 8.0f;
+        }
         renderer.DrawText(info.type,
-                          {row.x + 8.0f, row.y + 3.0f, row.width - 16.0f,
-                           16.0f},
+                          {text_x, row.y + 3.0f,
+                           row.x + row.width - text_x - 8.0f, 16.0f},
                           XER::UI::Rendering::TextStyle{
                               tokens.foreground, tokens.font_body, 500});
         renderer.DrawText(info.description,
-                          {row.x + 8.0f, row.y + 20.0f,
-                           row.width - 16.0f, 14.0f},
+                          {text_x, row.y + 20.0f,
+                           row.x + row.width - text_x - 8.0f, 14.0f},
                           XER::UI::Rendering::TextStyle{
                               tokens.muted, tokens.font_small, 400});
     }

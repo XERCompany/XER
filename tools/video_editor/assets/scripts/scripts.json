@@ -1,0 +1,26 @@
+[
+  {
+    "id": "hello",
+    "title": "Hello Script",
+    "description": "Demo: pushes a status line through xer_editor",
+    "file": "hello.js",
+    "category": "Utility",
+    "shortcut": "Ctrl+Alt+1"
+  },
+  {
+    "id": "sort_clips",
+    "title": "Sort Clips by Name",
+    "description": "Demo: selects all timeline clips and reorders them by name",
+    "file": "sort_clips.js",
+    "category": "Timeline",
+    "shortcut": "Ctrl+Alt+2"
+  },
+  {
+    "id": "project_info",
+    "title": "Project Info",
+    "description": "Demo: prints the project info JSON to the script log",
+    "file": "project_info.js",
+    "category": "Utility",
+    "shortcut": "Ctrl+Alt+3"
+  }
+]

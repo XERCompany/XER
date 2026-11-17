@@ -1,0 +1,22 @@
+{
+    "Toolbar": {
+        "buttons": [
+            {"id": "import", "label": "Import", "icon": "bin.import",
+             "action": "file.import"},
+            {"id": "add", "label": "Add", "icon": "action.add",
+             "action": "timeline.add"},
+            {"id": "sep1", "type": "separator"},
+            {"id": "undo", "label": "Undo", "icon": "action.undo",
+             "action": "edit.undo"},
+            {"id": "redo", "label": "Redo", "icon": "action.redo",
+             "action": "edit.redo"},
+            {"id": "split", "label": "Split", "icon": "action.delete",
+             "action": "edit.split"},
+            {"id": "sep2", "type": "separator"},
+            {"id": "play", "label": "Play", "icon": "transport.play",
+             "action": "playback.toggle"},
+            {"id": "snap", "label": "Snap", "icon": "transport.grid",
+             "action": "timeline.snap"}
+        ]
+    }
+}

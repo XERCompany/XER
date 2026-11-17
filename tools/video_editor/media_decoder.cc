@@ -10,7 +10,16 @@
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"  // AudioFrameInfo def
 #include "wrapper/ffmpeg/ffmpeg_video_decoder.h"
 
+#include <algorithm>
+#include <filesystem>
+
+#include "io/oiio_image.h"
+#include "helper/path_utils.h"
+
+#include <cctype>
+
 namespace XER::VideoEditor {
+namespace Path = XER::Helper::Path;
 namespace {
 
 namespace FFmpeg = XER::Bridge::FFmpeg;
@@ -20,16 +29,53 @@ namespace FFmpeg = XER::Bridge::FFmpeg;
 // calls Close(), so decoder lifetime is RAII. Every method forwards
 // unchanged; only NextFrame adapts the bridge's reference-out
 // signature to pointers.
+// Nominal still-image duration/fps — matches the catalog's still
+// import defaults; seeking just clamps, every frame is the same.
+constexpr double kStillDurationSeconds = 5.0;
+constexpr double kStillFps = 25.0;
+
 class BridgeVideoDecoder final : public IMediaDecoder {
 public:
     bool Open(const std::string& utf8_path,
               std::string* error_out) override {
-        return decoder_.Open(utf8_path, error_out);
+        still_ = false;
+        still_bgra_.clear();
+        still_pos_ = 0.0;
+        if (decoder_.Open(utf8_path, error_out)) {
+            return true;
+        }
+        // FFmpeg couldn't parse it — try still-image formats OIIO
+        // handles (EXR/DPX/TIFF/RAW/PSD/HDR). The still is a constant
+        // frame: every NextFrame returns the same picture.
+        const std::filesystem::path path =
+            Path::FromUtf8(utf8_path);
+        std::string ext = path.extension().string();
+        for (auto& c : ext) c = static_cast<char>(std::tolower(c));
+        if (!Io::OiioHandlesExtension(ext)) {
+            return false;
+        }
+        const Io::Image image = Io::ReadImage(path);
+        if (!image.ok || image.bgra.empty() || image.width <= 0 ||
+            image.height <= 0) {
+            if (error_out) *error_out = "still image decode failed";
+            return false;
+        }
+        still_ = true;
+        still_bgra_ = image.bgra;
+        still_w_ = image.width;
+        still_h_ = image.height;
+        if (error_out) error_out->clear();
+        return true;
     }
 
-    void Close() override { decoder_.Close(); }
+    void Close() override {
+        decoder_.Close();
+        still_ = false;
+        still_bgra_.clear();
+        still_pos_ = 0.0;
+    }
 
-    bool IsOpen() const override { return decoder_.IsOpen(); }
+    bool IsOpen() const override { return still_ || decoder_.IsOpen(); }
 
     bool NextFrame(std::vector<std::uint8_t>* bgra,
                    int* width, int* height) override {
@@ -39,26 +85,45 @@ public:
         if (bgra == nullptr || width == nullptr || height == nullptr) {
             return false;
         }
+        if (still_) {
+            *bgra = still_bgra_;
+            *width = still_w_;
+            *height = still_h_;
+            return true;
+        }
         // Bridge signature is (std::vector<uint8_t>&, int&, int&) —
         // *bgra/*width/*height bind directly.
         return decoder_.NextFrame(*bgra, *width, *height);
     }
 
-    bool Seek(double seconds) override { return decoder_.Seek(seconds); }
+    bool Seek(double seconds) override {
+        if (still_) {
+            still_pos_ = std::clamp(seconds, 0.0, kStillDurationSeconds);
+            return true;
+        }
+        return decoder_.Seek(seconds);
+    }
 
     double GetPositionSeconds() const override {
-        return decoder_.GetPositionSeconds();
+        return still_ ? still_pos_ : decoder_.GetPositionSeconds();
     }
 
-    double GetFps() const override { return decoder_.GetFps(); }
+    double GetFps() const override {
+        return still_ ? kStillFps : decoder_.GetFps();
+    }
 
     double GetDurationSeconds() const override {
-        return decoder_.GetDurationSeconds();
+        return still_ ? kStillDurationSeconds
+                      : decoder_.GetDurationSeconds();
     }
 
-    int GetWidth() const override { return decoder_.GetWidth(); }
+    int GetWidth() const override {
+        return still_ ? still_w_ : decoder_.GetWidth();
+    }
 
-    int GetHeight() const override { return decoder_.GetHeight(); }
+    int GetHeight() const override {
+        return still_ ? still_h_ : decoder_.GetHeight();
+    }
 
     void EnableAudioTap(bool enable) override {
         // Ordering constraint (EnableAudioTap BEFORE Open) is enforced
@@ -91,6 +156,13 @@ public:
 
 private:
     FFmpeg::VideoDecoder decoder_;
+    // Still-image fallback (OIIO): a single decoded frame replayed
+    // forever. Active only when FFmpeg couldn't open the file.
+    bool still_ = false;
+    std::vector<std::uint8_t> still_bgra_;
+    int still_w_ = 0;
+    int still_h_ = 0;
+    double still_pos_ = 0.0;
 };
 
 }  // namespace

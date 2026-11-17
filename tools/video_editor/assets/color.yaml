@@ -1,0 +1,18 @@
+Color:
+  OcioConfig: ""
+  Source: "Linear Rec.709 (sRGB)"
+  Display: "sRGB"
+  View: "Standard"
+  Enabled: true
+  Profiles:
+    - Name: "Linear to sRGB"
+      Display: "sRGB"
+      View: "Standard"
+    - Name: "Teal Orange"
+      Lut: "luts/teal_orange.cube"
+    - Name: "Vintage Fade"
+      Lut: "luts/vintage_fade.cube"
+    - Name: "Noir BW"
+      Lut: "luts/noir_bw.cube"
+    - Name: "Warm Golden"
+      Lut: "luts/warm_golden.cube"

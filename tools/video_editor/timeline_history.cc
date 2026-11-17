@@ -8,6 +8,7 @@
 #include "timeline_history.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <optional>
 #include <string>
@@ -724,6 +725,134 @@ private:
     std::string last_error_;
 };
 
+// Track mute/hide — bool flag ops mirroring SetTrackLockedCommand but
+// touching fields that don't gate other ops, so no model helper is
+// needed. `which`: 'm' = muted, 'h' = hidden.
+class SetTrackFlagCommand : public Command {
+public:
+    SetTrackFlagCommand(int track_index, char which, bool on)
+        : track_index_(track_index), which_(which), on_(on) {}
+    bool Apply(Project& project) override {
+        last_error_.clear();
+        if (track_index_ < 0 ||
+            track_index_ >= static_cast<int>(project.tracks.size())) {
+            last_error_ = "track index out of range";
+            return false;
+        }
+        Track& track = project.tracks[
+            static_cast<std::size_t>(track_index_)];
+        before_ = which_ == 'm' ? track.muted : track.hidden;
+        (which_ == 'm' ? track.muted : track.hidden) = on_;
+        return true;
+    }
+    bool Revert(Project& project) override {
+        if (track_index_ >= 0 &&
+            track_index_ < static_cast<int>(project.tracks.size())) {
+            Track& track = project.tracks[
+                static_cast<std::size_t>(track_index_)];
+            (which_ == 'm' ? track.muted : track.hidden) = before_;
+        }
+        return true;
+    }
+    std::string Label() const override {
+        return which_ == 'm' ? "Toggle track mute"
+                             : "Toggle track visibility";
+    }
+    const std::string& last_error() const { return last_error_; }
+
+private:
+    int track_index_;
+    char which_;
+    bool on_;
+    bool before_ = false;
+    std::string last_error_;
+};
+
+// Track fader/pan and the project master fader — continuous-write ops
+// that coalesce via MergeWith so a knob drag folds into one undo
+// step. `which`: 'g' = Track::gain_db, 'p' = Track::pan,
+// 'M' = Project::master_gain_db (track_index_ ignored).
+class SetGainLikeCommand : public Command {
+public:
+    SetGainLikeCommand(char which, int track_index, float value)
+        : which_(which), track_index_(track_index), value_(value) {}
+    bool Apply(Project& project) override {
+        last_error_.clear();
+        if (!std::isfinite(value_)) {
+            last_error_ = "value must be finite";
+            return false;
+        }
+        if (which_ == 'M') {
+            if (value_ < -96.0f || value_ > 24.0f) {
+                last_error_ = "master gain out of range [-96, 24]";
+                return false;
+            }
+            before_ = project.master_gain_db;
+            project.master_gain_db = value_;
+            return true;
+        }
+        if (track_index_ < 0 ||
+            track_index_ >= static_cast<int>(project.tracks.size())) {
+            last_error_ = "track index out of range";
+            return false;
+        }
+        Track& track = project.tracks[
+            static_cast<std::size_t>(track_index_)];
+        if (which_ == 'p') {
+            if (value_ < -1.0f || value_ > 1.0f) {
+                last_error_ = "pan out of range [-1, 1]";
+                return false;
+            }
+            before_ = track.pan;
+            track.pan = value_;
+        } else {
+            before_ = track.gain_db;
+            track.gain_db = value_;
+        }
+        return true;
+    }
+    bool Revert(Project& project) override {
+        if (which_ == 'M') {
+            project.master_gain_db = before_;
+            return true;
+        }
+        if (track_index_ >= 0 &&
+            track_index_ < static_cast<int>(project.tracks.size())) {
+            Track& track = project.tracks[
+                static_cast<std::size_t>(track_index_)];
+            (which_ == 'p' ? track.pan : track.gain_db) = before_;
+        }
+        return true;
+    }
+    bool MergeWith(const Command& other) override {
+        // PushBack asks the STACKED command (this) to absorb the new
+        // one (other): keep our pre-drag `before_`, adopt the newest
+        // target value — a fader drag replays as a single undo step.
+        const auto* o = dynamic_cast<const SetGainLikeCommand*>(&other);
+        if (o == nullptr || o->which_ != which_ ||
+            o->track_index_ != track_index_) {
+            return false;
+        }
+        value_ = o->value_;
+        return true;
+    }
+    std::string Label() const override {
+        switch (which_) {
+            case 'M': return "Set master gain";
+            case 'p': return "Set track pan";
+            default:  return "Set track gain";
+        }
+    }
+    const std::string& last_error() const { return last_error_; }
+
+private:
+    char which_;
+    int track_index_;
+    float value_;
+    float before_ = 0.0f;
+    std::string last_error_;
+};
+
 // Marker ops are dedicated: project.markers sits outside the clip
 // slice, so the whole (small) vector is snapshotted before Apply and
 // restored verbatim on Revert — exact for both add and remove.
@@ -1362,6 +1491,69 @@ bool TimelineHistory::SetTrackLocked(int track_index, bool locked,
         if (error_out) {
             *error_out = raw->last_error();
         }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetTrackMuted(int track_index, bool muted,
+                                    std::string* error_out) {
+    auto cmd =
+        std::make_unique<SetTrackFlagCommand>(track_index, 'm', muted);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) *error_out = raw->last_error();
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetTrackHidden(int track_index, bool hidden,
+                                     std::string* error_out) {
+    auto cmd =
+        std::make_unique<SetTrackFlagCommand>(track_index, 'h', hidden);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) *error_out = raw->last_error();
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetTrackGainDb(int track_index, float db,
+                                     std::string* error_out) {
+    auto cmd =
+        std::make_unique<SetGainLikeCommand>('g', track_index, db);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) *error_out = raw->last_error();
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetTrackPan(int track_index, float pan,
+                                  std::string* error_out) {
+    auto cmd =
+        std::make_unique<SetGainLikeCommand>('p', track_index, pan);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) *error_out = raw->last_error();
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetMasterGainDb(float db, std::string* error_out) {
+    auto cmd = std::make_unique<SetGainLikeCommand>('M', 0, db);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) *error_out = raw->last_error();
         return false;
     }
     PushBack(std::move(cmd));

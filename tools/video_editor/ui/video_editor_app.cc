@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <iostream>
 #include <filesystem>
 #include <functional>
 #include <string>
@@ -18,16 +20,27 @@
 #endif
 #include <windows.h>
 #include <commdlg.h>
+#include <shellapi.h>
+#if defined(_MSC_VER)
+#pragma comment(lib, "shell32.lib")   // ShellExecuteW (media-bin reveal)
+#endif
 #endif
 
+#include "app_runtime/app_runtime.h"
+#include "app_runtime/ui_manifest.h"
 #include "content/video/video_info.h"
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
 #include "generated_source.h"
 #include "lab/async_op.h"
 #include "lab/object_ops.h"
+#include "ai/audio_pcm.h"
+#include "ai/beat_markers.h"
+#include "ai/whisper_transcribe.h"
 #include "playback/audio_sink_factory.h"
+#include "plugin_host.h"
 #include "project_store.h"
+#include "extensions/ext_host.h"
 #include "rendering/renderer.h"
 #include "video/frame_exporter.h"
 #include "theme/tokens.h"
@@ -107,6 +120,38 @@ std::shared_ptr<Widgets::Button> MakeButton(
     return button;
 }
 
+// Minimal 16-bit PCM WAV writer for audio-plugin bounces — avoids an
+// encoder dependency for a bounce that the catalog re-imports anyway.
+bool WriteWav16(const std::string& path, const float* samples,
+                int frames, int channels, int sample_rate) {
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (f == nullptr) return false;
+    const std::uint32_t data_bytes =
+        static_cast<std::uint32_t>(frames * channels * 2);
+    const auto w32 = [&](std::uint32_t v) { std::fwrite(&v, 4, 1, f); };
+    const auto w16 = [&](std::uint16_t v) { std::fwrite(&v, 2, 1, f); };
+    std::fwrite("RIFF", 1, 4, f);
+    w32(36 + data_bytes);
+    std::fwrite("WAVE", 1, 4, f);
+    std::fwrite("fmt ", 1, 4, f);
+    w32(16);
+    w16(1);  // PCM
+    w16(static_cast<std::uint16_t>(channels));
+    w32(static_cast<std::uint32_t>(sample_rate));
+    w32(static_cast<std::uint32_t>(sample_rate * channels * 2));
+    w16(static_cast<std::uint16_t>(channels * 2));
+    w16(16);
+    std::fwrite("data", 1, 4, f);
+    w32(data_bytes);
+    for (int i = 0; i < frames * channels; ++i) {
+        const float s = std::clamp(samples[i], -1.0f, 1.0f);
+        const std::int16_t v = static_cast<std::int16_t>(s * 32767.0f);
+        std::fwrite(&v, 2, 1, f);
+    }
+    std::fclose(f);
+    return true;
+}
+
 }  // namespace
 
 // PreviewEngine callbacks fire on the engine worker — the sink only
@@ -141,6 +186,9 @@ VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
     } else {
         NewProject();
     }
+    // One-shot crash-recovery offer: surfaces autosave slots without
+    // auto-loading (status bar + File ▸ Recover Autosave).
+    CheckAutosaveRecovery();
 }
 
 VideoEditorAppWidget::~VideoEditorAppWidget() {
@@ -152,6 +200,21 @@ VideoEditorAppWidget::~VideoEditorAppWidget() {
 void VideoEditorAppWidget::EnsureChildren() {
     if (children_attached_) return;
     children_attached_ = true;
+
+    // assets/ui/layout.yaml — seed panel defaults once here; later
+    // toggles (View menu, workspaces, monitor focus) own the values.
+    const auto& layout_cfg = AppRuntime::SharedLayoutConfig();
+    left_panel_visible_ = layout_cfg.left_visible;
+    right_panel_visible_ = layout_cfg.right_visible;
+    if (layout_cfg.right_tab > 0) {
+        right_tab_ = layout_cfg.right_tab;
+    }
+    // Splitter size overrides start at the manifest widths (0 = use the
+    // proportional defaults); splitter drags rewrite them afterward.
+    left_width_ = layout_cfg.left_width > 0
+        ? static_cast<float>(layout_cfg.left_width) : 0.0f;
+    right_width_ = layout_cfg.right_width > 0
+        ? static_cast<float>(layout_cfg.right_width) : 0.0f;
 
     BuildTitleBar();
 
@@ -187,14 +250,57 @@ void VideoEditorAppWidget::EnsureChildren() {
     export_btn_ = MakeButton("Export", Widgets::ButtonStyle::Primary,
                              [this] { StartExport(); },
                              "Render timeline to MP4");
+
+    // assets/ui/toolbar.json — toolbar_ids orders the left button row
+    // (export stays pinned right). No runtime action registry exists,
+    // so ids map onto the compiled buttons by position; ids that match
+    // nothing become disabled placeholders keeping the slot visible,
+    // and compiled buttons the manifest didn't list stay appended.
+    toolbar_row_ = {
+        {import_btn_, 70.0f}, {add_btn_, 58.0f}, {undo_btn_, 58.0f},
+        {redo_btn_, 58.0f},   {split_btn_, 58.0f},
+        {delete_btn_, 66.0f}, {snap_btn_, 58.0f}, {play_btn_, 64.0f},
+    };
+    const auto& toolbar_ids = AppRuntime::SharedAssetsConfig().toolbar_ids;
+    if (!toolbar_ids.empty()) {
+        static const std::array<const char*, 8> kActionIds = {
+            "file.import",    "timeline.add",  "edit.undo",
+            "edit.redo",      "edit.split",    "edit.delete",
+            "timeline.snap",  "playback.toggle"};
+        std::vector<std::pair<std::shared_ptr<Widgets::Button>, float>>
+            ordered;
+        std::array<bool, 8> used{};
+        for (const std::string& id : toolbar_ids) {
+            bool matched = false;
+            for (std::size_t i = 0; i < kActionIds.size(); ++i) {
+                if (!used[i] && id == kActionIds[i]) {
+                    used[i] = true;
+                    matched = true;
+                    ordered.push_back(toolbar_row_[i]);
+                }
+            }
+            if (!matched) {
+                auto placeholder = MakeButton(
+                    id, Widgets::ButtonStyle::Ghost, [] {},
+                    "No action registered for \"" + id + "\"");
+                placeholder->SetEnabled(false);
+                AddChild(placeholder);
+                ordered.emplace_back(std::move(placeholder), 84.0f);
+            }
+        }
+        for (std::size_t i = 0; i < toolbar_row_.size(); ++i) {
+            if (!used[i]) ordered.push_back(toolbar_row_[i]);
+        }
+        toolbar_row_ = std::move(ordered);
+    }
     status_label_ = std::make_shared<Widgets::Label>("Ready", true);
     zoom_label_ = std::make_shared<Widgets::Label>(
         "Wheel: zoom  Shift+Wheel: scroll", true);
 
     MediaBinWidget::Hooks media_hooks;
     media_hooks.on_import = [this] { ImportMedia(); };
-    media_hooks.on_add_to_timeline = [this](const std::string&) {
-        AddSelectedToTimeline();
+    media_hooks.on_add_to_timeline = [this](const std::string& path) {
+        AddMediaToTimeline(path);
     };
     media_hooks.on_select = [this](const std::string& path) {
         selected_media_path_ = path;
@@ -203,18 +309,201 @@ void VideoEditorAppWidget::EnsureChildren() {
     media_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
     };
+    media_hooks.on_detect_beats = [this](const std::string& path) {
+        DetectBeatsForMedia(path);
+    };
+    media_hooks.on_transcribe = [this](const std::string& path) {
+        TranscribeMedia(path);
+    };
+    media_hooks.transcribe_available = [] {
+        return Ai::WhisperAvailable() && !Ai::FindWhisperModel().empty();
+    };
+    media_hooks.audio_fx_list = [] {
+        std::vector<std::pair<std::string, std::string>> out;
+        for (const PluginDesc* desc : SharedPluginHost().OfKind(
+                 XER_PLUGIN_AUDIO_FX)) {
+            out.emplace_back(desc->id, desc->name);
+        }
+        return out;
+    };
+    media_hooks.on_audio_fx = [this](const std::string& path,
+                                     const std::string& plugin_id) {
+        BounceAudioFx(path, plugin_id);
+    };
+    // CapCut-style icon rail on the far left — switches the left panel
+    // content and jumps to the matching right-side tab.
+    nav_rail_ = std::make_shared<NavRailWidget>();
+    std::vector<NavRailWidget::Item> rail_top = {
+            {NavRailWidget::Glyph::Media, "Media library",
+             [this] {
+                 left_panel_visible_ = !left_panel_visible_;
+                 Invalidate();
+             },
+             [this] { return left_panel_visible_; }},
+            {NavRailWidget::Glyph::Audio, "Audio mixer",
+             [this] {
+                 right_panel_visible_ = true;
+                 SetRightTab(5);
+                 Invalidate();
+             },
+             [this] {
+                 return right_panel_visible_ && right_tab_ == 5;
+             }},
+            {NavRailWidget::Glyph::Text, "Add title",
+             [this] {
+                 AddGeneratedClip(SourceKind::Text);
+                 OpenTitleEditor();
+             },
+             nullptr},
+            {NavRailWidget::Glyph::Fx, "Effects",
+             [this] {
+                 right_panel_visible_ = true;
+                 SetRightTab(1);
+                 Invalidate();
+             },
+             [this] {
+                 return right_panel_visible_ && right_tab_ == 1;
+             }},
+            {NavRailWidget::Glyph::Trans, "Markers",
+             [this] {
+                 right_panel_visible_ = true;
+                 SetRightTab(2);
+                 Invalidate();
+             },
+             [this] {
+                 return right_panel_visible_ && right_tab_ == 2;
+             }},
+    };
+    std::vector<NavRailWidget::Item> rail_bottom = {
+            {NavRailWidget::Glyph::Settings, "Project settings",
+             [this] { ShowProjectSettingsDialog(); },
+             nullptr},
+    };
+    // assets/ui/layout.yaml — NavRail.items reorders/filters the rail.
+    // Item carries no id, so yaml names map onto the compiled slots by
+    // position (top: media/audio/text/fx/markers, bottom: settings).
+    if (!layout_cfg.nav_items.empty()) {
+        static const std::array<const char*, 5> kTopIds = {
+            "media", "audio", "text", "fx", "markers"};
+        static const std::array<const char*, 1> kBottomIds = {
+            "settings"};
+        std::array<bool, 5> top_used{};
+        std::array<bool, 1> bottom_used{};
+        std::vector<NavRailWidget::Item> top_out;
+        std::vector<NavRailWidget::Item> bottom_out;
+        for (const std::string& raw : layout_cfg.nav_items) {
+            std::string id = raw;
+            std::transform(id.begin(), id.end(), id.begin(),
+                           [](unsigned char c) {
+                               return std::tolower(c);
+                           });
+            for (std::size_t i = 0; i < rail_top.size(); ++i) {
+                if (!top_used[i] && id == kTopIds[i]) {
+                    top_used[i] = true;
+                    top_out.push_back(std::move(rail_top[i]));
+                }
+            }
+            for (std::size_t i = 0; i < rail_bottom.size(); ++i) {
+                if (!bottom_used[i] && id == kBottomIds[i]) {
+                    bottom_used[i] = true;
+                    bottom_out.push_back(std::move(rail_bottom[i]));
+                }
+            }
+        }
+        rail_top = std::move(top_out);
+        rail_bottom = std::move(bottom_out);
+    }
+    nav_rail_->SetItems(std::move(rail_top), std::move(rail_bottom));
     media_bin_ =
         std::make_shared<MediaBinWidget>(parent_hwnd_, media_hooks);
+    // Entry-action setters added by the media-bin pass (parallel fix
+    // round): catalog removal + Explorer reveal from row entries.
+    media_bin_->SetOnRemoveEntry([this](const std::string& path) {
+        const CatalogEntry* entry = FindCatalogEntry(path);
+        if (entry == nullptr) {
+            SetStatus("Not in catalog: " + Basename(path), true);
+            return;
+        }
+        std::string error;
+        // MediaCatalog::Remove is keyed by row id (media_catalog.cc).
+        if (!catalog_.Remove(entry->id, true, &error)) {
+            SetStatus("Remove failed: " + error, true);
+            return;
+        }
+        if (selected_media_path_ == path) selected_media_path_.clear();
+        RefreshCatalog();
+        SetStatus("Removed " + Basename(path) + " from catalog");
+    });
+    media_bin_->SetOnRevealEntry([this](const std::string& path) {
+#ifdef _WIN32
+        // explorer /select,<path> — one argument, native separators.
+        const std::wstring wpath =
+            Path::FromUtf8(Path::NormalizeUtf8Path(path)).wstring();
+        const std::wstring args = L"/select,\"" + wpath + L"\"";
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(),
+                      nullptr, SW_SHOWNORMAL);
+        SetStatus("Revealed " + Basename(path));
+#else
+        (void)path;
+        SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+    });
 
     MonitorWidget::Hooks monitor_hooks;
     monitor_hooks.on_time_changed = [this](double t) {
         playhead_ = std::clamp(t, 0.0, project_.duration());
         timeline_->SetPlayhead(playhead_);
+        // Same sink set as Seek(), minus the engine rebase — this
+        // callback originates from the monitor's own transport, so
+        // routing through Seek() would fight the engine.
+        inspector_->SetPlayhead(playhead_);
+        if (markers_panel_) markers_panel_->SetPlayhead(playhead_);
+        if (waveform_panel_ && waveform_panel_->IsVisible()) {
+            waveform_panel_->SetPlayhead(playhead_);
+        }
     };
     monitor_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
     };
+    monitor_hooks.on_toggle_focus = [this] {
+        if (monitor_focus_) {
+            left_panel_visible_ = saved_left_panel_;
+            right_panel_visible_ = saved_right_panel_;
+            monitor_focus_ = false;
+            SetStatus("Panels restored");
+        } else {
+            saved_left_panel_ = left_panel_visible_;
+            saved_right_panel_ = right_panel_visible_;
+            left_panel_visible_ = false;
+            right_panel_visible_ = false;
+            monitor_focus_ = true;
+            SetStatus("Monitor focus — press again to restore panels");
+        }
+        Invalidate();
+    };
     monitor_ = std::make_shared<MonitorWidget>(monitor_hooks);
+    // Transport setters added by the monitor pass (parallel fix
+    // round): on-monitor play toggle, ruler seeks and the |◀ ▶|
+    // frame-step buttons all route through the app's engine paths.
+    monitor_->SetOnPlayToggle([this] { TogglePlay(); });
+    monitor_->SetOnSeekRequest([this](double t) { Seek(t); });
+    monitor_->SetOnFrameStep([this](int dir) {
+        // ±1 frame via the project's fps (fps_den/fps_num seconds).
+        const double frame_dt =
+            project_.fps_num > 0
+                ? static_cast<double>(project_.fps_den) /
+                      static_cast<double>(project_.fps_num)
+                : 1.0 / 30.0;
+        Seek(playhead_ + dir * frame_dt);
+    });
+    // Monitor context-menu quality pick (badge + checkmarks live in
+    // the widget): 1.0 / 0.5 / 0.25 render scale. EnsurePreviewEngine
+    // re-applies preview_quality_ after every Init — the engine resets
+    // its quality command there.
+    monitor_->SetOnQualityChange([this](float scale) {
+        preview_quality_ = scale;
+        preview_engine_.SetQuality(scale);
+    });
 
     InspectorWidget::Hooks inspector_hooks;
     inspector_hooks.on_apply_clip = [this](const Clip& clip) {
@@ -306,24 +595,41 @@ void VideoEditorAppWidget::EnsureChildren() {
 
     MixerPanelWidget::Hooks mixer_hooks;
     mixer_hooks.on_track_gain = [this](int track, float db) {
-        if (track < 0 ||
-            track >= static_cast<int>(project_.tracks.size())) return;
+        std::string error;
+        if (!history_.SetTrackGainDb(track, db, &error)) {
+            if (!error.empty()) SetStatus("Gain failed: " + error, true);
+            return;
+        }
         // Continuous fader writes — invalidate the engine snapshot but
         // skip the full Notify rebuild while the drag is live.
-        project_.tracks[track].gain_db = db;
         preview_dirty_ = true;
         Invalidate();
     };
-    mixer_hooks.on_track_pan = [](int, float) {
-        // The model has no per-track pan yet; the panel keeps its own
-        // pan map until a model field lands.
+    mixer_hooks.on_track_pan = [this](int track, float pan) {
+        std::string error;
+        if (!history_.SetTrackPan(track, pan, &error)) {
+            if (!error.empty()) SetStatus("Pan failed: " + error, true);
+            return;
+        }
+        preview_dirty_ = true;
+        Invalidate();
     };
     mixer_hooks.on_track_mute = [this](int track, bool on) {
         SetTrackFlag(track, 'm', on);
     };
     mixer_hooks.on_master_gain = [this](float db) {
-        master_gain_db_ = db;
+        std::string error;
+        if (!history_.SetMasterGainDb(db, &error)) {
+            if (!error.empty()) {
+                SetStatus("Master gain failed: " + error, true);
+            }
+            return;
+        }
         preview_dirty_ = true;
+        // Live-forward to the running engine; Init resets the command,
+        // so EnsurePreviewEngine re-applies project_.master_gain_db.
+        preview_engine_.SetMasterGainDb(project_.master_gain_db);
+        Invalidate();
     };
     mixer_panel_ = std::make_shared<MixerPanelWidget>(mixer_hooks);
 
@@ -378,11 +684,27 @@ void VideoEditorAppWidget::EnsureChildren() {
     ExportQueuePanelWidget::Hooks queue_hooks;
     queue_hooks.on_cancel = [this](int) { export_engine_.Cancel(); };
     queue_hooks.on_reveal = [this](int job) {
-        if (job >= 0 && job < static_cast<int>(export_jobs_.size())) {
-            SetStatus(export_jobs_[job].label);
+        if (job < 0 || job >= static_cast<int>(export_jobs_.size())) {
+            return;
         }
+        const std::string& output = export_jobs_[job].output_path;
+        if (output.empty()) {
+            SetStatus(export_jobs_[job].label);
+            return;
+        }
+#ifdef _WIN32
+        // explorer /select,<path> — same reveal the media bin uses.
+        const std::wstring wpath =
+            Path::FromUtf8(Path::NormalizeUtf8Path(output)).wstring();
+        const std::wstring args = L"/select,\"" + wpath + L"\"";
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(),
+                      nullptr, SW_SHOWNORMAL);
+        SetStatus("Revealed " + Basename(output));
+#else
+        SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
     };
-    queue_hooks.on_retry = [this](int) { StartExport(); };
+    queue_hooks.on_retry = [this](int job) { RetryExport(job); };
     queue_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
     };
@@ -390,6 +712,10 @@ void VideoEditorAppWidget::EnsureChildren() {
         std::make_shared<ExportQueuePanelWidget>(queue_hooks);
     waveform_panel_ = std::make_shared<WaveformPanelWidget>();
     status_toast_ = std::make_shared<StatusToastWidget>();
+    // Full-window click-through overlay: disabled widgets are skipped by
+    // FindHitTarget but still rendered, so toasts draw above panels while
+    // clicks fall through to the widgets beneath.
+    status_toast_->SetEnabled(false);
 
     auto tab = [this](const char* text, int index,
                       const std::string& tooltip) {
@@ -405,6 +731,81 @@ void VideoEditorAppWidget::EnsureChildren() {
     tab_history_btn_ = tab("Hist", 4, "History — undo/redo");
     tab_mixer_btn_ = tab("Mix", 5, "Mixer — audio tracks");
     tab_queue_btn_ = tab("Q", 6, "Queue — export jobs");
+    tab_plugins_btn_ = tab("Plg", 7, "Plugins — loaded DLL effects");
+    tab_color_btn_ = tab("Color", 8, "Color — OCIO looks/transforms");
+    tab_browser_btn_ =
+        tab("Web", 9, "Browser — embedded Chromium (HTML views)");
+
+    PluginsPanelWidget::Hooks plugin_hooks;
+    plugin_hooks.on_add_effect = [this](const std::string& type) {
+        ClipEffect fx;
+        fx.type = type;
+        AddClipEffectBy(selected_clip_id_, fx);
+    };
+    plugins_panel_ = std::make_shared<PluginsPanelWidget>(plugin_hooks);
+    plugins_panel_->Reload();
+
+    // OCIO looks/transforms browser (ui/color_panel_widget.h): "Add
+    // to Clip" emits "ocio:<name>" which lands as a ClipEffect on the
+    // current selection — same path as the plugins panel. Refresh()
+    // re-reads the profiles Boot() loaded from assets/color.yaml.
+    color_panel_ = ColorPanelWidget::Create();
+    color_panel_->SetOnAddEffect([this](const std::string& type) {
+        ClipEffect fx;
+        fx.type = type;
+        AddClipEffectBy(selected_clip_id_, fx);
+    });
+    color_panel_->Refresh();
+
+    // Embedded Chromium tab (src/cef): graceful placeholder when the
+    // CEF binary distribution is not installed next to the exe.
+    browser_panel_ = std::make_shared<BrowserPanelWidget>(parent_hwnd_);
+
+    // .xexrj extension host: verified TZ archives under
+    // assets/extensions/ whose main.js runs in the shared V8 engine;
+    // extension UI renders via xer-ext:// inside the Web tab.
+    ExtHost::Shared().SetActionFn(
+        [this](const std::string& action, const std::string& arg_json) {
+            return DispatchExtensionAction(action, arg_json);
+        });
+    ExtHost::Shared().SetOpenUiFn([this](const std::string& url) {
+        right_panel_visible_ = true;
+        right_tab_ = 9;
+        if (browser_panel_) browser_panel_->OpenUrl(url);
+        RequestLayout();
+        Invalidate();
+    });
+    {
+        const auto ext_dir =
+            AppRuntime::SharedAssetsConfig().assets_dir / "extensions";
+        if (!ext_dir.empty()) {
+            ExtHost::Shared().Scan(ext_dir.string());
+            const auto& exts = ExtHost::Shared().Entries();
+            if (!exts.empty()) {
+                size_t good = 0, ran = 0;
+                for (const auto& e : exts) {
+                    good += e.verified;
+                    // Verified extensions auto-run their entry point —
+                    // that's the "main.js executes inside the TZ"
+                    // contract; failures land on the status bar.
+                    if (!e.verified) continue;
+                    auto r = ExtHost::Shared().Run(e.manifest.id);
+                    if (r.ok) {
+                        ++ran;
+                    } else {
+                        SetStatus("ext '" + e.manifest.id +
+                                  "': " + r.error, true);
+                    }
+                }
+                const std::string msg =
+                    "extensions: " + std::to_string(good) + "/" +
+                    std::to_string(exts.size()) + " verified, " +
+                    std::to_string(ran) + " running";
+                std::cerr << msg << "\n";   // visible in headless logs
+                SetStatus(msg);
+            }
+        }
+    }
 
     TimelineWidget::Hooks timeline_hooks;
     timeline_hooks.on_select_clip = [this](const std::string& id) {
@@ -446,6 +847,8 @@ void VideoEditorAppWidget::EnsureChildren() {
         [this](const std::string& id, double rate) {
             SetClipRateBy(id, rate);
         };
+    timeline_hooks.on_add_transition =
+        [this](const std::string& id) { AddTransitionAfter(id); };
     timeline_hooks.on_add_marker =
         [this](double t, const std::string& name) {
             AddMarkerAt(t, name);
@@ -516,6 +919,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(export_btn_);
     AddChild(status_label_);
     AddChild(zoom_label_);
+    AddChild(nav_rail_);
     AddChild(media_bin_);
     AddChild(monitor_);
     AddChild(inspector_);
@@ -525,6 +929,9 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(history_panel_);
     AddChild(mixer_panel_);
     AddChild(export_queue_);
+    AddChild(plugins_panel_);
+    AddChild(color_panel_);
+    AddChild(browser_panel_);
     AddChild(waveform_panel_);
     AddChild(status_toast_);
     AddChild(tab_inspector_btn_);
@@ -534,7 +941,28 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(tab_history_btn_);
     AddChild(tab_mixer_btn_);
     AddChild(tab_queue_btn_);
+    AddChild(tab_plugins_btn_);
+    AddChild(tab_color_btn_);
+    AddChild(tab_browser_btn_);
     AddChild(timeline_);
+}
+
+bool VideoEditorAppWidget::OnContextMenu(
+    const XER::UI::Widgets::Event& event) {
+    const XER::UI::Layout::Point p = event.position;
+    if (timeline_ != nullptr && timeline_->IsVisible() &&
+        timeline_->ShowContextMenu(p)) {
+        return true;
+    }
+    if (media_bin_ != nullptr && media_bin_->IsVisible() &&
+        media_bin_->ShowContextMenu(p)) {
+        return true;
+    }
+    if (monitor_ != nullptr && monitor_->IsVisible() &&
+        monitor_->ShowContextMenu(p)) {
+        return true;
+    }
+    return false;
 }
 
 void VideoEditorAppWidget::InstallGlobalShortcuts() {
@@ -546,11 +974,48 @@ void VideoEditorAppWidget::InstallGlobalShortcuts() {
 }
 
 void VideoEditorAppWidget::BuildTitleBar() {
+    using MenuItem = Widgets::AppTitleBar::MenuItem;
+    title_bar_ = std::make_shared<Widgets::AppTitleBar>(
+        AppRuntime::SharedUiStrings().Get("app_name", "XER Studio"));
+    title_bar_->SetWorkspaceLabel("Video Editor");
+    // The center pill carries the project file name; activating it
+    // opens the project-settings dialog (rename/settings in one spot).
+    title_bar_->SetCenterCommand(
+        "Untitled.xerproj",
+        [this] { ShowProjectSettingsDialog(); }, false);
+    // Workspace-label dropdown: the same BuiltinWorkspaces presets the
+    // View menu lists, routed to ApplyWorkspace.
+    std::vector<MenuItem> workspace_items;
+    for (const WorkspaceLayout& ws : BuiltinWorkspaces()) {
+        workspace_items.push_back(
+            {ws.name, "", [this, ws] { ApplyWorkspace(ws); }});
+    }
+    title_bar_->SetWorkspaceItems(std::move(workspace_items));
+    // Avatar chip: no account system in the editor, so it doubles as
+    // a quick shortcut menu instead of a stub "U" glyph.
+    title_bar_->SetAvatar(
+        "Editor",
+        {{"Project Settings…", "",
+          [this] { ShowProjectSettingsDialog(); }},
+         {"Keyboard Shortcuts", "?",
+          [this] { ToggleShortcutsOverlay(); }}});
+    RebuildTitleBarMenus();
+    // Export lives in the main toolbar (pinned right) — a second pill
+    // in the title bar duplicated it.
+    title_bar_->SetLeftPanelToggle(true, left_panel_visible_, [this] {
+        left_panel_visible_ = !left_panel_visible_;
+        RequestLayout();
+    });
+    title_bar_->SetRightPanelToggle(true, right_panel_visible_, [this] {
+        right_panel_visible_ = !right_panel_visible_;
+        RequestLayout();
+    });
+}
+
+void VideoEditorAppWidget::RebuildTitleBarMenus() {
+    if (!title_bar_) return;
     using Menu = Widgets::AppTitleBar::Menu;
     using MenuItem = Widgets::AppTitleBar::MenuItem;
-    title_bar_ = std::make_shared<Widgets::AppTitleBar>("XER Studio");
-    title_bar_->SetWorkspaceLabel("Video Editor");
-    title_bar_->SetCenterCommand("Untitled.xerproj", nullptr, false);
 
     auto item = [](std::string label, std::string shortcut,
                    std::function<void()> action, bool enabled = true,
@@ -572,24 +1037,16 @@ void VideoEditorAppWidget::BuildTitleBar() {
     file.items = {
         item("New Project", "Ctrl+N", [this] { NewProject(); }),
         item("Open Project…", "Ctrl+O", [this] { OpenProject(); }),
+        item("Recover Autosave", "", [this] { RecoverAutosave(); },
+             autosave_offer_),
         item("Save", "Ctrl+S", [this] { SaveProject(false); }),
         item("Save As…", "Ctrl+Shift+S",
              [this] { SaveProject(true); }),
         item("Import Media…", "", [this] { ImportMedia(); }, true, false,
              false, true),
-        item("Project Settings…", "", [this] {
-            ProjectSettings settings;
-            settings.w = project_.width;
-            settings.h = project_.height;
-            settings.fps_num = project_.fps_num;
-            settings.fps_den = project_.fps_den;
-            settings.bg = project_.bg_color;
-            settings_dialog_->SetProjectName(
-                project_path_.empty() ? "Untitled.xerproj"
-                                      : Basename(project_path_));
-            settings_dialog_->SetSettings(settings);
-            ShowOverlay(settings_dialog_);
-        }, true, false, false, true),
+        item("Project Settings…", "",
+             [this] { ShowProjectSettingsDialog(); }, true, false,
+             false, true),
         item("Export MP4…", "Ctrl+P", [this] { StartExport(); }, true,
              false, false, true),
     };
@@ -668,6 +1125,12 @@ void VideoEditorAppWidget::BuildTitleBar() {
              right_tab_ == 4),
         item("Audio Mixer", "", [this] { SetRightTab(5); }, true,
              right_tab_ == 5),
+        item("Color", "", [this] { SetRightTab(8); }, true,
+             right_tab_ == 8),
+        item("Browser", "", [this] {
+            right_panel_visible_ = true;
+            SetRightTab(9);
+        }, true, right_tab_ == 9),
         item("Keyboard Shortcuts", "?", [this] {
             ToggleShortcutsOverlay();
         }),
@@ -678,15 +1141,20 @@ void VideoEditorAppWidget::BuildTitleBar() {
                  [this, ws] { ApplyWorkspace(ws); }));
     }
     title_bar_->SetMenus({file, edit, timeline, view});
-    title_bar_->SetActionPill("Export", [this] { StartExport(); }, true);
-    title_bar_->SetLeftPanelToggle(true, left_panel_visible_, [this] {
-        left_panel_visible_ = !left_panel_visible_;
-        RequestLayout();
-    });
-    title_bar_->SetRightPanelToggle(true, right_panel_visible_, [this] {
-        right_panel_visible_ = !right_panel_visible_;
-        RequestLayout();
-    });
+}
+
+void VideoEditorAppWidget::ShowProjectSettingsDialog() {
+    ProjectSettings settings;
+    settings.w = project_.width;
+    settings.h = project_.height;
+    settings.fps_num = project_.fps_num;
+    settings.fps_den = project_.fps_den;
+    settings.bg = project_.bg_color;
+    settings_dialog_->SetProjectName(
+        project_path_.empty() ? "Untitled.xerproj"
+                              : Basename(project_path_));
+    settings_dialog_->SetSettings(settings);
+    ShowOverlay(settings_dialog_);
 }
 
 void VideoEditorAppWidget::NewProject() {
@@ -733,6 +1201,8 @@ void VideoEditorAppWidget::OpenProject() {
         static_cast<HWND>(parent_hwnd_),
         FilterSpec(L"XER project", L"*.xerproj"), L"Open project");
     if (!picked.empty()) LoadProject(Str::WideToUtf8(picked));
+#else
+    SetStatus("Open dialog is Windows-only", true);
 #endif
 }
 
@@ -781,11 +1251,23 @@ void VideoEditorAppWidget::ImportMedia() {
     selected_media_path_ = path;
     RefreshCatalog();
     SetStatus("Imported " + Basename(path));
+#else
+    SetStatus("Import dialog is Windows-only", true);
 #endif
 }
 
 void VideoEditorAppWidget::AddSelectedToTimeline() {
-    const CatalogEntry* entry = FindCatalogEntry(selected_media_path_);
+    AddMediaToTimeline(selected_media_path_);
+}
+
+void VideoEditorAppWidget::AddMediaToTimeline(const std::string& path) {
+    // The media-bin context menu passes the clicked row's path; the
+    // toolbar Add button passes the selection. Fall back to the
+    // selection only when the explicit path isn't in the catalog.
+    const CatalogEntry* entry = FindCatalogEntry(path);
+    if (entry == nullptr && path != selected_media_path_) {
+        entry = FindCatalogEntry(selected_media_path_);
+    }
     if (entry == nullptr) {
         SetStatus("Select media in the bin first", true);
         return;
@@ -872,24 +1354,65 @@ void VideoEditorAppWidget::BeginConfiguredExport() {
     // scale) with the configured range mode.
     ExportOptions options = export_dialog_->GetExportOptions();
     options.output_path = output;
+    // Mixer master fader -> export mix bus (ExportOptions field added
+    // by the engine pass).
+    options.master_gain_db = project_.master_gain_db;
+    EnqueueExport(options);
+}
+
+void VideoEditorAppWidget::EnqueueExport(const ExportOptions& options) {
     std::string error;
     if (!export_engine_.Start(project_, options, {}, &error)) {
         SetStatus("Export failed: " + error, true);
         return;
     }
-    export_dialog_->SetProgress(export_engine_.Progress());
+    if (export_dialog_) {
+        // Reset re-arms the finished flag so Tick() lands the
+        // completion — a retried job never re-opens the dialog.
+        export_dialog_->Reset();
+        export_dialog_->SetProgress(export_engine_.Progress());
+    }
     // Track the job in the export queue panel (cap the history at 8).
     ExportJobRow job;
-    job.label = Basename(output);
-    job.detail = options.video_codec + " " +
-                 std::to_string(options.video_bit_rate / 1000) +
-                 " kbps · " + options.audio_codec;
+    job.label = Basename(options.output_path);
+    job.output_path = options.output_path;
+    // Empty video_codec is the audio-only convention (export_preset.cc)
+    // — don't print a leading " 0 kbps" video column for those jobs.
+    job.detail = options.video_codec.empty()
+                     ? options.audio_codec + " " +
+                           std::to_string(options.audio_bit_rate / 1000) +
+                           " kbps · audio only"
+                     : options.video_codec + " " +
+                           std::to_string(options.video_bit_rate / 1000) +
+                           " kbps · " + options.audio_codec;
     job.progress = 0.0f;
     job.state = static_cast<int>(ExportJobState::Running);
     export_jobs_.push_back(std::move(job));
-    if (export_jobs_.size() > 8) export_jobs_.erase(export_jobs_.begin());
+    export_job_options_.push_back(options);
+    while (export_jobs_.size() > 8) {
+        export_jobs_.erase(export_jobs_.begin());
+        export_job_options_.erase(export_job_options_.begin());
+    }
     RefreshExportQueue();
-    SetStatus("Exporting " + Basename(output));
+    SetStatus("Exporting " + Basename(options.output_path));
+}
+
+void VideoEditorAppWidget::RetryExport(int job) {
+    if (job < 0 || job >= static_cast<int>(export_jobs_.size()) ||
+        job >= static_cast<int>(export_job_options_.size())) {
+        return;
+    }
+    if (export_engine_.IsRunning()) {
+        SetStatus("Export already running", true);
+        return;
+    }
+    // Re-issue with the options captured at queue time. The failed row
+    // is dropped so the retried job lands at the back — Tick() tracks
+    // progress on export_jobs_.back() only.
+    const ExportOptions options = export_job_options_[job];
+    export_jobs_.erase(export_jobs_.begin() + job);
+    export_job_options_.erase(export_job_options_.begin() + job);
+    EnqueueExport(options);
 }
 
 void VideoEditorAppWidget::AddTrack(TrackKind kind) {
@@ -907,6 +1430,9 @@ void VideoEditorAppWidget::SelectClip(const std::string& clip_id) {
     selected_clip_id_ = clip_id;
     timeline_->SetSelectedClip(clip_id);
     inspector_->SetClip(FindClip(project_, clip_id));
+    // Timeline menu items ("Edit Title…", "Speed/Duration…") snapshot
+    // the selection at build time — refresh so they track it.
+    RebuildTitleBarMenus();
     SetStatus(clip_id.empty() ? "Selection cleared"
                               : "Selected " + clip_id);
 }
@@ -986,6 +1512,13 @@ void VideoEditorAppWidget::EnsurePreviewEngine() {
     std::string error;
     preview_ready_ = preview_engine_.Init(project_, options,
                                         engine_sink_.get(), &error);
+    // Init resets the master-gain command — re-apply the UI fader.
+    if (preview_ready_) {
+        preview_engine_.SetMasterGainDb(project_.master_gain_db);
+        // Same for the monitor's playback-quality pick — Init resets
+        // the engine's quality command to full res.
+        preview_engine_.SetQuality(preview_quality_);
+    }
     preview_dirty_ = false;
     if (!preview_ready_) {
         SetStatus("Preview init failed: " + error, true);
@@ -1387,6 +1920,7 @@ void VideoEditorAppWidget::ApplyWorkspace(const WorkspaceLayout& ws) {
     left_panel_visible_ = ws.left_visible;
     right_panel_visible_ = ws.right_visible;
     timeline_fraction_ = std::clamp(ws.timeline_fraction, 0.2, 0.5);
+    timeline_height_ = 0.0f;   // drop splitter override; fraction rules
     SetRightTab(ws.right_tab);   // restyles tabs + RequestLayout
     SetStatus("Workspace: " + ws.name);
 }
@@ -1431,6 +1965,111 @@ void VideoEditorAppWidget::InitAutosave() {
     }
 }
 
+void VideoEditorAppWidget::CheckAutosaveRecovery() {
+    autosave_offer_ = false;
+    autosave_offer_dir_.clear();
+    autosave_offer_project_.clear();
+    // Only offer when nothing meaningful is loaded — autosaves of an
+    // already-open project's edits stay silently available.
+    if (!project_.clips.empty()) return;
+    if (!project_path_.empty()) {
+        // Bound project: slots live in <project dir>/autosave.
+        const std::string dir = Path::NormalizeUtf8Path(
+            (std::filesystem::path(Path::FromUtf8(project_path_))
+                 .parent_path() / "autosave")
+                .string());
+        const std::vector<std::string> slots =
+            AutosaveManager::ListAutosaves(project_path_, dir);
+        if (slots.empty()) return;
+        autosave_offer_ = true;
+        autosave_offer_dir_ = dir;
+        autosave_offer_project_ = project_path_;
+    } else {
+        // Unsaved session: look for an autosave dir next to the CWD.
+        // Slot files are "<stem>.autosave-N.xerproj" (N=1 newest) —
+        // the newest file's stem identifies the owning project.
+        std::error_code ec;
+        const std::filesystem::path dir =
+            std::filesystem::current_path(ec) / "autosave";
+        if (ec || !std::filesystem::is_directory(dir, ec) || ec) return;
+        std::string newest_stem;
+        std::filesystem::file_time_type newest_time{};
+        for (std::filesystem::directory_iterator it(dir, ec), end;
+             !ec && it != end; it.increment(ec)) {
+            std::error_code tec;
+            if (!it->is_regular_file(tec) || tec) continue;
+            const std::string name =
+                Path::ToUtf8(it->path().filename());
+            const std::size_t marker = name.find(".autosave-");
+            if (marker == std::string::npos) continue;
+            if (name.size() < 8 ||
+                name.compare(name.size() - 8, 8, ".xerproj") != 0) {
+                continue;
+            }
+            const auto write_time = it->last_write_time(tec);
+            if (tec) continue;
+            if (newest_stem.empty() || write_time > newest_time) {
+                newest_time = write_time;
+                newest_stem = name.substr(0, marker);
+            }
+        }
+        if (newest_stem.empty()) return;
+        autosave_offer_ = true;
+        autosave_offer_dir_ =
+            Path::NormalizeUtf8Path(dir.string());
+        autosave_offer_project_ = Path::NormalizeUtf8Path(
+            (dir.parent_path() / (newest_stem + ".xerproj")).string());
+    }
+    SetStatus("Autosave found: " +
+              Basename(autosave_offer_project_) +
+              " — restore via File ▸ Recover Autosave");
+    if (status_toast_) {
+        status_toast_->Push(
+            "Autosave found — File ▸ Recover Autosave to restore",
+            false);
+    }
+    // Rebuild so the File menu's Recover Autosave item enables.
+    RebuildTitleBarMenus();
+}
+
+void VideoEditorAppWidget::RecoverAutosave() {
+    if (!autosave_offer_) {
+        SetStatus("No autosave to recover", true);
+        return;
+    }
+    Project restored;
+    std::string error;
+    if (!AutosaveManager::LoadLatest(autosave_offer_project_,
+                                     autosave_offer_dir_, &restored,
+                                     &error)) {
+        SetStatus("Autosave restore failed: " + error, true);
+        autosave_offer_ = false;
+        RebuildTitleBarMenus();
+        return;
+    }
+    history_.Clear();
+    project_ = std::move(restored);
+    // Keep the originating path only when the primary file still
+    // exists — otherwise Save stays a Save-As instead of silently
+    // writing next to a deleted project.
+    std::error_code ec;
+    project_path_ =
+        std::filesystem::exists(
+            Path::FromUtf8(autosave_offer_project_), ec)
+            ? autosave_offer_project_
+            : std::string{};
+    InitAutosave();
+    autosave_offer_ = false;
+    selected_clip_id_.clear();
+    playhead_ = 0.0;
+    NotifyProjectChanged();
+    RebuildTitleBarMenus();
+    SetStatus(project_path_.empty()
+                  ? "Restored autosave (unsaved) — Save As to keep it"
+                  : "Restored autosave for " +
+                        Basename(autosave_offer_project_));
+}
+
 void VideoEditorAppWidget::SetClipKeyframesBy(
     const std::string& clip_id, KeyProp prop,
     std::vector<Keyframe> keys) {
@@ -1461,6 +2100,159 @@ void VideoEditorAppWidget::AddClipEffectBy(const std::string& clip_id,
     }
     NotifyProjectChanged();
     SetStatus("Added effect " + effect.type);
+}
+
+void VideoEditorAppWidget::DetectBeatsForMedia(
+    const std::string& path) {
+    if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+        SetStatus("An AI task is already running", true);
+        return;
+    }
+    SetStatus("Detecting beats: " + Basename(path) + "…");
+    ai_progress_shown_ = -1.0f;
+    const bool started = ai_op_.Start(
+        [this, path](const Lab::JobControl& ctl) {
+            Ai::BeatResult beats;
+            std::string error;
+            // Cap analysis at 5 minutes — plenty for edit-to-the-beat
+            // workflows and keeps long media responsive.
+            if (!Ai::DetectBeats(path, 300.0, &beats, &error)) {
+                ctl.Fail(std::move(error));
+                return false;
+            }
+            {
+                std::lock_guard lock(ai_result_mutex_);
+                ai_result_.markers.clear();
+                for (const double t : beats.times) {
+                    ai_result_.markers.emplace_back(t, "Beat");
+                }
+                if (beats.bpm > 0.0) {
+                    ai_result_.detail =
+                        std::to_string(
+                            static_cast<int>(std::lround(beats.bpm))) +
+                        " BPM";
+                } else {
+                    ai_result_.detail.clear();
+                }
+            }
+            return true;
+        });
+    if (!started) SetStatus("An AI task is already running", true);
+}
+
+void VideoEditorAppWidget::TranscribeMedia(const std::string& path) {
+    if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+        SetStatus("An AI task is already running", true);
+        return;
+    }
+    std::string detail;
+    if (!Ai::WhisperAvailable(&detail)) {
+        SetStatus("Whisper unavailable: " + detail, true);
+        return;
+    }
+    const std::string model = Ai::FindWhisperModel();
+    if (model.empty()) {
+        SetStatus(
+            "No whisper model — put ggml-*.bin in models/ or set "
+            "XER_WHISPER_MODEL",
+            true);
+        return;
+    }
+    SetStatus("Transcribing: " + Basename(path) + "…");
+    ai_progress_shown_ = -1.0f;
+    const bool started = ai_op_.Start(
+        [this, path, model](const Lab::JobControl& ctl) {
+            Ai::Pcm pcm;
+            std::string error;
+            // 16 kHz mono is the whisper contract; cap at 10 minutes.
+            if (!Ai::ExtractMonoPcm(path, 16000, 600.0, &pcm, &error)) {
+                ctl.Fail(std::move(error));
+                return false;
+            }
+            std::vector<Ai::TranscriptSegment> segments;
+            if (!Ai::Transcribe(
+                    pcm.samples, model,
+                    [&ctl](float p) { ctl.ReportProgress(p); },
+                    &segments, &error)) {
+                ctl.Fail(std::move(error));
+                return false;
+            }
+            {
+                std::lock_guard lock(ai_result_mutex_);
+                ai_result_.markers.clear();
+                for (const auto& seg : segments) {
+                    std::string label = seg.text;
+                    if (label.size() > 48) {
+                        label = label.substr(0, 45) + "…";
+                    }
+                    if (label.empty()) label = "Speech";
+                    ai_result_.markers.emplace_back(seg.t0,
+                                                    std::move(label));
+                }
+                ai_result_.detail =
+                    std::to_string(segments.size()) + " segments";
+            }
+            return true;
+        });
+    if (!started) SetStatus("An AI task is already running", true);
+}
+
+void VideoEditorAppWidget::BounceAudioFx(
+    const std::string& path, const std::string& plugin_id) {
+    if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+        SetStatus("A task is already running", true);
+        return;
+    }
+    const PluginDesc* desc = SharedPluginHost().Find(plugin_id);
+    if (desc == nullptr || desc->audio_fn == nullptr) {
+        SetStatus("Audio plugin not found: " + plugin_id, true);
+        return;
+    }
+    const PluginDesc copy = *desc;  // fn pointer stays valid (DLL loaded)
+    SetStatus("Audio FX " + copy.name + ": " + Basename(path) + "…");
+    ai_progress_shown_ = -1.0f;
+    const bool started = ai_op_.Start(
+        [this, path, copy](const Lab::JobControl& ctl) {
+            Ai::Pcm pcm;
+            std::string error;
+            // Source rate, mono, capped at 5 minutes — the bounce stays
+            // light and the catalog picks it up like any import.
+            if (!Ai::ExtractMonoPcm(path, 0, 300.0, &pcm, &error) ||
+                pcm.samples.empty() || pcm.sample_rate <= 0) {
+                ctl.Fail("decode: " + error);
+                return false;
+            }
+            const int frames = static_cast<int>(pcm.samples.size());
+            std::vector<float> params;
+            params.reserve(copy.params.size());
+            for (const XER_ParamDesc& pd : copy.params) {
+                params.push_back(pd.default_value);
+            }
+            if (!PluginHost::ApplyAudio(copy, pcm.samples.data(), frames,
+                                        1, pcm.sample_rate, params)) {
+                ctl.Fail("plugin apply failed");
+                return false;
+            }
+            // <stem>.<plugin-id>.wav next to the source.
+            const std::filesystem::path src(path);
+            const std::string out =
+                (src.parent_path() /
+                 (src.stem().string() + "." + copy.id + ".wav"))
+                    .string();
+            if (!WriteWav16(out, pcm.samples.data(), frames, 1,
+                            pcm.sample_rate)) {
+                ctl.Fail("cannot write " + out);
+                return false;
+            }
+            {
+                std::lock_guard lock(ai_result_mutex_);
+                ai_result_.markers.clear();
+                ai_result_.bounce_path = out;
+                ai_result_.detail = copy.name;
+            }
+            return true;
+        });
+    if (!started) SetStatus("A task is already running", true);
 }
 
 void VideoEditorAppWidget::AddMarkerAt(double t,
@@ -1528,15 +2320,21 @@ void VideoEditorAppWidget::SetTrackFlag(int track, char which, bool on) {
             return;
         }
     } else if (which == 'm') {
-        project_.tracks[track].muted = on;
+        if (!history_.SetTrackMuted(track, on, &error)) {
+            SetStatus("Mute failed: " + error, true);
+            return;
+        }
     } else {
-        project_.tracks[track].hidden = on;
+        if (!history_.SetTrackHidden(track, on, &error)) {
+            SetStatus("Hide failed: " + error, true);
+            return;
+        }
     }
     NotifyProjectChanged();
 }
 
 void VideoEditorAppWidget::SetRightTab(int tab) {
-    right_tab_ = std::clamp(tab, 0, 6);
+    right_tab_ = std::clamp(tab, 0, 8);
     const auto style_for = [this](int index) {
         return right_tab_ == index ? Widgets::ButtonStyle::Secondary
                                    : Widgets::ButtonStyle::Ghost;
@@ -1548,6 +2346,8 @@ void VideoEditorAppWidget::SetRightTab(int tab) {
     if (tab_history_btn_) tab_history_btn_->SetStyle(style_for(4));
     if (tab_mixer_btn_) tab_mixer_btn_->SetStyle(style_for(5));
     if (tab_queue_btn_) tab_queue_btn_->SetStyle(style_for(6));
+    if (tab_plugins_btn_) tab_plugins_btn_->SetStyle(style_for(7));
+    if (tab_color_btn_) tab_color_btn_->SetStyle(style_for(8));
     RequestLayout();
     Invalidate();
 }
@@ -1632,6 +2432,8 @@ void VideoEditorAppWidget::AddVst3FxToSelectedClip() {
     }
     NotifyProjectChanged();
     SetStatus("Added VST3 effect");
+#else
+    SetStatus("VST3 is Windows-only", true);
 #endif
 }
 
@@ -1665,6 +2467,8 @@ void VideoEditorAppWidget::OpenVst3FxEditor() {
         return;
     }
     SetStatus("Opened " + fx->name);
+#else
+    SetStatus("VST3 is Windows-only", true);
 #endif
 }
 
@@ -1801,7 +2605,7 @@ void VideoEditorAppWidget::NotifyProjectChanged() {
     }
     if (mixer_panel_) {
         mixer_panel_->SetProject(&project_);
-        mixer_panel_->SetMasterGainDb(master_gain_db_);
+        mixer_panel_->SetMasterGainDb(project_.master_gain_db);
     }
     RefreshWaveformPanel();
     monitor_->SetProject(project_);
@@ -1810,6 +2614,10 @@ void VideoEditorAppWidget::NotifyProjectChanged() {
             project_path_.empty() ? "Untitled.xerproj"
                                   : Basename(project_path_));
     }
+    // Selection-dependent Timeline items snapshot selected_clip_id_ at
+    // menu build — clip deletes clear it without going through
+    // SelectClip(), so refresh here too.
+    RebuildTitleBarMenus();
     Invalidate();
 }
 
@@ -1821,6 +2629,62 @@ void VideoEditorAppWidget::SetStatus(const std::string& text,
     if (is_error && status_toast_ && !text.empty()) {
         status_toast_->Push(text, true);
     }
+}
+
+std::string VideoEditorAppWidget::DispatchExtensionAction(
+    const std::string& action, const std::string& arg_json) {
+    if (action == "project_info") {
+        char buf[512];
+        std::snprintf(
+            buf, sizeof buf,
+            "{\"width\":%d,\"height\":%d,\"fps_num\":%d,"
+            "\"fps_den\":%d,\"tracks\":%zu,\"clips\":%zu,"
+            "\"duration\":%.3f,\"master_gain_db\":%.2f}",
+            project_.width, project_.height, project_.fps_num,
+            project_.fps_den, project_.tracks.size(),
+            project_.clips.size(), project_.duration(),
+            static_cast<double>(project_.master_gain_db));
+        return buf;
+    }
+    if (action == "status") {
+        // Cheap extraction — the host only ever sends {"text": ...}.
+        const auto key = arg_json.find("\"text\"");
+        std::string text;
+        if (key != std::string::npos) {
+            const auto colon = arg_json.find(':', key + 6);
+            const auto q1 = arg_json.find('"', colon + 1);
+            if (q1 != std::string::npos) {
+                std::string raw;
+                bool esc = false;
+                for (size_t i = q1 + 1; i < arg_json.size(); ++i) {
+                    const char c = arg_json[i];
+                    if (esc) { raw.push_back(c); esc = false; continue; }
+                    if (c == '\\') { esc = true; continue; }
+                    if (c == '"') break;
+                    raw.push_back(c);
+                }
+                text = raw;
+            }
+        }
+        SetStatus(text);
+        return "{\"ok\":true}";
+    }
+    if (action == "run_extension") {
+        const auto key = arg_json.find("\"id\"");
+        if (key == std::string::npos) {
+            return "{\"error\":\"id required\"}";
+        }
+        const auto q1 = arg_json.find('"', arg_json.find(':', key));
+        const auto q2 = arg_json.find('"', q1 + 1);
+        if (q1 == std::string::npos || q2 == std::string::npos) {
+            return "{\"error\":\"id malformed\"}";
+        }
+        auto r = ExtHost::Shared().Run(arg_json.substr(q1 + 1,
+                                                       q2 - q1 - 1));
+        if (!r.ok) return "{\"error\":\"" + r.error + "\"}";
+        return "{\"ok\":true,\"output\":\"" + r.output + "\"}";
+    }
+    return "{\"error\":\"unknown extension action: " + action + "\"}";
 }
 
 MediaBounds VideoEditorAppWidget::BoundsForPath(
@@ -1858,11 +2722,76 @@ void VideoEditorAppWidget::Render(
     renderer.DrawLine({bounds.x, bounds.y + 82.0f},
                       {bounds.x + bounds.width, bounds.y + 82.0f},
                       tokens.border, 1.0f);
+    // Structural chrome cached by Layout(): the right-panel tab strip
+    // reads as a bar above the active panel, the status bar gets its
+    // own surface, and the timeline split gets a hairline divider.
+    if (status_bar_top_ > 0.0f) {
+        renderer.FillRect({bounds.x, status_bar_top_, bounds.width,
+                           bounds.height - status_bar_top_},
+                          tokens.panel, 0.0f);
+        renderer.DrawLine({bounds.x, status_bar_top_},
+                          {bounds.x + bounds.width, status_bar_top_},
+                          tokens.border, 1.0f);
+    }
+    if (tab_strip_rect_.width > 0.0f) {
+        renderer.FillRect(tab_strip_rect_, tokens.panel, 0.0f);
+        renderer.DrawLine(
+            {tab_strip_rect_.x,
+             tab_strip_rect_.y + tab_strip_rect_.height},
+            {tab_strip_rect_.x + tab_strip_rect_.width,
+             tab_strip_rect_.y + tab_strip_rect_.height},
+            tokens.border, 1.0f);
+    }
+    if (timeline_top_ > 0.0f) {
+        renderer.DrawLine({bounds.x, timeline_top_},
+                          {bounds.x + bounds.width, timeline_top_},
+                          tokens.border, 1.0f);
+    }
+    // Splitter affordances: a thin centered line inside each gap strip —
+    // border-subtle at rest, accent and slightly thicker on hover/drag.
+    const auto draw_splitter =
+        [&](const XER::UI::Layout::Rect& rect, int index,
+            bool vertical) {
+            if (rect.width <= 0.0f || rect.height <= 0.0f) return;
+            const bool active =
+                drag_splitter_ == index || hover_splitter_ == index;
+            const auto& color = active ? tokens.accent : tokens.border;
+            const float thick = active ? 2.0f : 1.0f;
+            if (vertical) {
+                renderer.FillRect(
+                    {rect.x + rect.width * 0.5f - thick * 0.5f, rect.y,
+                     thick, rect.height},
+                    color, 0.0f);
+            } else {
+                renderer.FillRect(
+                    {rect.x,
+                     rect.y + rect.height * 0.5f - thick * 0.5f,
+                     rect.width, thick},
+                    color, 0.0f);
+            }
+        };
+    draw_splitter(left_splitter_rect_, 0, true);
+    draw_splitter(right_splitter_rect_, 1, true);
+    draw_splitter(timeline_splitter_rect_, 2, false);
 }
 
 void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     EnsureChildren();
     InstallGlobalShortcuts();
+    // Tree-level context-menu dispatch: any right-click a widget didn't
+    // consume lands in OnContextMenu() and is routed by region. Same
+    // lazy-register pattern as InstallGlobalShortcuts — retries until
+    // the tree is attached.
+    if (!context_menu_registered_) {
+        if (XER::UI::Widgets::WidgetTree* tree = GetTree();
+            tree != nullptr) {
+            context_menu_registered_ = true;
+            tree->SetContextMenuHandler(
+                [this](const Widgets::Event& event) {
+                    return OnContextMenu(event);
+                });
+        }
+    }
     SetBounds(bounds);
     const auto& tokens = CachedLayoutTokens();
     const float gap = tokens.spacing_small;
@@ -1871,107 +2800,203 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
 
     const float toolbar_y = bounds.y + 38.0f;
     const float toolbar_h = 44.0f;
-    float x = bounds.x + 10.0f;
+    const float margin = 10.0f;
+    // Export stays pinned right; the left button row hides buttons that
+    // would collide with it instead of drawing underneath.
+    const float export_x = bounds.x + bounds.width - margin - 84.0f;
+    float x = bounds.x + margin;
     const auto place = [&](const std::shared_ptr<Widgets::Button>& button,
                            float width) {
-        button->Layout({x, toolbar_y + 7.0f, width, 30.0f}, tokens);
+        const bool fits = x + width <= export_x - gap;
+        button->SetVisible(fits);
+        if (fits) {
+            button->Layout({x, toolbar_y + 7.0f, width, 30.0f}, tokens);
+        }
         x += width + gap;
     };
-    place(import_btn_, 70.0f);
-    place(add_btn_, 58.0f);
-    place(undo_btn_, 58.0f);
-    place(redo_btn_, 58.0f);
-    place(split_btn_, 58.0f);
-    place(delete_btn_, 66.0f);
-    place(snap_btn_, 58.0f);
-    place(play_btn_, 64.0f);
-    zoom_label_->Layout({x + 4.0f, toolbar_y + 10.0f,
-                         std::max(60.0f, bounds.x + bounds.width - 112.0f - x),
-                         22.0f}, tokens);
-    export_btn_->Layout({bounds.x + bounds.width - 96.0f,
-                         toolbar_y + 6.0f, 84.0f, 32.0f}, tokens);
+    // Row order comes from toolbar_row_ (built in EnsureChildren):
+    // toolbar.json order when the assets layer loaded, else compiled.
+    for (const auto& [button, width] : toolbar_row_) {
+        place(button, width);
+    }
+    const float zoom_x = x + 4.0f;
+    const float zoom_w = export_x - gap - zoom_x;
+    zoom_label_->SetVisible(zoom_w >= 48.0f);
+    if (zoom_w > 0.0f) {
+        zoom_label_->Layout({zoom_x, toolbar_y + 10.0f, zoom_w, 22.0f},
+                            tokens);
+    }
+    export_btn_->Layout({export_x, toolbar_y + 7.0f, 84.0f, 30.0f},
+                        tokens);
 
     const float status_h = 26.0f;
     const float content_top = toolbar_y + toolbar_h;
     const float content_bottom = bounds.y + bounds.height - status_h;
-    const float timeline_h = std::clamp(
-        (content_bottom - content_top) *
-            static_cast<float>(timeline_fraction_),
-        170.0f, 340.0f);
+    const float content_h =
+        std::max(0.0f, content_bottom - content_top);
     // Optional selected-clip waveform strip sits between the central
     // row and the timeline.
     const float wave_h =
         (waveform_panel_ && waveform_panel_->IsVisible()) ? 84.0f : 0.0f;
-    const float central_h =
-        std::max(80.0f, content_bottom - content_top - timeline_h -
-                            gap * 2.0f - wave_h);
+    // The timeline yields height before the central row is crushed:
+    // never push the monitor/panels below a usable strip or past the
+    // status bar on short windows.
+    const float max_timeline_h =
+        std::max(110.0f, content_h - 100.0f - gap * 2.0f - wave_h);
+    // A splitter drag pins an exact pixel height; otherwise the
+    // workspace fraction drives the timeline band.
+    const float timeline_h = std::min(
+        timeline_height_ > 0.0f
+            ? timeline_height_
+            : std::clamp(content_h *
+                             static_cast<float>(timeline_fraction_),
+                         170.0f, 340.0f),
+        max_timeline_h);
+    const float central_h = std::max(
+        60.0f, content_h - timeline_h - gap * 2.0f - wave_h);
 
-    const float left_w = left_panel_visible_
-        ? std::clamp(bounds.width * 0.20f, 230.0f, 320.0f)
+    // Icon rail on the far left, below the toolbar and above the
+    // status bar — everything else shifts right by its width.
+    constexpr float kRailW = 46.0f;
+    // Side panels keep their preferred sizes but shrink — then collapse —
+    // so the monitor never goes under 220px or overlaps them.
+    constexpr float kMinMonitorW = 220.0f;
+    // Panel widths come from the drag overrides (seeded from
+    // assets/ui/layout.yaml Panels.left/right.width in EnsureChildren);
+    // a 0 override falls back to the proportional default.
+    float left_w = left_panel_visible_
+        ? (left_width_ > 0.0f
+               ? left_width_
+               : std::clamp(bounds.width * 0.20f, 230.0f, 320.0f))
         : 0.0f;
-    const float right_w = right_panel_visible_
-        ? std::clamp(bounds.width * 0.22f, 250.0f, 340.0f)
+    float right_w = right_panel_visible_
+        ? (right_width_ > 0.0f
+               ? right_width_
+               : std::clamp(bounds.width * 0.22f, 250.0f, 340.0f))
         : 0.0f;
-    float panel_x = bounds.x + 10.0f;
+    const auto monitor_avail = [&] {
+        return bounds.width - kRailW - margin * 2.0f - left_w - right_w;
+    };
+    if (monitor_avail() < kMinMonitorW) {
+        right_w =
+            std::max(0.0f, right_w - (kMinMonitorW - monitor_avail()));
+        if (right_w < 200.0f) right_w = 0.0f;
+    }
+    if (monitor_avail() < kMinMonitorW) {
+        left_w =
+            std::max(0.0f, left_w - (kMinMonitorW - monitor_avail()));
+        if (left_w < 160.0f) left_w = 0.0f;
+    }
+    const bool left_eff = left_panel_visible_ && left_w > 0.0f;
+    const bool right_eff = right_panel_visible_ && right_w > 0.0f;
+
+    const float rail_x = bounds.x;
+    nav_rail_->Layout({rail_x, content_top, kRailW,
+                       content_bottom - content_top},
+                      tokens);
+    const float content_x = rail_x + kRailW;
+
+    float panel_x = content_x + margin;
     const float panel_y = content_top + gap;
-    media_bin_->SetVisible(left_panel_visible_);
-    media_bin_->SetPreviewActive(left_panel_visible_);
-    inspector_->SetVisible(right_panel_visible_);
-    if (left_panel_visible_) {
+    media_bin_->SetVisible(left_eff);
+    media_bin_->SetPreviewActive(left_eff);
+    if (left_eff) {
         media_bin_->Layout({panel_x, panel_y, left_w - gap,
                             std::max(80.0f, central_h)}, tokens);
         panel_x += left_w;
     }
     const float inspector_x =
-        bounds.x + bounds.width - 10.0f - right_w + gap;
+        bounds.x + bounds.width - margin - right_w + gap;
     const float monitor_w = std::max(
-        240.0f, bounds.x + bounds.width - 10.0f - panel_x - right_w);
+        60.0f, bounds.x + bounds.width - margin - panel_x - right_w);
     monitor_->Layout({panel_x, panel_y, monitor_w,
                       std::max(80.0f, central_h)}, tokens);
     // Right column: tab strip over the active panel — Premiere's
     // stacked panel group (Inspector/Effects/Markers/Lab/History/Mix).
-    inspector_->SetVisible(right_panel_visible_ && right_tab_ == 0);
-    effects_panel_->SetVisible(right_panel_visible_ && right_tab_ == 1);
-    markers_panel_->SetVisible(right_panel_visible_ && right_tab_ == 2);
-    lab_panel_->SetVisible(right_panel_visible_ && right_tab_ == 3);
-    history_panel_->SetVisible(right_panel_visible_ && right_tab_ == 4);
-    mixer_panel_->SetVisible(right_panel_visible_ && right_tab_ == 5);
-    export_queue_->SetVisible(right_panel_visible_ && right_tab_ == 6);
-    tab_inspector_btn_->SetVisible(right_panel_visible_);
-    tab_effects_btn_->SetVisible(right_panel_visible_);
-    tab_markers_btn_->SetVisible(right_panel_visible_);
-    tab_lab_btn_->SetVisible(right_panel_visible_);
-    tab_history_btn_->SetVisible(right_panel_visible_);
-    tab_mixer_btn_->SetVisible(right_panel_visible_);
-    tab_queue_btn_->SetVisible(right_panel_visible_);
-    if (right_panel_visible_) {
+    inspector_->SetVisible(right_eff && right_tab_ == 0);
+    effects_panel_->SetVisible(right_eff && right_tab_ == 1);
+    markers_panel_->SetVisible(right_eff && right_tab_ == 2);
+    lab_panel_->SetVisible(right_eff && right_tab_ == 3);
+    history_panel_->SetVisible(right_eff && right_tab_ == 4);
+    mixer_panel_->SetVisible(right_eff && right_tab_ == 5);
+    export_queue_->SetVisible(right_eff && right_tab_ == 6);
+    plugins_panel_->SetVisible(right_eff && right_tab_ == 7);
+    color_panel_->SetVisible(right_eff && right_tab_ == 8);
+    browser_panel_->SetVisible(right_eff && right_tab_ == 9);
+    tab_inspector_btn_->SetVisible(right_eff);
+    tab_effects_btn_->SetVisible(right_eff);
+    tab_markers_btn_->SetVisible(right_eff);
+    tab_lab_btn_->SetVisible(right_eff);
+    tab_history_btn_->SetVisible(right_eff);
+    tab_mixer_btn_->SetVisible(right_eff);
+    tab_queue_btn_->SetVisible(right_eff);
+    tab_plugins_btn_->SetVisible(right_eff);
+    tab_color_btn_->SetVisible(right_eff);
+    tab_browser_btn_->SetVisible(right_eff);
+    tab_strip_rect_ = {};
+    if (right_eff) {
         const float tab_h = 30.0f;
         const float tab_w =
-            (right_w - gap - gap * 6.0f) / 7.0f;
+            (right_w - gap - gap * 9.0f) / 10.0f;
+        tab_strip_rect_ = {inspector_x, panel_y, right_w - gap, tab_h};
         std::shared_ptr<Widgets::Button> tabs[] = {
             tab_inspector_btn_, tab_effects_btn_, tab_markers_btn_,
             tab_lab_btn_, tab_history_btn_, tab_mixer_btn_,
-            tab_queue_btn_};
+            tab_queue_btn_, tab_plugins_btn_, tab_color_btn_,
+            tab_browser_btn_};
         float tx = inspector_x;
         for (const auto& btn : tabs) {
-            btn->Layout({tx, panel_y, tab_w, tab_h - 6.0f}, tokens);
+            btn->Layout({tx, panel_y + 3.0f, tab_w, tab_h - 6.0f},
+                        tokens);
             tx += tab_w + gap;
         }
         std::shared_ptr<Widgets::Widget> panels[] = {
             inspector_,  effects_panel_, markers_panel_, lab_panel_,
-            history_panel_, mixer_panel_, export_queue_};
+            history_panel_, mixer_panel_, export_queue_,
+            plugins_panel_, color_panel_, browser_panel_};
         panels[right_tab_]->Layout(
             {inspector_x, panel_y + tab_h, right_w - gap,
              std::max(60.0f, central_h - tab_h)}, tokens);
     }
     if (wave_h > 0.0f) {
         waveform_panel_->Layout(
-            {bounds.x + 10.0f, panel_y + central_h + gap,
-             bounds.width - 20.0f, wave_h - gap}, tokens);
+            {content_x + 10.0f, panel_y + central_h + gap,
+             bounds.width - kRailW - 20.0f, wave_h - gap}, tokens);
     }
+    const float timeline_y = panel_y + central_h + gap + wave_h;
     timeline_->Layout(
-        {bounds.x + 10.0f, panel_y + central_h + gap + wave_h,
-         bounds.width - 20.0f, timeline_h}, tokens);
+        {content_x + 10.0f, timeline_y, bounds.width - kRailW - 20.0f,
+         timeline_h}, tokens);
+    timeline_top_ = timeline_y;
+    // Splitter hit-rects: 6px bars centered on the gap strips the child
+    // layout leaves between panels (gap = 8px, so a 6px rect fits fully
+    // inside). Events in those strips hit this widget — not a child —
+    // which is what makes HandleEvent() drags work.
+    constexpr float kSplitterW = 6.0f;
+    left_splitter_rect_ = {};
+    right_splitter_rect_ = {};
+    timeline_splitter_rect_ = {};
+    if (left_eff) {
+        // Left gap strip spans [panel_x - gap, panel_x).
+        left_splitter_rect_ = {
+            panel_x - gap * 0.5f - kSplitterW * 0.5f, panel_y,
+            kSplitterW, std::max(80.0f, central_h)};
+    }
+    if (right_eff) {
+        // Right gap strip spans [inspector_x - gap, inspector_x).
+        right_splitter_rect_ = {
+            inspector_x - gap * 0.5f - kSplitterW * 0.5f, panel_y,
+            kSplitterW, std::max(80.0f, central_h)};
+    }
+    // Timeline gap strip spans [timeline_y - gap, timeline_y).
+    timeline_splitter_rect_ = {
+        content_x + 10.0f, timeline_y - gap * 0.5f - kSplitterW * 0.5f,
+        bounds.width - kRailW - 20.0f, kSplitterW};
+    // Resolved sizes for the next drag's start deltas.
+    last_left_w_ = left_w;
+    last_right_w_ = right_w;
+    last_timeline_h_ = timeline_h;
+    status_bar_top_ = content_bottom;
     if (status_toast_) {
         // Click-through overlay spanning the whole window.
         status_toast_->Layout(bounds, tokens);
@@ -1983,6 +3008,96 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
 bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     using Widgets::Event;
     using Widgets::KeyCode;
+    // Panel splitters: hit-rects are cached by Layout() inside the gap
+    // strips between children, so presses land on this widget and the
+    // tree's left-button capture routes the whole drag here.
+    if (event.type == Event::Type::MouseDown &&
+        event.mouse_button == Widgets::MouseButton::Left) {
+        int hit = -1;
+        float start_size = 0.0f;
+        if (left_splitter_rect_.width > 0.0f &&
+            left_splitter_rect_.Contains(event.position)) {
+            hit = 0;
+            start_size = last_left_w_;
+        } else if (right_splitter_rect_.width > 0.0f &&
+                   right_splitter_rect_.Contains(event.position)) {
+            hit = 1;
+            start_size = last_right_w_;
+        } else if (timeline_splitter_rect_.width > 0.0f &&
+                   timeline_splitter_rect_.Contains(event.position)) {
+            hit = 2;
+            start_size = last_timeline_h_;
+        }
+        if (hit >= 0) {
+            drag_splitter_ = hit;
+            hover_splitter_ = hit;
+            drag_start_ =
+                hit == 2 ? event.position.y : event.position.x;
+            drag_start_size_ = start_size;
+            Invalidate();
+            return true;
+        }
+    }
+    if (event.type == Event::Type::MouseMove) {
+        if (drag_splitter_ >= 0) {
+            const float delta = drag_splitter_ == 2
+                ? event.position.y - drag_start_
+                : event.position.x - drag_start_;
+            switch (drag_splitter_) {
+                case 0: {  // left panel's right edge follows the cursor
+                    const float w = drag_start_size_ + delta;
+                    // Drag-through collapse like Premiere: under ~120px
+                    // the panel snaps hidden (View menu/toggles restore).
+                    if (w < 120.0f) {
+                        left_panel_visible_ = false;
+                        drag_splitter_ = -1;
+                    } else {
+                        left_width_ = std::clamp(w, 160.0f, 600.0f);
+                    }
+                    break;
+                }
+                case 1: {  // right panel: width grows leftward
+                    const float w = drag_start_size_ - delta;
+                    if (w < 120.0f) {
+                        right_panel_visible_ = false;
+                        drag_splitter_ = -1;
+                    } else {
+                        right_width_ = std::clamp(w, 160.0f, 600.0f);
+                    }
+                    break;
+                }
+                case 2:  // timeline top edge: height grows upward
+                    timeline_height_ = std::clamp(
+                        drag_start_size_ - delta, 120.0f, 500.0f);
+                    break;
+                default:
+                    break;
+            }
+            RequestLayout();
+            return true;
+        }
+        // Not dragging: track splitter hover for the accent tint.
+        int hover = -1;
+        if (left_splitter_rect_.width > 0.0f &&
+            left_splitter_rect_.Contains(event.position)) {
+            hover = 0;
+        } else if (right_splitter_rect_.width > 0.0f &&
+                   right_splitter_rect_.Contains(event.position)) {
+            hover = 1;
+        } else if (timeline_splitter_rect_.width > 0.0f &&
+                   timeline_splitter_rect_.Contains(event.position)) {
+            hover = 2;
+        }
+        if (hover != hover_splitter_) {
+            hover_splitter_ = hover;
+            Invalidate();
+        }
+    }
+    if (event.type == Event::Type::MouseUp && drag_splitter_ >= 0) {
+        drag_splitter_ = -1;
+        Invalidate();
+        return true;
+    }
     if (event.type == Event::Type::TextInput && event.text.size() == 1 &&
         !event.is_ctrl && !event.is_alt) {
         // Premiere tool letters -> timeline tool selection.
@@ -2025,7 +3140,15 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 Seek(playhead_ - 5.0);
                 return true;
             case 'k': case 'K':
-                if (monitor_->IsPlaying()) TogglePlay();
+                // Premiere K = pause only (Space toggles). Mirrors the
+                // TogglePlay else-branch; a paused K is a no-op.
+                if (monitor_->IsPlaying()) {
+                    preview_engine_.SetPlaying(false);
+                    monitor_->SetPlaying(false);
+                    monitor_->SetExternalPlayback(false);
+                    monitor_->SetTime(playhead_, true);
+                    play_btn_->SetText("Play");
+                }
                 return true;
             case 'l': case 'L':
                 Seek(playhead_ + 5.0);
@@ -2083,7 +3206,13 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         return true;
     }
     if (!event.is_ctrl && event.key == KeyCode::Delete) {
-        DeleteClip(selected_clip_id_);
+        // Alt+Del = ripple delete even when the timeline widget itself
+        // doesn't have focus (timeline's on_ripple_delete path).
+        if (event.is_alt) {
+            RippleDeleteClipById(selected_clip_id_);
+        } else {
+            DeleteClip(selected_clip_id_);
+        }
         return true;
     }
     return false;
@@ -2091,6 +3220,66 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
 
 void VideoEditorAppWidget::Tick(double dt_seconds) {
     if (status_toast_) status_toast_->Tick(dt_seconds);
+    // Shared AI job: land finished results (markers) on the UI thread.
+    {
+        bool ok = false, cancelled = false;
+        std::string ai_error;
+        if (ai_op_.PopResult(&ok, &cancelled, &ai_error)) {
+            ai_progress_shown_ = -1.0f;
+            AiResult result;
+            {
+                std::lock_guard lock(ai_result_mutex_);
+                result = std::move(ai_result_);
+                ai_result_ = AiResult{};
+            }
+            if (ok && !result.bounce_path.empty()) {
+                std::int64_t id = 0;
+                std::string imp_err;
+                if (catalog_.Open(&imp_err) &&
+                    catalog_.Import(result.bounce_path, &id, true,
+                                    &imp_err)) {
+                    SetStatus("Audio FX bounce imported: " +
+                              Basename(result.bounce_path));
+                    catalog_entries_ = catalog_.List(&imp_err);
+                    if (media_bin_ != nullptr) {
+                        media_bin_->SetEntries(catalog_entries_);
+                    }
+                } else {
+                    SetStatus("Bounce import failed: " + imp_err, true);
+                }
+            } else if (ok && !result.markers.empty()) {
+                history_.BeginMacro("AI markers");
+                int added = 0;
+                for (const auto& [t, name] : result.markers) {
+                    Marker marker;
+                    marker.time = t;
+                    marker.name = name;
+                    if (history_.AddMarker(marker, nullptr)) ++added;
+                }
+                history_.EndMacro();
+                NotifyProjectChanged();
+                SetStatus("AI: added " + std::to_string(added) +
+                          " marker(s)" +
+                          (result.detail.empty()
+                               ? ""
+                               : " — " + result.detail));
+            } else if (ok) {
+                SetStatus("AI finished — nothing to add");
+            } else {
+                SetStatus(cancelled ? "AI task cancelled"
+                                    : "AI failed: " + ai_error,
+                          true);
+            }
+        } else if (ai_op_.IsRunning()) {
+            const float p = ai_op_.Progress();
+            if (p != ai_progress_shown_ && p > 0.0f) {
+                ai_progress_shown_ = p;
+                SetStatus("AI running: " +
+                          std::to_string(static_cast<int>(p * 100.0f)) +
+                          "%");
+            }
+        }
+    }
     // Autosave poll (every ~2 s of wall time; the manager itself
     // enforces its own interval + dirty gating).
     autosave_poll_ += dt_seconds;
@@ -2142,6 +3331,13 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 play_btn_->SetText("Play");
             }
         }
+    }
+    // Mirror the engine's transport state onto the monitor's play
+    // button (MonitorWidget::SetEnginePlaying is added by the monitor
+    // pass — call after pending_playhead_/engine updates above).
+    if (monitor_) {
+        monitor_->SetEnginePlaying(preview_ready_ &&
+                                   preview_engine_.Playing());
     }
     // Import a finished Lab result onto the timeline (worker wrote a
     // PNG; catalog + history edits stay on the UI thread).

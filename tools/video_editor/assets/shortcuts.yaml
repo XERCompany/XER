@@ -1,0 +1,32 @@
+# Keyboard shortcuts — mirrors keyboard_map.cc and
+# ui/video_editor_app.cc HandleEvent. "" = intentionally unbound.
+Shortcuts:
+  playback.toggle: Space
+  playback.pause: K
+  playback.seek_back: J          # -5 s
+  playback.seek_forward: L       # +5 s
+  playback.prev_frame: Left
+  playback.next_frame: Right
+  playback.step_back_5s: Shift+Left
+  playback.step_forward_5s: Shift+Right
+  playback.go_start: Home
+  playback.go_end: End
+  marker.add: M
+  workarea.in: I
+  workarea.out: O
+  edit.undo: Ctrl+Z
+  edit.redo: Ctrl+Y              # Ctrl+Shift+Z also works
+  edit.delete: Delete
+  edit.ripple_delete: Alt+Delete
+  edit.snapping: S
+  edit.split: ""                 # unbound — Razor tool (C) / clip menu
+  edit.razor: C                  # selects the razor tool
+  timeline.zoom_in: ""           # unbound — mouse wheel over timeline
+  timeline.zoom_out: ""          # unbound — mouse wheel over timeline
+  file.new: Ctrl+N
+  file.open: Ctrl+O
+  file.save: Ctrl+S
+  file.save_as: Ctrl+Shift+S
+  file.import: ""                # unbound — Media Bin import button
+  file.export: Ctrl+P
+  view.shortcuts: "?"

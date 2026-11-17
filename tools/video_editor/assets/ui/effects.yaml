@@ -1,0 +1,114 @@
+# Effects catalog — mirrors the compositor dispatch table
+# (compositor.cc ApplyClipEffects). `params` drives the inspector
+# editors; defaults match EffectsPanelWidget::Catalog. `category`
+# groups rows in the FX panel; `icon` is a logical icons.yaml name.
+Effects:
+  - id: brightness_contrast
+    label: Brightness / Contrast
+    category: Adjust
+    icon: fx.adjust
+    params:
+      - {id: brightness, label: Brightness, kind: slider, min: -255, max: 255, default: 0}
+      - {id: contrast,   label: Contrast,   kind: slider, min: 0,    max: 4,   default: 1}
+  - id: grayscale
+    label: Grayscale
+    category: Adjust
+    icon: fx.color
+    params: []
+  - id: color_balance
+    label: Color Balance
+    category: Adjust
+    icon: fx.color
+    params:
+      - {id: lift_r, label: Lift R, kind: slider, min: -1, max: 1, default: 0}
+      - {id: lift_g, label: Lift G, kind: slider, min: -1, max: 1, default: 0}
+      - {id: lift_b, label: Lift B, kind: slider, min: -1, max: 1, default: 0}
+      - {id: gain_r, label: Gain R, kind: slider, min: 0,  max: 4, default: 1}
+      - {id: gain_g, label: Gain G, kind: slider, min: 0,  max: 4, default: 1}
+      - {id: gain_b, label: Gain B, kind: slider, min: 0,  max: 4, default: 1}
+  - id: posterize
+    label: Posterize
+    category: Adjust
+    icon: fx.color
+    params:
+      - {id: levels, label: Levels, kind: slider, min: 2, max: 256, default: 4}
+  - id: box_blur
+    label: Box Blur
+    category: Blur
+    icon: fx.blur
+    params:
+      - {id: radius, label: Radius, kind: slider, min: 0, max: 64, default: 4, unit: px}
+  - id: gaussian_blur
+    label: Gaussian Blur
+    category: Blur
+    icon: fx.blur
+    params:
+      - {id: sigma, label: Sigma, kind: slider, min: 0, max: 32, default: 2}
+  - id: motion_blur
+    label: Motion Blur
+    category: Blur
+    icon: fx.blur
+    params:
+      - {id: angle,   label: Angle,   kind: slider, min: 0, max: 360, default: 0,  unit: deg}
+      - {id: samples, label: Samples, kind: slider, min: 2, max: 64,  default: 10}
+  - id: flip_h
+    label: Flip Horizontal
+    category: Distort
+    icon: fx.flip
+    params: []
+  - id: flip_v
+    label: Flip Vertical
+    category: Distort
+    icon: fx.flip
+    params: []
+  - id: chromatic_aberration
+    label: Chromatic Aberration
+    category: Distort
+    icon: fx.distort
+    params:
+      - {id: shift, label: Shift, kind: slider, min: 0, max: 32, default: 2, unit: px}
+  - id: pixelate
+    label: Pixelate
+    category: Distort
+    icon: fx.distort
+    params:
+      - {id: block, label: Block, kind: slider, min: 1, max: 128, default: 8, unit: px}
+  - id: sharpen
+    label: Sharpen
+    category: Stylize
+    icon: fx.stylize
+    params:
+      - {id: amount, label: Amount, kind: slider, min: 0, max: 4, default: 1.5}
+  - id: edge_detect
+    label: Edge Detect
+    category: Stylize
+    icon: fx.stylize
+    params: []
+  - id: emboss
+    label: Emboss
+    category: Stylize
+    icon: fx.stylize
+    params: []
+  - id: oil_paint
+    label: Oil Paint
+    category: Stylize
+    icon: fx.stylize
+    params:
+      - {id: radius, label: Radius, kind: slider, min: 1, max: 16, default: 4}
+  - id: vignette
+    label: Vignette
+    category: Stylize
+    icon: fx.overlay
+    params:
+      - {id: strength, label: Strength, kind: slider, min: 0, max: 1, default: 0.5}
+      - {id: size,     label: Size,     kind: slider, min: 0, max: 1, default: 0.7}
+  - id: chroma_key
+    label: Chroma Key
+    category: Keying
+    icon: fx.key
+    params:
+      - {id: key_r,     label: Key R,     kind: slider, min: 0, max: 255, default: 0}
+      - {id: key_g,     label: Key G,     kind: slider, min: 0, max: 255, default: 255}
+      - {id: key_b,     label: Key B,     kind: slider, min: 0, max: 255, default: 0}
+      - {id: tolerance, label: Tolerance, kind: slider, min: 0, max: 255, default: 120}
+      - {id: softness,  label: Softness,  kind: slider, min: 0, max: 255, default: 40}

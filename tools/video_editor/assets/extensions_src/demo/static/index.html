@@ -1,0 +1,14 @@
+<!doctype html><html><head><meta charset="utf-8">
+<link rel="stylesheet" href="style.css"><title>Demo Ext</title></head>
+<body><h1>Demo Extension UI</h1><p id="s">…</p>
+<script>
+(async () => {
+  if (window.xer) {
+    const r = await xer.callJson('xer.version', {});
+    document.getElementById('s').textContent =
+      'served from TZ: ' + JSON.stringify(r);
+  } else {
+    document.getElementById('s').textContent = 'no xer API';
+  }
+})();
+</script></body></html>

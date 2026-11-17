@@ -133,6 +133,8 @@ struct Track {
     bool hidden = false;   // video: not composited (+ its audio); ignored on audio
     bool locked = false;   // no clip-affecting edits allowed
     float gain_db = 0;     // applied by the audio mixer
+    float pan = 0.0f;      // stereo position [-1, 1] — summed with
+                           // clip.pan (clamped) by the audio mixer
 };
 struct Project {
     int width = 1920, height = 1080;
@@ -144,6 +146,8 @@ struct Project {
     std::vector<Marker> markers;        // timeline markers, sorted by time
     double work_in = 0.0, work_out = 0.0;   // export/preview range;
                                            // work_out <= work_in = whole
+    float master_gain_db = 0.0f;       // post-mix master fader (dB),
+                                       // preview + export
     double duration() const;   // max(timeline_start + duration), 0 if empty
 };
 
