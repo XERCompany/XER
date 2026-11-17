@@ -173,7 +173,9 @@ jobs:
             mingw-w64-clang-x86_64-lame
             mingw-w64-clang-x86_64-onnx
             mingw-w64-clang-x86_64-onnxruntime
-            mingw-w64-clang-x86_64-utf8-range
+            # utf8_range ships inside the protobuf package (lib/cmake/
+            # utf8_range) — there is no separate -utf8-range package and
+            # naming one aborts the whole pacman transaction.
             mingw-w64-clang-x86_64-opencl-icd
             mingw-w64-clang-x86_64-opencl-headers
             mingw-w64-clang-x86_64-protobuf
