@@ -1,0 +1,14 @@
+# Color-token overrides — hex ARGB or RGB; unknown keys ignored.
+[colors]
+accent        = "#8B5CF6"
+accent_hover  = "#A78BFA"
+surface       = "#16161A"
+panel_bg      = "#1C1C22"
+border        = "#2A2A33"
+text          = "#E8E8F0"
+muted         = "#8B8B98"
+
+[metrics]
+radius      = 8
+nav_rail_w  = 46
+toolbar_h   = 34

@@ -1,5 +1,6 @@
 #include "video_command_buffer.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace XER::Content::Video {
@@ -22,9 +23,20 @@ void VideoCommandBuffer::Push(VideoCommand command) {
         // No pending frame — fall through and append.
     }
     if (queue_.size() >= kMaxQueued) {
-        // Drop the oldest non-frame command first; frames are cheap to
-        // lose anyway, so evict from the front.
-        queue_.pop_front();
+        // Evict the oldest kFrame only — frames are disposable, while a
+        // dropped kState/kError/kAudio* transition would hide the change
+        // from the consumer entirely. If the queue is somehow all
+        // non-frames, drop the incoming command rather than shed a
+        // state or error to make room.
+        const auto oldest_frame =
+            std::find_if(queue_.begin(), queue_.end(),
+                         [](const VideoCommand& c) {
+                             return c.type == VideoCommandType::kFrame;
+                         });
+        if (oldest_frame == queue_.end()) {
+            return;
+        }
+        queue_.erase(oldest_frame);
     }
     queue_.push_back(std::move(command));
 }

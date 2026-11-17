@@ -1,0 +1,71 @@
+# Dockable panel set — the declarative half of the widget tree.
+# ids match the widgets VideoEditorAppWidget creates; `dock` is one of
+# left | right | bottom | center | top (unknown values fall back to
+# "right" with a loader note). `size`/`min_size` are in dock_size_unit
+# (px here; "fraction" would read them as 0..1 of the dock span).
+# The right-column entries share one Premiere-style tab group — `tabs`
+# names every sibling in the group, in tab-strip order (the same order
+# the Insp/FX/Mkr/Lab/Hist/Mix/Q/Plg/Color strip uses).
+Panels:
+  dock_size_unit: px
+  splitter_thickness: 6
+  workspace_order: [Editing, Color, Audio, Effects]
+  panels:
+    # Chrome
+    - {id: title_bar,   dock: top,    size: 38,  min_size: 38,  visible: true}
+    - {id: status_bar,  dock: bottom, size: 26,  min_size: 26,  visible: true}
+    - {id: nav_rail,    dock: left,   size: 46,  min_size: 46,  visible: true}
+
+    # Left column — project/bin strip.
+    - {id: media_bin,   title: Media Library, dock: left, size: 320,
+       min_size: 230, visible: true, tabs: [media_bin]}
+
+    # Center — program monitor fills what the docks leave.
+    - {id: monitor,     title: Program Monitor, dock: center, size: 0,
+       min_size: 220, visible: true}
+
+    # Right column — one tab group, inspector raised by default.
+    - {id: inspector,    title: Inspector,     dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: effects,      title: Effects,       dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: markers,      title: Markers,       dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: lab,          title: Lab,           dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: history,      title: History,       dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: mixer,        title: Audio Mixer,   dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: export_queue, title: Export Queue,  dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: plugins,      title: Plugins,       dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+    - {id: color,        title: Color,         dock: right, size: 340,
+       min_size: 250, visible: true,
+       tabs: [inspector, effects, markers, lab, history, mixer,
+              export_queue, plugins, color]}
+
+    # Bottom — scopes/waveform strips sit above the timeline band.
+    - {id: scopes,    title: Scopes,   dock: bottom, size: 160,
+       min_size: 100, visible: false}
+    - {id: waveform,  title: Waveform, dock: bottom, size: 84,
+       min_size: 48,  visible: false}
+    - {id: timeline,  title: Timeline, dock: bottom, size: 240,
+       min_size: 170, visible: true}

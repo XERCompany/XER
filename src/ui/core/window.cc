@@ -46,7 +46,15 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
     }
 
     if (window != nullptr) {
-        return window->HandleNativeMessage(hwnd, msg, wParam, lParam);
+        try {
+            return window->HandleNativeMessage(hwnd, msg, wParam, lParam);
+        } catch (const std::exception& e) {
+            fprintf(stderr, "WndProc exception msg=%u: %s\n", msg, e.what());
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+        } catch (...) {
+            fprintf(stderr, "WndProc exception msg=%u: unknown\n", msg);
+            return DefWindowProc(hwnd, msg, wParam, lParam);
+        }
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 }
@@ -76,6 +84,11 @@ public:
         RunCloseHooks();
         if (hwnd_) {
             renderer_.reset();
+            // Detach the WndProc from this Window BEFORE DestroyWindow.
+            // unique_ptr nulls its pointer before running ~Impl, so the
+            // WM_DESTROY/WM_NCDESTROY messages dispatched below would
+            // otherwise be routed into HandleNativeMessage on a dead impl_.
+            SetWindowLongPtrW(hwnd_, GWLP_USERDATA, 0);
             DestroyWindow(hwnd_);
         }
     }
@@ -255,9 +268,12 @@ public:
 
     void Invalidate() {
         // Drop pending dirty flags so the explicit invalidate below is the
-        // single source of the next repaint.
+        // single source of the next repaint. A pending layout request must
+        // run first — discarding it would leave stale geometry forever.
         widget_tree_.ConsumeDirtyPaint();
-        widget_tree_.ConsumeLayoutRequest();
+        if (widget_tree_.ConsumeLayoutRequest() && hwnd_ != nullptr) {
+            LayoutContent(hwnd_);
+        }
         if (hwnd_ != nullptr) {
             InvalidateRect(hwnd_, nullptr, FALSE);
         }
@@ -1065,6 +1081,9 @@ LRESULT Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 LRESULT Window::HandleNativeMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (impl_ == nullptr) {
+        return DefWindowProc(hwnd, msg, wParam, lParam);
+    }
     return impl_->HandleMessage(hwnd, msg, wParam, lParam);
 }
 

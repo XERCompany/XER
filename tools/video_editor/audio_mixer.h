@@ -65,6 +65,11 @@ struct AudioMixerOptions {
     int sample_rate = 48000;    // output rate (export contract: 48 kHz)
     int channels = 2;           // output channels — v1 is stereo-only
     int chunk_samples = 1024;   // provider chunk size
+    // Post-mix master gain in dB applied to the summed float buffer
+    // before the output clamp/convert AND before the peak-meter read
+    // (the UI master fader; meters reflect it). 0 = unity.
+    // SetMasterGainDb() overrides it live between Init()s.
+    float master_gain_db = 0.0f;
     // Per-clip audio plugin chain backend (clip.audio_fx, Phase 2).
     // Null -> production VST3 host via vst/vst3_factory.cc (dual-mono
     // Vst3HostInterface per node). Tests inject fakes through
@@ -86,12 +91,15 @@ struct AudioMixerOptions {
 // lazily-opened decoder reports HasAudio(). Phase-2 clip fields apply:
 // playback_rate scales the timeline->source map (handles are timeline
 // time, so they map rate-scaled too), clip.gain_db + GainDb keyframes +
-// track.gain_db set the per-chunk gain, and clip.pan steers the stereo
-// balance. Clips with a non-empty `audio_fx` list additionally run
+// track.gain_db set the per-chunk gain, and clip.pan + track.pan
+// (summed, clamped to [-1,1]) steer the stereo balance. Clips with a
+// non-empty `audio_fx` list additionally run
 // their contribution through an ordered plugin chain
 // (vst/vst3_chain.h) AFTER gain/pan/fades and BEFORE accumulation —
 // missing or broken plugins warn once via Warnings() and are
-// bypassed, never failing the mix.
+// bypassed, never failing the mix. The summed mix then passes through
+// the master fader (options.master_gain_db / SetMasterGainDb) before
+// the output clamp and peak-meter read.
 class AudioMixer {
 public:
     AudioMixer();
@@ -137,6 +145,12 @@ public:
     // update them (they describe the rendered chunk, which is the same
     // one being returned).
     std::pair<float, float> LastChunkPeaks() const;
+
+    // Live master-fader override (dB): thread-safe (atomic), takes
+    // effect on the next rendered chunk. Init() resets it to
+    // options.master_gain_db. Non-finite values are ignored.
+    void SetMasterGainDb(float db);
+    float MasterGainDb() const;
 
     void Cancel();          // cooperative; checked per GetChunk
     bool Cancelled() const;

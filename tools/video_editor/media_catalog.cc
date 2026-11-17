@@ -19,6 +19,7 @@
 
 #include "clip_poster.h"
 #include "content/video/video_info.h"
+#include "io/oiio_image.h"
 #include "frame.h"
 #include "helper/env_utils.h"
 #include "helper/path_utils.h"
@@ -772,11 +773,32 @@ bool MediaCatalog::Import(const std::string& utf8_path,
     }
 
     Video::VideoInfo info;
-    if (!Video::ProbeVideo(canon, &info, error_out)) {
-        if (error_out != nullptr && error_out->empty()) {
-            *error_out = "probe failed: " + canon;
+    bool is_still = false;
+    if (!Video::ProbeVideo(canon, &info, nullptr)) {
+        // Still images (EXR/DPX/TIFF/RAW/PSD/HDR) aren't FFmpeg
+        // containers — fall back to OIIO and synthesize the probe.
+        const std::filesystem::path fs_path = Path::FromUtf8(canon);
+        std::string ext = fs_path.extension().string();
+        ext = XER::Helper::String::ToLowerAscii(ext);
+        if (!Io::OiioHandlesExtension(ext)) {
+            if (error_out != nullptr && error_out->empty()) {
+                *error_out = "probe failed: " + canon;
+            }
+            return false;
         }
-        return false;
+        const Io::Image still = Io::ReadImage(fs_path);
+        if (!still.ok || still.width <= 0 || still.height <= 0) {
+            return Fail(error_out,
+                        "still image decode failed: " + canon);
+        }
+        info.valid = true;
+        info.width = still.width;
+        info.height = still.height;
+        info.duration_seconds = 5.0;   // Premiere-style still default
+        info.video_codec = "image";
+        info.has_audio = false;
+        is_still = true;
+        if (error_out != nullptr) error_out->clear();
     }
     const std::filesystem::path canon_fs = Path::FromUtf8(canon);
 
@@ -853,7 +875,21 @@ bool MediaCatalog::Import(const std::string& utf8_path,
         const std::string poster_path =
             poster_dir + "/" + std::to_string(id) + ".png";
         std::string poster_error;
-        if (ClipPoster::Extract(canon, seek, poster_path, &poster_error)) {
+        bool poster_ok = false;
+        if (is_still) {
+            // OIIO decodes it — write the PNG poster directly.
+            const Io::Image still =
+                Io::ReadImage(Path::FromUtf8(canon));
+            poster_ok =
+                still.ok &&
+                Io::WriteImage(Path::FromUtf8(poster_path),
+                               still.bgra.data(), still.width,
+                               still.height);
+        } else {
+            poster_ok = ClipPoster::Extract(canon, seek, poster_path,
+                                            &poster_error);
+        }
+        if (poster_ok) {
             // Failure here is also non-fatal — the poster file exists
             // but the path simply will not be recorded.
             db_->Execute("UPDATE media SET poster_path = ? WHERE id = ?",

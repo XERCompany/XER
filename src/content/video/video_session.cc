@@ -20,6 +20,10 @@ constexpr double kMaxFps = 240.0;
 // of spinning on Seek(0) forever (e.g. a corrupt video that opens
 // but never produces a frame).
 constexpr int kMaxRestartsWithoutFrame = 3;
+// Audio-only pump pacing: the tap queue is bounded (~2048 packets) and
+// sheds the OLDEST packet on overflow, so refilling pauses above this
+// depth until the audio consumer drains it.
+constexpr std::size_t kAudioTapHighWater = 1536;
 
 }  // namespace
 
@@ -269,6 +273,9 @@ void VideoSession::DecodeLoop() {
                      : VideoState::kReady);
 
     auto next_tick = std::chrono::steady_clock::now();
+    // Wall-clock base for advancing position on audio-only files —
+    // no frames exist to publish timestamps on that path.
+    auto last_pump_tick = std::chrono::steady_clock::now();
 
     while (running_.load(std::memory_order_acquire)) {
         // Transport gate: sleep while paused; wake on play/seek/stop.
@@ -288,6 +295,15 @@ void VideoSession::DecodeLoop() {
         if (seek_target >= 0.0) {
             if (decoder->Seek(seek_target)) {
                 position_.store(seek_target, std::memory_order_relaxed);
+                // A seek out of kEnded must leave a live state behind —
+                // Play() routes its rewind through this same path, and a
+                // bare slider seek while ended should land on paused.
+                if (GetState() == VideoState::kEnded) {
+                    PublishState(
+                        play_requested_.load(std::memory_order_relaxed)
+                            ? VideoState::kPlaying
+                            : VideoState::kPaused);
+                }
                 // av_seek_frame lands on the nearest preceding keyframe —
                 // decode forward until the frame PTS reaches the target,
                 // then publish that frame so a paused preview still shows
@@ -307,8 +323,22 @@ void VideoSession::DecodeLoop() {
                         break;
                     }
                 }
+            } else {
+                // Seek failure is non-fatal — surface it so the UI can
+                // report it, but keep the session alive.
+                const std::string msg = "seek failed";
+                if (error_cb_) {
+                    error_cb_(msg);
+                }
+                if (event_cb_) {
+                    VideoEvent event;
+                    event.type = VideoEvent::Type::kError;
+                    event.message = msg;
+                    event_cb_(event);
+                }
             }
             next_tick = std::chrono::steady_clock::now();
+            last_pump_tick = next_tick;
             continue;  // re-enter the gate: paused stays paused after seek
         }
 
@@ -316,21 +346,49 @@ void VideoSession::DecodeLoop() {
             continue;  // paused — wait again
         }
 
+        // Audio-only container: NextFrame() returns false on EVERY call —
+        // it exists to pump packets into the audio tap, so keep pumping
+        // until the tap drains instead of declaring EOS on the first
+        // false. Refilling pauses above the tap queue's high-water mark:
+        // the queue is bounded and sheds the oldest packet on overflow.
+        const bool audio_only =
+            decoder->GetWidth() <= 0 && decoder->HasAudio();
         if (!decoder->NextFrame(bgra, w, h)) {
-            // End of stream. Loop-restart only for real video:
-            // audio-only containers report EOS on EVERY NextFrame()
-            // (the call exists to pump the audio tap), so Seek(0)+
-            // retry would spin this worker forever without ever
-            // reaching kEnded — GetWidth()==0 marks that case. The
-            // restart counter covers video files that keep reporting
-            // EOS right after a successful Seek (corrupt stream).
+            if (audio_only && !decoder->AudioDrained()) {
+                if (decoder->GetAudioTapQueueSize() >= kAudioTapHighWater) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(10));
+                }
+                // Advance position by wall time — the audio device paces
+                // playback and nothing publishes timestamps on this path.
+                // Clamped so gate stalls can't teleport the position.
+                const auto now = std::chrono::steady_clock::now();
+                const double dt = std::min(
+                    std::chrono::duration<double>(now - last_pump_tick)
+                        .count(),
+                    0.25);
+                last_pump_tick = now;
+                const double pos =
+                    std::max(0.0,
+                             position_.load(std::memory_order_relaxed));
+                const double dur = GetDuration();
+                position_.store(dur > 0.0 ? std::min(pos + dt, dur)
+                                          : pos + dt,
+                                std::memory_order_relaxed);
+                continue;
+            }
+            // End of stream. The restart counter bounds video files that
+            // keep reporting EOS right after a successful Seek (corrupt
+            // stream); audio-only files loop too — Seek(0) bumps the
+            // audio epoch, so the parked audio worker resumes by itself.
             if (loop_.load(std::memory_order_relaxed) &&
-                decoder->GetWidth() > 0 &&
-                restarts_without_frame < kMaxRestartsWithoutFrame &&
+                (audio_only ||
+                 restarts_without_frame < kMaxRestartsWithoutFrame) &&
                 decoder->Seek(0.0)) {
                 ++restarts_without_frame;
                 position_.store(0.0, std::memory_order_relaxed);
                 next_tick = std::chrono::steady_clock::now();
+                last_pump_tick = next_tick;
                 continue;
             }
             play_requested_.store(false, std::memory_order_relaxed);

@@ -17,6 +17,10 @@ namespace {
 
 constexpr std::uint32_t kPosterMagic = 0x52564658;  // 'XVFR' little-endian
 constexpr std::uint32_t kPosterVersion = 1;
+// Upper bound on dimensions read back from a poster file — StorePoster
+// already writes <= kPosterMaxDim; the clamp just keeps a crafted or
+// corrupt file from turning into a giant allocation.
+constexpr std::uint32_t kPosterDimLimit = 8192;
 
 // FNV-1a 64 — stable across runs, no dependency on std::hash implementation.
 std::uint64_t Fnv1a(const std::string& s) {
@@ -153,11 +157,13 @@ bool VideoFrameCache::LoadPoster(const std::string& video_path,
     std::uint32_t header[4]{};
     file.read(reinterpret_cast<char*>(header), sizeof(header));
     if (!file || header[0] != kPosterMagic || header[1] != kPosterVersion ||
-        header[2] == 0 || header[3] == 0) {
+        header[2] == 0 || header[3] == 0 ||
+        header[2] > kPosterDimLimit || header[3] > kPosterDimLimit) {
         return false;
     }
     std::uint64_t pts_bits = 0;
     file.read(reinterpret_cast<char*>(&pts_bits), sizeof(pts_bits));
+    if (!file) return false;  // truncated header
 
     VideoFrame frame;
     frame.width = static_cast<int>(header[2]);

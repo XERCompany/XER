@@ -26,6 +26,7 @@ void Table::SetColumns(std::vector<Column> columns) {
 void Table::SetRows(std::vector<std::vector<std::string>> rows) {
     rows_ = std::move(rows);
     selected_ = -1;
+    hovered_ = -1;
     scroll_ = 0.0f;
     RequestLayout();
     Invalidate();
@@ -269,9 +270,13 @@ bool Table::HandleEvent(const Event& event) {
         }
         case Event::Type::Click:
         case Event::Type::MouseDown: {
-            // Scrollbar drag region.
-            if (max_scroll_ > 0.0f && p.x >= scrollbar_rect_.x - 4.0f &&
-                p.x <= scrollbar_rect_.x + scrollbar_rect_.width + 4.0f &&
+            // Scrollbar drag region — MouseDown only, and the strip itself:
+            // the old ±4px halo stole clicks from the last column, and a
+            // synthesized Click must never re-arm a finished drag.
+            if (event.type == Event::Type::MouseDown &&
+                event.mouse_button == MouseButton::Left &&
+                max_scroll_ > 0.0f && p.x >= scrollbar_rect_.x &&
+                p.x <= scrollbar_rect_.x + scrollbar_rect_.width &&
                 p.y >= scrollbar_rect_.y &&
                 p.y <= scrollbar_rect_.y + scrollbar_rect_.height) {
                 // Grab offset inside the thumb so the thumb doesn't jump.
@@ -301,7 +306,7 @@ bool Table::HandleEvent(const Event& event) {
             return false;
         }
         case Event::Type::MouseUp:
-            if (scrollbar_drag_) {
+            if (scrollbar_drag_ && event.mouse_button == MouseButton::Left) {
                 scrollbar_drag_ = false;
                 return true;
             }

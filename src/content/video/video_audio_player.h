@@ -117,11 +117,16 @@ private:
                             SourceChunk* chunk);
 
     std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder> av_decoder_;
-    double audio_time_base_ = 0.0;  // pts * tb = media seconds
+    double audio_time_base_ = 0.0;   // pts * tb = media seconds
+    double audio_start_sec_ = 0.0;   // media time of the first PCM sample
 
     std::thread worker_;
     std::atomic<bool> stream_stop_{false};
     std::atomic<bool> worker_done_{false};
+    // Set once the decoder reports AudioDrained() and the pending tail
+    // has been converted; cleared when a new audio epoch arrives (seek)
+    // and the worker resumes feeding. The render thread parks on this.
+    std::atomic<bool> stream_drained_{false};
     std::atomic<bool> format_known_{false};
     std::atomic<bool> output_ready_{false};
     std::mutex decode_mutex_;   // guards load_error_ / src format fields
@@ -137,6 +142,12 @@ private:
     std::deque<PlayChunk> play_queue_;
     // Conversion flush threshold in source frames (~0.7 s at 48 kHz).
     static constexpr std::size_t kConvertThreshold = 32768;
+    // Back-pressure bounds: converted audio is ~8 MB of device-rate PCM
+    // (~85 s stereo f32) and pending source audio ~22 s — far beyond any
+    // legitimate lead. Past these the worker waits for the consumer
+    // rather than banking unbounded PCM or shedding the whole queue.
+    static constexpr std::size_t kPlayQueueMaxBytes = 8u * 1024u * 1024u;
+    static constexpr std::size_t kPendingSrcMaxFrames = 1u << 20;
 
     // Device-side output format (known after FinalizeOutput).
     int out_rate_ = 0;
@@ -148,6 +159,10 @@ private:
     IAudioClient* audio_client_ = nullptr;
     IAudioRenderClient* render_client_ = nullptr;
     UINT32 buffer_frame_count_ = 0;
+    // True only when this player successfully called CoInitializeEx —
+    // RPC_E_CHANGED_MODE means another component owns the apartment and
+    // must NOT be balanced with CoUninitialize.
+    bool com_initialized_ = false;
 #endif
 
     std::thread render_thread_;

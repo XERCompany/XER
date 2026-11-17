@@ -112,8 +112,20 @@ void MixerPanelWidget::RebuildStrips(const Project* project) {
                              : track.name;
             strip.gain_db = ClampGain(track.gain_db);
             strip.muted = track.muted;
+            // Pan lives on the track model — loaded projects and undo
+            // must show it. pan_by_track_ only shadows the value while
+            // THIS strip's knob is mid-drag (the model write lags the
+            // pointer by a frame, same reason SetProject preserves the
+            // fader drag).
+            const bool pan_drag =
+                drag_mode_ == DragMode::Pan && drag_strip_ >= 0 &&
+                drag_strip_ < static_cast<int>(previous.size()) &&
+                previous[static_cast<std::size_t>(drag_strip_)]
+                        .track_index == strip.track_index;
             const auto pan = pan_by_track_.find(strip.track_index);
-            strip.pan = pan == pan_by_track_.end() ? 0.0f : pan->second;
+            strip.pan = pan_drag && pan != pan_by_track_.end()
+                            ? pan->second
+                            : std::clamp(track.pan, -1.0f, 1.0f);
             // Carry meter peaks over for a strip that kept its index.
             for (const Strip& old : previous) {
                 if (!old.master && old.track_index == strip.track_index) {
@@ -384,39 +396,46 @@ void MixerPanelWidget::DrawStrip(
                       {thumb.Right() - 3.0f, thumb_y},
                       WithAlpha(tokens.background, 0.8f), 1.0f);
 
-    // Peak meters: two bars, zone colors, peak-hold ticks.
-    const Rect meter = MeterRect(strip);
-    const auto draw_bar = [&](float x, float level_db, float hold_db) {
-        constexpr float kBarW = 5.0f;
-        renderer.FillRect({x, meter.y, kBarW, meter.height},
-                          tokens.input, 1.0f);
-        const auto y_for_db = [&](float db) {
-            const float u = std::clamp(
-                (db - kMeterMinDb) / (0.0f - kMeterMinDb), 0.0f, 1.0f);
-            return meter.y + meter.height - u * meter.height;
+    // Peak meters: two bars, zone colors, peak-hold ticks. Master
+    // strip only — the host feeds SetPeak(-1, ...) exclusively (the
+    // mix bus), so per-track bars would sit permanently dead.
+    if (s.master) {
+        const Rect meter = MeterRect(strip);
+        const auto draw_bar = [&](float x, float level_db,
+                                  float hold_db) {
+            constexpr float kBarW = 5.0f;
+            renderer.FillRect({x, meter.y, kBarW, meter.height},
+                              tokens.input, 1.0f);
+            const auto y_for_db = [&](float db) {
+                const float u = std::clamp(
+                    (db - kMeterMinDb) / (0.0f - kMeterMinDb), 0.0f,
+                    1.0f);
+                return meter.y + meter.height - u * meter.height;
+            };
+            const float level_y = y_for_db(std::min(level_db, 0.0f));
+            const Color zone = level_db > kMeterRedDb
+                                   ? MeterRed()
+                                   : level_db > kMeterYellowDb
+                                         ? MeterYellow()
+                                         : MeterGreen();
+            if (level_y < meter.y + meter.height) {
+                renderer.FillRect(
+                    {x, level_y, kBarW,
+                     meter.y + meter.height - level_y},
+                    zone, 0.0f);
+            }
+            if (hold_db > kMeterMinDb + 0.5f) {
+                const float y_peak = y_for_db(std::min(hold_db, 0.0f));
+                renderer.DrawLine({x, y_peak}, {x + kBarW, y_peak},
+                                  hold_db > kMeterRedDb
+                                      ? MeterRed()
+                                      : Color{1, 1, 1, 0.9f},
+                                  1.5f);
+            }
         };
-        const float level_y = y_for_db(std::min(level_db, 0.0f));
-        const Color zone = level_db > kMeterRedDb
-                               ? MeterRed()
-                               : level_db > kMeterYellowDb
-                                     ? MeterYellow()
-                                     : MeterGreen();
-        if (level_y < meter.y + meter.height) {
-            renderer.FillRect(
-                {x, level_y, kBarW, meter.y + meter.height - level_y},
-                zone, 0.0f);
-        }
-        if (hold_db > kMeterMinDb + 0.5f) {
-            const float y_peak = y_for_db(std::min(hold_db, 0.0f));
-            renderer.DrawLine({x, y_peak}, {x + kBarW, y_peak},
-                              hold_db > kMeterRedDb
-                                  ? MeterRed()
-                                  : Color{1, 1, 1, 0.9f},
-                              1.5f);
-        }
-    };
-    draw_bar(meter.x, s.meter_l_db, s.hold_l_db);
-    draw_bar(meter.x + 7.0f, s.meter_r_db, s.hold_r_db);
+        draw_bar(meter.x, s.meter_l_db, s.hold_l_db);
+        draw_bar(meter.x + 7.0f, s.meter_r_db, s.hold_r_db);
+    }
 
     // Gain readout + name (muted strips dim everything; the name row
     // trades its label for a red "muted" tag).

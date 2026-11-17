@@ -135,6 +135,10 @@ private:
     };
 
     HitZone HitTest(Layout::Point p) const;
+    // Rebuilds every interactive rect from `b` using cached text metrics
+    // (measured in Render, estimated until the first frame). Called from
+    // Layout so hit zones are valid before/between paints.
+    void ComputeZoneRects(const Layout::Rect& b);
     void OpenMenuOverlay(int menu_index, Layout::Point anchor);
     void ExecuteWindowCommand(WindowCommand cmd);
     void InvalidateInteractive(Layout::Point p);
@@ -180,6 +184,11 @@ private:
 
     std::function<void(WindowCommand)> on_window_command_;
     bool maximized_ = false;
+
+    // Text widths measured during Render; 0 means "not measured yet" and
+    // Layout falls back to a codepoint-count estimate.
+    float workspace_label_w_ = 0.0f;
+    float action_pill_text_w_ = 0.0f;
 
     // Cached interactive rectangles (in widget-local DIP coordinates).
     Layout::Rect bounds_{};

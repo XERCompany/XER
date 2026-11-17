@@ -25,11 +25,15 @@ struct ExportOptions {
     std::string audio_codec = "aac";
     int video_bit_rate = 8000000;  // 0 -> bridge default (4 Mbps)
     int audio_bit_rate = 128000;   // 0 -> bridge default (192k)
+    // Post-mix master gain in dB applied by the audio mixer before the
+    // output clamp — the export-time equivalent of the preview master
+    // fader. 0 = unity.
+    float master_gain_db = 0.0f;
     // Output resolution multiplier applied to the project canvas —
     // 1.0 (default) = native size, 0.5 = half dimensions (draft).
-    // Written by ApplyPreset(); the engine does NOT consume it yet
-    // (compositor-side scaling is a follow-up), so it is currently
-    // metadata only — clamps are applied at the preset layer.
+    // The engine renders at round(dim*scale) snapped to even values
+    // and scales clip transform.scale accordingly; Start rejects
+    // non-finite/non-positive values or results under 2px.
     double resolution_scale = 1.0;
     // Explicit export range in timeline seconds [in, out). When
     // range_out <= range_in (the default) the project's work area

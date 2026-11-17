@@ -130,6 +130,9 @@ add_subdirectory(src/content/audio)
 add_subdirectory(src/content/clipboard)
 add_subdirectory(src/content/hex)
 add_subdirectory(src/content/network)
+add_subdirectory(src/network)
+add_subdirectory(src/tz)
+add_subdirectory(src/cef)
 add_subdirectory(src/content/nettest)
 add_subdirectory(src/content/sim)
 add_subdirectory(src/content/model3d)
@@ -474,6 +477,7 @@ endif()
 
 # VideoEditor (XER Studio Phase 1) — headless core lib; the exe lands in
 # 1C/1D inside this same directory.
+add_subdirectory(tools/tz)
 add_subdirectory(tools/video_editor)
 
 include(CTest)

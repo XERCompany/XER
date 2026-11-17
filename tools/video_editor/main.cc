@@ -29,6 +29,10 @@
 #include "ui/theme/theme.h"
 #include "ui/video_editor_app.h"
 #include "ui/widgets/app_title_bar.h"
+
+#include "app_runtime/app_runtime.h"
+#include "app_runtime/js_engine.h"  // complete type for BootResult dtor
+#include "cef/cef_runtime.h"        // CEF subprocess early-out
 #endif
 
 namespace {
@@ -90,6 +94,17 @@ void PrintUsage() {
 
 #if defined(_WIN32)
 int RunGui(const std::string& project_path) {
+    // Declarative assets layer: assets/app.yaml → runtime.js (real V8)
+    // → window/window.yaml. Missing assets boot with compiled defaults.
+    std::string boot_status;
+    auto boot = XER::VideoEditor::AppRuntime::Boot(&boot_status);
+    if (boot.ok) {
+        std::cerr << "assets: " << boot_status << "\n";
+    } else if (!boot_status.empty()) {
+        std::cerr << "assets: " << boot_status << "\n";
+    }
+    const auto& wcfg = boot.window;
+
     auto& app = XER::UI::Core::Application::Instance();
     app.SetAppName("XER Video Editor");
     if (!app.Initialize()) {
@@ -98,10 +113,13 @@ int RunGui(const std::string& project_path) {
     }
 
     auto window = std::make_shared<XER::UI::Core::Window>();
-    if (!window->Create("XER Video Editor", 1440, 900)) {
+    if (!window->Create(wcfg.title, wcfg.width, wcfg.height)) {
         app.Shutdown();
         std::cerr << "Error: failed to create editor window\n";
         return 1;
+    }
+    if (wcfg.maximized) {
+        window->ToggleMaximize();
     }
     auto editor = std::make_shared<XER::VideoEditor::Ui::VideoEditorAppWidget>(
         window->GetHWND(), project_path);
@@ -148,6 +166,9 @@ int RunGui(const std::string& project_path) {
     window->Show();
     const int result = app.Run();
     app.Shutdown();
+    // Browsers are children of the now-destroyed window — draining CEF
+    // after the message loop lets it tear subprocesses down cleanly.
+    XER::Cef::Shutdown();
     return result;
 }
 #endif
@@ -313,6 +334,13 @@ int RunExport(const std::string& input_path,
 
 int main(int argc, char** argv) {
 #if defined(_WIN32)
+    // CEF child processes (renderer/GPU via bootstrap.exe) never return
+    // from this — must run before any other initialization.
+    const int cef_exit =
+        XER::Cef::RunSubprocessIfAny(argc, argv);
+    if (cef_exit >= 0) {
+        return cef_exit;
+    }
     SetConsoleOutputCP(CP_UTF8);
     (void)argc;
     (void)argv;

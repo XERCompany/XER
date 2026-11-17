@@ -1,0 +1,10 @@
+Window:
+  Size:
+    w: 1560
+    h: 900
+  MinSize:
+    w: 1100
+    h: 700
+  Title: "XER Studio"
+  OpenDevTools: "false"
+  Maximized: "false"

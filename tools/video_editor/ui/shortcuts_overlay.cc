@@ -46,9 +46,9 @@ ShortcutsOverlay::Groups() {
           {"Z", "Zoom tool"}}},
         {"Playback",
          {{"Space", "Play / pause"},
-          {"J", "Shuttle back 5 s"},
+          {"J", "Seek back 5 s"},
           {"K", "Pause"},
-          {"L", "Shuttle forward 5 s"},
+          {"L", "Seek forward 5 s"},
           {"\xe2\x86\x90 / \xe2\x86\x92",
            "Step frame (Shift: 5 s)"},
           {"Home", "Go to start"},
@@ -68,7 +68,7 @@ ShortcutsOverlay::Groups() {
           {"Alt+Del", "Ripple-delete clip"},
           {"S", "Toggle snapping"}}},
         {"View",
-         {{"F1", "Toggle this reference"}}},
+         {{"?", "Toggle shortcuts overlay"}}},
     };
     return groups;
 }
@@ -85,7 +85,7 @@ void ShortcutsOverlay::EnsureChildren() {
     namespace Widgets = XER::UI::Widgets;
     title_ = std::make_shared<Widgets::Label>("Keyboard shortcuts");
     hint_ = std::make_shared<Widgets::Label>(
-        "F1 or Esc to close", true);
+        "? or Esc to close", true);
     AddChild(title_);
     AddChild(hint_);
 }

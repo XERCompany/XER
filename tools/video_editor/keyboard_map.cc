@@ -19,11 +19,11 @@ const std::vector<ShortcutEntry>& EditorShortcuts() {
         {"Tools", "R", "Rate stretch tool"},
         {"Tools", "H", "Hand tool"},
         {"Tools", "Z", "Zoom tool"},
-        // Transport: Space toggles, J/L shuttle 5 s, K pauses only.
+        // Transport: Space toggles, J/L seek 5 s, K pauses only.
         {"Playback", "Space", "Play / pause"},
-        {"Playback", "J", "Shuttle back 5 s"},
+        {"Playback", "J", "Seek back 5 s"},
         {"Playback", "K", "Pause"},
-        {"Playback", "L", "Shuttle forward 5 s"},
+        {"Playback", "L", "Seek forward 5 s"},
         {"Playback", "Left / Right", "Step frame (Shift: 5 s)"},
         {"Playback", "Home", "Go to start"},
         {"Playback", "End", "Go to end"},

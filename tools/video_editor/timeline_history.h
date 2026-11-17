@@ -126,6 +126,16 @@ public:
                      std::string* error_out = nullptr);
     bool SetTrackLocked(int track_index, bool locked,
                         std::string* error_out = nullptr);
+    // Mixer-strip edits — undoable, continuous writes coalesce.
+    bool SetTrackMuted(int track_index, bool muted,
+                       std::string* error_out = nullptr);
+    bool SetTrackHidden(int track_index, bool hidden,
+                        std::string* error_out = nullptr);
+    bool SetTrackGainDb(int track_index, float db,
+                        std::string* error_out = nullptr);
+    bool SetTrackPan(int track_index, float pan,
+                     std::string* error_out = nullptr);
+    bool SetMasterGainDb(float db, std::string* error_out = nullptr);
     bool SetClipLinkGroup(const std::string& clip_id,
                           const std::string& group);
     bool SetClipKeyframes(const std::string& clip_id, KeyProp prop,

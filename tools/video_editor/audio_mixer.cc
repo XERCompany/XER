@@ -495,6 +495,10 @@ struct AudioMixer::Impl {
     // chunk (LastChunkPeaks()).
     float last_peak_l = 0.0f;
     float last_peak_r = 0.0f;
+    // Master fader (dB) — atomic so SetMasterGainDb() from any thread
+    // applies to the next rendered chunk. Init() loads it from
+    // options.master_gain_db.
+    std::atomic<float> master_gain_db{0.0f};
 
     bool Fail(std::string* error_out, const std::string& message) {
         if (error_out != nullptr) {
@@ -543,6 +547,13 @@ struct AudioMixer::Impl {
             ? options.plugin_factory
             : Vst::PluginInstanceFactory(&Vst::InstantiateVst3Plugin);
         cancelled.store(false, std::memory_order_relaxed);
+        // Master fader: non-finite dB falls back to unity — same rule
+        // as track.gain_db below.
+        master_gain_db.store(
+            std::isfinite(options.master_gain_db)
+                ? options.master_gain_db
+                : 0.0f,
+            std::memory_order_relaxed);
 
         // Sessions for every clip passing the mute/track/hidden gates.
         // Decoder open + HasAudio() are deferred to first use (lazy).
@@ -582,13 +593,20 @@ struct AudioMixer::Impl {
             // the constant-power cos/sin law at angle
             // (pan+1)*pi/4, normalized so the dominant channel stays
             // at unity — pan=0 is an exact no-op (no 3 dB program
-            // drop), full pan mutes the opposite channel. Out-of-range
-            // or non-finite pans clamp to center.
-            const double pan = std::clamp(
+            // drop), full pan mutes the opposite channel. Track pan
+            // composes with clip pan (summed, clamped to [-1, 1]) so a
+            // panned track shifts its clips' stereo image;
+            // out-of-range or non-finite pans clamp to center.
+            const double clip_pan =
                 std::isfinite(static_cast<double>(clip.pan))
                     ? static_cast<double>(clip.pan)
-                    : 0.0,
-                -1.0, 1.0);
+                    : 0.0;
+            const double track_pan =
+                std::isfinite(static_cast<double>(track->pan))
+                    ? static_cast<double>(track->pan)
+                    : 0.0;
+            const double pan =
+                std::clamp(clip_pan + track_pan, -1.0, 1.0);
             const double angle = (pan + 1.0) * kPi * 0.25;
             const double gl = std::cos(angle);
             const double gr = std::sin(angle);
@@ -1077,14 +1095,24 @@ struct AudioMixer::Impl {
             }
             // Build into a typed buffer, then copy bytes — avoids
             // alignment/aliasing concerns on the uint8_t payload.
+            // Master gain (UI fader) applies to the summed float mix
+            // BEFORE the clamp/convert and BEFORE the meter read, so
+            // peaks describe the gained output the listener hears.
+            const double master_lin = std::pow(
+                10.0,
+                static_cast<double>(master_gain_db.load(
+                    std::memory_order_relaxed)) /
+                    20.0);
             std::vector<std::int16_t> pcm16(
                 static_cast<std::size_t>(n) * 2u);
             double peak_l = 0.0;
             double peak_r = 0.0;
             for (int i = 0; i < n; ++i) {
-                const double acc_l = mix[static_cast<std::size_t>(i) * 2u];
+                const double acc_l =
+                    mix[static_cast<std::size_t>(i) * 2u] * master_lin;
                 const double acc_r =
-                    mix[static_cast<std::size_t>(i) * 2u + 1u];
+                    mix[static_cast<std::size_t>(i) * 2u + 1u] *
+                    master_lin;
                 // clamp -> *32767 -> round -> interleaved s16 (LE on
                 // the Windows targets this ships on).
                 pcm16[static_cast<std::size_t>(i) * 2u] =
@@ -1145,6 +1173,17 @@ bool AudioMixer::GetChunk(std::size_t index,
 
 std::pair<float, float> AudioMixer::LastChunkPeaks() const {
     return {impl_->last_peak_l, impl_->last_peak_r};
+}
+
+void AudioMixer::SetMasterGainDb(float db) {
+    if (!std::isfinite(db)) {
+        return;
+    }
+    impl_->master_gain_db.store(db, std::memory_order_relaxed);
+}
+
+float AudioMixer::MasterGainDb() const {
+    return impl_->master_gain_db.load(std::memory_order_relaxed);
 }
 
 void AudioMixer::Cancel() {

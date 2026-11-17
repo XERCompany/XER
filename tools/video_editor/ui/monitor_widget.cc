@@ -3,16 +3,67 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstdint>
+#include <unordered_map>
+#include <vector>
 
+#include "app_runtime/app_runtime.h"
+#include "app_runtime/icon_pack.h"
+#include "app_runtime/ui_manifest.h"
+#include "color/ocio_transform.h"
+#include "helper/path_utils.h"
 #include "rendering/renderer.h"
+#include "scopes_widget.h"
 #include "theme/tokens.h"
+#include "widgets/context_menu.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
 namespace Layout = XER::UI::Layout;
+namespace Path = XER::Helper::Path;
 namespace Rendering = XER::UI::Rendering;
 using XER::UI::Theme::Color;
+
+// assets/color.yaml wires the program monitor's OCIO display
+// transform. The resolved path is immutable for the session, so the
+// config is lazily loaded on the first composited frame — a missing
+// yaml, a disabled/failed config, or an absent OpenColorIO runtime
+// (ApplyDisplayTransform probes that itself) all degrade to
+// pass-through.
+const XER::VideoEditor::Color::OcioConfig& MonitorOcioConfig() {
+    static bool loaded = false;
+    static XER::VideoEditor::Color::OcioConfig cfg;
+    if (!loaded) {
+        loaded = true;
+        const std::string& yaml =
+            AppRuntime::SharedAssetsConfig().color_yaml;
+        std::string error;
+        if (yaml.empty() ||
+            !XER::VideoEditor::Color::LoadOcioConfig(
+                Path::FromUtf8(yaml), &cfg, &error)) {
+            cfg.enabled = false;
+        }
+    }
+    return cfg;
+}
+
+// In-place OCIO display transform on a packed BGRA8 monitor frame
+// (stride == width*4, alpha preserved). No-op when color.yaml is
+// absent/disabled or the buffer can't hold width*height pixels.
+void ApplyMonitorDisplayTransform(std::vector<std::uint8_t>* bgra,
+                                  int width, int height) {
+    const XER::VideoEditor::Color::OcioConfig& cfg = MonitorOcioConfig();
+    if (!cfg.enabled || bgra == nullptr || width <= 0 || height <= 0) {
+        return;
+    }
+    if (bgra->size() < static_cast<std::size_t>(width) *
+                           static_cast<std::size_t>(height) * 4u) {
+        return;
+    }
+    XER::VideoEditor::Color::ApplyDisplayTransform(
+        bgra->data(), width, height, width * 4, cfg);
+}
 
 // ---- audio meter ballistics (Premiere-style) ----
 constexpr float kMeterMinDb = -60.0f;      // bottom of the meter scale
@@ -40,9 +91,84 @@ Color WithAlpha(Color c, float alpha) {
     return c;
 }
 
+// Theme float color → packed AARRGGBB tint for the icon pack.
+std::uint32_t ToArgb(Color color) {
+    const auto byte = [](float v) {
+        return static_cast<std::uint32_t>(
+            std::clamp(std::lround(v * 255.0f), 0L, 255L));
+    };
+    return (byte(color.a) << 24) | (byte(color.r) << 16) |
+           (byte(color.g) << 8) | byte(color.b);
+}
+
+// Rasterized SVG icon from the shared pack, drawn centered in `box`.
+// Returns false when the icon is missing or the renderer can't blit
+// it — the caller then falls back to the drawn glyph/label.
+bool DrawIcon(Rendering::Renderer& renderer, const char* name, int px,
+              Color tint, const Layout::Rect& box) {
+    const auto* bmp =
+        AppRuntime::SharedIconPack().Get(name, px, ToArgb(tint));
+    if (bmp == nullptr) return false;
+    const Layout::Rect dst{box.x + (box.width - bmp->width) * 0.5f,
+                           box.y + (box.height - bmp->height) * 0.5f,
+                           static_cast<float>(bmp->width),
+                           static_cast<float>(bmp->height)};
+    return renderer.DrawFrameBgra(bmp->bgra.data(), bmp->width,
+                                  bmp->height, dst, 1.0f);
+}
+
 Color MarkerColor(const Marker& marker) {
     return {marker.color[0] / 255.0f, marker.color[1] / 255.0f,
             marker.color[2] / 255.0f, marker.color[3] / 255.0f};
+}
+
+// ---- scopes overlay ----
+// monitor_widget.h is untouched by this change, so the scopes widget
+// and its visibility flag live in a file-local table keyed on the
+// MonitorWidget instance (erased in ~MonitorWidget).
+struct MonitorScopes {
+    ScopesWidget widget;
+    bool visible = false;
+};
+
+std::unordered_map<MonitorWidget*, MonitorScopes>& ScopesTable() {
+    static std::unordered_map<MonitorWidget*, MonitorScopes> table;
+    return table;
+}
+
+MonitorScopes& ScopesState(MonitorWidget* self) {
+    return ScopesTable()[self];
+}
+
+// Width of the 8th transport button appended after Focus (see
+// ScopesButtonRect); also counted in OverlayButtonRect's centering.
+constexpr float kScopesButtonWidth = 52.0f;
+
+// Geometry mirrors OverlayButtonRect(): 7 buttons
+// {34,30,30,52,52,52,30} + 6 px gaps, then the scopes toggle last.
+Layout::Rect ScopesButtonRect(const Layout::Rect& row) {
+    const float gap = 6.0f;
+    const float widths[] = {34.0f, 30.0f, 30.0f, 52.0f, 52.0f, 52.0f,
+                            30.0f};
+    float strip = gap * 7.0f + kScopesButtonWidth;
+    for (float w : widths) strip += w;
+    float x = row.x;
+    if (AppRuntime::SharedLayoutConfig().transport_center) {
+        x += std::max(0.0f, (row.width - strip) * 0.5f);
+    }
+    return {x + strip - kScopesButtonWidth, row.y, kScopesButtonWidth,
+            row.height};
+}
+
+// Top-right scopes overlay inside the video area, kept clear of the
+// audio meters hugging the right edge.
+Layout::Rect ScopesOverlayRect(const Layout::Rect& video_area) {
+    const float w =
+        std::max(0.0f, std::min(256.0f, video_area.width - 40.0f));
+    const float h =
+        std::max(0.0f, std::min(190.0f, video_area.height - 16.0f));
+    return {video_area.x + video_area.width - w - 24.0f,
+            video_area.y + 8.0f, w, h};
 }
 
 std::string FormatTime(double seconds) {
@@ -89,6 +215,7 @@ MonitorWidget::MonitorWidget(Hooks hooks) : hooks_(std::move(hooks)) {
 }
 
 MonitorWidget::~MonitorWidget() {
+    ScopesTable().erase(this);
     compositor_.Cancel();
     compositor_.Shutdown();
 }
@@ -109,6 +236,8 @@ void MonitorWidget::RebuildCompositor() {
     frame_height_ = 0;
     rendered_time_ = -1.0;
     frame_dirty_ = true;
+    // Frame buffer is gone — detach the scopes' source pointer.
+    ScopesState(this).widget.SetFrame(nullptr, 0, 0, 0);
 
     std::string error;
     std::vector<std::string> warnings;
@@ -222,6 +351,36 @@ void MonitorWidget::SetExternalFrame(const std::vector<std::uint8_t>& bgra,
     frame_ = bgra;
     frame_width_ = width;
     frame_height_ = height;
+    ApplyMonitorDisplayTransform(&frame_, width, height);
+    MonitorScopes& scopes = ScopesState(this);
+    if (scopes.visible) {
+        scopes.widget.SetFrame(frame_.data(), frame_width_,
+                               frame_height_, frame_width_ * 4);
+    }
+    Invalidate();
+}
+
+void MonitorWidget::SetOnPlayToggle(std::function<void()> cb) {
+    on_play_toggle_ = std::move(cb);
+    Invalidate();
+}
+
+void MonitorWidget::SetOnSeekRequest(std::function<void(double)> cb) {
+    on_seek_request_ = std::move(cb);
+}
+
+void MonitorWidget::SetOnFrameStep(std::function<void(int)> cb) {
+    on_frame_step_ = std::move(cb);
+}
+
+void MonitorWidget::SetOnQualityChange(
+    std::function<void(float)> cb) {
+    on_quality_ = std::move(cb);
+}
+
+void MonitorWidget::SetEnginePlaying(bool playing) {
+    if (engine_playing_ == playing) return;
+    engine_playing_ = playing;
     Invalidate();
 }
 
@@ -246,6 +405,14 @@ bool MonitorWidget::RenderCurrentFrame(std::string* error_out) {
     }
     frame_width_ = compositor_.CanvasWidth();
     frame_height_ = compositor_.CanvasHeight();
+    // Same display transform as externally pumped frames — paused
+    // stills and playback stay color-managed identically.
+    ApplyMonitorDisplayTransform(&frame_, frame_width_, frame_height_);
+    MonitorScopes& scopes = ScopesState(this);
+    if (scopes.visible) {
+        scopes.widget.SetFrame(frame_.data(), frame_width_,
+                               frame_height_, frame_width_ * 4);
+    }
     rendered_time_ = time_;
     frame_dirty_ = false;
     status_text_ = "Ready";
@@ -296,7 +463,18 @@ Layout::Rect MonitorWidget::OverlayButtonRect(OverlayButton button) const {
     const auto row = TransportRect();
     const float gap = 6.0f;
     float x = row.x;
-    const float widths[] = {34.0f, 52.0f, 52.0f, 52.0f};
+    const float widths[] = {34.0f, 30.0f, 30.0f, 52.0f, 52.0f,
+                            52.0f, 30.0f};
+    // assets/ui/layout.yaml — Monitor.transport_center centers the
+    // transport strip instead of left-aligning it.
+    if (AppRuntime::SharedLayoutConfig().transport_center) {
+        float total = gap * 6.0f;
+        for (float w : widths) total += w;
+        // + gap + the scopes toggle appended after Focus (see
+        // ScopesButtonRect) so the whole 8-button strip stays centered.
+        total += gap + kScopesButtonWidth;
+        x = row.x + std::max(0.0f, (row.width - total) * 0.5f);
+    }
     const int index = static_cast<int>(button);
     for (int i = 0; i < index; ++i) x += widths[i] + gap;
     return {x, row.y, widths[index], row.height};
@@ -363,8 +541,10 @@ void MonitorWidget::Render(
     const float pad = tokens.spacing_medium;
     const Layout::Rect header{bounds.x + pad, bounds.y + pad * 0.6f,
                               bounds.width - pad * 2.0f, 24.0f};
-    renderer.DrawText("PROGRAM", header,
-                      {tokens.muted, tokens.font_small, 700});
+    // assets/ui/strings.ini — program_title overrides the header.
+    renderer.DrawText(
+        AppRuntime::SharedUiStrings().Get("program_title", "PROGRAM"),
+        header, {tokens.muted, tokens.font_small, 700});
 
     // Preview-quality badge ("Full"/"1/2"/"1/4"...) top-right.
     if (!quality_tag_.empty()) {
@@ -398,6 +578,25 @@ void MonitorWidget::Render(
 
     DrawMeters(renderer, tokens, video_area);
     DrawTimecode(renderer, tokens, video_area);
+
+    // Scopes overlay: semi-transparent dark backing + border, the
+    // scopes widget drawn inside. The SetFrame() call refreshes the
+    // source pointer every paint so mode switches on paused stills
+    // recompute immediately (recompute is throttled internally).
+    MonitorScopes& scopes = ScopesState(this);
+    if (scopes.visible && !frame_.empty() && frame_width_ > 0 &&
+        frame_height_ > 0) {
+        scopes.widget.SetFrame(frame_.data(), frame_width_,
+                               frame_height_, frame_width_ * 4);
+        const auto overlay = ScopesOverlayRect(video_area);
+        renderer.FillRect(overlay, {0.0f, 0.0f, 0.0f, 0.62f},
+                          tokens.radius_small);
+        renderer.StrokeRect(overlay, WithAlpha(tokens.border, 0.9f),
+                            1.0f, tokens.radius_small);
+        scopes.widget.Layout(overlay);
+        scopes.widget.Render(renderer, tokens);
+    }
+
     DrawRuler(renderer, tokens, RulerRect());
     DrawTransport(renderer, tokens, TransportRect());
 }
@@ -611,13 +810,40 @@ void MonitorWidget::DrawTransport(Rendering::Renderer& renderer,
                                   const XER::UI::Theme::Tokens& tokens,
                                   const Layout::Rect& row) {
     DrawOverlayButton(renderer, tokens, OverlayButton::Play, nullptr,
-                      playing_);
+                      TransportPlaying());
+    DrawOverlayButton(renderer, tokens, OverlayButton::PrevFrame,
+                      nullptr, false);
+    DrawOverlayButton(renderer, tokens, OverlayButton::NextFrame,
+                      nullptr, false);
     DrawOverlayButton(renderer, tokens, OverlayButton::SafeMargins,
                       "SAFE", safe_margins_);
     DrawOverlayButton(renderer, tokens, OverlayButton::Grid, "GRID",
                       grid_);
     DrawOverlayButton(renderer, tokens, OverlayButton::Loop, "LOOP",
                       loop_);
+    DrawOverlayButton(renderer, tokens, OverlayButton::Focus, nullptr,
+                      false);
+
+    // 8th button, appended after Focus: scopes overlay toggle. Drawn
+    // inline (OverlayButton is a closed enum in the header); the icon
+    // name misses the pack on purpose and falls back to the label.
+    {
+        const auto rect = ScopesButtonRect(row);
+        const bool active = ScopesState(this).visible;
+        const Color fill = active ? tokens.accent : tokens.secondary;
+        const Color text_color =
+            active ? tokens.accent_foreground : tokens.muted;
+        renderer.FillRect(rect, fill, tokens.radius_small);
+        if (active) {
+            renderer.StrokeRect(rect, tokens.accent, 1.0f,
+                                tokens.radius_small);
+        }
+        if (!DrawIcon(renderer, "transport.scopes", 16, text_color,
+                      rect)) {
+            renderer.DrawText("SCOPES", rect,
+                              {text_color, tokens.font_small, 600});
+        }
+    }
 
     // "current / duration" small readout, right-aligned.
     const std::string time_text =
@@ -644,11 +870,45 @@ void MonitorWidget::DrawOverlayButton(Rendering::Renderer& renderer,
         renderer.StrokeRect(rect, tokens.accent, 1.0f,
                             tokens.radius_small);
     }
+    // Prefer SVG icons from the shared pack (assets/icons.yaml), tinted
+    // with the same state color as the drawn mark; the vector
+    // glyphs/labels below stay as the fallback when an icon is missing.
+    const char* icon_name = nullptr;
+    switch (button) {
+        case OverlayButton::Play:
+            // No pause asset in the pack — "transport.pause" misses and
+            // falls back to the vector pause bars below.
+            icon_name = TransportPlaying() ? "transport.pause"
+                                           : "transport.play";
+            break;
+        case OverlayButton::PrevFrame:
+            icon_name = "transport.prev";
+            break;
+        case OverlayButton::NextFrame:
+            icon_name = "transport.next";
+            break;
+        case OverlayButton::SafeMargins:
+            icon_name = "transport.safe";
+            break;
+        case OverlayButton::Grid:
+            icon_name = "transport.grid";
+            break;
+        case OverlayButton::Loop:
+            icon_name = "transport.loop";
+            break;
+        case OverlayButton::Focus:
+            icon_name = "transport.fullscreen";
+            break;
+    }
+    if (icon_name != nullptr &&
+        DrawIcon(renderer, icon_name, 16, text_color, rect)) {
+        return;
+    }
     if (button == OverlayButton::Play) {
         // Vector play/pause glyph.
         const float cx = rect.x + rect.width * 0.5f;
         const float cy = rect.y + rect.height * 0.5f;
-        if (playing_) {
+        if (TransportPlaying()) {
             renderer.FillRect({cx - 5.0f, cy - 5.0f, 3.5f, 10.0f},
                               text_color, 0.5f);
             renderer.FillRect({cx + 1.5f, cy - 5.0f, 3.5f, 10.0f},
@@ -663,10 +923,134 @@ void MonitorWidget::DrawOverlayButton(Rendering::Renderer& renderer,
         }
         return;
     }
+    if (button == OverlayButton::PrevFrame ||
+        button == OverlayButton::NextFrame) {
+        // Step glyph: triangle plus an edge bar (|◀ / ▶|).
+        const float cx = rect.x + rect.width * 0.5f;
+        const float cy = rect.y + rect.height * 0.5f;
+        const int dir =
+            button == OverlayButton::NextFrame ? 1 : -1;
+        const float bar_x = cx - dir * 5.5f;
+        renderer.FillRect({bar_x, cy - 6.0f, 1.8f, 12.0f}, text_color,
+                          0.5f);
+        renderer.DrawLine({cx + dir * 4.0f, cy - 5.5f},
+                          {cx - dir * 3.0f, cy}, text_color, 1.5f);
+        renderer.DrawLine({cx - dir * 3.0f, cy},
+                          {cx + dir * 4.0f, cy + 5.5f}, text_color,
+                          1.5f);
+        renderer.DrawLine({cx + dir * 4.0f, cy + 5.5f},
+                          {cx + dir * 4.0f, cy - 5.5f}, text_color,
+                          1.5f);
+        return;
+    }
+    if (button == OverlayButton::Focus) {
+        // Fullscreen corners — four L-shaped brackets.
+        const float x0 = rect.x + 7.0f, x1 = rect.x + rect.width - 7.0f;
+        const float y0 = rect.y + 6.0f, y1 = rect.y + rect.height - 6.0f;
+        const float a = 4.0f;
+        renderer.DrawLine({x0, y0 + a}, {x0, y0}, text_color, 1.5f);
+        renderer.DrawLine({x0, y0}, {x0 + a, y0}, text_color, 1.5f);
+        renderer.DrawLine({x1 - a, y0}, {x1, y0}, text_color, 1.5f);
+        renderer.DrawLine({x1, y0}, {x1, y0 + a}, text_color, 1.5f);
+        renderer.DrawLine({x0, y1 - a}, {x0, y1}, text_color, 1.5f);
+        renderer.DrawLine({x0, y1}, {x0 + a, y1}, text_color, 1.5f);
+        renderer.DrawLine({x1 - a, y1}, {x1, y1}, text_color, 1.5f);
+        renderer.DrawLine({x1, y1}, {x1, y1 - a}, text_color, 1.5f);
+        return;
+    }
     if (label != nullptr) {
         renderer.DrawText(label, rect,
                           {text_color, tokens.font_small, 600});
     }
+}
+
+bool MonitorWidget::ShowContextMenu(const Layout::Point p) {
+    namespace Widgets = XER::UI::Widgets;
+    if (!GetBounds().Contains(p)) return false;
+
+    std::vector<Widgets::ContextMenu::Item> items;
+
+    Widgets::ContextMenu::Item play;
+    auto& ui_strings = AppRuntime::SharedUiStrings();
+    play.label = TransportPlaying()
+        ? ui_strings.Get("transport_pause", "Pause")
+        : ui_strings.Get("transport_play", "Play");
+    play.shortcut = "Space";
+    play.action = [this] {
+        if (on_play_toggle_) {
+            on_play_toggle_();
+        } else {
+            SetPlaying(!playing_);
+        }
+    };
+    items.push_back(std::move(play));
+
+    Widgets::ContextMenu::Item loop;
+    loop.label = "Loop Playback";
+    loop.checked = loop_;
+    loop.separator_before = true;
+    loop.action = [this] { SetLoop(!loop_); };
+    items.push_back(std::move(loop));
+
+    Widgets::ContextMenu::Item margins;
+    margins.label = "Safe Margins";
+    margins.checked = safe_margins_;
+    margins.separator_before = true;
+    margins.action = [this] { SetSafeMargins(!safe_margins_); };
+    items.push_back(std::move(margins));
+
+    Widgets::ContextMenu::Item grid;
+    grid.label = "Grid";
+    grid.checked = grid_;
+    grid.action = [this] { SetGrid(!grid_); };
+    items.push_back(std::move(grid));
+
+    Widgets::ContextMenu::Item focus;
+    focus.label = "Toggle Monitor Focus";
+    focus.separator_before = true;
+    focus.action = [this] {
+        if (hooks_.on_toggle_focus) hooks_.on_toggle_focus();
+    };
+    items.push_back(std::move(focus));
+
+    Widgets::ContextMenu::Item scopes;
+    scopes.label = "Toggle Scopes";
+    scopes.checked = ScopesState(this).visible;
+    scopes.action = [this] {
+        MonitorScopes& s = ScopesState(this);
+        s.visible = !s.visible;
+        Invalidate();
+    };
+    items.push_back(std::move(scopes));
+
+    // Playback-quality group: the badge (quality_tag_) is the source
+    // of truth for the checkmark; the host routes the scale to
+    // PreviewEngine::SetQuality via on_quality_.
+    const struct {
+        const char* label;
+        const char* tag;
+        float scale;
+    } kQuality[] = {
+        {"Playback Quality: Full", "Full", 1.0f},
+        {"Playback Quality: Half", "1/2", 0.5f},
+        {"Playback Quality: Quarter", "1/4", 0.25f},
+    };
+    for (const auto& q : kQuality) {
+        Widgets::ContextMenu::Item quality;
+        quality.label = q.label;
+        quality.checked = quality_tag_ == q.tag;
+        quality.separator_before = q.scale == 1.0f;
+        quality.action = [this, tag = q.tag, scale = q.scale] {
+            SetQualityTag(tag);
+            if (on_quality_) on_quality_(scale);
+        };
+        items.push_back(std::move(quality));
+    }
+
+    auto menu = Widgets::ContextMenu::Create(std::move(items));
+    menu->SetAnchor(p);
+    ShowOverlay(menu);
+    return true;
 }
 
 void MonitorWidget::Layout(const Layout::Rect& bounds) {
@@ -681,7 +1065,33 @@ bool MonitorWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         const auto p = event.position;
         // Transport buttons first.
         if (OverlayButtonRect(OverlayButton::Play).Contains(p)) {
-            SetPlaying(!playing_);
+            if (on_play_toggle_) {
+                on_play_toggle_();
+            } else {
+                SetPlaying(!playing_);
+            }
+            return true;
+        }
+        if (OverlayButtonRect(OverlayButton::PrevFrame).Contains(p) ||
+            OverlayButtonRect(OverlayButton::NextFrame).Contains(p)) {
+            const int dir = OverlayButtonRect(OverlayButton::NextFrame)
+                                .Contains(p)
+                ? 1
+                : -1;
+            if (on_frame_step_) {
+                on_frame_step_(dir);
+                return true;
+            }
+            const double frame_dt =
+                project_.fps_num > 0
+                    ? static_cast<double>(project_.fps_den) /
+                          project_.fps_num
+                    : 1.0 / 30.0;
+            SetPlaying(false);
+            SetTime(std::clamp(time_ + dir * frame_dt, 0.0,
+                               project_.duration()),
+                    true);
+            EmitTime(time_);
             return true;
         }
         if (OverlayButtonRect(OverlayButton::SafeMargins).Contains(p)) {
@@ -696,50 +1106,91 @@ bool MonitorWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
             SetLoop(!loop_);
             return true;
         }
+        if (OverlayButtonRect(OverlayButton::Focus).Contains(p)) {
+            if (hooks_.on_toggle_focus) hooks_.on_toggle_focus();
+            return true;
+        }
+        if (ScopesButtonRect(TransportRect()).Contains(p)) {
+            MonitorScopes& scopes = ScopesState(this);
+            scopes.visible = !scopes.visible;
+            Invalidate();
+            return true;
+        }
+        // Scopes overlay: mode tabs get first pick via the widget's own
+        // hit test; any other click inside the overlay is swallowed so
+        // it doesn't toggle playback on the frame underneath.
+        MonitorScopes& scopes = ScopesState(this);
+        if (scopes.visible &&
+            ScopesOverlayRect(VideoAreaRect()).Contains(p)) {
+            scopes.widget.HandleEvent(event);
+            return true;
+        }
         // Mini ruler: click to seek.
         if (RulerRect().Contains(p)) {
-            SetPlaying(false);
-            SetTime(RulerTimeAtX(p.x), true);
-            EmitTime(time_);
+            if (on_seek_request_) {
+                on_seek_request_(RulerTimeAtX(p.x));
+            } else {
+                SetPlaying(false);
+                SetTime(RulerTimeAtX(p.x), true);
+                EmitTime(time_);
+            }
             return true;
         }
         // Clicking the frame still toggles playback (Phase-1 behavior).
         if (VideoAreaRect().Contains(p)) {
-            SetPlaying(!playing_);
+            if (on_play_toggle_) {
+                on_play_toggle_();
+            } else {
+                SetPlaying(!playing_);
+            }
             return true;
         }
         return GetBounds().Contains(p);
     }
     if (event.type == Event::Type::KeyDown) {
         if (event.key == XER::UI::Widgets::KeyCode::Space) {
-            SetPlaying(!playing_);
+            if (on_play_toggle_) {
+                on_play_toggle_();
+            } else {
+                SetPlaying(!playing_);
+            }
             return true;
         }
         const double frame_step = project_.fps_num > 0
             ? static_cast<double>(project_.fps_den) / project_.fps_num
             : 1.0 / 30.0;
-        if (event.key == XER::UI::Widgets::KeyCode::ArrowLeft) {
-            SetPlaying(false);
-            SetTime(time_ - (event.is_shift ? 1.0 : frame_step), true);
-            EmitTime(time_);
+        if (event.key == XER::UI::Widgets::KeyCode::ArrowLeft ||
+            event.key == XER::UI::Widgets::KeyCode::ArrowRight) {
+            const int dir =
+                event.key == XER::UI::Widgets::KeyCode::ArrowRight
+                    ? 1 : -1;
+            if (!event.is_shift && on_frame_step_) {
+                on_frame_step_(dir);
+            } else if (on_seek_request_) {
+                on_seek_request_(std::clamp(
+                    time_ + dir * (event.is_shift ? 1.0 : frame_step),
+                    0.0, project_.duration()));
+            } else {
+                SetPlaying(false);
+                SetTime(time_ +
+                            dir * (event.is_shift ? 1.0 : frame_step),
+                        true);
+                EmitTime(time_);
+            }
             return true;
         }
-        if (event.key == XER::UI::Widgets::KeyCode::ArrowRight) {
-            SetPlaying(false);
-            SetTime(time_ + (event.is_shift ? 1.0 : frame_step), true);
-            EmitTime(time_);
-            return true;
-        }
-        if (event.key == XER::UI::Widgets::KeyCode::Home) {
-            SetPlaying(false);
-            SetTime(0.0, true);
-            EmitTime(time_);
-            return true;
-        }
-        if (event.key == XER::UI::Widgets::KeyCode::End) {
-            SetPlaying(false);
-            SetTime(project_.duration(), true);
-            EmitTime(time_);
+        if (event.key == XER::UI::Widgets::KeyCode::Home ||
+            event.key == XER::UI::Widgets::KeyCode::End) {
+            const double target =
+                event.key == XER::UI::Widgets::KeyCode::Home
+                    ? 0.0 : project_.duration();
+            if (on_seek_request_) {
+                on_seek_request_(target);
+            } else {
+                SetPlaying(false);
+                SetTime(target, true);
+                EmitTime(time_);
+            }
             return true;
         }
     }

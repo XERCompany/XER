@@ -29,6 +29,12 @@ constexpr int kMaxAudioChunksPerTick = 64;
 // the target instead of draining every crossed chunk (large forward
 // seeks would otherwise mix seconds of audio nobody hears).
 constexpr std::size_t kAudioGapSkipChunks = 96;   // ~2 s at 1024/48k
+// Audio runs AHEAD of the playhead by this much (free-running stream
+// paced by the device buffer): the ~200 ms WASAPI cushion means a slow
+// render tick never starves the output. Re-anchoring happens only on
+// real discontinuities (user seek, backward, >2 s gap) — never on
+// ordinary per-tick jitter.
+constexpr double kAudioLeadSeconds = 0.12;
 
 // Nearest-neighbor BGRA8 downsample for the quality post-pass — both
 // buffers are packed stride==width*4.
@@ -71,6 +77,7 @@ struct PreviewEngine::Impl {
     float quality_cmd_ = 1.0f;
     double loop_in_cmd_ = 0.0;
     double loop_out_cmd_ = 0.0;     // loop_out <= loop_in -> disabled
+    float master_gain_cmd_ = 0.0f;  // master fader dB -> mixer
     bool seek_pending_ = false;
     double seek_t_ = 0.0;
     bool present_pending_ = false;  // render one frame even when paused
@@ -169,6 +176,7 @@ struct PreviewEngine::Impl {
             quality_cmd_ = 1.0f;
             loop_in_cmd_ = 0.0;
             loop_out_cmd_ = 0.0;
+            master_gain_cmd_ = 0.0f;
             seek_pending_ = false;
             // Present the first frame at t=0 even while paused — the
             // monitor shows the sequence head like Premiere.
@@ -278,6 +286,22 @@ struct PreviewEngine::Impl {
                            : 1.0f;
         present_pending_ = true;   // paused monitors refresh quality
         cv_.notify_all();
+    }
+
+    void SetMasterGainDb(float db) {
+        if (!std::isfinite(db)) {
+            return;
+        }
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (!running_) {
+            return;
+        }
+        master_gain_cmd_ = db;
+    }
+
+    float MasterGainDb() const {
+        std::lock_guard<std::mutex> lk(mutex_);
+        return master_gain_cmd_;
     }
 
     // ---- session lifecycle (worker thread) ----------------------------
@@ -393,7 +417,8 @@ struct PreviewEngine::Impl {
     // sink + meter callback. Skipped entirely unless playing forward
     // at a listenable rate; the mixer re-opens when the wanted index
     // is unreachable (backward) or wastefully far ahead.
-    void PumpAudio(bool playing, double rate, double t) {
+    void PumpAudio(bool playing, double rate, double t,
+                   float master_gain_db) {
         if (!options_.audio_enabled || audio_broken_ || !playing ||
             rate <= 0.0 || rate > PreviewEngine::kMaxAudioRate) {
             return;
@@ -405,13 +430,35 @@ struct PreviewEngine::Impl {
             }
         }
         const std::size_t want = ChunkIndexAt(t);
-        if (want < audio_next_index_ ||
-            want - audio_next_index_ > kAudioGapSkipChunks) {
+        const std::size_t lead_chunks =
+            chunk_dur_ > 0.0
+                ? static_cast<std::size_t>(
+                      std::ceil(kAudioLeadSeconds / chunk_dur_))
+                : 0;
+        // Reopen only on a REAL discontinuity (a user seek): the
+        // playhead moved backward past audio we already produced, or
+        // jumped far forward. Free-run buffering legitimately puts
+        // audio_next_index_ ahead of `want` by up to `lead` — that is
+        // not a discontinuity and must not reopen every tick.
+        const bool backward_jump =
+            want + lead_chunks < audio_next_index_;
+        const bool forward_jump =
+            want > audio_next_index_ &&
+            want - audio_next_index_ > kAudioGapSkipChunks;
+        if (backward_jump || forward_jump) {
             ReopenMixer(t);   // resets audio_next_index_ near `want`
         }
+        // Free-running stream: produce up to `lead` chunks AHEAD of the
+        // playhead so the device buffer stays topped up even when a
+        // frame renders late. Chunks always stream sequentially — the
+        // only reposition is the discontinuity reopen above.
+        const std::size_t pump_to = want + lead_chunks;
+        // Live fader: applied every tick — covers both UI changes and
+        // the Init-time reset inside ReopenMixer above.
+        mixer_.SetMasterGainDb(master_gain_db);
         FFmpeg::AudioFrameInfo chunk;
         int pumped = 0;
-        while (mixer_open_ && audio_next_index_ <= want &&
+        while (mixer_open_ && audio_next_index_ <= pump_to &&
                audio_next_index_ < audio_chunk_count_ &&
                pumped < kMaxAudioChunksPerTick) {
             std::string err;
@@ -448,6 +495,7 @@ struct PreviewEngine::Impl {
         for (;;) {
             double rate;
             float quality;
+            float master_gain_db;
             double loop_in, loop_out;
             bool present;
             bool seek_applied = false;
@@ -498,6 +546,7 @@ struct PreviewEngine::Impl {
                 }
                 playing = playing_cmd_;
                 quality = quality_cmd_;
+                master_gain_db = master_gain_cmd_;
                 loop_in = loop_in_cmd_;
                 loop_out = loop_out_cmd_;
                 present = present_pending_;
@@ -560,7 +609,7 @@ struct PreviewEngine::Impl {
                     RenderAndDeliver(t, quality);
                 }
             }
-            PumpAudio(playing, applied_rate, t);
+            PumpAudio(playing, applied_rate, t, master_gain_db);
             HarvestEngineWarnings();
 
             // Playhead callback AFTER the frame so the UI sees a
@@ -621,6 +670,12 @@ void PreviewEngine::SetLoop(double in_s, double out_s) {
 }
 void PreviewEngine::SetQuality(float scale) {
     impl_->SetQuality(scale);
+}
+void PreviewEngine::SetMasterGainDb(float db) {
+    impl_->SetMasterGainDb(db);
+}
+float PreviewEngine::MasterGainDb() const {
+    return impl_->MasterGainDb();
 }
 double PreviewEngine::Playhead() const {
     return impl_->playhead_.load(std::memory_order_relaxed);

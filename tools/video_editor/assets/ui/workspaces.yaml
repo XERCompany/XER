@@ -1,0 +1,119 @@
+# Workspace presets — Premiere-style named panel layouts. Each entry
+# carries two views of the same preset:
+#
+#   column level (Ui::WorkspaceLayout / WorkspaceDef):
+#     left_visible, right_visible, right_tab, timeline_fraction
+#       right_tab indexes the right-column tab strip:
+#         0 Insp · 1 FX · 2 Mkr · 3 Lab · 4 Hist · 5 Mix · 6 Q · 7 Plg · 8 Color
+#
+#   panel level (WorkspaceSpec / LoadWorkspacesConfig):
+#     active_tab        — panel id raised in its tab group
+#     panel_visibility  — per-panel show/hide overrides (panels.yaml ids)
+#     panel_sizes       — per-panel size overrides, panels.yaml units (px)
+Workspaces:
+  # Premiere "Editing": every column up, Inspector focused, standard split.
+  - name: Editing
+    left_visible: true
+    right_visible: true
+    right_tab: 0
+    timeline_fraction: 0.32
+    active_tab: inspector
+    panel_visibility:
+      media_bin: true
+      inspector: true
+      monitor: true
+      timeline: true
+      mixer: false
+      scopes: false
+      waveform: false
+    panel_sizes: {media_bin: 320, inspector: 340, timeline: 240}
+
+  # Premiere "Assembly"-ish: big timeline, bin kept, right column stowed.
+  - name: Assembly
+    left_visible: true
+    right_visible: false
+    right_tab: 0
+    timeline_fraction: 0.45
+    active_tab: inspector
+    panel_visibility:
+      media_bin: true
+      inspector: false
+      monitor: true
+      timeline: true
+    panel_sizes: {media_bin: 300, timeline: 340}
+
+  # Premiere "Effects": FX panel raised, bin kept for drag-and-drop.
+  - name: Effects
+    left_visible: true
+    right_visible: true
+    right_tab: 1
+    timeline_fraction: 0.30
+    active_tab: effects
+    panel_visibility:
+      media_bin: true
+      effects: true
+      monitor: true
+      timeline: true
+      scopes: false
+    panel_sizes: {media_bin: 280, effects: 380, timeline: 220}
+
+  # Premiere "Color": color controls + scopes, compact timeline so the
+  # monitor keeps the most room.
+  - name: Color
+    left_visible: true
+    right_visible: true
+    right_tab: 8
+    timeline_fraction: 0.30
+    active_tab: color
+    panel_visibility:
+      media_bin: true
+      color: true
+      scopes: true
+      monitor: true
+      timeline: true
+      mixer: false
+    panel_sizes: {media_bin: 260, color: 380, scopes: 180, timeline: 200}
+
+  # Premiere "Audio": mixer raised, bin hidden — strips need the column.
+  - name: Audio
+    left_visible: false
+    right_visible: true
+    right_tab: 5
+    timeline_fraction: 0.30
+    active_tab: mixer
+    panel_visibility:
+      media_bin: false
+      mixer: true
+      waveform: true
+      monitor: true
+      timeline: true
+      scopes: false
+    panel_sizes: {mixer: 400, waveform: 84, timeline: 220}
+
+  # Marker review: markers tab + a taller timeline for the marker lane.
+  - name: Markers
+    left_visible: true
+    right_visible: true
+    right_tab: 2
+    timeline_fraction: 0.38
+    active_tab: markers
+    panel_visibility:
+      media_bin: true
+      markers: true
+      monitor: true
+      timeline: true
+    panel_sizes: {media_bin: 300, markers: 340, timeline: 290}
+
+  # Lab experiments: lab tab up, editing split otherwise.
+  - name: Lab
+    left_visible: true
+    right_visible: true
+    right_tab: 3
+    timeline_fraction: 0.32
+    active_tab: lab
+    panel_visibility:
+      media_bin: true
+      lab: true
+      monitor: true
+      timeline: true
+    panel_sizes: {media_bin: 320, lab: 340, timeline: 240}

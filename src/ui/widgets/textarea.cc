@@ -171,6 +171,12 @@ bool Textarea::HandleEvent(const Event& event) {
     if (!IsEnabled() || read_only_) {
         return false;
     }
+    // Keys/text only apply while focused; pointer events still land so a
+    // click can claim focus (and place the caret) first.
+    if (event.type != Event::Type::MouseDown &&
+        event.type != Event::Type::Click && !IsFocused()) {
+        return false;
+    }
     switch (event.type) {
         case Event::Type::MouseDown:
         case Event::Type::Click: {

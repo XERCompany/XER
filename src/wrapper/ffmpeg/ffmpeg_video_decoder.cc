@@ -701,6 +701,15 @@ std::uint64_t VideoDecoder::GetAudioEpoch() const {
 #endif
 }
 
+std::size_t VideoDecoder::GetAudioTapQueueSize() const {
+#ifdef _WIN32
+    std::lock_guard<std::mutex> lock(impl_->audio_mutex);
+    return impl_->audio_queue.size();
+#else
+    return 0;
+#endif
+}
+
 double VideoDecoder::GetPositionSeconds() const {
 #ifdef _WIN32
     return impl_->position_seconds;

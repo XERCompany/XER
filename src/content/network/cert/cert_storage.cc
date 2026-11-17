@@ -16,6 +16,7 @@ CertStorage::CertStorage(const std::string& bundle_path) {
 bool CertStorage::Load(const std::string& path) {
     std::ifstream file(path);
     if (!file.is_open()) return false;
+    bundle_path_ = path;
 
     std::ostringstream current;
     std::string line;

@@ -1,0 +1,31 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>XER Shell</title>
+<style>
+body{background:#14141a;color:#e8e8f0;font:13px/1.5 Consolas,monospace;margin:16px}
+h1{font-size:15px;color:#a78bfa}pre{background:#1e1e28;border:1px solid #333;padding:8px;white-space:pre-wrap}
+</style></head><body>
+<h1>XERBrowserShell — src/ API</h1>
+<pre id="out">loading…</pre>
+<script>
+const out = document.getElementById('out');
+async function main() {
+  if (!window.xer) { out.textContent = 'xer object NOT injected'; return; }
+  const lines = [];
+  lines.push('xer.version() = ' + xer.version());
+  for (const [cmd, args] of [
+      ['xer.version', {}],
+      ['sys.info', {}],
+      ['sys.env', {name: 'USERNAME'}],
+      ['fs.exists', {path: 'C:/Windows'}],
+      ['net.get', {url: 'https://example.com', timeout_ms: 8000}],
+  ]) {
+    try {
+      const r = await xer.callJson(cmd, args);
+      if (r.status !== undefined && r.body) r.body = r.body.slice(0, 120) + '…';
+      lines.push(cmd + ' => ' + JSON.stringify(r).slice(0, 400));
+    } catch (e) { lines.push(cmd + ' => REJECTED: ' + e); }
+  }
+  out.textContent = lines.join('\n\n');
+}
+main();
+</script></body></html>

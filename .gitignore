@@ -120,3 +120,6 @@ node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# CEF binary distribution — installed locally by InstallCef.ps1,
+# never committed (280MB+ binaries).
+/third_party/cef/

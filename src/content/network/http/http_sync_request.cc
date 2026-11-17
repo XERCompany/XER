@@ -76,6 +76,15 @@ SyncResponse SyncRequest(const std::string& method,
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, user_agent.c_str());
+#if defined(_WIN32) && defined(CURLSSLOPT_NATIVE_CA)
+    // The bundled OpenSSL build has no usable default CA path on
+    // Windows — delegate trust to the OS certificate store so HTTPS
+    // works out of the box (curl >= 7.71; no-op on older libs).
+    // NO_REVOKE skips the CRL fetch which otherwise fails offline /
+    // behind proxies and rejects perfectly valid chains.
+    curl_easy_setopt(curl, CURLOPT_SSL_OPTIONS,
+                     CURLSSLOPT_NATIVE_CA | CURLSSLOPT_NO_REVOKE);
+#endif
     if (method == "HEAD") {
         curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);
     }

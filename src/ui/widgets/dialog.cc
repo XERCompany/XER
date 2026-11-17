@@ -243,7 +243,10 @@ bool Dialog::HandleEvent(const Event& event) {
                 Close();
                 return true;
             }
-            return panel.Contains(event.position);
+            // Modal: swallow every other key — a position-based Contains()
+            // check is meaningless for key events and would leak keys to
+            // handlers behind the dialog.
+            return true;
         default:
             return false;
     }

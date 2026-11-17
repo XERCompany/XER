@@ -438,8 +438,14 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                 !r.GetBool("muted", track.muted, &track.muted) ||
                 !r.GetBool("hidden", track.hidden, &track.hidden) ||
                 !r.GetBool("locked", track.locked, &track.locked) ||
-                !r.GetF32("gain_db", track.gain_db, &track.gain_db)) {
+                !r.GetF32("gain_db", track.gain_db, &track.gain_db) ||
+                !r.GetF32("pan", track.pan, &track.pan)) {
                 return false;
+            }
+            if (!std::isfinite(track.pan) || track.pan < -1.0f ||
+                track.pan > 1.0f) {
+                return Fail(error_out,
+                            where + ".pan: out of range [-1, 1]");
             }
             project.tracks.push_back(track);
         }
@@ -918,8 +924,16 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
     {
         Reader r{root, "project", error_out};
         if (!r.GetF64("work_in", project.work_in, &project.work_in) ||
-            !r.GetF64("work_out", project.work_out, &project.work_out)) {
+            !r.GetF64("work_out", project.work_out, &project.work_out) ||
+            !r.GetF32("master_gain_db", project.master_gain_db,
+                      &project.master_gain_db)) {
             return false;
+        }
+        if (!std::isfinite(project.master_gain_db) ||
+            project.master_gain_db < -96.0f ||
+            project.master_gain_db > 24.0f) {
+            return Fail(error_out,
+                        "master_gain_db out of range [-96, 24]");
         }
         if (!std::isfinite(project.work_in) ||
             !std::isfinite(project.work_out) || project.work_in < 0.0 ||
@@ -950,6 +964,7 @@ Json::Value TrackToJson(const Track& track) {
     out["hidden"] = track.hidden;
     out["locked"] = track.locked;
     out["gain_db"] = static_cast<double>(track.gain_db);
+    out["pan"] = static_cast<double>(track.pan);
     return out;
 }
 
@@ -1124,6 +1139,9 @@ Json::Value ProjectToJson(const Project& project) {
     if (project.work_out > project.work_in) {
         root["work_in"] = project.work_in;
         root["work_out"] = project.work_out;
+    }
+    if (project.master_gain_db != 0.0f) {
+        root["master_gain_db"] = static_cast<double>(project.master_gain_db);
     }
     return root;
 }

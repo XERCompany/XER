@@ -1442,6 +1442,65 @@ void TestPanTrackGainRateMeters() {
     }
 }
 
+// ------------------------------------------------------------------
+// Case 10 — Phase-2b: track pan, master gain
+// ------------------------------------------------------------------
+
+void TestTrackPanMasterGain() {
+    // track_pan_shifts_stereo: audio-track pan steers the stereo
+    // balance of every clip on it. Centered -> |L| == |R|; hard-right
+    // -> the same normalized equal-power law as clip.pan (dominant
+    // channel at unity, opposite muted). Init() snapshots the
+    // project, so re-Init remixes the edited model.
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, "dc.wav"));
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        const double l0 = ChunkMeanChannel(chunk, 0);
+        const double r0 = ChunkMeanChannel(chunk, 1);
+        XER_VE_CHECK(l0 > 10000.0);            // real signal, not mute
+        XER_VE_CHECK(std::abs(l0 - r0) < 200.0);
+
+        p.tracks[1].pan = 1.0f;   // A1 hard-right
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        const double l = ChunkPeakChannel(chunk, 0);
+        const double r = ChunkPeakChannel(chunk, 1);
+        XER_VE_CHECK(l < r * 0.2);   // left muted at pan +1
+        XER_VE_CHECK(r > r0 * 0.5);  // dominant channel stays hot
+    }
+
+    // master_gain_db_scales_output: options.master_gain_db applies to
+    // the summed output — -6 dB -> peak * 10^(-6/20) = 0.501 (+-5%).
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, "dc.wav"));
+        AudioMixerOptions options = FakeOptions(bank);
+        AudioMixer mixer;
+        std::string err;
+        XER_VE_CHECK(mixer.Init(p, options, &err));
+        FFmpeg::AudioFrameInfo chunk;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        const double p0 = ChunkPeak(chunk);
+        XER_VE_CHECK(p0 > 10000.0);
+
+        options.master_gain_db = -6.0f;
+        XER_VE_CHECK(mixer.Init(p, options, &err));
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        const double p1 = ChunkPeak(chunk);
+        const double expected = p0 * std::pow(10.0, -6.0 / 20.0);
+        XER_VE_CHECK(std::abs(p1 - expected) < expected * 0.05);
+    }
+}
+
 }  // namespace
 
 int XER_VideoEditor_RunMixerTests() {
@@ -1454,5 +1513,6 @@ int XER_VideoEditor_RunMixerTests() {
     TestLifecycle();
     TestFfmpegWavIntegration();
     TestPanTrackGainRateMeters();
+    TestTrackPanMasterGain();
     return 0;
 }

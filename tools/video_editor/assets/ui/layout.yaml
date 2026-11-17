@@ -1,0 +1,8 @@
+Layout:
+  NavRail:
+    items: [media, audio, text, fx, markers, settings]
+  Panels:
+    left: {visible: true, width: 320}
+    right: {visible: true, width: 340, tab: 0}
+  Monitor:
+    transport_center: true

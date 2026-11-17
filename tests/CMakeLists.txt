@@ -104,7 +104,18 @@ add_executable(XER_VideoEditor_Tests
     video/video_editor_model2_tests.cc
     video/video_editor_timecode_tests.cc
     video/video_editor_autosave_tests.cc
+    video/plugin_host_tests.cc
+    video/app_runtime_tests.cc
+    video/script_host_tests.cc
+    video/net_client_tests.cc
+    video/ext_host_tests.cc
 )
 target_link_libraries(XER_VideoEditor_Tests PRIVATE XER_VideoEditor_Core)
 target_compile_features(XER_VideoEditor_Tests PRIVATE cxx_std_23)
+# The app_runtime boot tests read deployed bin/assets — keep the copy
+# fresh even when only the tests target is built (the copy target is
+# defined inside the WIN32 UI block, so guard it).
+if(TARGET video_editor_assets)
+    add_dependencies(XER_VideoEditor_Tests video_editor_assets)
+endif()
 add_test(NAME XER_VideoEditor_Tests COMMAND XER_VideoEditor_Tests)

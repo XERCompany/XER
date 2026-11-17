@@ -149,6 +149,10 @@ private:
     IMMDevice* device_;
     IAudioClient* audio_client_;
     IAudioRenderClient* render_client_;
+    // True only when our own CoInitializeEx succeeded — RPC_E_CHANGED_MODE
+    // means another component owns the apartment and must NOT be balanced
+    // with CoUninitialize.
+    bool com_initialized_ = false;
 
     // Audio configuration
     int sample_rate_;

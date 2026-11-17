@@ -15,16 +15,19 @@
 // the pan knob resets it to 0 dB / center. The mouse wheel scrolls the
 // strip row horizontally when tracks overflow.
 //
-// Strips mirror Track::gain_db / Track::muted on SetProject; per-track
-// pan is NOT in the model — the panel keeps it locally and still emits
-// on_track_pan so the host can route/store it as it sees fit. The
-// master strip's fader emits on_master_gain (no model field either);
-// push the authoritative value back via SetMasterGainDb().
+// Strips mirror Track::gain_db / Track::muted / Track::pan on
+// SetProject; knob drags still emit on_track_pan continuously and the
+// panel keeps the dragged value as a mid-gesture shadow until the
+// model catches up. The master strip's fader emits on_master_gain (no
+// model field either); push the authoritative value back via
+// SetMasterGainDb().
 //
 // Meters are fed by SetPeak() with linear |sample| maxima (may exceed
 // 1.0 on overs — the bars clamp to the -60..0 dB display and light red
 // above -3 dB). Instant attack, ~20 dB/s falloff, 1.6 s peak-hold —
-// the same ballistics as MonitorWidget::SetPeakLevels.
+// the same ballistics as MonitorWidget::SetPeakLevels. Only the
+// master strip draws meters: the app feeds the mix bus exclusively
+// (SetPeak(-1, ...)), so per-track bars would sit dead.
 #pragma once
 
 #include <chrono>
@@ -98,7 +101,7 @@ private:
         int track_index = -1;   // Project::tracks index; -1 = master
         std::string name;
         float gain_db = 0.0f;
-        float pan = 0.0f;       // -1..1; local only (not in the model)
+        float pan = 0.0f;       // -1..1; mirrors Track::pan
         bool muted = false;
         bool master = false;
         // Raw pushed peaks (linear) + displayed dB with ballistics.
@@ -140,8 +143,9 @@ private:
 
     Hooks hooks_;
     std::vector<Strip> strips_;
-    // Survives RebuildStrips: Track has no pan field, so pan is keyed
-    // by track index out-of-model.
+    // Mid-drag pan shadow keyed by track index: RebuildStrips prefers
+    // Track::pan but keeps the dragged value while its own knob is
+    // grabbed so the display can't snap back mid-gesture.
     std::map<int, float> pan_by_track_;
     float master_gain_db_ = 0.0f;
     float scroll_x_ = 0.0f;

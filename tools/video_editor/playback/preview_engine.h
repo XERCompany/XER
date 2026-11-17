@@ -123,6 +123,11 @@ public:
     // composited BGRA before OnVideoFrame (decodes still run at
     // source resolution; cheap CPU post-pass, honest "1/2" preview).
     void SetQuality(float scale);
+    // Master fader in dB — forwarded to the audio mixer and applied
+    // to the mixed output BEFORE the peak read, so OnAudioPeakLevels
+    // reflects it. Non-finite values are ignored; Init() resets to 0.
+    void SetMasterGainDb(float db);
+    float MasterGainDb() const;
 
     double Playhead() const;
     bool Playing() const;

@@ -49,6 +49,7 @@ enum class ExportJobState : int {
 struct ExportJobRow {
     std::string label;     // output basename ("interview.mp4")
     std::string detail;    // "range · codec bitrate" line (host-composed)
+    std::string output_path;  // full UTF-8 output path (Reveal target)
     float progress = 0.0f; // 0..1, shown on the bar (clamped)
     int state = 0;         // ExportJobState
 };

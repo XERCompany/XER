@@ -1,0 +1,14 @@
+Editor:
+  Theme: dark
+  Accent: "#8B5CF6"
+  RightTab: 0
+  Panels:
+    Left: true
+    Right: true
+  Timeline:
+    Height: 220
+  Waveform:
+    Height: 72
+  MediaBin:
+    View: grid
+  StatusBar: true

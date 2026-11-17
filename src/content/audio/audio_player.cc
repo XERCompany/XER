@@ -108,6 +108,15 @@ bool AudioPlayer::InitializeWASAPI() {
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) {
         return false;
     }
+    // S_OK/S_FALSE took (or deepened) our apartment reference and must be
+    // balanced in CleanupWASAPI; RPC_E_CHANGED_MODE is not ours to uninit.
+    com_initialized_ = SUCCEEDED(hr);
+    auto uninit_com = [this] {
+        if (com_initialized_) {
+            CoUninitialize();
+            com_initialized_ = false;
+        }
+    };
 
     hr = CoCreateInstance(
         __uuidof(MMDeviceEnumerator),
@@ -118,7 +127,7 @@ bool AudioPlayer::InitializeWASAPI() {
     );
 
     if (FAILED(hr)) {
-        CoUninitialize();
+        uninit_com();
         return false;
     }
 
@@ -126,7 +135,7 @@ bool AudioPlayer::InitializeWASAPI() {
     if (FAILED(hr)) {
         device_enumerator_->Release();
         device_enumerator_ = nullptr;
-        CoUninitialize();
+        uninit_com();
         return false;
     }
 
@@ -135,7 +144,7 @@ bool AudioPlayer::InitializeWASAPI() {
         device_ = nullptr;
         device_enumerator_->Release();
         device_enumerator_ = nullptr;
-        CoUninitialize();
+        uninit_com();
         return false;
     }
 
@@ -166,8 +175,11 @@ bool AudioPlayer::BindRenderEndpoint() {
         return false;
     }
 
-    // Use device's native format for simplicity
-    REFERENCE_TIME buffer_duration = 10000000; // 1 second
+    // Use device's native format for simplicity. ~100 ms of buffering is
+    // enough headroom for the feed thread while keeping the stale-audio
+    // tail after a seek short (Reset discards it; this bounds how much
+    // old-position audio could bleed through if a seek is missed).
+    REFERENCE_TIME buffer_duration = 1000000; // 100 ms
     hr = audio_client_->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
         0,
@@ -252,11 +264,20 @@ void AudioPlayer::UnregisterDeviceMonitor() {
 }
 
 void AudioPlayer::MonitorLoop() {
+    // HandleDefaultDeviceChange() makes COM calls (endpoint lookup,
+    // device Activate) on this thread — it needs its own apartment.
+    // Uninit only when the init succeeded (RPC_E_CHANGED_MODE is not
+    // ours to balance).
+    const bool com_initialized =
+        SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
     while (WaitForSingleObject(device_event_, INFINITE) == WAIT_OBJECT_0) {
         if (monitor_stop_.load()) {
             break;
         }
         HandleDefaultDeviceChange();
+    }
+    if (com_initialized) {
+        CoUninitialize();
     }
 }
 
@@ -462,7 +483,10 @@ void AudioPlayer::CleanupWASAPI() {
         device_enumerator_->Release();
         device_enumerator_ = nullptr;
     }
-    CoUninitialize();
+    if (com_initialized_) {
+        CoUninitialize();
+        com_initialized_ = false;
+    }
 }
 
 bool AudioPlayer::LoadFromFile(const std::string& file_path, std::string* error_out) {
@@ -608,10 +632,32 @@ bool AudioPlayer::Seek(double time_seconds) {
         time_seconds = duration;
     }
 
+    // While playing, the device buffer still holds up to ~100 ms of
+    // audio rendered from the OLD position. Stop the feed thread and
+    // stream, then Reset discards that queue — otherwise the old
+    // position audibly bleeds through after every seek. StartRendering
+    // restarts without touching state_, so no pause blip is signalled.
+    const bool was_playing = state_.load() == PlaybackState::kPlaying;
+    if (was_playing) {
+        stop_thread_ = true;
+        if (audio_thread_) {
+            WaitForSingleObject(audio_thread_, INFINITE);
+            CloseHandle(audio_thread_);
+            audio_thread_ = nullptr;
+        }
+        if (audio_client_ != nullptr) {
+            audio_client_->Stop();
+            audio_client_->Reset();
+        }
+    }
+
     size_t target_frame = static_cast<size_t>(time_seconds * audio_buffer_.sample_rate);
     playback_position_ = target_frame * audio_buffer_.channels;
     current_time_ = time_seconds;
 
+    if (was_playing) {
+        return StartRendering();
+    }
     return true;
 }
 
@@ -664,6 +710,11 @@ void AudioPlayer::ProcessAudio() {
         UpdateState(PlaybackState::kError);
         return;
     }
+    // This thread (CreateThread) makes WASAPI calls — it needs its own
+    // COM apartment. Uninit only on a successful init; RPC_E_CHANGED_MODE
+    // is a failure and must not be balanced.
+    const bool com_initialized =
+        SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
     // Flush denormals to zero on this thread: IIR filters and reverb tails
     // generate denormal floats that cause massive slowdowns (audible
     // crackling) on processors without FTZ/DAZ enabled by default.
@@ -905,6 +956,9 @@ void AudioPlayer::ProcessAudio() {
         }
 
         Sleep(10);
+    }
+    if (com_initialized) {
+        CoUninitialize();
     }
 }
 
