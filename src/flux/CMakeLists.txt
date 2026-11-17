@@ -6,6 +6,12 @@ if(APPLE)
     list(APPEND FLUX_SOURCES ${_xer_apple_mm})
 endif()
 
+# v8_console_*.cc are a work-in-progress port — they include helpers
+# (helper/js_buffer.h, helper/class_builder.h) that do not exist in the
+# tree yet, so they cannot compile. Excluded until the port lands its
+# dependencies; the files stay for the author to finish.
+list(FILTER FLUX_SOURCES EXCLUDE REGEX "/v8_console_[^/]*\\.cc$")
+
 file(GLOB_RECURSE FLUX_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
