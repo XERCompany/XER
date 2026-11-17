@@ -70,15 +70,22 @@ jobs:
           )
           for f in /etc/pacman.d/mirrorlist.*; do
             suffix=$(sed -n 's|^Server = https://mirror\.msys2\.org/\(\S*\)|\1|p' "$f" | head -n1)
+            [ -n "$suffix" ] || suffix=$(sed -n 's|^Server = https://repo\.msys2\.org/\(\S*\)|\1|p' "$f" | head -n1)
             [ -n "$suffix" ] || continue
             {
               for m in "${mirrors[@]}"; do echo "Server = $m/$suffix"; done
               grep '^Server' "$f"
             } > "$f.new" && mv "$f.new" "$f"
           done
+          # Fresh base (update:false) has no pacman keyring yet — init it
+          # or every -S fails instantly with "keyring is not writable" /
+          # "signature is unknown trust".
+          pacman-key --init || true
+          pacman-key --populate msys2 || true
+          pacman -Sy --noconfirm
           # The msys2-runtime core update can kill this shell mid-run;
           # retry so the transaction finishes.
-          pacman -Syu --noconfirm || pacman -Syu --noconfirm
+          pacman -Su --noconfirm || pacman -Su --noconfirm
 
       # Toolchain + all library dependencies, mirroring InstallTools.ps1.
       # `cache: true` on setup-msys2 caches downloaded pacman packages
