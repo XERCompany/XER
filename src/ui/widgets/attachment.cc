@@ -80,7 +80,7 @@ void Attachment::Render(Rendering::Renderer& renderer,
     tile.y = bounds.y + pad;
     tile.width = icon_size;
     tile.height = icon_size;
-    renderer.FillRect(tile, tokens.muted, tokens.radius_small);
+    renderer.FillRect(tile, tokens.secondary, tokens.radius_small);
     const std::string ext = ExtensionOf(filename_);
     if (!ext.empty()) {
         const Rendering::TextStyle style{tokens.foreground,

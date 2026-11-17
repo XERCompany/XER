@@ -112,6 +112,14 @@ struct VideoDecoder::Impl {
     std::atomic<std::uint64_t> audio_epoch_{0};
     double audio_start_seconds = 0.0;
 
+    // Consecutive av_read_frame() failures, counted across NextFrame()
+    // calls. Reaching kDemuxErrorLimit is treated as demux EOF so a
+    // persistently failing demuxer cannot starve the audio tap forever —
+    // audio_drained is the only terminator for tap consumers and there is
+    // no video-EOF signal on audio-only files.
+    int demux_read_errors = 0;
+    static constexpr int kDemuxErrorLimit = 3;
+
     // ~2048 AAC frames ≈ 40+ s of audio — bounds queue memory if the audio
     // consumer stalls; oldest packets are dropped first.
     static constexpr size_t kMaxQueuedAudioPackets = 2048;
@@ -127,6 +135,41 @@ struct VideoDecoder::Impl {
             audio_queue.push_back(clone);
         } else {
             av_packet_free(&clone);
+        }
+    }
+
+    // Prepares audio_stream/audio_start_seconds and, when the tap is
+    // enabled, opens the decode-side audio codec. Runs on every successful
+    // Open() — both the A/V path and the audio-only path.
+    void PrepareAudioStream() {
+        if (!has_audio || audio_stream != nullptr) {
+            return;
+        }
+        audio_stream = fmt->streams[audio_stream_index];
+        audio_start_seconds =
+            (audio_stream->start_time != AV_NOPTS_VALUE &&
+             audio_stream->time_base.den > 0)
+                ? std::max(0.0, audio_stream->start_time *
+                                      av_q2d(audio_stream->time_base))
+                : 0.0;
+        if (audio_tap) {
+            // Decode-side codec for the tapped packets; opened once here so
+            // ReadAudioFrames() never touches avformat state.
+            audio_codec_desc =
+                avcodec_find_decoder(audio_stream->codecpar->codec_id);
+            if (audio_codec_desc != nullptr) {
+                audio_codec =
+                    avcodec_alloc_context3(audio_codec_desc);
+                if (audio_codec != nullptr &&
+                    avcodec_parameters_to_context(audio_codec,
+                                                  audio_stream->codecpar) >= 0 &&
+                    avcodec_open2(audio_codec, audio_codec_desc,
+                                  nullptr) == 0) {
+                    // ready
+                } else {
+                    avcodec_free_context(&audio_codec);
+                }
+            }
         }
     }
 
@@ -147,6 +190,7 @@ struct VideoDecoder::Impl {
         audio_flushed = false;
         audio_drained = false;
         audio_demux_eof = false;
+        demux_read_errors = 0;
     }
 
     void ReleaseAudio() {
@@ -167,6 +211,7 @@ struct VideoDecoder::Impl {
         audio_demux_eof = false;
         audio_flushed = false;
         audio_drained = false;
+        demux_read_errors = 0;
     }
 
     void ReleaseCodec() {
@@ -198,8 +243,20 @@ struct VideoDecoder::Impl {
         stream = nullptr;
         video_stream_index = -1;
         audio_start_seconds = 0.0;
+        // Reset per-session scalars to the fresh-decoder defaults: the
+        // audio-only Open() path never assigns them, so without this a
+        // reused decoder would report the previous file's geometry,
+        // frame rate and position.
+        width = 0;
+        height = 0;
+        fps = 30.0;
+        position_seconds = -1.0;
     }
 #else
+    // EnableAudioTap() assigns impl_->audio_tap unconditionally, so the
+    // member must exist off-Windows too. It is never read there (every
+    // reader is _WIN32-only) — a pure compile sink, zero behavior change.
+    bool audio_tap = false;
     struct Dummy {};
     Dummy dummy;
 #endif
@@ -226,25 +283,44 @@ bool VideoDecoder::Open(const std::string& path, std::string* error_out) {
     if (p.packet == nullptr || p.frame == nullptr || p.scaled == nullptr ||
         p.audio_frame == nullptr) {
         if (error_out) *error_out = "alloc failed";
+        Close();  // free whichever allocations did succeed
         return false;
     }
     if (avformat_open_input(&p.fmt, path.c_str(), nullptr, nullptr) != 0) {
         if (error_out) *error_out = "cannot open: " + path;
+        Close();
         return false;
     }
     if (avformat_find_stream_info(p.fmt, nullptr) < 0) {
         if (error_out) *error_out = "no stream info";
+        Close();
         return false;
     }
     p.video_stream_index = av_find_best_stream(p.fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    p.audio_stream_index =
+        av_find_best_stream(p.fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    p.has_audio = p.audio_stream_index >= 0;
+    p.duration = (p.fmt->duration != AV_NOPTS_VALUE)
+        ? p.fmt->duration / AV_TIME_BASE : 0.0;
+
     if (p.video_stream_index < 0) {
-        if (error_out) *error_out = "no video stream";
-        return false;
+        // Audio-only container: succeed so the audio tap works.
+        // codec/sws stay null, width/height stay 0, fps keeps its
+        // 30.0 default; NextFrame() pumps the demuxer but returns false.
+        if (!p.has_audio) {
+            if (error_out) *error_out = "no decodable audio/video streams";
+            Close();
+            return false;
+        }
+        p.PrepareAudioStream();
+        return true;
     }
+
     p.stream = p.fmt->streams[p.video_stream_index];
     p.decoder = avcodec_find_decoder(p.stream->codecpar->codec_id);
     if (p.decoder == nullptr) {
         if (error_out) *error_out = "unsupported codec";
+        Close();
         return false;
     }
     p.codec = avcodec_alloc_context3(p.decoder);
@@ -252,6 +328,9 @@ bool VideoDecoder::Open(const std::string& path, std::string* error_out) {
         avcodec_parameters_to_context(p.codec, p.stream->codecpar) < 0 ||
         avcodec_open2(p.codec, p.decoder, nullptr) < 0) {
         if (error_out) *error_out = "codec open failed";
+        // codec may be non-null here — release it (and fmt) so IsOpen()
+        // stays false and nothing leaks until the next Open/destruction.
+        Close();
         return false;
     }
     p.width = p.codec->width;
@@ -260,44 +339,15 @@ bool VideoDecoder::Open(const std::string& path, std::string* error_out) {
         ? p.stream->avg_frame_rate : p.stream->r_frame_rate;
     p.fps = (rate.num > 0 && rate.den > 0)
         ? av_q2d(rate) : 30.0;
-    p.duration = (p.fmt->duration != AV_NOPTS_VALUE)
-        ? p.fmt->duration / AV_TIME_BASE : 0.0;
-    p.audio_stream_index =
-        av_find_best_stream(p.fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
-    p.has_audio = p.audio_stream_index >= 0;
-    if (p.has_audio) {
-        p.audio_stream = p.fmt->streams[p.audio_stream_index];
-        p.audio_start_seconds =
-            (p.audio_stream->start_time != AV_NOPTS_VALUE &&
-             p.audio_stream->time_base.den > 0)
-                ? std::max(0.0, p.audio_stream->start_time *
-                                      av_q2d(p.audio_stream->time_base))
-                : 0.0;
-        if (p.audio_tap) {
-            // Decode-side codec for the tapped packets; opened once here so
-            // ReadAudioFrames() never touches avformat state.
-            p.audio_codec_desc =
-                avcodec_find_decoder(p.audio_stream->codecpar->codec_id);
-            if (p.audio_codec_desc != nullptr) {
-                p.audio_codec =
-                    avcodec_alloc_context3(p.audio_codec_desc);
-                if (p.audio_codec != nullptr &&
-                    avcodec_parameters_to_context(p.audio_codec,
-                                                  p.audio_stream->codecpar) >= 0 &&
-                    avcodec_open2(p.audio_codec, p.audio_codec_desc,
-                                  nullptr) == 0) {
-                    // ready
-                } else {
-                    avcodec_free_context(&p.audio_codec);
-                }
-            }
-        }
-    }
+    p.PrepareAudioStream();   // replaces the inline audio block
     p.sws = sws_getContext(p.width, p.height, p.codec->pix_fmt,
                            p.width, p.height, AV_PIX_FMT_BGRA,
                            SWS_BILINEAR, nullptr, nullptr, nullptr);
     if (p.sws == nullptr) {
         if (error_out) *error_out = "sws init failed";
+        // codec/audio state is fully opened at this point — release it so
+        // IsOpen() reports closed instead of a half-initialized session.
+        Close();
         return false;
     }
     return true;
@@ -315,7 +365,12 @@ void VideoDecoder::Close() {
 
 bool VideoDecoder::IsOpen() const {
 #ifdef _WIN32
-    return impl_->fmt != nullptr && impl_->codec != nullptr;
+    // Keyed on opened objects rather than codec alone: audio-only
+    // containers have no video codec but are fully usable through the
+    // audio tap. audio_stream is only assigned on successful Open()
+    // paths, so a failed Open still reports closed.
+    return impl_->fmt != nullptr &&
+           (impl_->codec != nullptr || impl_->audio_stream != nullptr);
 #else
     return false;
 #endif
@@ -330,6 +385,40 @@ bool VideoDecoder::NextFrame(std::vector<uint8_t>& bgra, int& width, int& height
     bgra.assign(static_cast<size_t>(p.width) * p.height * 4u, 0);
     width = p.width;
     height = p.height;
+
+    if (p.codec == nullptr) {
+        // Audio-only container: no frames exist, but the demuxer must
+        // keep being pumped or the audio tap starves. Each call moves a
+        // bounded batch of packets into the tap queue, then reports
+        // end-of-stream. Consumers loop NextFrame()/ReadAudioFrames()
+        // until AudioDrained().
+        constexpr int kPumpBudget = 256;
+        for (int i = 0; i < kPumpBudget; ++i) {
+            const int read_ret = av_read_frame(p.fmt, p.packet);
+            if (read_ret == AVERROR_EOF) {
+                av_packet_unref(p.packet);
+                p.audio_demux_eof = true;
+                break;
+            }
+            if (read_ret < 0) {
+                // Persistent read failure: after a few consecutive errors
+                // treat the demuxer as exhausted so the audio flush path
+                // still runs and AudioDrained() can become true.
+                if (++p.demux_read_errors >= Impl::kDemuxErrorLimit) {
+                    p.audio_demux_eof = true;
+                }
+                break;
+            }
+            p.demux_read_errors = 0;
+            if (p.audio_tap &&
+                p.packet->stream_index == p.audio_stream_index &&
+                p.audio_codec != nullptr) {
+                p.PushAudioPacket(p.packet);
+            }
+            av_packet_unref(p.packet);
+        }
+        return false;
+    }
 
     // Canonical send/receive pacing: avcodec_send_packet may only be called
     // after avcodec_receive_frame reported EAGAIN (decoder input drained).
@@ -419,8 +508,16 @@ bool VideoDecoder::NextFrame(std::vector<uint8_t>& bgra, int& width, int& height
             continue;
         }
         if (read_ret < 0) {
+            // Same persistent-failure guard as the audio-only pump: a
+            // demuxer that keeps erroring must not starve the audio tap —
+            // after a few consecutive errors mark demux EOF so the audio
+            // side can flush and drain.
+            if (++p.demux_read_errors >= Impl::kDemuxErrorLimit) {
+                p.audio_demux_eof = true;
+            }
             return false;
         }
+        p.demux_read_errors = 0;
         if (p.packet->stream_index != p.video_stream_index) {
             // Audio packets are tapped into the shared queue instead of
             // being dropped — ReadAudioFrames() decodes them off-thread.
@@ -459,13 +556,26 @@ bool VideoDecoder::Seek(double seconds) {
     int ret = avformat_seek_file(p.fmt, -1, INT64_MIN, ts, ts,
                                  AVSEEK_FLAG_BACKWARD);
     if (ret < 0) {
-        ret = av_seek_frame(p.fmt, p.video_stream_index, ts,
-                            AVSEEK_FLAG_BACKWARD);
+        const int fallback_stream =
+            p.video_stream_index >= 0 ? p.video_stream_index
+                                      : p.audio_stream_index;
+        if (fallback_stream >= 0) {
+            // av_seek_frame with a stream index expects the timestamp
+            // in that stream's time_base — rescale from AV_TIME_BASE
+            // (was: raw AV_TIME_BASE ts -> ~1e6/tb_ratio too far).
+            const AVStream* fs = p.fmt->streams[fallback_stream];
+            const int64_t stream_ts = av_rescale_q(
+                ts, AV_TIME_BASE_Q, fs->time_base);
+            ret = av_seek_frame(p.fmt, fallback_stream, stream_ts,
+                                AVSEEK_FLAG_BACKWARD);
+        }
     }
     if (ret < 0) {
         return false;
     }
-    avcodec_flush_buffers(p.codec);
+    if (p.codec != nullptr) {
+        avcodec_flush_buffers(p.codec);
+    }
     // Audio side restarts from the same demux point: drop queued packets
     // from the old position and flush the audio decoder.
     p.FlushAudioState();
@@ -485,6 +595,19 @@ bool VideoDecoder::ReadAudioFrames(std::vector<AudioFrameInfo>* out,
         return false;
     }
     if (p.audio_codec == nullptr || p.audio_frame == nullptr) {
+        // No decode codec: either the tap was never enabled or the tapped
+        // audio codec failed to open / has no decoder. When the tap WAS
+        // requested, AudioDrained() must still be able to reach true once
+        // the demuxer is exhausted and nothing is queued — otherwise
+        // consumers looping NextFrame()/ReadAudioFrames() until
+        // AudioDrained() spin forever (audio-only files have no video-EOF
+        // signal as an alternate terminator).
+        if (p.audio_tap && p.audio_demux_eof) {
+            std::lock_guard<std::mutex> lock(p.audio_mutex);
+            if (p.audio_queue.empty()) {
+                p.audio_drained = true;
+            }
+        }
         return false;  // no audio stream or tap codec failed to open
     }
     const int limit = max_frames > 0 ? max_frames : INT_MAX;

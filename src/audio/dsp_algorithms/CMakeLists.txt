@@ -28,8 +28,13 @@ target_link_libraries(XER_AudioDSP
         absl::strings
         unofficial::pthreadpool
         unofficial::fxdiv::fxdiv
-        MKL::MKL
 )
+
+# Intel MKL accelerates the DFTI backend when present (vcpkg on Windows,
+# intel-mkl on Linux); no system package exists on macOS/MSYS2.
+if(TARGET MKL::MKL)
+    target_link_libraries(XER_AudioDSP PUBLIC MKL::MKL)
+endif()
 
 # C++ standard
 target_compile_features(XER_AudioDSP PUBLIC cxx_std_23)

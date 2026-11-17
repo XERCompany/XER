@@ -1,0 +1,190 @@
+// Frame-accurate timeline -> canvas BGRA renderer for the VideoEditor
+// core (XER Studio Phase 1C). UI-free, single consumer thread —
+// RenderFrameAt calls must be serialized (the export worker and a
+// future preview engine each own an instance). Init() snapshots the
+// project (copies it); decoders open lazily on a clip's first
+// contributing frame and close after its last.
+//
+// Pixel pipeline (all packed BGRA8, straight alpha — NOT
+// premultiplied): per video track, contributing clips are the union
+// of nominal [timeline_start, end) PLUS transition handle extensions
+// (ClipTransitionHandles: duration/2 past each endpoint). Each clip
+// decodes sequentially forward with nearest-PTS frame selection,
+// runs the CPU ClipEffect chain (video::VideoEffects), warps by its
+// affine Transform into a canvas-sized layer (WarpClipFrame — the
+// contract the 1D preview must match), transition pairs combine via
+// ApplyTransitionPixels, and track layers alpha-over bottom->top onto
+// bg_color. A clip with Clip::is_adjustment instead runs its
+// effect/mask chain on a snapshot of the already-composited canvas
+// (everything below its track) and writes the result back through its
+// transform rect — a Premiere adjustment layer. Skia is used ONLY
+// inside VideoEffects dispatch; the compositor's own pixel loops are
+// plain CPU BGRA.
+#pragma once
+
+#include <atomic>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "frame.h"            // video::Frame — XER_Video (PUBLIC dep)
+#include "media_decoder.h"    // IMediaDecoder + MediaDecoderFactory
+#include "timeline_model.h"
+
+namespace XER::VideoEditor {
+
+// ---- pure helpers (exposed for tests + 1D preview reuse) ----
+
+// Normalized transition progress w in [0,1]: 0 at window start
+// (cut - duration/2), 1 at window end (cut + duration/2), clamped.
+// `cut_seconds` = ClipEndSeconds(from_clip) == to_clip.timeline_start.
+// Degenerate duration <= 0 -> w = 1 for t >= cut, else 0 (such
+// transitions never form a render window anyway).
+double TransitionWeightAt(double t_seconds, const Transition& transition,
+                          double cut_seconds);
+
+// Composites two canvas-sized straight-alpha BGRA layers — `under`
+// (from/outgoing) and `over` (to/incoming) — per the transition at
+// weight w, into `out` (canvas-sized, may not alias inputs). All three
+// frames must share width/height/format(BGRA8); `out` is allocated
+// here when needed. `weight` is clamped to [0,1] internally.
+//
+// Conventions (fixed — the 1D preview must match):
+//   Crossfade: premultiplied-alpha lerp (correct for straight-alpha
+//     layers; equals MixSystem::Blend(Alpha,w) for opaque inputs).
+//   Wipe<D>: hard-edge reveal, no feather (v1) — `over` shows where
+//     the directional test passes, `under` elsewhere; inside the
+//     revealed region `over` alpha-composites OVER `under` (its
+//     transparency lets `under` show — correct for transformed
+//     clips). Revealed tests use pixel centers (x+0.5)/W etc.:
+//       WipeLeft:  (x+0.5)/W < w        (incoming grows left->right)
+//       WipeRight: (x+0.5)/W > 1-w
+//       WipeUp:    (y+0.5)/H < w
+//       WipeDown:  (y+0.5)/H > 1-w
+//   Slide<D>: BOTH layers translate toward D — `under` is displaced
+//     -w*dim px (exits toward D) while `over` is displaced
+//     +(1-w)*dim px from the opposite side, so the composite motion
+//     is toward <D> (SlideLeft = everything moves left). Per canvas
+//     pixel: under_px = bilinear(under, x+0.5-udx, y+0.5-udy),
+//     over_px  = bilinear(over,  x+0.5-odx, y+0.5-ody) with outside
+//     sampling -> transparent, result = AlphaOver(under_px, over_px).
+//     At w=0 -> under only; w=1 -> over only.
+// Returns false on size/format mismatch or allocation failure.
+bool ApplyTransitionPixels(Transition::Type type, double weight,
+                           const video::Frame& under,
+                           const video::Frame& over,
+                           video::Frame* out);
+
+// Renders `src` (packed BGRA8, any dims) into a canvas-sized
+// transparent-black layer applying `tr`: the scaled rect
+// (src_w*scale x src_h*scale) is placed with its TOP-LEFT at
+// (offset_x*canvas_w, offset_y*canvas_h) — the 1B convention — then
+// rotated `rotation_deg` about the scaled rect's CENTER, and alpha is
+// multiplied by `opacity`. Inverse-mapped bilinear sampling (always
+// bilinear in v1 — no nearest fast path); pixels outside the source
+// stay transparent (alpha 0). `out_layer` must be canvas_w*canvas_h
+// BGRA8 (allocated by caller or here; fully rewritten each call).
+// Returns false on invalid inputs/allocation failure.
+bool WarpClipFrame(const video::Frame& src, const Transform& tr,
+                   int canvas_w, int canvas_h, video::Frame* out_layer);
+
+// Multiplies `frame`'s alpha by the product of all `masks` (straight
+// alpha — only the A channel is scaled; RGB passes through). Masks are
+// defined in CLIP-FRAME fractions: shape centered at
+// (cx*W, cy*H) sized (w*W, h*H) pixels; feather is a linear alpha
+// falloff over feather*min(w_px, h_px) pixels centered on the shape
+// boundary (0 -> hard edge); inverted flips inside/outside. Multiple
+// masks MULTIPLY coverage. Degenerate masks (non-positive or
+// non-finite w/h) cover nothing (coverage 0, or 1 when inverted).
+// Returns false when `frame` is null/not a valid BGRA8 frame; an empty
+// `masks` list is a no-op true.
+bool ApplyMaskPixels(video::Frame* frame,
+                     const std::vector<ClipMask>& masks);
+
+// Composites `src` onto `dst` (both packed straight-alpha BGRA8, same
+// dims) using `mode`: dst <- src OVER dst where the source's effective
+// rgb is the W3C-style blend of (backdrop, source):
+//   Cb    = blend(dst_rgb_norm, src_rgb_norm)     (per channel)
+//   Cs'   = sA*Cb + (1-sA)*src_rgb_norm           (spec'd effective src)
+//   out_c = (sA*Cs' + dA*(1-sA)*dst_rgb_norm)/oA  (standard alpha-over)
+//   out_a = alpha-over(sA, dA)
+// Opaque src over opaque dst yields exactly Cb. Blend formulas
+// (normalized 0..1): Add = min(1,b+s); Multiply = b*s;
+// Screen = 1-(1-b)(1-s); Overlay = b<=0.5 ? 2*b*s : 1-2*(1-b)*(1-s);
+// Darken = min(b,s); Lighten = max(b,s). BlendMode::Normal reduces
+// EXACTLY to plain alpha-over (Cb = src) — the compositor still keeps
+// its dedicated alpha-over fast path for Normal.
+// Returns false on size/format mismatch or invalid frames.
+bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
+                          const video::Frame& src);
+
+// ---- the compositor ----
+
+struct CompositorOptions {
+    // Empty -> DefaultDecoderFactory() (real FFmpeg bridge). Tests
+    // inject fakes.
+    MediaDecoderFactory decoder_factory;
+};
+
+// Frame-accurate timeline -> canvas BGRA renderer. UI-free, single
+// consumer thread (RenderFrameAt calls must be serialized — the
+// export worker and a future preview engine each own an instance).
+// Init() snapshots the project (copies it); decoders open lazily on a
+// clip's first contributing frame and close after its last.
+//
+// RenderFrameAt assumes non-decreasing `t` per session for
+// frame-accurate decode (export drives t forward); a backward jump
+// keeps the already-decoded frames (no re-seek) — preview scrubbing
+// backward may show a stale frame until the session re-opens.
+class Compositor {
+public:
+    Compositor();
+    ~Compositor();
+    Compositor(const Compositor&) = delete;
+    Compositor& operator=(const Compositor&) = delete;
+
+    // Binds a snapshot of `project`. Fails only on invalid canvas
+    // (width/height <= 0) or empty fps — clip-level problems (missing
+    // files, undecodable media, audio-only-on-video-track) surface as
+    // RenderFrameAt errors or Warnings(), not Init failures.
+    // `warnings_out` (optional) collects non-fatal notes: unknown
+    // ClipEffect.type strings, Skia-only effects when Skia is
+    // unavailable, transitions referencing clips not on video tracks.
+    bool Init(const Project& project, const CompositorOptions& options,
+              std::string* error_out = nullptr,
+              std::vector<std::string>* warnings_out = nullptr);
+
+    void Shutdown();   // close all decoders + release frames (idempotent)
+
+    int CanvasWidth() const;
+    int CanvasHeight() const;
+    double DurationSeconds() const;    // project.duration()
+    // Output frame count for fps_num/fps_den:
+    // llround(duration * fps_num / fps_den), >= 1 when duration > 0.
+    std::size_t FrameCount(int fps_num, int fps_den) const;
+
+    // Renders canvas at timeline time `t` (seconds; clamped to
+    // [0, duration]) into `out_bgra`: width*height*4 packed BGRA8,
+    // row-major, stride width*4. Returns false + error_out on decode/
+    // render failure (missing file, undecodable clip, allocation) —
+    // export treats that as fatal. After Cancel(), the next call
+    // returns false with "export cancelled"-style error.
+    bool RenderFrameAt(double t, std::vector<std::uint8_t>* out_bgra,
+                       std::string* error_out = nullptr);
+
+    // Non-fatal issues seen so far (Init warnings + runtime notes like
+    // "clip X has no video stream"). Cleared by Init/Shutdown.
+    const std::vector<std::string>& Warnings() const;
+
+    void Cancel();          // cooperative; checked per RenderFrameAt
+    bool Cancelled() const;
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace XER::VideoEditor

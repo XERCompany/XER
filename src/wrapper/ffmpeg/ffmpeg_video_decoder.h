@@ -25,6 +25,14 @@ struct AudioFrameInfo;  // defined in ffmpeg_engine_bridge.h
 // dropped, and ReadAudioFrames() decodes them on a second thread. Both sides
 // share the single AVFormatContext opened by Open() — the file is demuxed
 // exactly once. Seek() and Close() flush the audio side as well.
+//
+// Audio-only containers: Open() also succeeds on files that carry an audio
+// stream but no decodable video stream — HasAudio() returns true and
+// GetWidth()/GetHeight() return 0. NextFrame() then always returns false but
+// must still be called: each call pumps a bounded batch of demuxed packets
+// into the audio tap queue so ReadAudioFrames() keeps receiving data. Drive
+// audio-only decode by alternating NextFrame() and ReadAudioFrames() until
+// AudioDrained() reports true.
 class VideoDecoder {
 public:
     VideoDecoder();

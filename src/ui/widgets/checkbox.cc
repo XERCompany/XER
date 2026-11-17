@@ -56,24 +56,28 @@ void Checkbox::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens
     };
     const float check = check_t_.Value();
 
-    Theme::Color fill_color = tokens.surface;
+    Theme::Color fill_color = tokens.input;
     Theme::Color stroke_color = tokens.border;
     Theme::Color check_color = tokens.foreground;
     if (!IsEnabled()) {
-        fill_color = tokens.muted;
+        // Disabled reads as a recessed empty box, not a filled swatch.
+        fill_color = tokens.secondary;
         stroke_color = tokens.border;
-        check_color = tokens.background;
+        check_color = tokens.disabled;
     } else if (check > 0.5f) {
         // Tailwind accent checkbox: indigo fill, white tick.
         fill_color = tokens.accent;
         check_color = tokens.accent_foreground;
     } else if (check > 0.01f) {
         // Mid-draw: blend toward the checked fill so the box doesn't pop.
-        fill_color = Motion::LerpColor(tokens.surface, tokens.accent, check);
+        fill_color = Motion::LerpColor(tokens.input, tokens.accent, check);
         check_color = Motion::LerpColor(tokens.foreground, tokens.accent_foreground, check);
     }
-    if (IsHovered() && IsEnabled() && check < 0.5f) {
-        fill_color = Motion::LerpColor(fill_color, tokens.hover, 0.6f);
+    if (IsHovered() && IsEnabled()) {
+        if (check < 0.5f) {
+            fill_color = Motion::LerpColor(fill_color, tokens.hover, 0.6f);
+        }
+        stroke_color = tokens.muted;
     }
 
     renderer.FillRect(box, fill_color, tokens.radius_small);

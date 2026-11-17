@@ -15,6 +15,11 @@ constexpr double kSeekSlopSeconds = 0.10;   // accept frames this close to targe
 constexpr int kSeekMaxDiscardFrames = 120;  // bound the post-seek decode-forward
 constexpr double kMinFps = 1.0;
 constexpr double kMaxFps = 240.0;
+// Consecutive loop-restarts that yield no decoded frame before the
+// next EOS — after this many the stream is treated as ended instead
+// of spinning on Seek(0) forever (e.g. a corrupt video that opens
+// but never produces a frame).
+constexpr int kMaxRestartsWithoutFrame = 3;
 
 }  // namespace
 
@@ -199,7 +204,10 @@ void VideoSession::DecodeLoop() {
         return;
     }
     // Publish for the audio consumer as soon as the stream is open.
-    av_decoder_.store(decoder, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(decoder_mutex_);
+        av_decoder_ = decoder;
+    }
 
     fps_.store(std::clamp(decoder->GetFps(), kMinFps, kMaxFps),
                std::memory_order_relaxed);
@@ -214,12 +222,17 @@ void VideoSession::DecodeLoop() {
     std::vector<std::uint8_t> bgra;
     int w = 0, h = 0;
     std::uint64_t decoded_count = 0;
+    // Loop-restarts since the last published frame — see
+    // kMaxRestartsWithoutFrame. Reset inside publish() so seek
+    // decode-forwards count too.
+    int restarts_without_frame = 0;
 
     // Publishes one decoded frame into the mailbox and updates position.
     // `pts` is the frame's stream timestamp; when the stream carries no
     // timestamps we estimate from the decoded-frame count instead.
     const auto publish = [&](double pts) {
         ++decoded_count;
+        restarts_without_frame = 0;  // a frame decoded — budget restored
         auto frame = std::make_shared<VideoFrame>();
         frame->bgra = std::move(bgra);
         bgra.clear();
@@ -304,9 +317,18 @@ void VideoSession::DecodeLoop() {
         }
 
         if (!decoder->NextFrame(bgra, w, h)) {
-            // End of stream.
+            // End of stream. Loop-restart only for real video:
+            // audio-only containers report EOS on EVERY NextFrame()
+            // (the call exists to pump the audio tap), so Seek(0)+
+            // retry would spin this worker forever without ever
+            // reaching kEnded — GetWidth()==0 marks that case. The
+            // restart counter covers video files that keep reporting
+            // EOS right after a successful Seek (corrupt stream).
             if (loop_.load(std::memory_order_relaxed) &&
+                decoder->GetWidth() > 0 &&
+                restarts_without_frame < kMaxRestartsWithoutFrame &&
                 decoder->Seek(0.0)) {
+                ++restarts_without_frame;
                 position_.store(0.0, std::memory_order_relaxed);
                 next_tick = std::chrono::steady_clock::now();
                 continue;
@@ -333,7 +355,10 @@ void VideoSession::DecodeLoop() {
 
     // Release the shared decoder handle — the audio consumer may still hold
     // a reference; it stops getting packets once IsOpen() goes false.
-    av_decoder_.store(nullptr, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(decoder_mutex_);
+        av_decoder_.reset();
+    }
     PublishState(VideoState::kIdle);
 }
 

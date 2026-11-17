@@ -31,13 +31,28 @@ void ScrollBarWidget::Render(Rendering::Renderer& renderer, const Theme::Tokens&
     if (thumb.width <= 0.0f || thumb.height <= 0.0f) {
         return;
     }
-    // Track: barely-there rounded rail.
-    renderer.FillRect(GetBounds(), WithAlpha(tokens.border, 0.35f), tokens.radius_small);
-    // Thumb: muted at rest, stronger on hover (hover state is managed by
-    // WidgetTree::UpdateHover).
-    const auto thumb_color = IsHovered() ? tokens.foreground : tokens.muted;
-    renderer.FillRect(thumb, WithAlpha(thumb_color, IsHovered() ? 0.85f : 0.55f),
-                      tokens.radius_small);
+    // Track rail is drawn right-aligned inside the (wider) hit strip so the
+    // visual bar hugs the edge while the grab zone stays generous.
+    const auto strip = GetBounds();
+    const Layout::Rect track{strip.x + strip.width - ScrollArea::kBarPad -
+                                 ScrollArea::kBarWidth,
+                             strip.y, ScrollArea::kBarWidth, strip.height};
+    const bool active = owner_->scrollbar_dragging_;
+    if (IsHovered() || active) {
+        renderer.FillRect(track, WithAlpha(tokens.border, 0.45f),
+                          track.width * 0.5f);
+    } else {
+        renderer.FillRect(track, WithAlpha(tokens.border, 0.22f),
+                          track.width * 0.5f);
+    }
+    // Thumb: muted at rest, stronger on hover, strongest while dragging
+    // (hover state is managed by WidgetTree::UpdateHover).
+    const Theme::Color thumb_color =
+        active ? tokens.foreground
+               : (IsHovered() ? tokens.foreground : tokens.muted);
+    const float thumb_alpha = active ? 0.95f : (IsHovered() ? 0.85f : 0.55f);
+    renderer.FillRect(thumb, WithAlpha(thumb_color, thumb_alpha),
+                      thumb.width * 0.5f);
 }
 
 void ScrollBarWidget::Layout(const Layout::Rect& bounds) {
@@ -155,8 +170,8 @@ void ScrollArea::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
 
     if (content_ == nullptr) {
         UpdateScrollRange();
-        scrollbar_->Layout(Layout::Rect{bounds.x + bounds.width - kBarWidth - kBarPad,
-                                        bounds.y, kBarWidth, bounds.height}, CachedLayoutTokens());
+        scrollbar_->Layout(Layout::Rect{bounds.x + bounds.width - kHitWidth,
+                                        bounds.y, kHitWidth, bounds.height}, CachedLayoutTokens());
         return;
     }
 
@@ -188,8 +203,8 @@ void ScrollArea::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
                                               bounds.width, bounds.height});
     }
 
-    scrollbar_->Layout(Layout::Rect{bounds.x + bounds.width - kBarWidth - kBarPad,
-                                    bounds.y, kBarWidth, bounds.height}, CachedLayoutTokens());
+    scrollbar_->Layout(Layout::Rect{bounds.x + bounds.width - kHitWidth,
+                                    bounds.y, kHitWidth, bounds.height}, CachedLayoutTokens());
 }
 
 void ScrollArea::RelayoutContent() {
@@ -227,7 +242,7 @@ Layout::Rect ScrollArea::ScrollbarThumbRect() const {
     const float t = scroll_range_ > 0.0f ? scroll_y_ / scroll_range_ : 0.0f;
     const float thumb_y = ScrollbarTrackTop() + t * travel;
     const auto bounds = GetBounds();
-    return Layout::Rect{bounds.x + bounds.width - kBarWidth,
+    return Layout::Rect{bounds.x + bounds.width - kBarPad - kBarWidth,
                         thumb_y, kBarWidth, thumb_h};
 }
 
@@ -251,7 +266,7 @@ bool ScrollArea::ScrollbarZoneContains(const Layout::Point& position) const {
     const auto bounds = GetBounds();
     // Without scroll range the bar is invisible — don't let it swallow input.
     return scroll_range_ > 0.0f &&
-           position.x >= bounds.x + bounds.width - kBarWidth - kBarPad &&
+           position.x >= bounds.x + bounds.width - kHitWidth &&
            position.x < bounds.x + bounds.width &&
            position.y >= bounds.y && position.y < bounds.y + bounds.height;
 }

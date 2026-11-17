@@ -9,6 +9,8 @@ add_executable(XER_UI_Tests
     ui/flex_layout_tests.cc
     ui/ffmpeg_avatar_tests.cc
     ui/ffmpeg_video_decode_tests.cc
+    ui/ffmpeg_audio_tap_tests.cc
+    ui/ffmpeg_av_mux_tests.cc
 )
 
 target_link_libraries(XER_UI_Tests
@@ -61,3 +63,48 @@ if(WIN32)
         endif()
     endforeach()
 endif()
+
+# XER_Video smoke — first real consumer of the (formerly orphan) video
+# pipeline lib. MSVC-gated like the rest of the video path; the test
+# itself also skips FFmpeg-backed checks when the bridge is stubbed.
+if(MSVC)
+    add_executable(XER_Video_Smoke video/xer_video_smoke.cc)
+    target_link_libraries(XER_Video_Smoke PRIVATE XER_Video)
+    target_compile_features(XER_Video_Smoke PRIVATE cxx_std_23)
+    add_test(NAME XER_Video_Smoke COMMAND XER_Video_Smoke)
+endif()
+
+# VideoEditor headless core — model/history/store/catalog/poster unit
+# tests. Plain-assert style like XER_Video_Smoke; FFmpeg-backed checks
+# self-skip via XER::Bridge::FFmpeg::IsAvailable(). Registered
+# unconditionally: XER_VideoEditor_Core's FFmpeg deps degrade to stubs
+# off-Windows and unused XER_Video objects are never pulled from the
+# static lib (if a non-MSVC link ever breaks, gate with if(MSVC) like
+# XER_Video_Smoke).
+add_executable(XER_VideoEditor_Tests
+    video/video_editor_test_util.h
+    video/video_editor_test_main.cc
+    video/video_editor_model_tests.cc
+    video/video_editor_history_tests.cc
+    video/video_editor_store_tests.cc
+    video/video_editor_catalog_tests.cc
+    video/video_editor_poster_tests.cc
+    video/video_editor_decoder_tests.cc
+    video/video_editor_compositor_tests.cc
+    video/video_editor_compositor2_tests.cc
+    video/video_editor_mixer_tests.cc
+    video/video_editor_export_tests.cc
+    video/video_editor_export_preset_tests.cc
+    video/video_editor_vst3_tests.cc
+    video/video_editor_lab_tests.cc
+    video/video_editor_lab2_tests.cc
+    video/video_editor_playback_tests.cc
+    video/video_editor_ops_tests.cc
+    video/video_editor_generated_export_tests.cc
+    video/video_editor_model2_tests.cc
+    video/video_editor_timecode_tests.cc
+    video/video_editor_autosave_tests.cc
+)
+target_link_libraries(XER_VideoEditor_Tests PRIVATE XER_VideoEditor_Core)
+target_compile_features(XER_VideoEditor_Tests PRIVATE cxx_std_23)
+add_test(NAME XER_VideoEditor_Tests COMMAND XER_VideoEditor_Tests)

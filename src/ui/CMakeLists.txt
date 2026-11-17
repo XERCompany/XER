@@ -144,6 +144,8 @@ if(WIN32)
             comdlg32
             windowscodecs
             ole32
+            dwmapi
+            gdiplus
     )
     # Prevent winsock.h / min-max macros from interfering with std::
     target_compile_definitions(XER_UI_Core PUBLIC WIN32_LEAN_AND_MEAN NOMINMAX)

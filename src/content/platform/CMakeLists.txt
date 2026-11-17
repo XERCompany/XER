@@ -52,5 +52,6 @@ endif()
 
 if(WIN32)
     target_link_libraries(XER_ContentPlatform PRIVATE
-        ws2_32 ole32 oleaut32 uuid shlwapi shell32 user32 gdi32 advapi32)
+        ws2_32 ole32 oleaut32 uuid shlwapi shell32 user32 gdi32 advapi32
+        winmm iphlpapi)
 endif()

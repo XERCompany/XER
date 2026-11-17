@@ -34,7 +34,12 @@
 #include <core/SkTypeface.h>
 #include <ports/SkTypeface_win.h>
 // Ganesh D3D12 backend — GPU-accelerated path for the canvas surface.
-// Falls back to the raster surface automatically when unavailable.
+// Falls back to the raster surface automatically when unavailable. Leaner
+// Skia builds (e.g. MSYS2) ship no Ganesh D3D headers at all — probe one
+// that only complete Ganesh builds carry to gate the whole GPU path.
+#if __has_include(<gpu/ganesh/d3d/GrD3DDirectContext.h>) || \
+    __has_include("gpu/ganesh/d3d/GrD3DDirectContext.h")
+#define XER_SKIA_HAS_GANESH_D3D 1
 #include <d3d12.h>
 #include <dxgi1_6.h>
 #include <wrl/client.h>
@@ -45,6 +50,9 @@
 #include <gpu/ganesh/GrBackendSurface.h>
 #include <gpu/ganesh/GrDirectContext.h>
 #include <gpu/ganesh/SkSurfaceGanesh.h>
+#else
+#define XER_SKIA_HAS_GANESH_D3D 0
+#endif
 #endif
 
 #include <cstdio>
@@ -80,6 +88,7 @@ public:
     }
 };
 
+#if XER_SKIA_HAS_GANESH_D3D
 // Temporary crash triage: step markers survive a hard crash, pinpointing
 // the last completed GPU-init stage. Written to %TEMP%/XER/gpu_trace.log.
 void GpuTrace(const char* step) {
@@ -156,6 +165,7 @@ private:
 
     gr_cp<ID3D12Device> fDevice;
 };
+#endif // XER_SKIA_HAS_GANESH_D3D
 
 SkColor ToSk(Canvas::Color c) {
     return SkColorSetARGB(
@@ -193,6 +203,7 @@ struct Canvas::Impl {
     // Created lazily on the first WM_PAINT; any init failure disables the
     // path permanently and the raster surface keeps working as fallback.
     struct Gpu {
+#if XER_SKIA_HAS_GANESH_D3D
         Microsoft::WRL::ComPtr<IDXGIFactory6> factory;
         Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
         Microsoft::WRL::ComPtr<ID3D12Device> device;
@@ -201,6 +212,7 @@ struct Canvas::Impl {
         sk_sp<GrDirectContext> dctx;
         int width = 0;
         int height = 0;
+#endif // XER_SKIA_HAS_GANESH_D3D
     };
     std::unique_ptr<Gpu> gpu;
     bool gpu_tried = false;
@@ -398,6 +410,10 @@ LRESULT Canvas::Impl::HandleMessage(Canvas* owner, HWND hwnd, UINT msg,
 }
 
 bool Canvas::Impl::TryInitGpu(HWND hwnd) {
+#if !XER_SKIA_HAS_GANESH_D3D
+    (void)hwnd;
+    return false;
+#else
     if (gpu != nullptr || gpu_failed) {
         return gpu != nullptr;
     }
@@ -482,6 +498,7 @@ bool Canvas::Impl::TryInitGpu(HWND hwnd) {
     gpu = std::move(g);
     GpuTrace("TryInitGpu done");
     return true;
+#endif // XER_SKIA_HAS_GANESH_D3D
 }
 
 void Canvas::Impl::RenderInto(SkSurface* surf, Canvas* owner) {
@@ -505,6 +522,11 @@ void Canvas::Impl::RenderInto(SkSurface* surf, Canvas* owner) {
 }
 
 bool Canvas::Impl::PaintGpu(Canvas* owner, HWND hwnd) {
+#if !XER_SKIA_HAS_GANESH_D3D
+    (void)owner;
+    (void)hwnd;
+    return false;
+#else
     if (gpu_failed || surf_w_ <= 0 || surf_h_ <= 0) {
         return false;
     }
@@ -568,6 +590,7 @@ bool Canvas::Impl::PaintGpu(Canvas* owner, HWND hwnd) {
         return false;
     }
     return true;
+#endif // XER_SKIA_HAS_GANESH_D3D
 }
 
 Canvas::Canvas() : impl_(std::make_unique<Impl>()) {}
@@ -767,6 +790,7 @@ void Canvas::DrawImageBgra(int width, int height, const void* bgra_pixels) {
     // upload per frame, no per-frame SkData/image/texture allocation),
     // then draw its snapshot. Falls through to the raster path when the
     // canvas is not GPU-backed.
+#if XER_SKIA_HAS_GANESH_D3D
     if (impl_->gpu != nullptr && impl_->gpu->dctx != nullptr) {
         if (impl_->image_surf == nullptr || impl_->image_surf_w != width ||
             impl_->image_surf_h != height) {
@@ -798,6 +822,7 @@ void Canvas::DrawImageBgra(int width, int height, const void* bgra_pixels) {
             }
         }
     }
+#endif // XER_SKIA_HAS_GANESH_D3D
     const size_t bytes = static_cast<size_t>(width) * static_cast<size_t>(height) * 4u;
     sk_sp<SkData> data = SkData::MakeWithCopy(bgra_pixels, bytes);
     if (data == nullptr) {

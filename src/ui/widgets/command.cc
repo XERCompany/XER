@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <utility>
 
 #include "rendering/renderer.h"
@@ -118,17 +119,20 @@ void Command::Render(Rendering::Renderer& renderer,
     renderer.FillRect(p, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(p, tokens.border, 1.0f, tokens.radius_large);
 
-    // Input row.
+    // Input row (recessed field inside the raised panel).
     const auto ir = InputRect(p);
-    renderer.FillRect(ir, tokens.muted, tokens.radius_medium);
-    const Rendering::TextStyle qs{tokens.foreground, tokens.font_body, 400};
+    renderer.FillRect(ir, tokens.input, tokens.radius_medium);
     const std::string shown =
         query_.empty() ? placeholder_ : query_;
     const Theme::Color qc = query_.empty() ? tokens.muted : tokens.foreground;
     const Rendering::TextStyle qstyle{qc, tokens.font_body, 400};
-    Layout::Rect qr{ir.x + 10.0f, ir.y, ir.width - 20.0f, ir.height};
+    const auto q_sample = shown.empty()
+        ? std::string_view("Ag") : std::string_view(shown);
+    const float qh = renderer.MeasureText(q_sample, qstyle).height;
+    Layout::Rect qr{ir.x + 10.0f,
+                    ir.y + std::max(0.0f, (ir.height - qh) * 0.5f),
+                    ir.width - 20.0f, qh + 1.0f};
     renderer.DrawText(shown, qr, qstyle);
-    (void)qs;
 
     // Results.
     const auto lr = ListRect(p);
@@ -147,13 +151,18 @@ void Command::Render(Rendering::Renderer& renderer,
         const Theme::Color tc =
             hi ? tokens.accent_foreground : tokens.foreground;
         const Rendering::TextStyle ts{tc, tokens.font_small, 500};
-        Layout::Rect tr{lr.x + 14.0f, iy, lr.width - 120.0f, item_h};
+        const auto i_sample = item.label.empty()
+            ? std::string_view("Ag") : std::string_view(item.label);
+        const float ith = renderer.MeasureText(i_sample, ts).height;
+        const float ity =
+            iy + std::max(0.0f, (item_h - ith) * 0.5f);
+        Layout::Rect tr{lr.x + 14.0f, ity, lr.width - 120.0f, ith + 1.0f};
         renderer.DrawText(item.label, tr, ts);
         if (!item.hint.empty()) {
             const Rendering::TextStyle hs{tokens.muted, tokens.font_small,
                                           400};
-            Layout::Rect hr{lr.x + lr.width - 110.0f, iy,
-                            100.0f, item_h};
+            Layout::Rect hr{lr.x + lr.width - 110.0f, ity,
+                            100.0f, ith + 1.0f};
             renderer.DrawText(item.hint, hr, hs);
         }
     }
@@ -170,7 +179,6 @@ bool Command::HandleEvent(const Event& event) {
     if (!open_) return false;
     const auto& p = event.position;
     const auto panel = PanelRect(GetBounds());
-    const auto ir = InputRect(panel);
     const auto lr = ListRect(panel);
     const auto filtered = Filtered();
     const float item_h = 32.0f;

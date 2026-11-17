@@ -144,7 +144,7 @@ void ToggleGroup::Render(Rendering::Renderer& renderer, const Theme::Tokens& tok
             renderer.FillRect(rect, fill, 0.0f);
             renderer.StrokeRect(rect, stroke, 1.0f, 0.0f);
         } else {
-            renderer.FillRect(rect, tokens.muted, 0.0f);
+            renderer.FillRect(rect, tokens.secondary, 0.0f);
             renderer.StrokeRect(rect, tokens.border, 1.0f, 0.0f);
         }
         // Inner separators between options.
@@ -158,7 +158,9 @@ void ToggleGroup::Render(Rendering::Renderer& renderer, const Theme::Tokens& tok
         }
         (void)last;
 
-        const Rendering::TextStyle style{tokens.foreground, tokens.font_body, active ? 500 : 400};
+        const Rendering::TextStyle style{
+            IsEnabled() ? tokens.foreground : tokens.disabled,
+            tokens.font_body, active ? 500 : 400};
         const float text_height = renderer.MeasureText(options_[i], style).height;
         const Layout::Rect text_rect{
             rect.x,

@@ -11,7 +11,7 @@
 namespace XER::UI::Widgets {
 namespace {
 
-constexpr float kItemHeight = 34.0f;
+constexpr float kItemHeight = 30.0f;
 constexpr float kMenuWidth = 216.0f;
 constexpr float kSeparatorHeight = 9.0f;
 constexpr float kCheckWidth = 22.0f;

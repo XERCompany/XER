@@ -149,6 +149,25 @@
         "ENABLE_MEDIA": "ON",
         "ENABLE_V8": "OFF"
       }
+    },
+    {
+      "name": "windows-clang-msys2",
+      "displayName": "Windows x64 (MSYS2 clang64 + system deps)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/out/build/windows-clang-msys2",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_TOOLCHAIN_FILE": "${sourceDir}/cmake/platforms/windows-msys2-clang64.cmake",
+        "XER_USE_SYSTEM_DEPS": "ON",
+        "XER_FETCH_DEPENDENCIES": "OFF",
+        "ENABLE_MEDIA": "ON",
+        "ENABLE_V8": "OFF",
+        "ENABLE_CUDA": "OFF",
+        "ENABLE_CUDNN": "OFF",
+        "BUILD_TESTING": "ON",
+        "CMAKE_DISABLE_FIND_PACKAGE_OpenBLAS": "ON",
+        "FFTW3f_DIR": "${sourceDir}/cmake/deps/configs/FFTW3f"
+      }
     }
   ],
   "buildPresets": [
@@ -207,6 +226,10 @@
     {
       "name": "macos-x64",
       "configurePreset": "macos-x64"
+    },
+    {
+      "name": "windows-clang-msys2",
+      "configurePreset": "windows-clang-msys2"
     }
   ],
   "testPresets": [

@@ -168,6 +168,31 @@ void VideoPreviewWidget::OnLoad() {
     RefreshTransportUi();
 }
 
+bool VideoPreviewWidget::OpenPath(const std::string& utf8_path) {
+    EnsureChildren();
+    if (utf8_path.empty()) {
+        SetStatus("Empty video path", true);
+        return false;
+    }
+    path_input_->SetValue(utf8_path);
+    poster_frame_ = engine_->RecallFrame(utf8_path);
+    if (poster_frame_ == nullptr) {
+        poster_frame_ = engine_->GetCachedPoster(utf8_path);
+    }
+    drawn_seq_ = 0;
+    draw_frame_.reset();
+    std::string error;
+    if (!engine_->Open(utf8_path, &error)) {
+        SetStatus("Open failed — " + error, true);
+        return false;
+    }
+    SetStatus("Loading…");
+    status_dirty_ = true;
+    RefreshTransportUi();
+    Invalidate();
+    return true;
+}
+
 void VideoPreviewWidget::OnTogglePlay() {
     if (!engine_->IsOpen()) {
         SetStatus("Load a video first", true);

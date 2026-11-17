@@ -32,6 +32,7 @@ target_link_libraries(XER_Cache
         absl::synchronization
         unofficial::sqlite3::sqlite3
         ZLIB::ZLIB
+        OpenSSL::Crypto   # SHA256 in cache_utils.cc
 )
 
 # C++ standard

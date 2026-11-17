@@ -45,6 +45,11 @@ public:
         return {100000.0f, 100000.0f};
     }
 
+    // Programmatic open used by host panels (e.g. VideoEditor's source
+    // monitor): mirrors typing the path + pressing Load, including the
+    // poster-cache fast path. UTF-8 path; returns false on probe failure.
+    bool OpenPath(const std::string& utf8_path);
+
     // Host hook: pause/resume decode when the containing view is hidden —
     // avoids decoding video nobody can see.
     void SetPreviewActive(bool active);

@@ -80,6 +80,9 @@ private:
     std::vector<EditState> redo_stack_;
     // Consecutive typed characters merge into a single undo step.
     bool coalesce_typing_ = false;
+    // Horizontal scroll offset (px) applied to the text so the caret stays
+    // inside the field when the value is wider than the box.
+    float scroll_x_ = 0.0f;
     std::optional<float> pending_caret_x_;
     std::function<void(const std::string&)> on_value_changed_;
 };

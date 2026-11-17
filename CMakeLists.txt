@@ -19,10 +19,28 @@ foreach(config IN ITEMS Debug Release RelWithDebInfo MinSizeRel)
     set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
 endforeach()
 
-# vcpkg integration (Windows only — Linux/macOS use system packages via
-# cmake/deps/system_deps.cmake plus a partial vcpkg install for the few ports
-# that have no system equivalent).
+# Dependency provider selection.
+#
+#   * XER_USE_SYSTEM_DEPS=ON → cmake/deps/system_deps.cmake resolves deps
+#     from OS packages: apt/brew on Linux/macOS (default ON there) and the
+#     MSYS2 clang64 .pc/shim configs on Windows (opt-in via the
+#     windows-clang-msys2 preset).
+#   * Otherwise on Windows → the vcpkg toolchain below, unchanged. This
+#     keeps the default/v8/v8-xer presets byte-identical: they never set
+#     XER_USE_SYSTEM_DEPS, so the option stays OFF and the vcpkg branch
+#     runs exactly as before.
 if(WIN32)
+    option(XER_USE_SYSTEM_DEPS
+        "Resolve dependencies from MSYS2/system packages instead of vcpkg" OFF)
+else()
+    option(XER_USE_SYSTEM_DEPS
+        "Resolve dependencies from OS packages (apt/brew) + partial vcpkg" ON)
+endif()
+
+if(XER_USE_SYSTEM_DEPS)
+    include(cmake/deps/system_deps.cmake)
+elseif(WIN32)
+    # vcpkg integration (Windows default — covers every dependency).
     if(DEFINED ENV{VCPKG_ROOT} AND NOT DEFINED CMAKE_TOOLCHAIN_FILE)
         set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "Vcpkg toolchain file")
     endif()
@@ -35,11 +53,6 @@ if(WIN32)
     set(VCPKG_TARGET_TRIPLET "x64-windows-release" CACHE STRING "Vcpkg target triplet")
     set(VCPKG_MANIFEST_MODE OFF CACHE BOOL "Use preinstalled vcpkg packages")
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreadedDLL" CACHE STRING "MSVC runtime")
-else()
-    option(XER_USE_SYSTEM_DEPS "Resolve dependencies from OS packages (apt/brew) + partial vcpkg" ON)
-    if(XER_USE_SYSTEM_DEPS)
-        include(cmake/deps/system_deps.cmake)
-    endif()
 endif()
 
 # Feature toggles (previously implicit -D cache vars; declared so they show
@@ -80,9 +93,10 @@ find_package(mimalloc CONFIG REQUIRED)
 find_package(ggml CONFIG REQUIRED)
 find_package(folly CONFIG REQUIRED)
 # Intel MKL: required where available (vcpkg on Windows, apt intel-mkl on
-# Linux); absent on macOS where MKL has no arm64 build — all MKL code paths
-# are gated on the ENGINE_HAS_MKL define / MKL::MKL target.
-if(APPLE)
+# Linux); absent on macOS where MKL has no arm64 build and on MinGW/MSYS2
+# where no system package exists — all MKL code paths are gated on the
+# ENGINE_HAS_MKL define / MKL::MKL target.
+if(APPLE OR MINGW)
     find_package(MKL CONFIG QUIET)
 else()
     find_package(MKL CONFIG REQUIRED)
@@ -457,6 +471,10 @@ option(XER_BUILD_NODE_ADDON
 if(XER_BUILD_NODE_ADDON)
     add_subdirectory(addon)
 endif()
+
+# VideoEditor (XER Studio Phase 1) — headless core lib; the exe lands in
+# 1C/1D inside this same directory.
+add_subdirectory(tools/video_editor)
 
 include(CTest)
 if(BUILD_TESTING)

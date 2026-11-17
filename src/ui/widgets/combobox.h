@@ -41,10 +41,19 @@ public:
 
 private:
     explicit Combobox();
+
+    static constexpr float kItemHeight = 26.0f;
+    static constexpr float kMaxDropdownHeight = 240.0f;
+
     std::vector<const Option*> Filtered() const;
     void UpdateFilter();
     void CloseDropdown();
     void SelectIndex(int idx);
+    // Popup geometry, derived from the field rect each time it is needed so
+    // hit-testing and rendering agree even between layout passes.
+    Layout::Rect DropdownRect() const;
+    // Keeps the highlighted option inside the visible part of the popup.
+    void EnsureHighlightVisible();
 
     std::vector<Option> options_;
     std::vector<int> filtered_;   // indices into options_
@@ -54,7 +63,10 @@ private:
     bool open_ = false;
     int highlight_ = -1;
     float scroll_ = 0.0f;
-    Layout::Rect dropdown_rect_{};
+    // The field box alone. While the dropdown is open the widget's own
+    // bounds grow to the union(field, dropdown) so pointer input over the
+    // popup is routed to us (hit-testing requires bounds containment).
+    Layout::Rect field_rect_{};
     std::function<void(const std::string&)> on_change_;
     std::function<void(const Option&)> on_select_;
 };

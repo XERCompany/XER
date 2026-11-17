@@ -6,7 +6,10 @@
 #include "include/core/SkStream.h"
 #include "include/core/SkBitmap.h"
 
-#if __has_include("modules/svg/include/SkSVGDOM.h") || __has_include(<modules/svg/include/SkSVGDOM.h>)
+// MSYS2 skia ships SkSVGDOM.h but not the private src/core/SkTHash.h it
+// transitively requires, so probe both.
+#if (__has_include("modules/svg/include/SkSVGDOM.h") || __has_include(<modules/svg/include/SkSVGDOM.h>)) && \
+    (__has_include("src/core/SkTHash.h") || __has_include(<src/core/SkTHash.h>))
 #define ENGINE_SKIA_HAS_SVG 1
 #include "modules/svg/include/SkSVGDOM.h"
 #endif

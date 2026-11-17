@@ -45,9 +45,10 @@ void Progress::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens
     const float shown = shown_.Value();
     renderer.FillRect(bounds, tokens.secondary, radius);
     if (shown > 0.0f) {
+        // Accent fill reads as "work in progress" in editor dark themes.
         renderer.FillRect(
             {bounds.x, bounds.y, bounds.width * shown, bounds.height},
-            IsEnabled() ? tokens.foreground : tokens.muted,
+            IsEnabled() ? tokens.accent : tokens.muted,
             radius
         );
     }
