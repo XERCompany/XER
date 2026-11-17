@@ -5,9 +5,10 @@
 #include "error_handler/err_monitor.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
-#include <condition_variable>
+#include <thread>
 
 #if defined(XER_AI_HAS_CUDA_LIB) && __has_include(<cuda_runtime.h>)
 #  include <cuda_runtime.h>
