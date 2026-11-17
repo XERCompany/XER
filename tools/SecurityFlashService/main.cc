@@ -78,7 +78,7 @@ void Log(const std::string& message) {
 	std::strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &tmv);
 
 	std::lock_guard lock(g_log_mutex);
-	std::ofstream f(LogPath(), std::ios::app);
+	std::ofstream f(fs::path(LogPath()), std::ios::app);
 	if (f) f << "[" << stamp << "] " << message << "\n";
 	OutputDebugStringA((std::string("[SecurityFlashService] ") + message +
 	                    "\n")

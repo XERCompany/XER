@@ -117,6 +117,7 @@ jobs:
             mingw-w64-clang-x86_64-lame
             mingw-w64-clang-x86_64-onnx
             mingw-w64-clang-x86_64-onnxruntime
+            mingw-w64-clang-x86_64-utf8-range
             mingw-w64-clang-x86_64-opencl-icd
             mingw-w64-clang-x86_64-opencl-headers
             mingw-w64-clang-x86_64-protobuf
@@ -153,10 +154,23 @@ jobs:
         run: >
           cmake --build --preset windows-clang-msys2
           --target video_editor XER_VideoEditor_Tests video_editor_dist
+          ztzmake ztzvertfy
 
       - name: Tests
         shell: msys2 {0}
         run: ./out/build/windows-clang-msys2/bin/XER_VideoEditor_Tests.exe
+
+      # The .xexrj extension pipeline: pack the demo extension source
+      # into TZ, then verify crc + OVERFLOW + required members — the
+      # exact contract the editor's ext_host enforces at runtime.
+      - name: TZ extension smoke
+        shell: msys2 {0}
+        run: |
+          BIN=out/build/windows-clang-msys2/bin
+          $BIN/ztzmake.exe tools/video_editor/assets/extensions_src/demo \
+            -o "$BIN/demo_smoke.xexrj"
+          $BIN/ztzvertfy.exe "$BIN/demo_smoke.xexrj" \
+            -r manifest.toml -r main.js -r static/index.html -l
 
       - name: Smoke — CLI help + DLL check
         shell: msys2 {0}
