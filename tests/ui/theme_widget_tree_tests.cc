@@ -75,6 +75,24 @@ public:
     bool consumes_events = true;
 };
 
+// Lays out the first two children side by side (left/right halves) so
+// pointer tests can distinguish hit targets.
+class SplitProbe final : public ProbeWidget {
+public:
+    using ProbeWidget::ProbeWidget;
+
+    void Layout(const Rect& bounds) override {
+        SetBounds(bounds);
+        const auto& kids = GetChildren();
+        if (kids.size() >= 2) {
+            kids[0]->Layout({bounds.x, bounds.y,
+                             bounds.width * 0.5f, bounds.height});
+            kids[1]->Layout({bounds.x + bounds.width * 0.5f, bounds.y,
+                             bounds.width * 0.5f, bounds.height});
+        }
+    }
+};
+
 } // namespace
 
 XER_UI_TEST(ThemeProviderUsesLightByDefault) {
@@ -236,6 +254,99 @@ XER_UI_TEST(WidgetTreeDispatchesPointerEventsToTopmostHitWidget) {
     XER_UI_EXPECT_EQ(0, lower->handled_events);
     XER_UI_EXPECT_EQ(1, upper->handled_events);
     XER_UI_EXPECT_TRUE(upper->IsFocused());
+}
+
+XER_UI_TEST(WidgetTreeDisabledOverlayLetsClicksFallThrough) {
+    auto root = std::make_shared<ProbeWidget>("root");
+    auto lower = std::make_shared<ProbeWidget>("lower");
+    auto overlay = std::make_shared<ProbeWidget>("overlay");
+    overlay->SetEnabled(false);
+    root->AddChild(lower);
+    root->AddChild(overlay);
+
+    WidgetTree tree;
+    tree.SetRoot(root);
+    tree.Layout({0, 0, 100, 100});
+
+    Event down;
+    down.type = Event::Type::MouseDown;
+    down.position = {5, 5};
+    XER_UI_EXPECT_TRUE(tree.HandleEvent(down));
+    XER_UI_EXPECT_EQ(1, lower->handled_events);
+    XER_UI_EXPECT_EQ(0, overlay->handled_events);
+}
+
+XER_UI_TEST(WidgetTreeSuppressesGlobalKeyHandlerWhileOverlayShown) {
+    auto root = std::make_shared<ProbeWidget>("root");
+    auto overlay = std::make_shared<ProbeWidget>("overlay");
+    overlay->consumes_events = false;
+
+    WidgetTree tree;
+    tree.SetRoot(root);
+    tree.Layout({0, 0, 100, 100});
+
+    int handled = 0;
+    tree.SetKeyHandler([&handled](const Event&) {
+        ++handled;
+        return true;
+    });
+
+    Event key;
+    key.type = Event::Type::KeyDown;
+    key.key = KeyCode::A;
+    XER_UI_EXPECT_TRUE(tree.HandleEvent(key));
+    XER_UI_EXPECT_EQ(1, handled);
+
+    tree.ShowOverlay(overlay);
+    // Modal overlay owns input: an unconsumed key must not reach the
+    // global shortcut handler behind it.
+    XER_UI_EXPECT_FALSE(tree.HandleEvent(key));
+    XER_UI_EXPECT_EQ(1, handled);
+
+    tree.HideOverlay();
+    XER_UI_EXPECT_TRUE(tree.HandleEvent(key));
+    XER_UI_EXPECT_EQ(2, handled);
+}
+
+XER_UI_TEST(WidgetTreeRefreshesHoverAfterCaptureRelease) {
+    auto root = std::make_shared<SplitProbe>("root");
+    auto left = std::make_shared<ProbeWidget>("left");
+    auto right = std::make_shared<ProbeWidget>("right");
+    root->AddChild(left);
+    root->AddChild(right);
+
+    WidgetTree tree;
+    tree.SetRoot(root);
+    tree.Layout({0, 0, 100, 50});
+
+    Event move;
+    move.type = Event::Type::MouseMove;
+    move.position = {75, 25};
+    tree.HandleEvent(move);
+    XER_UI_EXPECT_TRUE(right->IsHovered());
+    XER_UI_EXPECT_FALSE(left->IsHovered());
+
+    Event down;
+    down.type = Event::Type::MouseDown;
+    down.mouse_button = XER::UI::Widgets::MouseButton::Left;
+    down.position = {25, 25};
+    tree.HandleEvent(down);
+    XER_UI_EXPECT_TRUE(left->IsHovered());
+    XER_UI_EXPECT_FALSE(right->IsHovered());
+
+    // While captured, hover stays pinned to the pressed widget.
+    tree.HandleEvent(move);
+    XER_UI_EXPECT_TRUE(left->IsHovered());
+    XER_UI_EXPECT_FALSE(right->IsHovered());
+
+    // Releasing over the other half must restore hover to what's actually
+    // under the cursor instead of leaving a stale highlight behind.
+    Event up = down;
+    up.type = Event::Type::MouseUp;
+    up.position = {75, 25};
+    tree.HandleEvent(up);
+    XER_UI_EXPECT_FALSE(left->IsHovered());
+    XER_UI_EXPECT_TRUE(right->IsHovered());
 }
 
 XER_UI_TEST(WidgetTreeRoutesKeyboardEventsToFocusedWidget) {

@@ -1,5 +1,7 @@
 #include "test_harness.h"
 
+#include <algorithm>
+#include <cmath>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -8,11 +10,16 @@
 
 #include "rendering/renderer.h"
 #include "theme/theme.h"
+#include "widgets/app_title_bar.h"
 #include "widgets/button.h"
 #include "widgets/checkbox.h"
+#include "widgets/dialog.h"
 #include "widgets/label.h"
+#include "widgets/resizable.h"
 #include "widgets/switch.h"
+#include "widgets/table.h"
 #include "widgets/text_input.h"
+#include "widgets/textarea.h"
 #include "widgets/widget_tree.h"
 
 namespace {
@@ -33,6 +40,11 @@ using XER::UI::Widgets::MouseButton;
 using XER::UI::Widgets::Switch;
 using XER::UI::Widgets::TextInput;
 using XER::UI::Widgets::WidgetTree;
+using XER::UI::Widgets::AppTitleBar;
+using XER::UI::Widgets::Dialog;
+using XER::UI::Widgets::Resizable;
+using XER::UI::Widgets::Table;
+using XER::UI::Widgets::Textarea;
 
 class RecordingRenderer final : public Renderer {
 public:
@@ -104,8 +116,14 @@ XER_UI_TEST(ButtonActivatesOnceOnClickEnterOrSpace) {
     const auto tokens = XER::UI::Theme::Provider{}.GetTokens();
     button->Render(renderer, tokens);
     XER_UI_EXPECT_TRUE(!renderer.fills.empty());
-    XER_UI_EXPECT_TRUE(!renderer.strokes.empty());
     XER_UI_EXPECT_EQ(std::string{"Save"}, renderer.drawn_text.back());
+
+    // Secondary is borderless in the shadcn theme — the hairline stroke
+    // path is covered by the Outline style instead.
+    Button outlined("Outline", XER::UI::Widgets::ButtonStyle::Outline);
+    outlined.Layout({0, 0, 100, 32});
+    outlined.Render(renderer, tokens);
+    XER_UI_EXPECT_TRUE(!renderer.strokes.empty());
 
     Label label;
     XER_UI_EXPECT_EQ(std::string{}, label.GetText());
@@ -333,4 +351,178 @@ XER_UI_TEST(DisabledControlsDoNotActivate) {
     XER_UI_EXPECT_EQ(0, switch_changes);
     XER_UI_EXPECT_FALSE(checkbox->IsChecked());
     XER_UI_EXPECT_FALSE(toggle->IsChecked());
+}
+
+XER_UI_TEST(DialogSwallowsUnhandledKeys) {
+    auto dialog = Dialog::Create("Title", nullptr, "OK", "Cancel");
+    dialog->Layout({0, 0, 800, 600});
+
+    Event key;
+    key.type = Event::Type::KeyDown;
+    // A modal dialog must consume every key, not just Escape/Enter —
+    // otherwise shortcuts fire behind it.
+    for (const KeyCode k : {KeyCode::A, KeyCode::ArrowLeft, KeyCode::F5,
+                            KeyCode::Backspace}) {
+        key.key = k;
+        XER_UI_EXPECT_TRUE(dialog->HandleEvent(key));
+    }
+
+    int closed = 0;
+    dialog->SetOnClosed([&closed] { ++closed; });
+    key.key = KeyCode::Enter;
+    XER_UI_EXPECT_TRUE(dialog->HandleEvent(key));
+    XER_UI_EXPECT_TRUE(dialog->WasConfirmed());
+    XER_UI_EXPECT_EQ(1, closed);
+}
+
+XER_UI_TEST(TableScrollbarStripDoesNotStealClicksOrRearmOnClick) {
+    auto table = Table::Create();
+    table->SetColumns({{Table::Column{"Name", 0.0f, false}}});
+    std::vector<std::vector<std::string>> rows(10, {"row"});
+    table->SetRows(rows);
+    table->Layout({0, 0, 200, 50});
+    // Header 30px + 20px view, 300px content → scrollable; strip is the
+    // rightmost 6px starting at x=194, y in [30,50).
+
+    int row_clicks = 0;
+    table->SetOnRowClick([&row_clicks](int) { ++row_clicks; });
+
+    // A click inside the scrollbar strip still resolves as a row click —
+    // it must select the row, not arm the scrollbar drag.
+    XER_UI_EXPECT_TRUE(table->HandleEvent(
+        PointerEvent(Event::Type::Click, MouseButton::Left, {197, 40})));
+    XER_UI_EXPECT_EQ(1, row_clicks);
+    XER_UI_EXPECT_EQ(0, table->GetSelectedRow());
+    // ...and it must not have armed the drag: the next move reports
+    // unhandled (hover only) instead of scrolling.
+    XER_UI_EXPECT_FALSE(table->HandleEvent(
+        PointerEvent(Event::Type::MouseMove, MouseButton::None, {197, 35})));
+
+    // A real left press on the strip arms the drag; only a left release
+    // ends it.
+    XER_UI_EXPECT_TRUE(table->HandleEvent(
+        PointerEvent(Event::Type::MouseDown, MouseButton::Left, {197, 40})));
+    XER_UI_EXPECT_TRUE(table->HandleEvent(
+        PointerEvent(Event::Type::MouseMove, MouseButton::Left, {197, 35})));
+    XER_UI_EXPECT_FALSE(table->HandleEvent(
+        PointerEvent(Event::Type::MouseUp, MouseButton::Right, {197, 35})));
+    XER_UI_EXPECT_TRUE(table->HandleEvent(
+        PointerEvent(Event::Type::MouseMove, MouseButton::Left, {197, 38})));
+    XER_UI_EXPECT_TRUE(table->HandleEvent(
+        PointerEvent(Event::Type::MouseUp, MouseButton::Left, {197, 38})));
+    XER_UI_EXPECT_FALSE(table->HandleEvent(
+        PointerEvent(Event::Type::MouseMove, MouseButton::Left, {197, 42})));
+}
+
+XER_UI_TEST(TableSetRowsClearsHoverHighlight) {
+    auto table = Table::Create();
+    table->SetColumns({{Table::Column{"Name", 0.0f, false}}});
+    table->SetRows({{"a"}, {"b"}});
+    table->Layout({0, 0, 200, 200});
+    const auto tokens = XER::UI::Theme::Provider{}.GetTokens();
+
+    // Hover row 0, then replace the rows: the hover fill must disappear.
+    table->HandleEvent(
+        PointerEvent(Event::Type::MouseMove, MouseButton::None, {50, 45}));
+    RecordingRenderer renderer;
+    table->Render(renderer, tokens);
+    const bool had_hover_fill = std::any_of(
+        renderer.fills.begin(), renderer.fills.end(),
+        [&tokens](const Color& c) { return c == tokens.hover; });
+    XER_UI_EXPECT_TRUE(had_hover_fill);
+
+    table->SetRows({{"c"}, {"d"}});
+    renderer.fills.clear();
+    table->Render(renderer, tokens);
+    const bool still_hover = std::any_of(
+        renderer.fills.begin(), renderer.fills.end(),
+        [&tokens](const Color& c) { return c == tokens.hover; });
+    XER_UI_EXPECT_FALSE(still_hover);
+}
+
+XER_UI_TEST(ResizableCollapseExpandAndLeftOnlyDragEnd) {
+    auto resizable =
+        Resizable::Create(Resizable::Direction::Horizontal);
+    auto left_label = std::make_shared<Label>();
+    auto right_label = std::make_shared<Label>();
+    Resizable::Panel left_panel;
+    left_panel.widget = left_label;
+    left_panel.size = 0.5f;
+    Resizable::Panel right_panel;
+    right_panel.widget = right_label;
+    right_panel.size = 0.5f;
+    resizable->AddPanel(left_panel);
+    resizable->AddPanel(right_panel);
+    resizable->Layout({0, 0, 400, 100});
+    // usable span = 400 - 6 = 394 → 197/197 split, handle at x in [194,206].
+
+    XER_UI_EXPECT_FALSE(resizable->IsCollapsed(0));
+    resizable->SetCollapsed(0, true);
+    XER_UI_EXPECT_TRUE(resizable->IsCollapsed(0));
+    resizable->Layout({0, 0, 400, 100});
+    XER_UI_EXPECT_EQ(0.0f, left_label->GetBounds().width);
+    XER_UI_EXPECT_TRUE(right_label->GetBounds().width > 390.0f);
+
+    resizable->SetCollapsed(0, false);
+    resizable->Layout({0, 0, 400, 100});
+    XER_UI_EXPECT_FALSE(resizable->IsCollapsed(0));
+    XER_UI_EXPECT_TRUE(std::abs(left_label->GetBounds().width - 197.0f) < 1.0f);
+
+    // Splitter drag: delta is measured against the usable span
+    // (394 = 400 - one 6px handle), not the full 400.
+    XER_UI_EXPECT_TRUE(resizable->HandleEvent(
+        PointerEvent(Event::Type::MouseDown, MouseButton::Left, {200, 50})));
+    XER_UI_EXPECT_TRUE(resizable->HandleEvent(
+        PointerEvent(Event::Type::MouseMove, MouseButton::Left, {297, 50})));
+    resizable->Layout({0, 0, 400, 100});
+    // 0.5 + 97/394 ≈ 0.7462 → ~294px; the old full-span math gives ~292.5.
+    XER_UI_EXPECT_TRUE(std::abs(left_label->GetBounds().width - 294.0f) < 0.5f);
+
+    // A non-left release must not end the drag.
+    XER_UI_EXPECT_FALSE(resizable->HandleEvent(
+        PointerEvent(Event::Type::MouseUp, MouseButton::Right, {297, 50})));
+    XER_UI_EXPECT_TRUE(resizable->HandleEvent(
+        PointerEvent(Event::Type::MouseMove, MouseButton::Left, {320, 50})));
+    XER_UI_EXPECT_TRUE(resizable->HandleEvent(
+        PointerEvent(Event::Type::MouseUp, MouseButton::Left, {320, 50})));
+}
+
+XER_UI_TEST(TextareaIgnoresKeysAndTextWhenUnfocused) {
+    Textarea area("hello");
+    area.Layout({0, 0, 200, 100});
+
+    Event key;
+    key.type = Event::Type::KeyDown;
+    key.key = KeyCode::Backspace;
+    XER_UI_EXPECT_FALSE(area.HandleEvent(key));
+    XER_UI_EXPECT_EQ(std::string{"hello"}, area.GetText());
+
+    Event text;
+    text.type = Event::Type::TextInput;
+    text.text = "x";
+    XER_UI_EXPECT_FALSE(area.HandleEvent(text));
+    XER_UI_EXPECT_EQ(std::string{"hello"}, area.GetText());
+
+    area.SetFocused(true);
+    XER_UI_EXPECT_TRUE(area.HandleEvent(text));
+    XER_UI_EXPECT_EQ(std::string{"xhello"}, area.GetText());
+}
+
+XER_UI_TEST(AppTitleBarHitZonesValidAfterLayoutBeforeFirstRender) {
+    AppTitleBar bar("Studio");
+    std::vector<AppTitleBar::Menu> menus;
+    AppTitleBar::Menu file;
+    file.label = "File";
+    file.items.push_back(AppTitleBar::MenuItem{"Open", "", {}, true, false,
+                                               false, false});
+    menus.push_back(std::move(file));
+    bar.SetMenus(std::move(menus));
+    bar.Layout({0, 0, 1000, 38});
+
+    // No Render() has run — hit zones must already be live.
+    XER_UI_EXPECT_TRUE(bar.IsInteractiveAt({977, 19}));   // close button
+    XER_UI_EXPECT_TRUE(bar.IsInteractiveAt({931, 19}));   // maximize
+    XER_UI_EXPECT_TRUE(bar.IsInteractiveAt({10, 19}));    // workspace pill
+    XER_UI_EXPECT_TRUE(bar.IsInteractiveAt({500, 19}));   // center pill
+    XER_UI_EXPECT_FALSE(bar.IsInteractiveAt({2, 19}));    // padding gap
 }

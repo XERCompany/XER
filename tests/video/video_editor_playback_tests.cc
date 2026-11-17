@@ -592,9 +592,15 @@ void TestRateAdvance() {
     const int base = rig.sink.FrameCount();
     rig.engine.SetRate(2.0);
     rig.engine.SetPlaying(true);
+    // Wait on the playhead itself, not a sink frame count: frames can
+    // flush to the sink in bursts before the playhead position catches
+    // up, which made the count-based wait race-prone.
     XER_VE_CHECK(
-        WaitFor([&] { return rig.sink.FrameCount() >= base + 9; }));
+        WaitFor([&] {
+            return rig.engine.Playhead() >= 1.0 + 8.0 * kFrameDt;
+        }));
     rig.engine.SetPlaying(false);
+    XER_VE_CHECK(rig.sink.FrameCount() > base);  // real output too
     // 8+ playing ticks * 2*frame_dt => >= ~0.4 s past the seek point
     // (1.0 + 0.4 = 1.4); rate 1 would reach only ~1.2.
     const double ph = rig.engine.Playhead();
