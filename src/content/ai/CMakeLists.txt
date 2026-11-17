@@ -76,6 +76,10 @@ if(TARGET ggml::ggml)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_GGML=1)
 endif()
 
+# MSYS2's ONNX config hard-references utf8_range::utf8_range in the
+# link interface of ONNX::onnx_proto — the utf8_range package must be
+# imported first or generate-time target checks fail.
+find_package(utf8_range CONFIG QUIET)
 find_package(ONNX QUIET)
 if(TARGET ONNX::onnx_proto)
     # ONNX::onnx_proto carries the protobuf-generated model definitions
