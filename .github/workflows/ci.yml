@@ -92,9 +92,11 @@ jobs:
             # db signature checks fail ("signature is unknown trust").
             pacman-key --init || true
             pacman-key --populate msys2 || true
+            # Refresh db only — NO `pacman -Su` here: upgrading
+            # msys2-runtime kills every MSYS2 process including this
+            # shell (|| cannot catch an external taskkill, which is why
+            # previous runs died mid-step).
             pacman -Syy --noconfirm
-            # The msys2-runtime core update can kill this shell mid-run.
-            pacman -Su --noconfirm || pacman -Su --noconfirm
           ) || echo "::warning::pacman bootstrap failed — install step retries anyway"
 
       # Toolchain + all library dependencies, mirroring InstallTools.ps1.
