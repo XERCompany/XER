@@ -8,8 +8,9 @@ name: CI
 # them via cmake/platforms/windows-msys2-clang64.cmake + cmake/deps shims.
 #
 # Steps:
-#   1. msys2/setup-msys2 installs the toolchain + ~70 dependency packages
-#      (list mirrors InstallTools.ps1).
+#   1. msys2/setup-msys2 installs the MSYS2 base; a dedicated pacman step
+#      reorders mirrors (mirror.msys2.org stalls on runners) and installs
+#      the toolchain + ~70 dependency packages (mirrors InstallTools.ps1).
 #   2. cmake --preset windows-clang-msys2 configures the build.
 #   3. Ninja builds video_editor (+ POST_BUILD DLL deploy via CopyDLL.ps1)
 #      and the XER_VideoEditor_Tests runner.
@@ -42,15 +43,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # Toolchain + all library dependencies, mirroring InstallTools.ps1.
-      # `cache: true` caches downloaded pacman packages between runs.
+      # MSYS2 base only — package install happens in the dedicated steps
+      # below so we can reorder pacman mirrors first: the default
+      # mirror.msys2.org stalls on GitHub runners (db downloads time out
+      # with "Operation too slow" and every -S then reports
+      # "target not found").
       - name: Setup MSYS2 (clang64)
         uses: msys2/setup-msys2@v2
         with:
           msystem: CLANG64
-          update: true
+          update: false
           cache: true
-          install: >-
+
+      - name: Reorder pacman mirrors + system update
+        shell: msys2 {0}
+        run: |
+          set -ex
+          mirrors=(
+            "https://repo.msys2.org"
+            "https://mirrors.tuna.tsinghua.edu.cn/msys2"
+            "https://mirrors.ustc.edu.cn/msys2"
+            "https://mirror.clarkson.edu/msys2"
+            "https://ftp.nluug.nl/pub/os/windows/msys2/builds"
+            "https://download.nus.edu.sg/mirror/msys2"
+            "https://mirror.yandex.ru/mirrors/msys2"
+          )
+          for f in /etc/pacman.d/mirrorlist.*; do
+            suffix=$(sed -n 's|^Server = https://mirror\.msys2\.org/\(\S*\)|\1|p' "$f" | head -n1)
+            [ -n "$suffix" ] || continue
+            {
+              for m in "${mirrors[@]}"; do echo "Server = $m/$suffix"; done
+              grep '^Server' "$f"
+            } > "$f.new" && mv "$f.new" "$f"
+          done
+          # The msys2-runtime core update can kill this shell mid-run;
+          # retry so the transaction finishes.
+          pacman -Syu --noconfirm || pacman -Syu --noconfirm
+
+      # Toolchain + all library dependencies, mirroring InstallTools.ps1.
+      # `cache: true` on setup-msys2 caches downloaded pacman packages
+      # between runs.
+      - name: Install toolchain + dependencies (pacman)
+        shell: msys2 {0}
+        run: |
+          set -e
+          pkgs=(
             git
             mingw-w64-clang-x86_64-clang
             mingw-w64-clang-x86_64-lld
@@ -123,6 +160,12 @@ jobs:
             mingw-w64-clang-x86_64-protobuf
             mingw-w64-clang-x86_64-yaml-cpp
             mingw-w64-clang-x86_64-onednn
+          )
+          for attempt in 1 2 3; do
+            pacman -S --needed --noconfirm "${pkgs[@]}" && break
+            [ "$attempt" = 3 ] && exit 1
+            sleep 10
+          done
 
       - name: Cache ccache
         uses: actions/cache@v4
