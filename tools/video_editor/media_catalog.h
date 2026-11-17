@@ -9,10 +9,15 @@
 // NodeGraph::ProjectStore).
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace video {
+class Frame;  // src/video/frame.h — out-param only, forward-declared
+}
 
 namespace XER::SQL::Storage {
 class SQLiteDatabase;
@@ -34,6 +39,20 @@ struct CatalogEntry {
     std::string poster_path;          // UTF-8, empty when none
     std::int64_t added_at_unix = 0;
     bool HasVideo() const { return width > 0 && height > 0; }
+};
+
+// Decoded waveform summary for one media file (Phase 2 spec §5):
+// per-channel min/max float pairs bucketed at a fixed
+// samples-per-peak resolution — the UI draws clip waveforms straight
+// from `data` without touching the decoder.
+struct AudioPeaks {
+    int channels = 0;
+    int samples_per_peak = 256;
+    // Channel-major layout: channel c, bucket b occupies
+    // data[c * buckets * 2 + b * 2 + {0=min, 1=max}]; every channel
+    // carries exactly buckets * 2 floats (total channels*buckets*2).
+    std::vector<float> data;
+    std::size_t buckets = 0;
 };
 
 class MediaCatalog {
@@ -70,6 +89,29 @@ public:
     // remove_poster_file (default true).
     bool Remove(std::int64_t id, bool remove_poster_file = true,
                 std::string* error_out = nullptr);
+
+    // Waveform peaks for one media file (Phase 2 spec §5), cached in
+    // the `peaks` table keyed by canonical path + file mtime. On a
+    // cache miss — or when the file's mtime changed since the cached
+    // row was written — the audio stream is decoded through the same
+    // VideoDecoder audio-tap pipeline the mixer uses and the row is
+    // upserted. SYNCHRONOUS and expensive on a miss: decoding a full
+    // stream costs roughly realtime-length I/O + decode, so the decode
+    // is capped at the first 10 minutes of audio to bound the cost;
+    // call from a worker, not the UI thread. Returns false (nothing
+    // cached, `out` untouched) for a missing file, a file with no
+    // audio stream, or a decode failure.
+    bool GetAudioPeaks(const std::string& utf8_path, AudioPeaks* out,
+                       std::string* error_out = nullptr);
+
+    // Poster frame at an arbitrary source time (Phase 2 spec §5) —
+    // canonicalizes the path then forwards to ClipPoster::GetPosterAt:
+    // the decoded BGRA frame nearest `seconds`, or the mid-stream
+    // frame when `seconds` is out of range. Reads no tables and
+    // writes no poster files; requires no open catalog (static).
+    static bool GetPosterAt(const std::string& utf8_path,
+                            double seconds, video::Frame* frame_out,
+                            std::string* error_out = nullptr);
 
 private:
     bool EnsureSchema(std::string* error_out);

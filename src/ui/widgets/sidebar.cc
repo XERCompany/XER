@@ -1,6 +1,7 @@
 #include "sidebar.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 #include "motion/motion.h"
@@ -70,11 +71,15 @@ void Sidebar::Render(Rendering::Renderer& renderer,
     const float w = b.width * (1.0f - collapse_ * 0.55f);  // shrink when collapsed
     const bool icon_only = collapse_ > 0.5f;
 
-    // Header.
+    // Header: section label, not a page title — font_title (30px) does not
+    // fit the 26px band and was being clipped.
     if (!header_.empty() && !icon_only) {
-        const Rendering::TextStyle hs{tokens.foreground,
-                                      tokens.font_title, 600};
-        Layout::Rect hr{b.x + 14.0f, b.y + 10.0f, w - 28.0f, 26.0f};
+        const Rendering::TextStyle hs{tokens.muted,
+                                      tokens.font_small, 700};
+        const float hh = renderer.MeasureText(header_, hs).height;
+        Layout::Rect hr{b.x + 14.0f,
+                        b.y + 10.0f + std::max(0.0f, (26.0f - hh) * 0.5f),
+                        w - 28.0f, hh + 1.0f};
         renderer.DrawText(header_, hr, hs);
     }
 

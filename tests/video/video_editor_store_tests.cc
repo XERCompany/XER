@@ -127,8 +127,10 @@ Project MakeRoundTripProject() {
     p.fps_num = 24;
     p.fps_den = 1;
     p.bg_color = {16, 32, 48, 255};
-    p.tracks.push_back(Track{TrackKind::Video, "V1", false, false, 2.5f});
-    p.tracks.push_back(Track{TrackKind::Audio, "A1", true, true, -6.0f});
+    p.tracks.push_back(
+        Track{TrackKind::Video, "V1", false, false, false, 2.5f});
+    p.tracks.push_back(
+        Track{TrackKind::Audio, "A1", true, true, false, -6.0f});
 
     Clip a;
     a.id = "clip-a";
@@ -260,7 +262,7 @@ int XER_VideoEditor_RunStoreTests() {
         const Json::Value base = ReadProjectJson(rt_path);
 
         Json::Value v2 = base;
-        v2["version"] = 2;
+        v2["version"] = ProjectStore::kVersion + 1;
         const std::string v2_path = dir + "/version2.xerproj";
         WriteProjectJson(v2_path, v2);
         Project out;

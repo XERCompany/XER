@@ -64,7 +64,9 @@ void WaveformWidget::Render(Rendering::Renderer& renderer, const Theme::Tokens& 
     const float envelope = 0.72f + 0.28f * std::sin(phase_ * 0.9f);
     const float progress_x = bounds_.x + width * progress_;
 
-    renderer.FillRect(bounds_, tokens.muted, 1.0f);
+    // Recessed lane for the waveform (muted is a text color — as a fill it
+    // paints a glaring gray slab in dark themes).
+    renderer.FillRect(bounds_, tokens.secondary, 1.0f);
 
     // Batch-evaluate the two sine terms for all bars at once — MKL VML
     // (SIMD) when linked, scalar libm otherwise. Layout of the scratch

@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -18,6 +19,7 @@
 
 #include "video_editor_test_util.h"
 #include "clip_poster.h"
+#include "frame.h"
 #include "helper/path_utils.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
@@ -257,6 +259,75 @@ int XER_VideoEditor_RunPosterTests() {
         XER_VE_CHECK(ClipPoster::Extract(video_utf8, 0.5,
                                          Utf8Path(out), &err));
         CheckPngFile(out);
+    }
+
+    // -- 6. GetPosterAt: arbitrary source time -> in-memory frame -----
+    {
+        video::Frame at0;
+        err.clear();
+        XER_VE_CHECK(ClipPoster::GetPosterAt(video_utf8, 0.0, &at0,
+                                             &err));
+        XER_VE_CHECK(at0.IsValid());
+        XER_VE_CHECK(at0.Width() == kVideoW);
+        XER_VE_CHECK(at0.Height() == kVideoH);
+        XER_VE_CHECK(at0.Format() == video::PixelFormat::BGRA8);
+        XER_VE_CHECK(at0.DataSize() ==
+                     static_cast<std::size_t>(kVideoW) * kVideoH * 4u);
+
+        // A later time must land on a different frame — the fixture's
+        // bar moves every frame, so the pixels differ.
+        video::Frame at_late;
+        err.clear();
+        XER_VE_CHECK(ClipPoster::GetPosterAt(
+            video_utf8, kVideoDurationSec * 0.75, &at_late, &err));
+        XER_VE_CHECK(at_late.IsValid());
+        XER_VE_CHECK(at_late.DataSize() == at0.DataSize());
+        if (at0.IsValid() && at_late.IsValid() &&
+            at0.DataSize() == at_late.DataSize()) {
+            XER_VE_CHECK(std::memcmp(at0.Data(), at_late.Data(),
+                                     at0.DataSize()) != 0);
+        }
+
+        // Out-of-range times fall back to the mid-stream frame — a
+        // valid frame that differs from the t=0 poster (bar moved).
+        video::Frame at_negative;
+        err.clear();
+        XER_VE_CHECK(ClipPoster::GetPosterAt(video_utf8, -5.0,
+                                             &at_negative, &err));
+        XER_VE_CHECK(at_negative.IsValid());
+        video::Frame at_beyond;
+        err.clear();
+        XER_VE_CHECK(ClipPoster::GetPosterAt(video_utf8, 999.0,
+                                             &at_beyond, &err));
+        XER_VE_CHECK(at_beyond.IsValid());
+        if (at0.IsValid() && at_negative.IsValid() &&
+            at0.DataSize() == at_negative.DataSize()) {
+            XER_VE_CHECK(std::memcmp(at0.Data(), at_negative.Data(),
+                                     at0.DataSize()) != 0);
+        }
+    }
+
+    // -- 7. GetPosterAt failure paths ----------------------------------
+    {
+        video::Frame frame;
+        // Null out-param -> false.
+        err.clear();
+        XER_VE_CHECK(!ClipPoster::GetPosterAt(video_utf8, 0.5, nullptr,
+                                              &err));
+        // Missing file -> false with non-empty error.
+        const auto missing = dir / "does_not_exist.mp4";
+        err.clear();
+        XER_VE_CHECK(!ClipPoster::GetPosterAt(Utf8Path(missing), 0.5,
+                                              &frame, &err));
+        XER_VE_CHECK(!err.empty());
+        // Audio-only container -> false, frame untouched.
+        if (wav_ok) {
+            err.clear();
+            XER_VE_CHECK(!ClipPoster::GetPosterAt(Utf8Path(wav_path),
+                                                  0.5, &frame, &err));
+            XER_VE_CHECK(!err.empty());
+            XER_VE_CHECK(!frame.IsValid());
+        }
     }
 
     return 0;

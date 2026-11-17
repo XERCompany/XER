@@ -204,7 +204,10 @@ void VideoSession::DecodeLoop() {
         return;
     }
     // Publish for the audio consumer as soon as the stream is open.
-    av_decoder_.store(decoder, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(decoder_mutex_);
+        av_decoder_ = decoder;
+    }
 
     fps_.store(std::clamp(decoder->GetFps(), kMinFps, kMaxFps),
                std::memory_order_relaxed);
@@ -352,7 +355,10 @@ void VideoSession::DecodeLoop() {
 
     // Release the shared decoder handle — the audio consumer may still hold
     // a reference; it stops getting packets once IsOpen() goes false.
-    av_decoder_.store(nullptr, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lock(decoder_mutex_);
+        av_decoder_.reset();
+    }
     PublishState(VideoState::kIdle);
 }
 

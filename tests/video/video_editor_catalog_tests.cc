@@ -5,6 +5,7 @@
 // poster suite); fixtures are synthesized in %TEMP% via
 // EncodeVideoFrameStream / EncodeAudioFrames — no binary assets.
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -19,6 +20,7 @@
 #include <json/json.h>
 
 #include "video_editor_test_util.h"
+#include "frame.h"
 #include "helper/path_utils.h"
 #include "media_catalog.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
@@ -94,7 +96,8 @@ bool MakeVideoFile(const std::string& utf8_path, std::string* err) {
 }
 
 void FillSine(XER::Bridge::FFmpeg::AudioFrameInfo* frame,
-              std::size_t first_sample, int sample_count) {
+              std::size_t first_sample, int sample_count,
+              double amplitude = 12000.0) {
     frame->sample_rate = kAudioRate;
     frame->channels = kAudioChannels;
     frame->sample_count = sample_count;
@@ -107,26 +110,28 @@ void FillSine(XER::Bridge::FFmpeg::AudioFrameInfo* frame,
         const double t =
             static_cast<double>(first_sample + i) / kAudioRate;
         const std::int16_t v = static_cast<std::int16_t>(
-            12000.0 * std::sin(2.0 * 3.14159265358979323846 * 440.0 * t));
+            amplitude * std::sin(2.0 * 3.14159265358979323846 * 440.0 *
+                                 t));
         pcm[i * kAudioChannels + 0] = v;
         pcm[i * kAudioChannels + 1] = v;
     }
 }
 
 std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> MakeSineFrames(
-    int total_samples) {
+    int total_samples, double amplitude = 12000.0) {
     std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> frames;
     for (int done = 0; done < total_samples;) {
         const int n = std::min(1024, total_samples - done);
         XER::Bridge::FFmpeg::AudioFrameInfo f;
-        FillSine(&f, static_cast<std::size_t>(done), n);
+        FillSine(&f, static_cast<std::size_t>(done), n, amplitude);
         frames.push_back(std::move(f));
         done += n;
     }
     return frames;
 }
 
-bool MakeAudioFile(const std::string& utf8_path, std::string* err) {
+bool MakeAudioFile(const std::string& utf8_path, std::string* err,
+                   double amplitude = 12000.0) {
     XER::Bridge::FFmpeg::EncodeAudioParams params;
     params.output_path = utf8_path;
     params.codec_name = "pcm_s16le";
@@ -134,7 +139,7 @@ bool MakeAudioFile(const std::string& utf8_path, std::string* err) {
     params.channels = kAudioChannels;
     params.sample_format = "s16";
     return XER::Bridge::FFmpeg::EncodeAudioFrames(
-        params, MakeSineFrames(kAudioTotalSamples), err);
+        params, MakeSineFrames(kAudioTotalSamples, amplitude), err);
 }
 
 // ---- small helpers ------------------------------------------------------
@@ -173,6 +178,16 @@ bool ProbeJsonLooksSane(const std::string& probe_json) {
 
 std::size_t CountRows(const std::vector<CatalogEntry>& entries) {
     return entries.size();
+}
+
+// Largest |min|/|max| across all channels+buckets — used to compare
+// peak sets across re-decodes.
+float MaxAbsPeak(const XER::VideoEditor::AudioPeaks& peaks) {
+    float m = 0.0f;
+    for (const float v : peaks.data) {
+        m = std::max(m, std::fabs(v));
+    }
+    return m;
 }
 
 }  // namespace
@@ -343,6 +358,105 @@ int XER_VideoEditor_RunCatalogTests() {
             XER_VE_CHECK(all[1].id == wav_id);
             XER_VE_CHECK(all[0].id < all[1].id);
         }
+    }
+
+    // -- 5b. GetAudioPeaks: decode + cache + mtime invalidation --------
+    if (wav_ok) {
+        using XER::VideoEditor::AudioPeaks;
+
+        AudioPeaks peaks;
+        perr.clear();
+        XER_VE_CHECK(cat.GetAudioPeaks(wav_utf8, &peaks, &perr));
+        XER_VE_CHECK(peaks.channels == kAudioChannels);
+        XER_VE_CHECK(peaks.samples_per_peak == 256);
+        XER_VE_CHECK(peaks.buckets > 0);
+        XER_VE_CHECK(peaks.data.size() ==
+                     static_cast<std::size_t>(peaks.channels) *
+                         peaks.buckets * 2u);
+        // Per-channel {min,max} pairs are ordered and the sine is
+        // non-silent (~0.37 amplitude after s16 -> float).
+        bool ordered = true;
+        for (std::size_t i = 0; i + 1 < peaks.data.size(); i += 2) {
+            if (!(peaks.data[i] <= peaks.data[i + 1])) {
+                ordered = false;
+            }
+        }
+        XER_VE_CHECK(ordered);
+        const float loud = MaxAbsPeak(peaks);
+        XER_VE_CHECK(loud > 0.1f);
+        XER_VE_CHECK(loud <= 1.0f);
+
+        // Cache hit: second call returns identical data served from
+        // the peaks table (same mtime -> no re-decode).
+        AudioPeaks cached;
+        perr.clear();
+        XER_VE_CHECK(cat.GetAudioPeaks(wav_utf8, &cached, &perr));
+        XER_VE_CHECK(cached.channels == peaks.channels);
+        XER_VE_CHECK(cached.samples_per_peak ==
+                     peaks.samples_per_peak);
+        XER_VE_CHECK(cached.buckets == peaks.buckets);
+        XER_VE_CHECK(cached.data == peaks.data);
+
+        // A video-only file has no audio stream -> false, nothing
+        // cached (a later call still fails rather than serving a
+        // negative entry).
+        AudioPeaks no_audio;
+        perr.clear();
+        XER_VE_CHECK(!cat.GetAudioPeaks(video_utf8, &no_audio, &perr));
+        perr.clear();
+        XER_VE_CHECK(!cat.GetAudioPeaks(video_utf8, &no_audio, &perr));
+
+        // Missing file -> false.
+        AudioPeaks missing_peaks;
+        perr.clear();
+        XER_VE_CHECK(!cat.GetAudioPeaks(
+            Utf8Path(dir / "does_not_exist.wav"), &missing_peaks,
+            &perr));
+
+        // mtime invalidation: re-encode the SAME path at quarter
+        // amplitude and bump the mtime — the stale row must be
+        // re-decoded (a cached reply would repeat the loud peaks).
+        err.clear();
+        XER_VE_CHECK(MakeAudioFile(wav_utf8, &err, 3000.0));
+        {
+            std::error_code touch_ec;
+            std::filesystem::last_write_time(
+                wav_path,
+                std::filesystem::file_time_type::clock::now() +
+                    std::chrono::hours(2),
+                touch_ec);
+            XER_VE_CHECK(!touch_ec);
+        }
+        AudioPeaks quiet;
+        perr.clear();
+        XER_VE_CHECK(cat.GetAudioPeaks(wav_utf8, &quiet, &perr));
+        XER_VE_CHECK(quiet.channels == peaks.channels);
+        XER_VE_CHECK(quiet.buckets > 0);
+        const float quiet_loud = MaxAbsPeak(quiet);
+        XER_VE_CHECK(quiet_loud > 0.01f);
+        XER_VE_CHECK(quiet_loud < loud * 0.6f);
+    }
+
+    // -- 5c. GetPosterAt: catalog-level poster at arbitrary time ------
+    {
+        video::Frame frame;
+        perr.clear();
+        XER_VE_CHECK(MediaCatalog::GetPosterAt(video_utf8, 0.25,
+                                               &frame, &perr));
+        XER_VE_CHECK(frame.IsValid());
+        XER_VE_CHECK(frame.Width() == kVideoW);
+        XER_VE_CHECK(frame.Height() == kVideoH);
+        // Out of range -> mid-frame fallback, still a valid frame.
+        video::Frame beyond;
+        perr.clear();
+        XER_VE_CHECK(MediaCatalog::GetPosterAt(video_utf8, 999.0,
+                                               &beyond, &perr));
+        XER_VE_CHECK(beyond.IsValid());
+        // Missing file -> false.
+        video::Frame none;
+        perr.clear();
+        XER_VE_CHECK(!MediaCatalog::GetPosterAt(
+            Utf8Path(dir / "does_not_exist.mp4"), 0.5, &none, &perr));
     }
 
     // -- 6. Remove: row gone, poster file deleted -------------------------

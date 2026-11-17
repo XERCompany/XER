@@ -42,12 +42,15 @@ target_link_directories(XER_FFmpeg PUBLIC ${FFMPEG_LIBRARY_DIRS})
 
 target_compile_features(XER_FFmpeg PUBLIC cxx_std_23)
 
+# FFmpeg was found above (find_package REQUIRED) — the real bridge
+# compiles on every toolchain, not just MSVC.
+target_compile_definitions(XER_FFmpeg PUBLIC
+    ENGINE_HAS_FFMPEG_BRIDGE
+    ENGINE_HAS_FFMPEG_AVFILTER
+    ENGINE_HAS_FFMPEG_AVDEVICE)
+
 if(MSVC)
     target_compile_options(XER_FFmpeg PRIVATE /W4 /WX- /O2)
-    target_compile_definitions(XER_FFmpeg PUBLIC
-        ENGINE_HAS_FFMPEG_BRIDGE
-        ENGINE_HAS_FFMPEG_AVFILTER
-        ENGINE_HAS_FFMPEG_AVDEVICE)
 else()
     target_compile_options(XER_FFmpeg PRIVATE -Wall -Wextra -Wpedantic -O3)
 endif()

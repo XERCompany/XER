@@ -93,9 +93,10 @@ find_package(mimalloc CONFIG REQUIRED)
 find_package(ggml CONFIG REQUIRED)
 find_package(folly CONFIG REQUIRED)
 # Intel MKL: required where available (vcpkg on Windows, apt intel-mkl on
-# Linux); absent on macOS where MKL has no arm64 build — all MKL code paths
-# are gated on the ENGINE_HAS_MKL define / MKL::MKL target.
-if(APPLE)
+# Linux); absent on macOS where MKL has no arm64 build and on MinGW/MSYS2
+# where no system package exists — all MKL code paths are gated on the
+# ENGINE_HAS_MKL define / MKL::MKL target.
+if(APPLE OR MINGW)
     find_package(MKL CONFIG QUIET)
 else()
     find_package(MKL CONFIG REQUIRED)

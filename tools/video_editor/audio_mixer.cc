@@ -15,7 +15,10 @@
 #include <set>
 #include <vector>
 
+#include "generated_source.h"                  // IsGeneratedSource
 #include "string_utils.h"                      // ToLowerAscii
+#include "vst/vst3_chain.h"                    // Vst3Chain
+#include "vst/vst3_factory.h"                  // InstantiateVst3Plugin
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"  // AudioFrameInfo def
 
 namespace XER::VideoEditor {
@@ -36,6 +39,7 @@ constexpr int kReadBatch = 64;
 // first needed media time so forward decode stays short (Seek is
 // keyframe-backward only). Mirrors the compositor's 0.25 s.
 constexpr double kSeekLeadSeconds = 0.25;
+constexpr double kPi = 3.14159265358979323846;
 // Window margins (seconds of media time):
 //   kCoverageMargin — pump until pcm_media_end >= needed_end + margin
 //     (covers linear-interpolation headroom + timestamp rounding).
@@ -73,8 +77,14 @@ struct AudioClipSession {
     bool has_pcm = false;     // window ever received samples
     double ext_start = 0.0;   // contribution window (incl. handles), s
     double ext_end = 0.0;
-    double delta = 0.0;       // in_point - timeline_start: src = tau + delta
-    double gain_lin = 1.0;    // pow(10, gain_db / 20)
+    double rate = 1.0;        // clip.playback_rate (guarded finite > 0)
+    double pan_l = 1.0;       // equal-power stereo balance gains
+    double pan_r = 1.0;
+    double track_gain_lin = 1.0;   // pow(10, track.gain_db / 20)
+    // Per-chunk effective linear gain: track_gain_lin *
+    // 10^(EffectiveGainDbAt/20) — GainDb keyframes evaluate once per
+    // chunk at its clip-local start.
+    double mix_gain_lin = 1.0;
     // Nominal clip bounds + fades (fades never extend into handles).
     double clip_start = 0.0;
     double clip_end = 0.0;
@@ -95,7 +105,20 @@ struct AudioClipSession {
     double pcm_media_start = 0.0;
     double pcm_media_end = 0.0;
     std::vector<TransitionRef> transitions;
+    // Per-clip plugin chain (clip.audio_fx) — null when the list is
+    // empty. Nodes instantiate lazily on the first processed chunk;
+    // Sync() rebuilds only when the fx signature changes.
+    std::unique_ptr<Vst::Vst3Chain> fx_chain;
 };
+
+// Timeline tau -> source media time:
+//   in_point + (tau - timeline_start) * playback_rate
+// Handles are timeline time, so transition-handle regions map
+// rate-scaled like the nominal range — same rule as the compositor.
+double SourceTimeAt(const AudioClipSession& session, double tau) {
+    return session.clip->in_point +
+           (tau - session.clip->timeline_start) * session.rate;
+}
 
 // ------------------------------------------------------------------
 // Sample-format conversion — AudioFrameInfo -> stereo float @src_rate.
@@ -457,6 +480,7 @@ struct AudioMixer::Impl {
     double duration_ = 0.0;
     std::size_t chunk_count_ = 0;
     MediaDecoderFactory decoder_factory;
+    Vst::PluginInstanceFactory plugin_factory;
     bool initialized = false;
     std::atomic<bool> cancelled{false};
     std::vector<std::string> warnings;
@@ -467,6 +491,10 @@ struct AudioMixer::Impl {
     bool has_last_ = false;
     std::size_t last_index_ = 0;
     FFmpeg::AudioFrameInfo last_chunk_;
+    // UI meter state: unclamped |L|,|R| peaks of the last rendered
+    // chunk (LastChunkPeaks()).
+    float last_peak_l = 0.0f;
+    float last_peak_r = 0.0f;
 
     bool Fail(std::string* error_out, const std::string& message) {
         if (error_out != nullptr) {
@@ -509,6 +537,11 @@ struct AudioMixer::Impl {
         if (!decoder_factory) {
             decoder_factory = DefaultDecoderFactory();
         }
+        // Null -> production VST3 host (dual-mono per node); tests
+        // inject IPluginInstance fakes through options.plugin_factory.
+        plugin_factory = options.plugin_factory
+            ? options.plugin_factory
+            : Vst::PluginInstanceFactory(&Vst::InstantiateVst3Plugin);
         cancelled.store(false, std::memory_order_relaxed);
 
         // Sessions for every clip passing the mute/track/hidden gates.
@@ -538,9 +571,37 @@ struct AudioMixer::Impl {
 
             AudioClipSession session;
             session.clip = &clip;
-            session.delta = clip.in_point - clip.timeline_start;
-            session.gain_lin =
-                std::pow(10.0, static_cast<double>(clip.gain_db) / 20.0);
+            // playback_rate scales the timeline->source map (see
+            // SourceTimeAt); non-finite/non-positive falls back to 1.
+            session.rate =
+                std::isfinite(clip.playback_rate) &&
+                        clip.playback_rate > 0.0
+                    ? clip.playback_rate
+                    : 1.0;
+            // Equal-power stereo balance: the L/R gain RATIO follows
+            // the constant-power cos/sin law at angle
+            // (pan+1)*pi/4, normalized so the dominant channel stays
+            // at unity — pan=0 is an exact no-op (no 3 dB program
+            // drop), full pan mutes the opposite channel. Out-of-range
+            // or non-finite pans clamp to center.
+            const double pan = std::clamp(
+                std::isfinite(static_cast<double>(clip.pan))
+                    ? static_cast<double>(clip.pan)
+                    : 0.0,
+                -1.0, 1.0);
+            const double angle = (pan + 1.0) * kPi * 0.25;
+            const double gl = std::cos(angle);
+            const double gr = std::sin(angle);
+            const double gmax = std::max(gl, gr);  // >= ~0.7, never 0
+            session.pan_l = gl / gmax;
+            session.pan_r = gr / gmax;
+            // Track gain_db folds into the per-chunk effective gain.
+            session.track_gain_lin =
+                std::isfinite(static_cast<double>(track->gain_db))
+                    ? std::pow(
+                          10.0,
+                          static_cast<double>(track->gain_db) / 20.0)
+                    : 1.0;
             session.clip_start = clip.timeline_start;
             session.clip_end = ClipEndSeconds(clip);
             session.fade_in = clip.fade_in;
@@ -549,6 +610,19 @@ struct AudioMixer::Impl {
                 ClipTransitionHandles(project_, clip.id);
             session.ext_start = clip.timeline_start - handles.first;
             session.ext_end = ClipEndSeconds(clip) + handles.second;
+            // Per-clip plugin chain — instantiated lazily on the first
+            // processed chunk; missing/broken plugins warn once and
+            // bypass, never failing the mix.
+            if (!clip.audio_fx.empty()) {
+                session.fx_chain = std::make_unique<Vst::Vst3Chain>(
+                    static_cast<double>(out_rate),
+                    static_cast<std::uint32_t>(chunk_samples),
+                    plugin_factory,
+                    [this](const std::string& message) {
+                        Warn(message);
+                    });
+                session.fx_chain->Sync(clip.audio_fx);
+            }
             sessions.emplace(clip.id, std::move(session));
         }
 
@@ -611,6 +685,8 @@ struct AudioMixer::Impl {
         warned_once.clear();
         has_last_ = false;
         last_chunk_ = FFmpeg::AudioFrameInfo{};
+        last_peak_l = 0.0f;
+        last_peak_r = 0.0f;
         cancelled.store(false, std::memory_order_relaxed);
         initialized = false;
         duration_ = 0.0;
@@ -636,6 +712,12 @@ struct AudioMixer::Impl {
                             session.clip->id + "'");
         }
         session.open_attempted = true;
+        if (IsGeneratedSource(session.clip->source)) {
+            // Procedural clips (matte/bars/text) have no media file —
+            // contribute silence without touching the decoder.
+            session.dead = true;
+            return true;
+        }
         MediaDecoderPtr decoder = decoder_factory();
         if (decoder == nullptr) {
             return Fail(error_out,
@@ -664,8 +746,9 @@ struct AudioMixer::Impl {
         // let it truncate below what the clip's own bounds require
         // (in_point + duration + out_handle).
         const double clip_need =
-            session.clip->in_point + session.clip->duration +
-            (session.ext_end - ClipEndSeconds(*session.clip));
+            session.clip->in_point +
+            (session.ext_end - session.clip->timeline_start) *
+                session.rate;
         session.src_hi =
             std::max(media_duration > 0.0 ? media_duration : 0.0,
                      clip_need);
@@ -879,16 +962,18 @@ struct AudioMixer::Impl {
             // media time.
             const double tau_hi = std::min(t1, session.ext_end);
             const double tau_lo = std::max(t0, session.ext_start);
-            const double need_src_end = tau_hi + session.delta;
-            const double need_src_start = tau_lo + session.delta;
+            const double need_src_end = SourceTimeAt(session, tau_hi);
+            const double need_src_start = SourceTimeAt(session, tau_lo);
             if (!EnsureCoverage(session, need_src_end, need_src_start,
                                 error_out)) {
                 return false;
             }
         }
 
-        // Mix: per output sample, sum every contributing session's
-        // interpolated stereo sample * gain * fades * transition w.
+        // Mix: each contributing session renders interpolated stereo
+        // samples * gain * fades * transition weight * pan into a
+        // per-clip contribution buffer, optionally through its
+        // clip.audio_fx plugin chain, then accumulates into the mix.
         out->stream_index = -1;
         out->sample_rate = out_rate;
         out->channels = out_channels;
@@ -900,27 +985,56 @@ struct AudioMixer::Impl {
         out->plane_sizes.clear();
         out->data.assign(static_cast<std::size_t>(n) * 4u, 0);
         {
-            // Build into a typed buffer, then copy bytes — avoids
-            // alignment/aliasing concerns on the uint8_t payload.
-            std::vector<std::int16_t> pcm16(
-                static_cast<std::size_t>(n) * 2u);
-            for (int i = 0; i < n; ++i) {
-                const double tau = t0 +
-                    static_cast<double>(i) / out_rate;
-                double acc_l = 0.0;
-                double acc_r = 0.0;
-                for (auto& entry : sessions) {
-                    const AudioClipSession& session = entry.second;
-                    if (session.dead || session.closed ||
-                        !session.open_ok || !session.has_pcm ||
-                        session.src_rate <= 0) {
-                        continue;
-                    }
+            // Per-chunk effective gains: GainDb keyframes evaluate
+            // once per chunk at the chunk's clip-local start
+            // (chunk-rate automation — the contract fixes u at t0),
+            // folded with the static track gain. Dead/closed sessions
+            // keep a stale mix_gain_lin but are skipped by the mix
+            // loop anyway.
+            for (auto& entry : sessions) {
+                AudioClipSession& session = entry.second;
+                if (session.dead || session.closed) {
+                    continue;
+                }
+                const double u0 = t0 - session.clip_start;
+                const double gain_db = static_cast<double>(
+                    EffectiveGainDbAt(*session.clip, u0));
+                session.mix_gain_lin =
+                    session.track_gain_lin *
+                    std::pow(
+                        10.0,
+                        (std::isfinite(gain_db) ? gain_db : 0.0) / 20.0);
+            }
+            // Per-clip contribution pass: each session renders its
+            // gain/pan/fade/transition-weighted stereo floats into
+            // `contrib`, runs its plugin chain (if any) in place, then
+            // accumulates into `mix`. The chain insertion point is
+            // exactly "after this clip's gain/pan/fades, before
+            // accumulation into the mix" — Phase-2 clip.audio_fx.
+            std::vector<double> mix(
+                static_cast<std::size_t>(n) * 2u, 0.0);
+            std::vector<float> contrib;
+            for (auto& entry : sessions) {
+                AudioClipSession& session = entry.second;
+                if (session.dead || session.closed ||
+                    !session.open_ok || !session.has_pcm ||
+                    session.src_rate <= 0) {
+                    continue;
+                }
+                if (t1 <= session.ext_start ||
+                    t0 >= session.ext_end) {
+                    continue;   // no overlap with this chunk
+                }
+                contrib.assign(static_cast<std::size_t>(n) * 2u, 0.0f);
+                bool any = false;
+                for (int i = 0; i < n; ++i) {
+                    const double tau = t0 +
+                        static_cast<double>(i) / out_rate;
                     if (tau < session.ext_start ||
                         tau >= session.ext_end) {
                         continue;
                     }
-                    const double src = tau + session.delta;
+                    const double src = SourceTimeAt(session, tau);
                     if (src < 0.0 || src > session.src_hi) {
                         continue;  // outside media -> silence, no freeze
                     }
@@ -930,11 +1044,47 @@ struct AudioMixer::Impl {
                         continue;
                     }
                     const double env =
-                        session.gain_lin * FadeEnvelope(session, tau) *
+                        session.mix_gain_lin *
+                        FadeEnvelope(session, tau) *
                         TransitionWeight(session, tau);
-                    acc_l += static_cast<double>(l) * env;
-                    acc_r += static_cast<double>(r) * env;
+                    // Per-sample equal-power pan on top of gain/fade/
+                    // transition weighting.
+                    contrib[static_cast<std::size_t>(i) * 2u] =
+                        static_cast<float>(
+                            static_cast<double>(l) * env *
+                            session.pan_l);
+                    contrib[static_cast<std::size_t>(i) * 2u + 1u] =
+                        static_cast<float>(
+                            static_cast<double>(r) * env *
+                            session.pan_r);
+                    any = true;
                 }
+                if (!any) {
+                    continue;
+                }
+                // Sync() is a cheap no-op unless clip.audio_fx changed
+                // (signature compare); ProcessInterleaved leaves
+                // silence untouched through bypassed nodes.
+                if (session.fx_chain != nullptr) {
+                    session.fx_chain->Sync(session.clip->audio_fx);
+                    session.fx_chain->ProcessInterleaved(
+                        contrib.data(),
+                        static_cast<std::uint32_t>(n));
+                }
+                for (std::size_t i = 0; i < mix.size(); ++i) {
+                    mix[i] += contrib[i];
+                }
+            }
+            // Build into a typed buffer, then copy bytes — avoids
+            // alignment/aliasing concerns on the uint8_t payload.
+            std::vector<std::int16_t> pcm16(
+                static_cast<std::size_t>(n) * 2u);
+            double peak_l = 0.0;
+            double peak_r = 0.0;
+            for (int i = 0; i < n; ++i) {
+                const double acc_l = mix[static_cast<std::size_t>(i) * 2u];
+                const double acc_r =
+                    mix[static_cast<std::size_t>(i) * 2u + 1u];
                 // clamp -> *32767 -> round -> interleaved s16 (LE on
                 // the Windows targets this ships on).
                 pcm16[static_cast<std::size_t>(i) * 2u] =
@@ -945,9 +1095,15 @@ struct AudioMixer::Impl {
                     static_cast<std::int16_t>(
                         std::lrint(std::clamp(acc_r, -1.0, 1.0) *
                                    32767.0));
+                // Meter peaks come from the unclamped accumulators so
+                // overs show as > 1.0 to the UI.
+                peak_l = std::max(peak_l, std::fabs(acc_l));
+                peak_r = std::max(peak_r, std::fabs(acc_r));
             }
             std::memcpy(out->data.data(), pcm16.data(),
                         static_cast<std::size_t>(n) * 4u);
+            last_peak_l = static_cast<float>(peak_l);
+            last_peak_r = static_cast<float>(peak_r);
         }
 
         last_chunk_ = *out;
@@ -985,6 +1141,10 @@ bool AudioMixer::GetChunk(std::size_t index,
                           XER::Bridge::FFmpeg::AudioFrameInfo* out,
                           std::string* error_out) {
     return impl_->GetChunk(index, out, error_out);
+}
+
+std::pair<float, float> AudioMixer::LastChunkPeaks() const {
+    return {impl_->last_peak_l, impl_->last_peak_r};
 }
 
 void AudioMixer::Cancel() {

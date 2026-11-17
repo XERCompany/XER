@@ -16,9 +16,11 @@
       1. Elevation check + self-elevate
       2. Process-scope execution policy bypass
       3. Chocolatey bootstrap (if missing)
-      4. choco packages: nodejs-lts, python3, cmake, ninja, msys2
+      4. choco packages: git, nodejs-lts, python3, cmake, ninja, msys2
       5. Intel oneMKL via winget (manual fallback URL on failure)
-      6. MSYS2 pacman -Syu + ~60 mingw-w64-clang-x86_64-* packages
+      6. MSYS2 pacman -Syu + ~70 mingw-w64-clang-x86_64-* packages, then a
+         junction fix for build-machine paths embedded in package cmake
+         files (e.g. folly's D:/M/msys64/...)
       7. Verification (clang++/cmake/ninja versions), PATH notes, summary
 
     Deliberately NOT installed (audit decisions):
@@ -32,8 +34,12 @@
       - choco cuda, nasm            : CUDA has no mingw path (dead on this
         preset); nasm was only needed by CUDA/asm paths.
       - pacman lua54                : the repo FetchContent-builds Lua.
-      - pacman llvm/llvm-libs/llvm-tools/lld : redundant, folded into the
-        'mingw-w64-clang-x86_64-toolchain' group.
+      - pacman llvm/llvm-libs/lldb/clang-analyzer/clang-tools-extra :
+        the group 'mingw-w64-clang-x86_64-toolchain' is NOT installed -
+        'pacman -S <group>' is unreliable when pacman.exe is invoked
+        directly from PowerShell, and the group pulls ~1 GB of extras we
+        do not need. The compiler comes from explicit packages instead:
+        clang, lld, libc++, compiler-rt, llvm-openmp (rest = deps).
 
     NOT handled here (repo-side tasks, see audit "Hard blockers"):
       pthreadpool, fxdiv, fp16, dlfcn-win32 are NOT pacman packages - they
@@ -239,6 +245,62 @@ function Install-Mkl {
     return 'failed'
 }
 
+function Repair-Msys2EmbeddedPrefixes {
+    <#
+    .SYNOPSIS
+        Some MSYS2 clang64 binary packages (folly, and libs it exports)
+        hard-code absolute paths from the package build machine into their
+        installed CMake target files - e.g.
+            D:/M/msys64/clang64/lib/libng-log.a
+        When that drive/path does not exist locally, CMake configure fails
+        while reading imported targets. Fix: create a directory junction at
+        the embedded prefix that points at the real MSYS2 root.
+    #>
+    param([Parameter(Mandatory)][string]$Msys2Root)
+
+    $cmakeDir = Join-Path $Msys2Root 'clang64\lib\cmake'
+    if (-not (Test-Path -LiteralPath $cmakeDir)) {
+        Write-Note "no clang64\lib\cmake under $Msys2Root - prefix check skipped"
+        return
+    }
+    $localRoot = ($Msys2Root -replace '\\','/').TrimEnd('/')
+    $embeddedRoots = @{}
+    foreach ($file in (Get-ChildItem $cmakeDir -Recurse -Filter '*.cmake' -ErrorAction SilentlyContinue)) {
+        $text = Get-Content $file.FullName -Raw -ErrorAction SilentlyContinue
+        if (-not $text) { continue }
+        foreach ($m in [regex]::Matches($text, '([A-Za-z]:/[A-Za-z0-9_./-]+?)/clang64/')) {
+            $embeddedRoots[$m.Groups[1].Value] = $true
+        }
+    }
+    $fixed = 0
+    foreach ($embedded in $embeddedRoots.Keys) {
+        if ($embedded -ieq $localRoot) { continue }
+        $winPath = ($embedded -replace '/','\')
+        if (Test-Path -LiteralPath $winPath) { continue }  # already resolvable
+
+        $parent = Split-Path $winPath -Parent
+        if ($WhatIf) {
+            Write-Host "  [whatif] junction $winPath -> $Msys2Root" -ForegroundColor DarkYellow
+            $fixed++
+            continue
+        }
+        try {
+            if (-not (Test-Path -LiteralPath $parent)) {
+                New-Item -ItemType Directory -Path $parent -Force | Out-Null
+            }
+            New-Item -ItemType Junction -Path $winPath -Target $Msys2Root -Force | Out-Null
+            Write-Ok "junction $winPath -> $Msys2Root (paths embedded in MSYS2 packages)"
+            $fixed++
+        } catch {
+            Write-WarnX "junction $winPath failed: $($_.Exception.Message)"
+            Write-Note  "  run manually (admin): New-Item -ItemType Junction -Path '$winPath' -Target '$Msys2Root'"
+        }
+    }
+    if ($fixed -eq 0 -and -not $WhatIf) {
+        Write-Ok 'no broken embedded prefixes found in clang64 cmake files'
+    }
+}
+
 # ===========================================================================
 # MSYS2 clang64 package list
 # ===========================================================================
@@ -248,9 +310,13 @@ function Install-Mkl {
 #   - pkgconf/cmake/ninja added per audit
 #   - second block = "required deps missing from the plan" audit section
 $script:Msys2Packages = @(
-    # --- toolchain ---
-    'mingw-w64-clang-x86_64-toolchain',   # group: clang, lld, compiler-rt, libc++...
+    # --- toolchain (explicit packages; the 'toolchain' GROUP is not a
+    #     valid -S target when pacman.exe runs outside an msys shell) ---
+    'mingw-w64-clang-x86_64-clang',
+    'mingw-w64-clang-x86_64-lld',
     'mingw-w64-clang-x86_64-libc++',
+    'mingw-w64-clang-x86_64-compiler-rt',
+    'mingw-w64-clang-x86_64-llvm-openmp',
     'mingw-w64-clang-x86_64-pkgconf',
     'mingw-w64-clang-x86_64-cmake',
     'mingw-w64-clang-x86_64-ninja',
@@ -278,6 +344,8 @@ $script:Msys2Packages = @(
     'mingw-w64-clang-x86_64-zstd',
     'mingw-w64-clang-x86_64-brotli',
     'mingw-w64-clang-x86_64-curl',
+    'mingw-w64-clang-x86_64-bzip2',
+    'mingw-w64-clang-x86_64-fast_float',
     'mingw-w64-clang-x86_64-boost',
     'mingw-w64-clang-x86_64-eigen3',
     'mingw-w64-clang-x86_64-cereal',
@@ -321,6 +389,8 @@ $script:Msys2Packages = @(
 $script:ChocoFailed  = New-Object 'System.Collections.Generic.List[string]'
 $script:PacmanFailed = New-Object 'System.Collections.Generic.List[string]'
 $script:Msys2Root     = $null
+$script:ChocoReady    = $false
+$pacmanExe            = $null
 $mklStatus            = 'skipped'
 
 # ===========================================================================
@@ -388,8 +458,9 @@ if ($SkipChoco) {
 } else {
     Write-Step 'Chocolatey'
     if (Install-Choco) {
+        $script:ChocoReady = $true
         Refresh-MachinePath
-        $chocoPkgs = @('nodejs-lts','python3','cmake','ninja')
+        $chocoPkgs = @('git','nodejs-lts','python3','cmake','ninja')
         # Only install msys2 via choco when no existing install was detected;
         # otherwise we would end up with a duplicate at C:\tools\msys64.
         if (-not $script:Msys2Root) { $chocoPkgs += 'msys2' }
@@ -401,6 +472,9 @@ if ($SkipChoco) {
                 $script:ChocoFailed.Add($pkg)
             }
         }
+        # Pick up PATH entries written by the installs just performed
+        # (msys2, cmake, ninja...) so detection below sees them.
+        Refresh-MachinePath
         if ($chocoPkgs -contains 'msys2') {
             $script:Msys2Root = Find-Msys2Install
             if (-not $script:Msys2Root -and
@@ -430,7 +504,6 @@ if ($SkipMsys2) {
     Write-Step 'MSYS2 packages - skipped (-SkipMsys2)'
 } else {
     Write-Step "MSYS2 clang64 packages ($($script:Msys2Packages.Count) packages)"
-    $pacmanExe = $null
     if ($script:Msys2Root) {
         $pacmanExe = Join-Path $script:Msys2Root 'usr\bin\pacman.exe'
     } elseif ($WhatIf) {
@@ -472,15 +545,27 @@ if ($SkipMsys2) {
                 if (-not (Invoke-External $pacmanExe (@('-S','--needed','--noconfirm') + $batch))) {
                     Write-WarnX 'batch install failed - retrying packages individually'
                     foreach ($pkg in $batch) {
-                        if (-not (Invoke-External $pacmanExe @('-S','--needed','--noconfirm',$pkg))) {
-                            Write-FailX "pacman install failed: $pkg"
-                            $script:PacmanFailed.Add($pkg)
+                        if (Invoke-External $pacmanExe @('-S','--needed','--noconfirm',$pkg)) {
+                            continue
                         }
+                        if (-not (& $pacmanExe -Si $pkg 2>$null | Select-Object -First 1)) {
+                            Write-FailX "pacman: '$pkg' not found in repositories (typo or renamed package)"
+                        } else {
+                            Write-FailX "pacman install failed: $pkg"
+                        }
+                        $script:PacmanFailed.Add($pkg)
                     }
                 }
             }
         } finally {
             $env:MSYSTEM = $prevMsystem
+        }
+
+        # Some packages (folly) embed the build machine's MSYS2 path into
+        # their CMake config files; junction the foreign prefix to ours.
+        if ($script:Msys2Root) {
+            Write-Note 'checking for build-machine paths embedded in cmake files...'
+            Repair-Msys2EmbeddedPrefixes -Msys2Root $script:Msys2Root
         }
     } else {
         Write-FailX "pacman.exe not found at $pacmanExe"
@@ -548,9 +633,11 @@ if ($pyCmd) {
 if ($pacmanExe -and (Test-Path $pacmanExe)) {
     $installed = @(& $pacmanExe -Qq 2>$null | Where-Object { $_ -like 'mingw-w64-clang-x86_64-*' })
     Write-Ok "pacman: $($installed.Count) mingw-w64-clang-x86_64-* packages installed"
-    # Note: 'toolchain' is a group, not an installed package - query real
-    # package names instead.
-    & $pacmanExe -Q mingw-w64-clang-x86_64-clang mingw-w64-clang-x86_64-libc++ 2>$null |
+    & $pacmanExe -Q mingw-w64-clang-x86_64-clang `
+                    mingw-w64-clang-x86_64-lld `
+                    mingw-w64-clang-x86_64-libc++ `
+                    mingw-w64-clang-x86_64-fast_float `
+                    mingw-w64-clang-x86_64-folly 2>$null |
         ForEach-Object { Write-Note "  $_" }
 } elseif (-not $SkipMsys2) {
     Write-Note 'pacman query skipped (no pacman.exe)'
@@ -576,8 +663,10 @@ if ($allPath -notlike "*$clang64Bin*") {
 Write-Step 'Summary'
 $chocoMsg = if ($script:ChocoFailed.Count -gt 0) {
     "$($script:ChocoFailed.Count) failed -> $($script:ChocoFailed -join ', ')"
-} else { 'all ok (or skipped)' }
-Write-Note "choco failures : $chocoMsg"
+} elseif ($SkipChoco) { 'skipped (-SkipChoco)' }
+  elseif (-not $script:ChocoReady) { 'choco unavailable - packages not installed' }
+  else { 'all ok' }
+Write-Note "choco          : $chocoMsg"
 $pacmanMsg = if ($script:PacmanFailed.Count -gt 0) {
     "$($script:PacmanFailed.Count) failed -> $($script:PacmanFailed -join ', ')"
 } else { 'all ok (or skipped)' }

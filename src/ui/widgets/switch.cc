@@ -66,7 +66,8 @@ void Switch::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
     Theme::Color track_on = tokens.accent;
     Theme::Color track_color = lerp(track_off, track_on, t);
     if (!IsEnabled()) {
-        track_color = tokens.muted;
+        // Recessed, not a bright gray pill.
+        track_color = tokens.secondary;
     } else if (!checked_ && t < 0.05f && IsHovered()) {
         track_color = tokens.foreground;
         track_color.a = 0.12f;
@@ -100,7 +101,7 @@ void Switch::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
     const float thumb_x = thumb_cx - thumb_w * 0.5f;
     renderer.FillRect(
         {thumb_x, bounds.y + inset, thumb_w, diameter},
-        IsEnabled() ? tokens.surface : tokens.background,
+        IsEnabled() ? tokens.surface : tokens.disabled,
         diameter / 2.0f
     );
 }

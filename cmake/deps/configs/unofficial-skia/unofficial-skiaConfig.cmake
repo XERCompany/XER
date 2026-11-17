@@ -30,10 +30,15 @@ if(NOT XER_DEFER_CONFIG_LOADED)
     endif()
 
     # 2) Header-layout probes — the code tries several include spellings,
-    #    so collect every root that resolves them.
-    find_path(XER_SKIA_INC_CORE NAMES core/SkCanvas.h)
-    find_path(XER_SKIA_INC_FULL NAMES include/core/SkCanvas.h)
-    find_path(XER_SKIA_INC_FLAT NAMES SkCanvas.h)
+    #    so collect every root that resolves them. MSYS2 nests the public
+    #    headers one level deeper: include/skia/include/core/... — probe
+    #    the pkg-config include dir with an "include" suffix for that.
+    find_path(XER_SKIA_INC_CORE NAMES core/SkCanvas.h
+        PATHS ${XER_SKIA_0_INCLUDE_DIRS} PATH_SUFFIXES include)
+    find_path(XER_SKIA_INC_FULL NAMES include/core/SkCanvas.h
+        PATHS ${XER_SKIA_0_INCLUDE_DIRS})
+    find_path(XER_SKIA_INC_FLAT NAMES SkCanvas.h
+        PATHS ${XER_SKIA_0_INCLUDE_DIRS} PATH_SUFFIXES include/core)
     list(APPEND _xer_skia_inc
         "${XER_SKIA_INC_CORE}" "${XER_SKIA_INC_FULL}" "${XER_SKIA_INC_FLAT}")
     list(REMOVE_DUPLICATES _xer_skia_inc)

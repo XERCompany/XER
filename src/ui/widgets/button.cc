@@ -105,10 +105,16 @@ void Button::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
     };
 
     if (!IsEnabled()) {
-        fill_color = tokens.muted;
+        // Disabled reads as a muted control, not a filled block: recessed
+        // secondary fill + hairline border + dimmed text. Ghost/Outline stay
+        // unfilled so they don't turn into gray pills.
+        const bool flat = style_ == ButtonStyle::Ghost ||
+                          style_ == ButtonStyle::Outline;
+        has_fill = !flat;
+        fill_color = tokens.secondary;
         stroke_color = tokens.border;
-        text_color = tokens.background;
-        has_stroke = true;
+        text_color = tokens.disabled;
+        has_stroke = !flat || style_ == ButtonStyle::Outline;
     } else {
         // Loading keeps the resting style colors; the spinner carries state.
         switch (style_) {
@@ -121,12 +127,14 @@ void Button::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
                 text_color = tokens.accent_foreground;
                 break;
             case ButtonStyle::Secondary:
-                fill_color = lerp(tokens.surface, tokens.hover, hov);
-                stroke_color = tokens.border;
+                // shadcn secondary: quiet zinc fill, no border — hover lifts
+                // one step toward `pressed`.
+                fill_color = lerp(tokens.secondary, tokens.pressed, hov);
                 text_color = tokens.foreground;
-                has_stroke = true;
                 break;
             case ButtonStyle::Outline:
+                // shadcn outline: transparent + hairline border; hover
+                // introduces a quiet secondary fill.
                 has_fill = hov > 0.01f;
                 fill_color = lerp(tokens.surface, tokens.hover, hov);
                 stroke_color = tokens.border;

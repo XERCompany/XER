@@ -14,6 +14,7 @@
 #include <map>
 #include <set>
 
+#include "generated_source.h"
 #include "video_effects.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
@@ -232,6 +233,169 @@ inline void CrossfadePixel(const std::uint8_t* u, const std::uint8_t* o,
 }
 
 // ------------------------------------------------------------------
+// Mask helpers — soft coverage in clip-frame pixel coordinates.
+// ------------------------------------------------------------------
+
+// Signed distance (pixels) to the mask shape's boundary at sample
+// point (px, py): negative inside. Rect uses exact box distance (the
+// larger of the two axis distances); ellipse approximates by
+// normalized radius scaled by the smaller half-axis (exact for
+// circles, close enough for a feathered edge). Non-finite or
+// non-positive-size masks report +infinity (never inside).
+double MaskSignedDistance(const ClipMask& mask, int w, int h,
+                          double px, double py) {
+    const double cx = static_cast<double>(mask.cx) * w;
+    const double cy = static_cast<double>(mask.cy) * h;
+    const double mw = static_cast<double>(mask.w) * w;
+    const double mh = static_cast<double>(mask.h) * h;
+    if (!std::isfinite(cx) || !std::isfinite(cy) ||
+        !std::isfinite(mw) || !std::isfinite(mh) || !(mw > 0.0) ||
+        !(mh > 0.0)) {
+        return std::numeric_limits<double>::infinity();
+    }
+    const double dx = px - cx;
+    const double dy = py - cy;
+    if (mask.shape == MaskShape::Rect) {
+        return std::max(std::fabs(dx) - mw * 0.5,
+                        std::fabs(dy) - mh * 0.5);
+    }
+    const double rx = mw * 0.5;
+    const double ry = mh * 0.5;
+    const double qx = dx / rx;
+    const double qy = dy / ry;
+    return (std::sqrt(qx * qx + qy * qy) - 1.0) * std::min(rx, ry);
+}
+
+// Coverage [0,1] of one mask at pixel-center (px, py): a linear ramp
+// of feather*min(w_px, h_px) pixels centered on the shape boundary
+// (feather 0 -> hard edge at the boundary). inverted flips it. A
+// degenerate mask covers nothing (or everything when inverted).
+double MaskCoverage(const ClipMask& mask, int w, int h,
+                    double px, double py) {
+    const double mw = static_cast<double>(mask.w) * w;
+    const double mh = static_cast<double>(mask.h) * h;
+    double feather =
+        std::max(0.0, static_cast<double>(mask.feather)) *
+        std::min(mw, mh);
+    if (!std::isfinite(feather)) {
+        feather = 0.0;
+    }
+    const double d = MaskSignedDistance(mask, w, h, px, py);
+    double coverage;
+    if (!std::isfinite(d)) {
+        coverage = 0.0;
+    } else if (feather > 0.0) {
+        coverage = std::clamp(0.5 - d / feather, 0.0, 1.0);
+    } else {
+        coverage = d < 0.0 ? 1.0 : 0.0;
+    }
+    return mask.inverted ? 1.0 - coverage : coverage;
+}
+
+// ------------------------------------------------------------------
+// Blend helpers — W3C-style separable blend modes, normalized 0..1.
+// ------------------------------------------------------------------
+
+// One blend channel: b = backdrop norm, s = source norm. Normal
+// returns the source unchanged (callers keep a dedicated alpha-over
+// fast path for it anyway).
+inline double BlendChannelValue(BlendMode mode, double b, double s) {
+    switch (mode) {
+        case BlendMode::Add:
+            return std::min(1.0, b + s);
+        case BlendMode::Multiply:
+            return b * s;
+        case BlendMode::Screen:
+            return 1.0 - (1.0 - b) * (1.0 - s);
+        case BlendMode::Overlay:
+            return b <= 0.5 ? 2.0 * b * s
+                            : 1.0 - 2.0 * (1.0 - b) * (1.0 - s);
+        case BlendMode::Darken:
+            return std::min(b, s);
+        case BlendMode::Lighten:
+            return std::max(b, s);
+        default:
+            return s;   // Normal + any future mode: source
+    }
+}
+
+// ------------------------------------------------------------------
+// CPU-only ClipEffect helpers — src/video has no chroma-key, color
+// balance, or posterize primitive, so these run per-pixel here on
+// packed BGRA8 straight-alpha frames (same contract as the rest of
+// the pipeline; alpha is never touched unless documented).
+// ------------------------------------------------------------------
+
+// Chroma key: pixels within `tolerance` of the key color (Euclidean
+// distance in RGB, 0..~441 range) become transparent; `softness`
+// feathers the cutoff —
+//   keep = smoothstep(tolerance - softness, tolerance + softness, d)
+// multiplying the EXISTING alpha (keying never restores it). RGB is
+// left as-is (no despill — a spill pass can be stacked as another
+// effect if needed).
+void ApplyChromaKeyPixels(video::Frame* frame, double key_r,
+                          double key_g, double key_b, double tolerance,
+                          double softness) {
+    const int count = frame->Width() * frame->Height();
+    std::uint8_t* px = frame->Data();
+    const double lo = tolerance - softness;
+    const double hi = tolerance + softness;
+    for (int i = 0; i < count; ++i) {
+        std::uint8_t* p = px + static_cast<std::size_t>(i) * 4u;
+        if (p[3] == 0) {
+            continue;   // already transparent — nothing to key
+        }
+        const double dr = static_cast<double>(p[2]) - key_r;
+        const double dg = static_cast<double>(p[1]) - key_g;
+        const double db = static_cast<double>(p[0]) - key_b;
+        const double dist =
+            std::sqrt(dr * dr + dg * dg + db * db);
+        double keep;
+        if (hi <= lo) {
+            keep = dist > tolerance ? 1.0 : 0.0;   // hard edge
+        } else {
+            const double t =
+                std::clamp((dist - lo) / (hi - lo), 0.0, 1.0);
+            keep = t * t * (3.0 - 2.0 * t);   // smoothstep
+        }
+        p[3] = Clamp8(p[3] * keep);
+    }
+}
+
+// Lift/gain color balance (Premiere-style shadow/lift + gain):
+//   out_c = clamp(in_c * gain_c + lift_c * 255)
+// per RGB channel; alpha untouched. `lift`/`gain` are indexed
+// {r, g, b} — BGRA byte order means channel 2 is R.
+void ApplyColorBalancePixels(video::Frame* frame, const double lift[3],
+                             const double gain[3]) {
+    const int count = frame->Width() * frame->Height();
+    std::uint8_t* px = frame->Data();
+    for (int i = 0; i < count; ++i) {
+        std::uint8_t* p = px + static_cast<std::size_t>(i) * 4u;
+        for (int c = 0; c < 3; ++c) {
+            const int rgb = 2 - c;   // pixel channel for {r,g,b}[c]
+            p[rgb] = Clamp8(p[rgb] * gain[c] + lift[c] * 255.0);
+        }
+    }
+}
+
+// Posterize: each RGB channel quantized to `levels` evenly spaced
+// values in [0,255] — out = round(in*(L-1)/255) * 255/(L-1). Alpha
+// untouched. `levels` is pre-clamped to [2,256] by the dispatcher.
+void ApplyPosterizePixels(video::Frame* frame, int levels) {
+    const int count = frame->Width() * frame->Height();
+    std::uint8_t* px = frame->Data();
+    const double steps = static_cast<double>(levels - 1);
+    for (int i = 0; i < count; ++i) {
+        std::uint8_t* p = px + static_cast<std::size_t>(i) * 4u;
+        for (int c = 0; c < 3; ++c) {
+            p[c] = Clamp8(std::lround(p[c] * steps / 255.0) *
+                          (255.0 / steps));
+        }
+    }
+}
+
+// ------------------------------------------------------------------
 // Decode session state
 // ------------------------------------------------------------------
 
@@ -285,6 +449,7 @@ const std::set<std::string>& KnownEffectTypes() {
         "sharpen",            "edge_detect", "emboss",
         "vignette",           "chromatic_aberration",
         "pixelate",           "oil_paint",   "motion_blur",
+        "chroma_key",         "color_balance", "posterize",
     };
     return types;
 }
@@ -709,6 +874,42 @@ struct Compositor::Impl {
                 video::VideoEffects::MotionBlur(
                     frame, EffectParamDouble(effect, 0, 0.0),
                     std::max(0, EffectParamInt(effect, 1, 10)));
+            } else if (type == "chroma_key") {
+                // {key_r, key_g, key_b} in 0-255, {tolerance,
+                // softness} in RGB-distance units (max ~441).
+                const double kr = std::clamp(
+                    EffectParamDouble(effect, 0, 0.0), 0.0, 255.0);
+                const double kg = std::clamp(
+                    EffectParamDouble(effect, 1, 255.0), 0.0, 255.0);
+                const double kb = std::clamp(
+                    EffectParamDouble(effect, 2, 0.0), 0.0, 255.0);
+                const double tolerance = std::clamp(
+                    EffectParamDouble(effect, 3, 120.0), 0.0, 600.0);
+                const double softness = std::clamp(
+                    EffectParamDouble(effect, 4, 40.0), 0.0, 600.0);
+                ApplyChromaKeyPixels(&frame, kr, kg, kb, tolerance,
+                                     softness);
+            } else if (type == "color_balance") {
+                // {lift_r,lift_g,lift_b} in [-1,1] (scaled x255),
+                // {gain_r,gain_g,gain_b} in [0,4].
+                double lift[3];
+                double gain[3];
+                for (int c = 0; c < 3; ++c) {
+                    lift[c] = std::clamp(
+                        EffectParamDouble(
+                            effect, static_cast<std::size_t>(c), 0.0),
+                        -1.0, 1.0);
+                    gain[c] = std::clamp(
+                        EffectParamDouble(
+                            effect, static_cast<std::size_t>(c + 3),
+                            1.0),
+                        0.0, 4.0);
+                }
+                ApplyColorBalancePixels(&frame, lift, gain);
+            } else if (type == "posterize") {
+                ApplyPosterizePixels(
+                    &frame,
+                    std::clamp(EffectParamInt(effect, 0, 4), 2, 256));
             }
         }
     }
@@ -732,51 +933,207 @@ struct Compositor::Impl {
                 return Fail(error_out, "clip layer allocation failed");
             }
         }
+        // Effective per-frame transform: keyframe-animated properties
+        // override the static transform fields at clip-local time
+        // u = t - timeline_start — NOT scaled by playback_rate (keys
+        // are timeline-local like Premiere).
+        const double u = t - clip.timeline_start;
+        const Transform effective = EffectiveTransformAt(clip, u);
         // Invisible clips skip decode entirely — the layer stays
-        // transparent (cheap bbox optimization).
-        if (clip.transform.opacity <= 0.0f ||
-            clip.transform.scale <= 0.0f) {
+        // transparent (cheap bbox optimization). Uses the EFFECTIVE
+        // transform so animated opacity/scale still gates decode.
+        if (effective.opacity <= 0.0f || effective.scale <= 0.0f) {
             ClearFrame(&s.layer);
             return true;
         }
-        // src_t = in_point + (t - timeline_start); handle regions read
-        // into the source (clamped to [0, media_duration] when the
-        // duration is known — decoder EOF covers the unknown case).
-        double src_t = clip.in_point + (t - clip.timeline_start);
-        if (src_t < 0.0) {
-            src_t = 0.0;
+        if (clip.is_adjustment) {
+            return RenderAdjustmentLayer(s, clip, effective, error_out);
         }
-        if (s.media_duration > 0.0 && src_t > s.media_duration) {
-            src_t = s.media_duration;
-        }
-        const FrameSlot* slot = nullptr;
-        const EnsureResult result =
-            EnsureFrame(s, src_t, &slot, error_out);
-        if (result == EnsureResult::kError) {
-            return false;
-        }
-        if (result == EnsureResult::kNoContent) {
-            ClearFrame(&s.layer);
-            return true;
-        }
-        // Materialize the selected frame (slot buffers hold the
-        // pristine decode; s.frame is the per-call scratch the effect
-        // chain may destroy — it is re-copied next call).
-        if (s.frame.Width() != slot->width ||
-            s.frame.Height() != slot->height ||
-            s.frame.Format() != video::PixelFormat::BGRA8) {
-            s.frame.Release();
-            if (!s.frame.Allocate(slot->width, slot->height,
-                                  video::PixelFormat::BGRA8)) {
-                return Fail(error_out, "clip frame allocation failed");
+        if (IsGeneratedSource(clip.source)) {
+            // Generated clips (matte/bars/text) never open a decoder:
+            // the intrinsic frame is produced procedurally — matte
+            // and bars at canvas size, text at its measured size —
+            // then effects/masks/warp/blend apply exactly like they
+            // do on decoded media. Regenerated every call so the
+            // effect chain always starts from pristine pixels (it
+            // destroys s.frame in place).
+            if (!GenerateSourceFrame(clip, u, canvas_w, canvas_h,
+                                     &s.frame)) {
+                return Fail(error_out, "clip '" + clip.id +
+                                       "': generated source failed");
             }
+        } else {
+            // src_t = in_point + (t - timeline_start) * playback_rate;
+            // handle regions read into the source (clamped to
+            // [0, media_duration] when the duration is known — decoder
+            // EOF covers the unknown case). A non-finite or
+            // non-positive rate falls back to 1.0 rather than
+            // propagating NaN pts targets.
+            const double rate =
+                std::isfinite(clip.playback_rate) &&
+                        clip.playback_rate > 0.0
+                    ? clip.playback_rate
+                    : 1.0;
+            double src_t =
+                clip.in_point + (t - clip.timeline_start) * rate;
+            if (src_t < 0.0) {
+                src_t = 0.0;
+            }
+            if (s.media_duration > 0.0 && src_t > s.media_duration) {
+                src_t = s.media_duration;
+            }
+            const FrameSlot* slot = nullptr;
+            const EnsureResult result =
+                EnsureFrame(s, src_t, &slot, error_out);
+            if (result == EnsureResult::kError) {
+                return false;
+            }
+            if (result == EnsureResult::kNoContent) {
+                ClearFrame(&s.layer);
+                return true;
+            }
+            // Materialize the selected frame (slot buffers hold the
+            // pristine decode; s.frame is the per-call scratch the
+            // effect chain may destroy — it is re-copied next call).
+            if (s.frame.Width() != slot->width ||
+                s.frame.Height() != slot->height ||
+                s.frame.Format() != video::PixelFormat::BGRA8) {
+                s.frame.Release();
+                if (!s.frame.Allocate(slot->width, slot->height,
+                                      video::PixelFormat::BGRA8)) {
+                    return Fail(error_out,
+                                "clip frame allocation failed");
+                }
+            }
+            std::memcpy(s.frame.Data(), slot->pixels.data(),
+                        slot->pixels.size());
         }
-        std::memcpy(s.frame.Data(), slot->pixels.data(),
-                    slot->pixels.size());
         ApplyClipEffects(s, clip.effects);
-        if (!WarpClipFrame(s.frame, clip.transform, canvas_w, canvas_h,
+        // Masks multiply the clip frame's alpha AFTER the effect
+        // chain and BEFORE the warp — they are defined in clip-frame
+        // fractions, so warping first would smear the coordinates.
+        if (!clip.masks.empty() &&
+            !ApplyMaskPixels(&s.frame, clip.masks)) {
+            return Fail(error_out, "clip mask apply failed");
+        }
+        if (!WarpClipFrame(s.frame, effective, canvas_w, canvas_h,
                            &s.layer)) {
             return Fail(error_out, "clip warp failed");
+        }
+        return true;
+    }
+
+    // Premiere-style adjustment layer: the clip owns no pixels — its
+    // effect+mask chain runs on a snapshot of the already-composited
+    // canvas (everything stacked BELOW its track at this instant —
+    // tracks composite bottom->top and this method runs inside that
+    // loop), then the result is written back through the clip's
+    // transform rect. This is a REGION crop, not a resample: canvas
+    // pixel (x,y) inside the footprint takes the effected value of
+    // (x,y), so transform.scale/rotation move the coverage only and
+    // the underlying pixels are never stretched. The returned layer
+    // then rides the normal blend-mode/opacity composite like any
+    // other clip layer.
+    bool RenderAdjustmentLayer(ClipSession& s, const Clip& clip,
+                               const Transform& effective,
+                               std::string* error_out) {
+        // Snapshot the current canvas into the per-session scratch —
+        // ApplyClipEffects destroys s.frame in place, so this copy
+        // must happen every call (same contract as generated clips).
+        if (s.frame.Width() != canvas_w || s.frame.Height() != canvas_h ||
+            s.frame.Format() != video::PixelFormat::BGRA8) {
+            s.frame.Release();
+            if (!s.frame.Allocate(canvas_w, canvas_h,
+                                  video::PixelFormat::BGRA8)) {
+                return Fail(error_out,
+                            "adjustment snapshot allocation failed");
+            }
+        }
+        std::memcpy(s.frame.Data(), canvas.Data(), canvas.DataSize());
+        ApplyClipEffects(s, clip.effects);
+        // Masks behave exactly as on normal clips: clip-frame
+        // fractions — and the adjustment "clip frame" IS the canvas,
+        // so fractions map 1:1 onto canvas space.
+        if (!clip.masks.empty() &&
+            !ApplyMaskPixels(&s.frame, clip.masks)) {
+            return Fail(error_out, "clip mask apply failed");
+        }
+
+        // Coverage footprint: the same rect geometry WarpClipFrame
+        // computes for a canvas-size source — (canvas_w*scale x
+        // canvas_h*scale) with its top-left at
+        // (offset_x*canvas_w, offset_y*canvas_h), rotated
+        // rotation_deg about its center.
+        const double scale = static_cast<double>(effective.scale);
+        const double dw = canvas_w * scale;
+        const double dh = canvas_h * scale;
+        const double cx =
+            effective.offset_x * canvas_w + dw * 0.5;
+        const double cy =
+            effective.offset_y * canvas_h + dh * 0.5;
+        const double theta =
+            static_cast<double>(effective.rotation_deg) * kPi / 180.0;
+        const double cos_t = std::cos(theta);
+        const double sin_t = std::sin(theta);
+        const double half_dw = dw * 0.5;
+        const double half_dh = dh * 0.5;
+        const double opacity = std::clamp(
+            static_cast<double>(effective.opacity), 0.0, 1.0);
+
+        // Integer bbox of the rotated rect (forward-transform the
+        // four corners, floor/ceil, clamp) — same math as the warp.
+        double min_x = std::numeric_limits<double>::infinity();
+        double min_y = std::numeric_limits<double>::infinity();
+        double max_x = -std::numeric_limits<double>::infinity();
+        double max_y = -std::numeric_limits<double>::infinity();
+        for (int i = 0; i < 4; ++i) {
+            const double ux = (i & 1) != 0 ? half_dw : -half_dw;
+            const double uy = (i & 2) != 0 ? half_dh : -half_dh;
+            const double vx = ux * cos_t - uy * sin_t;
+            const double vy = ux * sin_t + uy * cos_t;
+            min_x = std::min(min_x, cx + vx);
+            min_y = std::min(min_y, cy + vy);
+            max_x = std::max(max_x, cx + vx);
+            max_y = std::max(max_y, cy + vy);
+        }
+        ClearFrame(&s.layer);
+        if (min_x > max_x || min_y > max_y) {
+            return true;   // fully offscreen — transparent layer
+        }
+        const int bx0 = std::clamp(
+            static_cast<int>(std::floor(min_x)), 0, canvas_w - 1);
+        const int bx1 = std::clamp(
+            static_cast<int>(std::ceil(max_x)), 0, canvas_w - 1);
+        const int by0 = std::clamp(
+            static_cast<int>(std::floor(min_y)), 0, canvas_h - 1);
+        const int by1 = std::clamp(
+            static_cast<int>(std::ceil(max_y)), 0, canvas_h - 1);
+        if (bx1 < bx0 || by1 < by0) {
+            return true;
+        }
+
+        const std::uint8_t* spx = s.frame.Data();
+        std::uint8_t* dpx = s.layer.Data();
+        for (int y = by0; y <= by1; ++y) {
+            for (int x = bx0; x <= bx1; ++x) {
+                // Inside test in the rect's rotated space — identical
+                // to WarpClipFrame's inverse map, minus the sampling.
+                const double vx = x + 0.5 - cx;
+                const double vy = y + 0.5 - cy;
+                const double ux = vx * cos_t + vy * sin_t;
+                const double uy = -vx * sin_t + vy * cos_t;
+                if (std::fabs(ux) > half_dw ||
+                    std::fabs(uy) > half_dh) {
+                    continue;
+                }
+                const std::size_t i =
+                    (static_cast<std::size_t>(y) * canvas_w + x) * 4u;
+                // Straight alpha: RGB passes through, alpha scales.
+                dpx[i + 0] = spx[i + 0];
+                dpx[i + 1] = spx[i + 1];
+                dpx[i + 2] = spx[i + 2];
+                dpx[i + 3] = Clamp8(spx[i + 3] * opacity);
+            }
         }
         return true;
     }
@@ -873,12 +1230,14 @@ struct Compositor::Impl {
             }
 
             const video::Frame* layer = nullptr;
+            BlendMode layer_mode = BlendMode::Normal;
             if (candidates_scratch.size() == 1) {
                 ClipSession* s = candidates_scratch.front();
                 if (!RenderClipLayer(*s, tc, error_out)) {
                     return false;
                 }
                 layer = &s->layer;
+                layer_mode = s->clip->blend_mode;
             } else {
                 // >=2 candidates: a stored transition whose window
                 // contains t AND whose endpoints are both candidates
@@ -929,6 +1288,8 @@ struct Compositor::Impl {
                     }
                     const Clip* from_clip =
                         FindClip(project_, transition->from_clip);
+                    const Clip* to_clip =
+                        FindClip(project_, transition->to_clip);
                     const double cut = ClipEndSeconds(*from_clip);
                     const double weight =
                         TransitionWeightAt(tc, *transition, cut);
@@ -940,6 +1301,15 @@ struct Compositor::Impl {
                                     "transition compositing failed");
                     }
                     layer = &transition_scratch;
+                    // The merged transition layer is a single clip
+                    // stand-in: it carries the blend mode of whichever
+                    // endpoint dominates at this weight, so the
+                    // composite is continuous at BOTH window edges
+                    // (w->0 is `from`, w->1 is `to`).
+                    layer_mode =
+                        weight < 0.5 || to_clip == nullptr
+                            ? from_clip->blend_mode
+                            : to_clip->blend_mode;
                 } else {
                     WarnAmbiguousOnce(tc);
                     ClipSession* pick =
@@ -948,10 +1318,20 @@ struct Compositor::Impl {
                         return false;
                     }
                     layer = &pick->layer;
+                    layer_mode = pick->clip->blend_mode;
                 }
             }
             if (layer != nullptr && layer->IsValid()) {
-                AlphaOverFrame(&canvas, *layer);
+                // Normal keeps the dedicated alpha-over path; every
+                // other BlendMode goes through the W3C-style blend
+                // composite (identical math for Normal, so no
+                // regression).
+                if (layer_mode == BlendMode::Normal) {
+                    AlphaOverFrame(&canvas, *layer);
+                } else if (!ApplyBlendModePixels(layer_mode, &canvas,
+                                                 *layer)) {
+                    return Fail(error_out, "blend compositing failed");
+                }
             }
         }
 
@@ -1060,7 +1440,122 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
         }
         return true;
     }
+    if (type == Transition::Type::DipToBlack ||
+        type == Transition::Type::DipToWhite) {
+        // Through-solid dip: the first half fades `under` into the
+        // solid frame, the second half fades `over` out of it. The
+        // solid is opaque, so a faded layer over it collapses to a
+        // straight rgb lerp toward the solid and the output alpha is
+        // always 255.
+        const std::uint8_t solid =
+            type == Transition::Type::DipToBlack ? 0 : 255;
+        const bool first_half = w < 0.5;
+        const std::uint8_t* lay = first_half ? u : o;
+        const double fade =
+            first_half ? (1.0 - 2.0 * w) : (2.0 * w - 1.0);
+        const int count = width * height;
+        for (int i = 0; i < count; ++i) {
+            const std::uint8_t* lp = lay + i * 4;
+            const double sa = (lp[3] / 255.0) * fade;
+            std::uint8_t* dp = d + i * 4;
+            dp[0] = Clamp8(lp[0] * sa + solid * (1.0 - sa));
+            dp[1] = Clamp8(lp[1] * sa + solid * (1.0 - sa));
+            dp[2] = Clamp8(lp[2] * sa + solid * (1.0 - sa));
+            dp[3] = 255;
+        }
+        return true;
+    }
+    if (type == Transition::Type::AdditiveDissolve) {
+        // Additive dissolve: straight (non-premultiplied) sum of the
+        // weighted contributions on ALL four channels — unlike
+        // CrossfadePixel the rgb channels are not alpha-weighted, so
+        // semi-transparent layers still add their full color.
+        const int count = width * height;
+        for (int i = 0; i < count; ++i) {
+            for (int c = 0; c < 4; ++c) {
+                d[i * 4 + c] =
+                    Clamp8(u[i * 4 + c] * iw + o[i * 4 + c] * w);
+            }
+        }
+        return true;
+    }
     return false;   // unknown transition type
+}
+
+bool ApplyMaskPixels(video::Frame* frame,
+                     const std::vector<ClipMask>& masks) {
+    if (frame == nullptr || !frame->IsValid() ||
+        frame->Format() != video::PixelFormat::BGRA8) {
+        return false;
+    }
+    if (masks.empty()) {
+        return true;   // no-op — frame untouched
+    }
+    const int w = frame->Width();
+    const int h = frame->Height();
+    std::uint8_t* px = frame->Data();
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            double coverage = 1.0;
+            for (const ClipMask& mask : masks) {
+                coverage *=
+                    MaskCoverage(mask, w, h, x + 0.5, y + 0.5);
+                if (coverage <= 0.0) {
+                    break;   // already fully masked out
+                }
+            }
+            // Straight alpha: RGB passes through, A scales.
+            std::uint8_t* p =
+                px + (static_cast<std::size_t>(y) * w + x) * 4u;
+            p[3] = Clamp8(p[3] * coverage);
+        }
+    }
+    return true;
+}
+
+bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
+                          const video::Frame& src) {
+    if (dst == nullptr || !dst->IsValid() || !src.IsValid() ||
+        dst->Format() != video::PixelFormat::BGRA8 ||
+        src.Format() != video::PixelFormat::BGRA8 ||
+        dst->Width() != src.Width() ||
+        dst->Height() != src.Height()) {
+        return false;
+    }
+    if (mode == BlendMode::Normal) {
+        AlphaOverFrame(dst, src);   // identical math, dedicated path
+        return true;
+    }
+    const int count = dst->Width() * dst->Height();
+    std::uint8_t* d = dst->Data();
+    const std::uint8_t* s = src.Data();
+    for (int i = 0; i < count; ++i) {
+        const std::uint8_t* sp = s + i * 4;
+        std::uint8_t* dp = d + i * 4;
+        const double sa = sp[3] / 255.0;
+        if (sa <= 0.0) {
+            continue;   // transparent source leaves dst untouched
+        }
+        const double da = dp[3] / 255.0;
+        const double oa = sa + da * (1.0 - sa);
+        if (oa <= 1e-9) {
+            dp[0] = dp[1] = dp[2] = dp[3] = 0;
+            continue;
+        }
+        const double keep = da * (1.0 - sa);
+        for (int c = 0; c < 3; ++c) {
+            const double sn = sp[c] / 255.0;
+            const double dn = dp[c] / 255.0;
+            const double cb = BlendChannelValue(mode, dn, sn);
+            // Effective source color lerped between the blend result
+            // and the raw source by the source coverage, then a
+            // standard alpha-over combine onto the backdrop.
+            const double eff = sa * cb + (1.0 - sa) * sn;
+            dp[c] = Clamp8(255.0 * (sa * eff + keep * dn) / oa);
+        }
+        dp[3] = Clamp8(oa * 255.0);
+    }
+    return true;
 }
 
 bool WarpClipFrame(const video::Frame& src, const Transform& tr,

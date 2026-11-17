@@ -3,10 +3,17 @@
 // Pipeline per the Phase-1B spec: VideoDecoder seek to the requested
 // clip position -> NextFrame -> FrameExporter::ToFile (PNG only —
 // FrameExporter has no JPEG path; the spec's ".jpg" catalog name is
-// illustrative).
+// illustrative). GetPosterAt (Phase 2, spec §5) is the in-memory
+// variant: same seek/decode path, but returns the decoded video::Frame
+// directly and falls back to the mid-stream frame when the requested
+// time is out of range.
 #pragma once
 
 #include <string>
+
+namespace video {
+class Frame;  // src/video/frame.h — out-param only, forward-declared
+}
 
 namespace XER::VideoEditor {
 
@@ -24,6 +31,19 @@ public:
                         double seek_seconds,
                         const std::string& utf8_out_png_path,
                         std::string* error_out = nullptr);
+
+    // In-memory poster at an arbitrary source time (Phase 2 spec §5).
+    // Decodes the frame nearest `seconds` into `frame_out` (packed
+    // BGRA8). Unlike Extract's clamp, an out-of-range `seconds`
+    // (< 0 or beyond the probed duration) falls back to the
+    // mid-stream frame — the catalog's default poster position.
+    // Returns false with error_out set for a null frame_out, a missing
+    // file, an audio-only container, or when no frame decodes.
+    // Stateless/static — callers own concurrency.
+    static bool GetPosterAt(const std::string& utf8_source_path,
+                            double seconds,
+                            video::Frame* frame_out,
+                            std::string* error_out = nullptr);
 };
 
 }  // namespace XER::VideoEditor

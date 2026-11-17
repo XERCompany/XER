@@ -6,7 +6,10 @@
 #include "include/core/SkStream.h"
 #include "include/core/SkBitmap.h"
 
-#if __has_include("modules/skottie/include/Skottie.h") || __has_include(<modules/skottie/include/Skottie.h>)
+// MSYS2 skia ships Skottie.h but not the private src/core/SkTHash.h it
+// transitively requires, so probe both.
+#if (__has_include("modules/skottie/include/Skottie.h") || __has_include(<modules/skottie/include/Skottie.h>)) && \
+    (__has_include("src/core/SkTHash.h") || __has_include(<src/core/SkTHash.h>))
 #define ENGINE_SKIA_HAS_SKOTTIE 1
 #include "modules/skottie/include/Skottie.h"
 #endif

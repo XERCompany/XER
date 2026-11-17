@@ -91,7 +91,19 @@ add_executable(XER_VideoEditor_Tests
     video/video_editor_poster_tests.cc
     video/video_editor_decoder_tests.cc
     video/video_editor_compositor_tests.cc
+    video/video_editor_compositor2_tests.cc
     video/video_editor_mixer_tests.cc
+    video/video_editor_export_tests.cc
+    video/video_editor_export_preset_tests.cc
+    video/video_editor_vst3_tests.cc
+    video/video_editor_lab_tests.cc
+    video/video_editor_lab2_tests.cc
+    video/video_editor_playback_tests.cc
+    video/video_editor_ops_tests.cc
+    video/video_editor_generated_export_tests.cc
+    video/video_editor_model2_tests.cc
+    video/video_editor_timecode_tests.cc
+    video/video_editor_autosave_tests.cc
 )
 target_link_libraries(XER_VideoEditor_Tests PRIVATE XER_VideoEditor_Core)
 target_compile_features(XER_VideoEditor_Tests PRIVATE cxx_std_23)

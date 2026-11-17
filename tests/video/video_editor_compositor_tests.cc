@@ -22,6 +22,7 @@
 
 #include "video_editor_test_util.h"
 #include "compositor.h"
+#include "generated_source.h"
 #include "helper/path_utils.h"
 #include "media_decoder.h"
 #include "timeline_model.h"
@@ -30,14 +31,21 @@
 namespace {
 namespace Path = XER::Helper::Path;  // UTF-8 <-> fs::path helpers
 namespace FFmpeg = XER::Bridge::FFmpeg;
+using XER::VideoEditor::BlendMode;
 using XER::VideoEditor::Clip;
 using XER::VideoEditor::ClipEffect;
+using XER::VideoEditor::ClipMask;
 using XER::VideoEditor::Compositor;
 using XER::VideoEditor::CompositorOptions;
 using XER::VideoEditor::IMediaDecoder;
+using XER::VideoEditor::KeyEase;
+using XER::VideoEditor::Keyframe;
+using XER::VideoEditor::KeyProp;
+using XER::VideoEditor::MaskShape;
 using XER::VideoEditor::MediaDecoderFactory;
 using XER::VideoEditor::MediaDecoderPtr;
 using XER::VideoEditor::Project;
+using XER::VideoEditor::SourceKind;
 using XER::VideoEditor::Track;
 using XER::VideoEditor::TrackKind;
 using XER::VideoEditor::Transform;
@@ -326,6 +334,26 @@ Transition MakeTransition(const std::string& from,
     t.type = type;
     t.duration = duration;
     return t;
+}
+
+// Procedural clip — no source_path, the decoder factory must never be
+// touched for it (the render succeeding with an EMPTY fake bank is
+// itself the "no session" assertion).
+Clip MakeGeneratedClip(const std::string& id, int track, double start,
+                       double duration, SourceKind kind,
+                       const std::string& param) {
+    Clip c = MakeClip(id, track, start, duration, "");
+    c.source.kind = kind;
+    c.source.param = param;
+    return c;
+}
+
+int TotalOpens(const FakeBank& bank) {
+    int total = 0;
+    for (const auto& entry : bank.open_counts) {
+        total += entry.second;
+    }
+    return total;
 }
 
 // ------------------------------------------------------------------
@@ -1331,6 +1359,733 @@ void TestFFmpegIntegration() {
     XER_VE_CHECK(comp.RenderFrameAt(0.2, &out, &err));
 }
 
+// ------------------------------------------------------------------
+// Suite 8: playback_rate — the source-time map is rate-scaled
+// ------------------------------------------------------------------
+void TestPlaybackRate() {
+    // rate 2.0: t=0.25 -> src 0.5 -> frame idx12 (pts 0.5) -> R=12;
+    // the same timeline point at rate 1.0 would read src 0.25.
+    {
+        Project p = MakeCanvasProject();
+        Clip c = MakeClip("fast", 0, 0.0, 1.0, "fake://ramp");
+        c.playback_rate = 2.0;
+        p.clips.push_back(c);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        RegisterSpec(rig, "fake://ramp",
+                     MakeRampSpec(16, 16, 24.0, 72, 10, 200, 0, 1));
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.25, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 10, 200, 12, 255));
+        // t=0.75 -> src 1.5 -> idx36 -> R=36.
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.75, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 10, 200, 36, 255));
+    }
+
+    // rate 0.5: consumes half speed — t=0.5 -> src 0.25 -> idx6 -> R=6.
+    {
+        Project p = MakeCanvasProject();
+        Clip c = MakeClip("slow", 0, 0.0, 1.0, "fake://ramp");
+        c.playback_rate = 0.5;
+        p.clips.push_back(c);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        RegisterSpec(rig, "fake://ramp",
+                     MakeRampSpec(16, 16, 24.0, 72, 10, 200, 0, 1));
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 10, 200, 6, 255));
+    }
+
+    // rate with in_point: src = in + (t-start)*rate.
+    {
+        Project p = MakeCanvasProject();
+        Clip c = MakeClip("off", 0, 0.0, 0.5, "fake://ramp", 1.0);
+        c.playback_rate = 2.0;
+        p.clips.push_back(c);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        RegisterSpec(rig, "fake://ramp",
+                     MakeRampSpec(16, 16, 24.0, 72, 10, 200, 0, 1));
+        std::vector<std::uint8_t> out;
+        std::string err;
+        // t=0.25 -> src = 1.0 + 0.25*2 = 1.5 -> idx36 -> R=36.
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.25, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 10, 200, 36, 255));
+    }
+}
+
+// ------------------------------------------------------------------
+// Suite 9: keyframes — EffectiveTransformAt drives the warp
+// ------------------------------------------------------------------
+void TestKeyframes() {
+    Project p = MakeCanvasProject();
+    Clip c = MakeClip("kf", 0, 0.0, 1.0, "fake://red");
+    // Opacity 0 -> 1 over [0, 0.5] clip-local; PosX 0 -> 0.5 over
+    // [0, 1.0]. Both linear.
+    c.keyframes[KeyProp::Opacity] = {
+        Keyframe{0.0, 0.0f, KeyEase::Linear},
+        Keyframe{0.5, 1.0f, KeyEase::Linear}};
+    c.keyframes[KeyProp::PosX] = {
+        Keyframe{0.0, 0.0f, KeyEase::Linear},
+        Keyframe{1.0, 0.5f, KeyEase::Linear}};
+    p.clips.push_back(c);
+    Rig rig = MakeRig(p);
+    XER_VE_CHECK(rig.init_ok);
+    RegisterSpec(rig, "fake://red",
+                 MakeSolidSpecAuto(16, 16, 4.0, 4, kRed));
+    std::vector<std::uint8_t> out;
+    std::string err;
+    // u=0.25: opacity ~0.5, offset_x ~0.125 -> rect x >= 2 px.
+    XER_VE_CHECK(rig.comp->RenderFrameAt(0.25, &out, &err));
+    XER_VE_CHECK(VecPxIs(out, 16, 0, 8, 0, 0, 0, 255));       // outside rect
+    XER_VE_CHECK(VecPxIs(out, 16, 1, 8, 0, 0, 0, 255));
+    // inside: red@~0.5 over opaque black -> ~(5,10,100).
+    XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 5, 10, 100, 255, 4));
+    // u=0.5: opacity = 1.0 (second key), offset_x = 0.25 -> x >= 4.
+    XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+    XER_VE_CHECK(VecPxIs(out, 16, 3, 8, 0, 0, 0, 255));
+    XER_VE_CHECK(VecPxIs(out, 16, 4, 8, 10, 20, 200, 255));
+    XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 10, 20, 200, 255));
+    // u=0.9: opacity holds at 1.0 (past last key), offset_x ~0.45.
+    XER_VE_CHECK(rig.comp->RenderFrameAt(0.9, &out, &err));
+    XER_VE_CHECK(VecPxIs(out, 16, 12, 8, 10, 20, 200, 255));
+
+    // Keyframe time is clip-LOCAL and NOT rate-stretched: rate 2.0 at
+    // t=0.25 -> u still 0.25 (same opacity) even though src = 0.5.
+    {
+        Project p2 = MakeCanvasProject();
+        Clip c2 = MakeClip("kfr", 0, 0.0, 1.0, "fake://red");
+        c2.playback_rate = 2.0;
+        c2.keyframes[KeyProp::Opacity] = {
+            Keyframe{0.0, 0.0f, KeyEase::Linear},
+            Keyframe{0.5, 1.0f, KeyEase::Linear}};
+        p2.clips.push_back(c2);
+        Rig rig2 = MakeRig(p2);
+        XER_VE_CHECK(rig2.init_ok);
+        RegisterSpec(rig2, "fake://red",
+                     MakeSolidSpecAuto(16, 16, 8.0, 8, kRed));
+        XER_VE_CHECK(rig2.comp->RenderFrameAt(0.25, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 5, 10, 100, 255, 4));
+    }
+}
+
+// ------------------------------------------------------------------
+// Suite 10: ApplyMaskPixels (pure) — rect/ellipse/inverted/feather
+// ------------------------------------------------------------------
+void TestMaskPixels() {
+    using XER::VideoEditor::ApplyMaskPixels;
+    // Rect, no feather: cx=cy=0.5, w=h=0.5 on 8x8 -> covers pixel
+    // centers in [2,6) x [2,6) -> x,y in {2,3,4,5}.
+    video::Frame f = MakeVideoFrame(8, 8, kRed);
+    ClipMask m;
+    m.shape = MaskShape::Rect;
+    m.cx = 0.5f;
+    m.cy = 0.5f;
+    m.w = 0.5f;
+    m.h = 0.5f;
+    m.feather = 0.0f;
+    XER_VE_CHECK(ApplyMaskPixels(&f, {m}));
+    XER_VE_CHECK(FramePxIs(f, 4, 4, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f, 2, 2, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f, 5, 5, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f, 0, 0, 10, 20, 200, 0));
+    XER_VE_CHECK(FramePxIs(f, 1, 1, 10, 20, 200, 0));
+    XER_VE_CHECK(FramePxIs(f, 6, 6, 10, 20, 200, 0));
+    XER_VE_CHECK(FramePxIs(f, 7, 7, 10, 20, 200, 0));
+
+    // Inverted flips inside/outside; RGB passes through.
+    video::Frame f2 = MakeVideoFrame(8, 8, kRed);
+    m.inverted = true;
+    XER_VE_CHECK(ApplyMaskPixels(&f2, {m}));
+    XER_VE_CHECK(FramePxIs(f2, 4, 4, 10, 20, 200, 0));
+    XER_VE_CHECK(FramePxIs(f2, 0, 0, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f2, 7, 4, 10, 20, 200, 255));
+
+    // Ellipse w=h=1.0 -> circle r=4 centered (4,4): corner outside,
+    // mid-edge inside.
+    video::Frame f3 = MakeVideoFrame(8, 8, kRed);
+    ClipMask e;
+    e.shape = MaskShape::Ellipse;
+    e.cx = 0.5f;
+    e.cy = 0.5f;
+    e.w = 1.0f;
+    e.h = 1.0f;
+    e.feather = 0.0f;
+    XER_VE_CHECK(ApplyMaskPixels(&f3, {e}));
+    XER_VE_CHECK(FramePxIs(f3, 4, 4, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f3, 0, 4, 10, 20, 200, 255));  // q=0.781 <1
+    XER_VE_CHECK(FramePxIs(f3, 4, 0, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f3, 0, 0, 10, 20, 200, 0));    // q=1.53 >1
+    XER_VE_CHECK(FramePxIs(f3, 7, 7, 10, 20, 200, 0));
+
+    // Feathered rect: feather=0.5 -> feather_px = 0.5*min(4,4) = 2px
+    // centered on the boundary. Row y=4 is fully inside vertically,
+    // so coverage is driven by x only:
+    //   x=0,7: d>=1.5 -> 0; x=1,6: d=0.5 -> 0.25 (~64);
+    //   x=2,5: d=-0.5 -> 0.75 (~191); x=3,4: d<=-1.5 -> 255.
+    video::Frame f4 = MakeVideoFrame(8, 8, kRed);
+    m.inverted = false;
+    m.feather = 0.5f;
+    XER_VE_CHECK(ApplyMaskPixels(&f4, {m}));
+    XER_VE_CHECK(FramePxIs(f4, 0, 4, 10, 20, 200, 0));
+    XER_VE_CHECK(FramePxIs(f4, 7, 4, 10, 20, 200, 0));
+    XER_VE_CHECK(FramePxNear(f4, 1, 4, 10, 20, 200, 64, 8));
+    XER_VE_CHECK(FramePxNear(f4, 6, 4, 10, 20, 200, 64, 8));
+    XER_VE_CHECK(FramePxNear(f4, 2, 4, 10, 20, 200, 191, 8));
+    XER_VE_CHECK(FramePxNear(f4, 5, 4, 10, 20, 200, 191, 8));
+    XER_VE_CHECK(FramePxIs(f4, 3, 4, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f4, 4, 4, 10, 20, 200, 255));
+
+    // Multiple masks multiply: m (x in 2..5) AND right-half rect
+    // (x >= 4) -> only x in {4,5} at y in {2..5} keeps alpha.
+    video::Frame f5 = MakeVideoFrame(8, 8, kRed);
+    m.feather = 0.0f;
+    ClipMask right;
+    right.shape = MaskShape::Rect;
+    right.cx = 0.75f;
+    right.cy = 0.5f;
+    right.w = 0.5f;
+    right.h = 1.0f;
+    right.feather = 0.0f;
+    XER_VE_CHECK(ApplyMaskPixels(&f5, {m, right}));
+    XER_VE_CHECK(FramePxIs(f5, 4, 4, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f5, 5, 3, 10, 20, 200, 255));
+    XER_VE_CHECK(FramePxIs(f5, 2, 4, 10, 20, 200, 0));   // fails right
+    XER_VE_CHECK(FramePxIs(f5, 4, 0, 10, 20, 200, 0));   // fails m
+
+    // Degenerate mask (w=0) masks everything; empty list is a no-op;
+    // invalid frame is a contract error.
+    ClipMask bad;
+    bad.shape = MaskShape::Rect;
+    bad.w = 0.0f;
+    video::Frame f6 = MakeVideoFrame(8, 8, kRed);
+    XER_VE_CHECK(ApplyMaskPixels(&f6, {bad}));
+    XER_VE_CHECK(FramePxIs(f6, 4, 4, 10, 20, 200, 0));
+    XER_VE_CHECK(ApplyMaskPixels(&f6, {}));
+    video::Frame empty_frame;
+    XER_VE_CHECK(!ApplyMaskPixels(&empty_frame, {bad}));
+    XER_VE_CHECK(!ApplyMaskPixels(nullptr, {bad}));
+}
+
+// ------------------------------------------------------------------
+// Suite 11: ApplyBlendModePixels (pure) — W3C formulas on opaque src
+// ------------------------------------------------------------------
+void TestBlendModes() {
+    using XER::VideoEditor::ApplyBlendModePixels;
+    // dst = opaque blue {200,40,10}, src = opaque red {10,20,200}.
+    video::Frame src = MakeVideoFrame(4, 4, kRed);
+    video::Frame dst;
+
+    // Multiply: b*s -> (200*10, 40*20, 10*200)/255 = (8,3,8).
+    dst = MakeVideoFrame(4, 4, kBlue);
+    XER_VE_CHECK(ApplyBlendModePixels(BlendMode::Multiply, &dst, src));
+    XER_VE_CHECK(FramePxNear(dst, 0, 0, 8, 3, 8, 255, 2));
+    XER_VE_CHECK(FramePxNear(dst, 3, 3, 8, 3, 8, 255, 2));
+
+    // Screen: 1-(1-b)(1-s) -> B:1-(55*245)/65025 = 0.7928 -> 202;
+    // G:1-(215*235)/65025 = 0.223 -> 57; R = B -> 202.
+    dst = MakeVideoFrame(4, 4, kBlue);
+    XER_VE_CHECK(ApplyBlendModePixels(BlendMode::Screen, &dst, src));
+    XER_VE_CHECK(FramePxNear(dst, 0, 0, 202, 57, 202, 255, 2));
+
+    // Add: min(1,b+s) -> (210,60,210).
+    dst = MakeVideoFrame(4, 4, kBlue);
+    XER_VE_CHECK(ApplyBlendModePixels(BlendMode::Add, &dst, src));
+    XER_VE_CHECK(FramePxNear(dst, 0, 0, 210, 60, 210, 255, 2));
+
+    // Darken/Lighten: channelwise min/max.
+    dst = MakeVideoFrame(4, 4, kBlue);
+    XER_VE_CHECK(ApplyBlendModePixels(BlendMode::Darken, &dst, src));
+    XER_VE_CHECK(FramePxIs(dst, 0, 0, 10, 20, 10, 255));
+    dst = MakeVideoFrame(4, 4, kBlue);
+    XER_VE_CHECK(ApplyBlendModePixels(BlendMode::Lighten, &dst, src));
+    XER_VE_CHECK(FramePxIs(dst, 0, 0, 200, 40, 200, 255));
+
+    // Overlay: b>0.5 -> 1-2(1-b)(1-s) (B:149), b<=0.5 -> 2bs
+    // (G: 2*0.157*0.078=0.0246 -> 6; R: 2*0.039*0.784=0.062 -> 16).
+    dst = MakeVideoFrame(4, 4, kBlue);
+    XER_VE_CHECK(ApplyBlendModePixels(BlendMode::Overlay, &dst, src));
+    XER_VE_CHECK(FramePxNear(dst, 0, 0, 149, 6, 16, 255, 3));
+
+    // Semi-transparent source: eff = sA*Cb + (1-sA)*Cs then alpha-over.
+    // src {0,0,255,128} Multiply over opaque black: sA=0.502, Cb=0 ->
+    // eff=0.498 -> out_r = sA*eff = 0.25 -> ~64 (NOT 128).
+    video::Frame semi_src(4, 4, video::PixelFormat::BGRA8);
+    XER_VE_CHECK(semi_src.IsValid());
+    for (int i = 0; i < 4 * 4; ++i) {
+        semi_src.Data()[i * 4 + 0] = 0;
+        semi_src.Data()[i * 4 + 1] = 0;
+        semi_src.Data()[i * 4 + 2] = 255;
+        semi_src.Data()[i * 4 + 3] = 128;
+    }
+    dst = MakeVideoFrame(4, 4, kBlack);
+    XER_VE_CHECK(
+        ApplyBlendModePixels(BlendMode::Multiply, &dst, semi_src));
+    XER_VE_CHECK(FramePxNear(dst, 0, 0, 0, 0, 64, 255, 4));
+    // Normal through the same entry point is exact alpha-over: src
+    // (128/255) over kBlack {5,5,5} -> R ~ 255*.502 + 5*.498 ~ 130,
+    // B/G ~ 5*.498 ~ 2.
+    dst = MakeVideoFrame(4, 4, kBlack);
+    XER_VE_CHECK(
+        ApplyBlendModePixels(BlendMode::Normal, &dst, semi_src));
+    XER_VE_CHECK(FramePxNear(dst, 0, 0, 2, 2, 130, 255, 2));
+
+    // Contract failures: size/format mismatch, null dst.
+    video::Frame small = MakeVideoFrame(2, 2, kRed);
+    dst = MakeVideoFrame(4, 4, kBlue);
+    XER_VE_CHECK(
+        !ApplyBlendModePixels(BlendMode::Add, &dst, small));
+    XER_VE_CHECK(!ApplyBlendModePixels(BlendMode::Add, nullptr, src));
+}
+
+// ------------------------------------------------------------------
+// Suite 12: new transition types in ApplyTransitionPixels (pure)
+// ------------------------------------------------------------------
+void TestPhase2Transitions() {
+    using XER::VideoEditor::ApplyTransitionPixels;
+    video::Frame under = MakeVideoFrame(8, 4, kRed);
+    video::Frame over = MakeVideoFrame(8, 4, kGreen);
+    video::Frame out;
+
+    // DipToBlack midpoint -> solid black everywhere.
+    XER_VE_CHECK(ApplyTransitionPixels(Transition::Type::DipToBlack,
+                                       0.5, under, over, &out));
+    XER_VE_CHECK(FramePxIs(out, 0, 0, 0, 0, 0, 255));
+    XER_VE_CHECK(FramePxIs(out, 7, 3, 0, 0, 0, 255));
+    // w=0.25 (first half): under at alpha 0.5 over black ->
+    // (5,10,100).
+    XER_VE_CHECK(ApplyTransitionPixels(Transition::Type::DipToBlack,
+                                       0.25, under, over, &out));
+    XER_VE_CHECK(FramePxIs(out, 4, 2, 5, 10, 100, 255));
+    // w=0.75 (second half): over at alpha 0.5 over black ->
+    // (15,100,20).
+    XER_VE_CHECK(ApplyTransitionPixels(Transition::Type::DipToBlack,
+                                       0.75, under, over, &out));
+    XER_VE_CHECK(FramePxIs(out, 4, 2, 15, 100, 20, 255));
+    // Endpoints: w=0 -> under, w=1 -> over.
+    XER_VE_CHECK(ApplyTransitionPixels(Transition::Type::DipToBlack,
+                                       0.0, under, over, &out));
+    XER_VE_CHECK(FramePxIs(out, 4, 2, 10, 20, 200, 255));
+    XER_VE_CHECK(ApplyTransitionPixels(Transition::Type::DipToBlack,
+                                       1.0, under, over, &out));
+    XER_VE_CHECK(FramePxIs(out, 4, 2, 30, 200, 40, 255));
+
+    // DipToWhite midpoint -> solid white; w=0.25: under@0.5 over
+    // white -> (133,138,228).
+    XER_VE_CHECK(ApplyTransitionPixels(Transition::Type::DipToWhite,
+                                       0.5, under, over, &out));
+    XER_VE_CHECK(FramePxIs(out, 0, 0, 255, 255, 255, 255));
+    XER_VE_CHECK(ApplyTransitionPixels(Transition::Type::DipToWhite,
+                                       0.25, under, over, &out));
+    XER_VE_CHECK(FramePxNear(out, 4, 2, 133, 138, 228, 255, 2));
+
+    // AdditiveDissolve w=0.5 on opaque frames == crossfade values.
+    XER_VE_CHECK(ApplyTransitionPixels(
+        Transition::Type::AdditiveDissolve, 0.5, under, over, &out));
+    XER_VE_CHECK(FramePxIs(out, 0, 0, 20, 110, 120, 255));
+
+    // ...but it is NOT alpha-weighted: semi-transparent under keeps
+    // its full rgb contribution (unlike CrossfadePixel's premul lerp).
+    // under (100,0,0,128), over (0,0,200,255), w=0.5:
+    //   B = 100*0.5 + 0*0.5 = 50; R = 0 + 200*0.5 = 100;
+    //   A = 128*0.5 + 255*0.5 = 192 -> (50,0,100,192).
+    video::Frame semi_u(8, 4, video::PixelFormat::BGRA8);
+    video::Frame semi_o(8, 4, video::PixelFormat::BGRA8);
+    XER_VE_CHECK(semi_u.IsValid() && semi_o.IsValid());
+    for (int i = 0; i < 8 * 4; ++i) {
+        semi_u.Data()[i * 4 + 0] = 100;
+        semi_u.Data()[i * 4 + 1] = 0;
+        semi_u.Data()[i * 4 + 2] = 0;
+        semi_u.Data()[i * 4 + 3] = 128;
+        semi_o.Data()[i * 4 + 0] = 0;
+        semi_o.Data()[i * 4 + 1] = 0;
+        semi_o.Data()[i * 4 + 2] = 200;
+        semi_o.Data()[i * 4 + 3] = 255;
+    }
+    XER_VE_CHECK(ApplyTransitionPixels(
+        Transition::Type::AdditiveDissolve, 0.5, semi_u, semi_o, &out));
+    XER_VE_CHECK(FramePxNear(out, 4, 2, 50, 0, 100, 192, 2));
+}
+
+// ------------------------------------------------------------------
+// Suite 13: compositor-level Phase-2 — masks + blend + dip render
+// ------------------------------------------------------------------
+void TestPhase2Composited() {
+    const std::vector<double> kPts = {0.0, 0.5, 1.0, 1.5, 2.0, 2.5};
+
+    // Rect mask on the clip frame: right half survives, left half is
+    // transparent -> bg shows through.
+    {
+        Project p = MakeCanvasProject();
+        Clip c = MakeClip("masked", 0, 0.0, 1.0, "fake://red");
+        ClipMask m;
+        m.shape = MaskShape::Rect;
+        m.cx = 0.75f;
+        m.cy = 0.5f;
+        m.w = 0.5f;
+        m.h = 1.0f;
+        m.feather = 0.0f;
+        c.masks.push_back(m);
+        p.clips.push_back(c);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        RegisterSpec(rig, "fake://red",
+                     MakeSolidSpecAuto(16, 16, 4.0, 4, kRed));
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 4, 8, 0, 0, 0, 255));   // masked
+        XER_VE_CHECK(VecPxIs(out, 16, 12, 8, 10, 20, 200, 255));
+    }
+
+    // Multiply blend on the top track: red * blue -> (8,3,8).
+    {
+        Project p = MakeCanvasProject();
+        p.tracks.push_back(Track{TrackKind::Video, "V2"});
+        p.clips.push_back(MakeClip("bot", 0, 0.0, 1.0, "fake://bot"));
+        Clip top = MakeClip("top", 1, 0.0, 1.0, "fake://top");
+        top.blend_mode = BlendMode::Multiply;
+        p.clips.push_back(top);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        RegisterSpec(rig, "fake://bot",
+                     MakeSolidSpecAuto(16, 16, 4.0, 4, kBlue));
+        RegisterSpec(rig, "fake://top",
+                     MakeSolidSpecAuto(16, 16, 4.0, 4, kRed));
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 8, 3, 8, 255, 2));
+        // Same scene with Normal stays pure alpha-over: red wins.
+        Clip top2 = top;
+        top2.blend_mode = BlendMode::Normal;
+        p.clips.back() = top2;
+        Rig rig2 = MakeRig(p);
+        XER_VE_CHECK(rig2.init_ok);
+        RegisterSpec(rig2, "fake://bot",
+                     MakeSolidSpecAuto(16, 16, 4.0, 4, kBlue));
+        RegisterSpec(rig2, "fake://top",
+                     MakeSolidSpecAuto(16, 16, 4.0, 4, kRed));
+        XER_VE_CHECK(rig2.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 10, 20, 200, 255));
+    }
+
+    // DipToBlack A->B, cut at t=2.0: midpoint renders the dip color.
+    {
+        Project p = MakeCanvasProject();
+        p.clips.push_back(MakeClip("a", 0, 0.0, 2.0, "fake://a"));
+        p.clips.push_back(MakeClip("b", 0, 2.0, 2.0, "fake://b"));
+        p.transitions.push_back(MakeTransition(
+            "a", "b", Transition::Type::DipToBlack, 1.0));
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        RegisterSpec(rig, "fake://a",
+                     MakeSolidSpec(16, 16, 2.0, kPts, kRed));
+        RegisterSpec(rig, "fake://b",
+                     MakeSolidSpec(16, 16, 2.0, kPts, kGreen));
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(2.0, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 0, 0, 0, 255));
+        // w=0.75 at t=2.25: green@0.5 over black -> (15,100,20).
+        XER_VE_CHECK(rig.comp->RenderFrameAt(2.25, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 15, 100, 20, 255, 3));
+    }
+}
+
+// ------------------------------------------------------------------
+// Suite 14: generated-source helpers — ParseMatteColor / bar table /
+// GenerateSourceFrame pixel contracts (no compositor needed)
+// ------------------------------------------------------------------
+void TestGeneratedSourceHelpers() {
+    using XER::VideoEditor::GenerateSourceFrame;
+    using XER::VideoEditor::ParseMatteColor;
+    using XER::VideoEditor::Smpte75Bars;
+    using XER::VideoEditor::TextClipGlyphScale;
+
+    // "#RRGGBB": r=0x0A g=0x14 b=0xC8 -> BGRA (200,20,10,255).
+    XER_VE_CHECK((ParseMatteColor("#0A14C8") == Color{200, 20, 10, 255}));
+    // "#RRGGBBAA": r=0xFF g=0 b=0 a=0x80.
+    XER_VE_CHECK((ParseMatteColor("#FF000080") == Color{0, 0, 255, 128}));
+    // '#' optional; hex case-insensitive.
+    XER_VE_CHECK((ParseMatteColor("0a14c8") == Color{200, 20, 10, 255}));
+    XER_VE_CHECK((ParseMatteColor("Ff000080") == Color{0, 0, 255, 128}));
+    // Malformed -> opaque black (the documented default).
+    XER_VE_CHECK((ParseMatteColor("") == Color{0, 0, 0, 255}));
+    XER_VE_CHECK((ParseMatteColor("#12345") == Color{0, 0, 0, 255}));
+    XER_VE_CHECK((ParseMatteColor("#GGGGGG") == Color{0, 0, 0, 255}));
+    XER_VE_CHECK((ParseMatteColor("red") == Color{0, 0, 0, 255}));
+
+    // SMPTE 75% table: gray/yellow/cyan/green/magenta/red/blue.
+    const auto& bars = Smpte75Bars();
+    XER_VE_CHECK((bars[0] == Color{191, 191, 191, 255}));
+    XER_VE_CHECK((bars[1] == Color{0, 191, 191, 255}));
+    XER_VE_CHECK((bars[6] == Color{191, 0, 0, 255}));
+
+    // Glyph scale derives from canvas height (one line ~1/15th).
+    XER_VE_CHECK(TextClipGlyphScale(1080) == 8);
+    XER_VE_CHECK(TextClipGlyphScale(16) == 1);
+    XER_VE_CHECK(TextClipGlyphScale(0) == 1);
+
+    // Direct frame generation — matte fills the canvas dims.
+    {
+        Clip c = MakeGeneratedClip("m", 0, 0.0, 1.0,
+                                   SourceKind::ColorMatte, "#0A14C8");
+        video::Frame f;
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+        XER_VE_CHECK(f.Width() == 16 && f.Height() == 16);
+        XER_VE_CHECK(FramePxIs(f, 0, 0, 200, 20, 10, 255));
+        XER_VE_CHECK(FramePxIs(f, 15, 15, 200, 20, 10, 255));
+        // Reuse across calls keeps the buffer working.
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.5, 16, 16, &f));
+        XER_VE_CHECK(FramePxIs(f, 8, 8, 200, 20, 10, 255));
+    }
+
+    // Bars: column index = floor(7x/16) -> bar edges at x = 3,5,7,10,
+    // 12,14. Spot-check each bar + a boundary flip.
+    {
+        Clip c = MakeGeneratedClip("b", 0, 0.0, 1.0,
+                                   SourceKind::ColorBars, "smpte75");
+        video::Frame f;
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+        XER_VE_CHECK(FramePxIs(f, 1, 8, 191, 191, 191, 255));   // gray
+        XER_VE_CHECK(FramePxIs(f, 3, 8, 0, 191, 191, 255));     // yellow
+        XER_VE_CHECK(FramePxIs(f, 5, 8, 191, 191, 0, 255));     // cyan
+        XER_VE_CHECK(FramePxIs(f, 8, 8, 0, 191, 0, 255));       // green
+        XER_VE_CHECK(FramePxIs(f, 10, 8, 191, 0, 191, 255));    // magenta
+        XER_VE_CHECK(FramePxIs(f, 12, 8, 0, 0, 191, 255));      // red
+        XER_VE_CHECK(FramePxIs(f, 15, 8, 191, 0, 0, 255));      // blue
+        // Boundary x=2 -> gray, x=3 -> yellow: adjacent columns differ.
+        const std::uint8_t* p2 = FramePx(f, 2, 8);
+        const std::uint8_t* p3 = FramePx(f, 3, 8);
+        XER_VE_CHECK(p2[0] != p3[0] || p2[1] != p3[1] ||
+                     p2[2] != p3[2]);
+        // Contract failures: bad canvas / Media kind / null out.
+        XER_VE_CHECK(!GenerateSourceFrame(c, 0.0, 0, 16, &f));
+        Clip media = MakeClip("mm", 0, 0.0, 1.0, "x");
+        XER_VE_CHECK(!GenerateSourceFrame(media, 0.0, 16, 16, &f));
+        XER_VE_CHECK(!GenerateSourceFrame(c, 0.0, 16, 16, nullptr));
+    }
+
+    // Text at scale 1 (16px canvas): "A" measures 5x7 + 2px shadow
+    // margin -> 7x9. 'A' = {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}.
+    {
+        Clip c = MakeGeneratedClip("t", 0, 0.0, 1.0,
+                                   SourceKind::Text, "A");
+        video::Frame f;
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+        XER_VE_CHECK(f.Width() == 7 && f.Height() == 9);
+        XER_VE_CHECK(FramePxIs(f, 2, 0, 255, 255, 255, 255));   // ink
+        XER_VE_CHECK(FramePxIs(f, 0, 1, 255, 255, 255, 255));   // ink
+        XER_VE_CHECK(FramePxIs(f, 0, 0, 0, 0, 0, 0));           // empty
+        // Soft shadow: glyph (4,6) is set -> near-shadow tap lands at
+        // (5,7) with alpha ~120 (not 0, not 255).
+        const std::uint8_t* sh = FramePx(f, 5, 7);
+        XER_VE_CHECK(sh[0] == 0 && sh[1] == 0 && sh[2] == 0);
+        XER_VE_CHECK(sh[3] > 80 && sh[3] < 180);
+        // Multi-line: "A\nB" -> height 16 + 2 margin, 'B' row at y=9.
+        Clip c2 = MakeGeneratedClip("t2", 0, 0.0, 1.0,
+                                    SourceKind::Text, "A\nB");
+        video::Frame f2;
+        XER_VE_CHECK(GenerateSourceFrame(c2, 0.0, 16, 16, &f2));
+        XER_VE_CHECK(f2.Height() == 18);
+        XER_VE_CHECK(FramePxIs(f2, 1, 9, 255, 255, 255, 255));  // 'B' ink
+        // Empty text -> 1x1 transparent, still valid.
+        Clip c3 = MakeGeneratedClip("t3", 0, 0.0, 1.0,
+                                    SourceKind::Text, "");
+        video::Frame f3;
+        XER_VE_CHECK(GenerateSourceFrame(c3, 0.0, 16, 16, &f3));
+        XER_VE_CHECK(f3.Width() == 1 && f3.Height() == 1);
+        XER_VE_CHECK(FramePxIs(f3, 0, 0, 0, 0, 0, 0));
+        // Non-ASCII UTF-8 resolves to '?' (which has ink), never fails.
+        Clip c4 = MakeGeneratedClip("t4", 0, 0.0, 1.0,
+                                    SourceKind::Text, "\xC3\xA9");  // é
+        video::Frame f4;
+        XER_VE_CHECK(GenerateSourceFrame(c4, 0.0, 16, 16, &f4));
+        XER_VE_CHECK(f4.Width() == 7 && f4.Height() == 9);
+    }
+}
+
+// ------------------------------------------------------------------
+// Suite 15: generated sources through the compositor — no decoder is
+// ever opened, and the effects/masks/warp/blend stages all apply
+// ------------------------------------------------------------------
+void TestGeneratedSourcesComposited() {
+    // ColorMatte fills the whole canvas (its natural size IS the
+    // canvas at identity transform); zero decoder opens.
+    {
+        Project p = MakeCanvasProject();
+        p.clips.push_back(MakeGeneratedClip(
+            "matte", 0, 0.0, 1.0, SourceKind::ColorMatte, "#0A14C8"));
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);   // empty bank — no specs needed
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 0, 0, 200, 20, 10, 255));
+        XER_VE_CHECK(VecPxIs(out, 16, 15, 15, 200, 20, 10, 255));
+        XER_VE_CHECK(TotalOpens(*rig.bank) == 0);
+    }
+
+    // "#RRGGBBAA" matte: r=255 a=128 over opaque black -> r ~128.
+    {
+        Project p = MakeCanvasProject();
+        p.clips.push_back(MakeGeneratedClip(
+            "matte", 0, 0.0, 1.0, SourceKind::ColorMatte,
+            "#FF000080"));
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 0, 0, 128, 255, 3));
+    }
+
+    // Invalid matte param -> opaque black, distinguishable from a
+    // WHITE bg (proves the matte painted, not the bg showing through).
+    {
+        Project p = MakeCanvasProject();
+        p.bg_color = {255, 255, 255, 255};   // {r,g,b,a}
+        p.clips.push_back(MakeGeneratedClip(
+            "matte", 0, 0.0, 1.0, SourceKind::ColorMatte, "nothex"));
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 0, 0, 0, 255));
+    }
+
+    // Bars end-to-end: same column pattern as the direct-API checks.
+    {
+        Project p = MakeCanvasProject();
+        p.clips.push_back(MakeGeneratedClip(
+            "bars", 0, 0.0, 1.0, SourceKind::ColorBars, ""));
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 1, 8, 191, 191, 191, 255));
+        XER_VE_CHECK(VecPxIs(out, 16, 10, 8, 191, 0, 191, 255));
+        XER_VE_CHECK(VecPxIs(out, 16, 15, 8, 191, 0, 0, 255));
+        XER_VE_CHECK(TotalOpens(*rig.bank) == 0);
+    }
+
+    // Text clip: 'A' ink lands at canvas (2,0); gray bg makes the
+    // soft drop shadow observable at (5,7) as ~53.
+    {
+        Project p = MakeCanvasProject();
+        p.bg_color = {100, 100, 100, 255};
+        p.clips.push_back(MakeGeneratedClip(
+            "title", 0, 0.0, 1.0, SourceKind::Text, "A"));
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 2, 0, 255, 255, 255, 255));
+        XER_VE_CHECK(VecPxIs(out, 16, 0, 0, 100, 100, 100, 255));
+        XER_VE_CHECK(VecPxIs(out, 16, 15, 15, 100, 100, 100, 255));
+        XER_VE_CHECK(VecPxNear(out, 16, 5, 7, 53, 53, 53, 255, 6));
+    }
+
+    // Effect + transform stack on a matte: grayscale then
+    // scale 0.5 @ offset (0.5,0.5). Matte rgb (10,20,200) ->
+    // luma = 0.299*10 + 0.587*20 + 0.114*200 = 37.5 -> ~38.
+    {
+        Project p = MakeCanvasProject();
+        Clip c = MakeGeneratedClip("matte", 0, 0.0, 1.0,
+                                   SourceKind::ColorMatte, "#0A14C8");
+        ClipEffect gray;
+        gray.type = "grayscale";
+        c.effects.push_back(gray);
+        c.transform.offset_x = 0.5f;
+        c.transform.offset_y = 0.5f;
+        c.transform.scale = 0.5f;
+        p.clips.push_back(c);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 12, 12, 38, 38, 38, 255, 4));
+        XER_VE_CHECK(VecPxIs(out, 16, 4, 4, 0, 0, 0, 255));
+        XER_VE_CHECK(TotalOpens(*rig.bank) == 0);
+    }
+
+    // Mask applies to generated frames too (pre-warp, clip fractions):
+    // right-half rect keeps x >= 8.
+    {
+        Project p = MakeCanvasProject();
+        Clip c = MakeGeneratedClip("matte", 0, 0.0, 1.0,
+                                   SourceKind::ColorMatte, "#0A14C8");
+        ClipMask m;
+        m.shape = MaskShape::Rect;
+        m.cx = 0.75f;
+        m.cy = 0.5f;
+        m.w = 0.5f;
+        m.h = 1.0f;
+        m.feather = 0.0f;
+        c.masks.push_back(m);
+        p.clips.push_back(c);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 4, 8, 0, 0, 0, 255));
+        XER_VE_CHECK(VecPxIs(out, 16, 12, 8, 200, 20, 10, 255));
+    }
+
+    // Keyframed opacity animates a matte: 0 -> 1 over [0,1) clip-local.
+    // t=0.25 -> ~64, t=0.5 -> ~128, t=0 -> invisible (bg).
+    {
+        Project p = MakeCanvasProject();
+        Clip c = MakeGeneratedClip("matte", 0, 0.0, 1.0,
+                                   SourceKind::ColorMatte, "#FF0000");
+        c.keyframes[KeyProp::Opacity] = {
+            Keyframe{0.0, 0.0f, KeyEase::Linear},
+            Keyframe{1.0, 1.0f, KeyEase::Linear}};
+        p.clips.push_back(c);
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.0, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 0, 0, 0, 255));
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.25, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 0, 0, 64, 255, 5));
+        XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 0, 0, 128, 255, 5));
+        XER_VE_CHECK(TotalOpens(*rig.bank) == 0);
+    }
+
+    // Generated clips drive transitions: crossfade red->green matte,
+    // midpoint ~ (0,128,128) — neither endpoint touches a decoder.
+    {
+        Project p = MakeCanvasProject();
+        p.clips.push_back(MakeGeneratedClip(
+            "a", 0, 0.0, 2.0, SourceKind::ColorMatte, "#FF0000"));
+        p.clips.push_back(MakeGeneratedClip(
+            "b", 0, 2.0, 2.0, SourceKind::ColorMatte, "#00FF00"));
+        p.transitions.push_back(
+            MakeTransition("a", "b", Transition::Type::Crossfade, 1.0));
+        Rig rig = MakeRig(p);
+        XER_VE_CHECK(rig.init_ok);
+        std::vector<std::uint8_t> out;
+        std::string err;
+        XER_VE_CHECK(rig.comp->RenderFrameAt(2.0, &out, &err));
+        XER_VE_CHECK(VecPxNear(out, 16, 8, 8, 0, 128, 128, 255, 4));
+        XER_VE_CHECK(rig.comp->RenderFrameAt(3.0, &out, &err));
+        XER_VE_CHECK(VecPxIs(out, 16, 8, 8, 0, 255, 0, 255));
+        XER_VE_CHECK(TotalOpens(*rig.bank) == 0);
+    }
+}
+
 }  // namespace
 
 int XER_VideoEditor_RunCompositorTests() {
@@ -1341,5 +2096,13 @@ int XER_VideoEditor_RunCompositorTests() {
     TestDecodeBehavior();
     TestCompositorTransitions();
     TestFFmpegIntegration();
+    TestPlaybackRate();
+    TestKeyframes();
+    TestMaskPixels();
+    TestBlendModes();
+    TestPhase2Transitions();
+    TestPhase2Composited();
+    TestGeneratedSourceHelpers();
+    TestGeneratedSourcesComposited();
     return 0;
 }

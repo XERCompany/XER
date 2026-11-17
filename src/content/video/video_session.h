@@ -99,7 +99,8 @@ public:
     // audio packets are tapped from the same already-open container — the
     // file is demuxed exactly once for both streams.
     std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder> GetAvDecoder() const {
-        return av_decoder_.load(std::memory_order_acquire);
+        std::lock_guard<std::mutex> lock(decoder_mutex_);
+        return av_decoder_;
     }
 
     using StateCallback = std::function<void(VideoState state)>;
@@ -147,8 +148,10 @@ private:
     std::condition_variable control_cv_;
 
     // Shared decoder handle published by DecodeLoop for audio consumers.
-    std::atomic<std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder>>
-        av_decoder_{nullptr};
+    // std::atomic<std::shared_ptr> is MSVC-only; a mutex keeps this
+    // portable across STLs.
+    mutable std::mutex decoder_mutex_;
+    std::shared_ptr<XER::Bridge::FFmpeg::VideoDecoder> av_decoder_;
 
     // Single-slot frame mailbox.
     std::mutex frame_mutex_;

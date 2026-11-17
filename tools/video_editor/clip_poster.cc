@@ -29,6 +29,60 @@ bool Fail(std::string* error_out, const std::string& message) {
     return false;
 }
 
+// Shared decode core for Extract/GetPosterAt — the decoder must be
+// open and carry video (width/height > 0). Seeks keyframe-backward to
+// `target` (best-effort — Seek clamps out-of-range values itself; on
+// false the decoder stays near position 0 and the bounded forward loop
+// below still yields a valid early frame), then forward-decodes to the
+// first frame at/after the target, keeping the last decoded frame at
+// EOF. The decoded BGRA pixels are copied into `frame_out`.
+bool DecodeFrameAt(FFmpeg::VideoDecoder& decoder, double target,
+                   video::Frame* frame_out, std::string* error_out) {
+    decoder.Seek(target);   // best-effort — see above
+
+    // Bounded forward-discard: NextFrame decodes forward from the
+    // keyframe; keep the LAST successfully decoded frame and stop at
+    // the first one at/after the target. At EOF (NextFrame false)
+    // `kept` still holds the last decoded frame — the EOF fallback.
+    // IMPORTANT: NextFrame resizes AND zero-fills its output vector
+    // before decoding (ffmpeg_video_decoder.cc), so a failed call
+    // leaves `pixels` zeroed — the decoded frame must be swapped
+    // into `kept` on every SUCCESS, never read after a failure.
+    constexpr int kMaxForwardFrames = 300;
+    std::vector<std::uint8_t> pixels;
+    std::vector<std::uint8_t> kept;
+    int width = 0;
+    int height = 0;
+    int kept_w = 0;
+    int kept_h = 0;
+    for (int i = 0; i < kMaxForwardFrames &&
+                    decoder.NextFrame(pixels, width, height);
+         ++i) {
+        pixels.swap(kept);  // kept = just-decoded frame; pixels = scratch
+        kept_w = width;
+        kept_h = height;
+        if (decoder.GetPositionSeconds() >= target) {
+            break;
+        }
+    }
+    if (kept_w <= 0 || kept_h <= 0 || kept.empty()) {
+        return Fail(error_out, "no frames decoded");
+    }
+    const std::size_t expected_bytes =
+        static_cast<std::size_t>(kept_w) *
+        static_cast<std::size_t>(kept_h) * 4u;
+    if (kept.size() != expected_bytes) {
+        return Fail(error_out, "decoded frame size mismatch");
+    }
+
+    // Copy the kept packed-BGRA pixels into the caller's video::Frame.
+    if (!frame_out->Allocate(kept_w, kept_h, video::PixelFormat::BGRA8)) {
+        return Fail(error_out, "frame allocation failed");
+    }
+    std::memcpy(frame_out->Data(), kept.data(), kept.size());
+    return true;
+}
+
 }  // namespace
 
 bool ClipPoster::Extract(const std::string& utf8_source_path,
@@ -58,57 +112,17 @@ bool ClipPoster::Extract(const std::string& utf8_source_path,
         return Fail(error_out, "no video stream (audio-only file)");
     }
 
-    // 4. Seek keyframe-backward — BEST-EFFORT. Seek clamps out-of-range
-    //    values to the stream bounds itself; on false (containers that
-    //    refuse seeks) the decoder stays near position 0 and the
-    //    bounded forward loop below still yields a valid early frame.
-    //    A wrong-position poster beats no poster; catalog can re-extract.
+    // 4. Decode the frame nearest the clamped seek target into memory
+    //    (DecodeFrameAt seeks + forward-decodes, keeping the last frame
+    //    at EOF). A wrong-position poster beats no poster; catalog can
+    //    re-extract.
     const double target = std::max(0.0, seek_seconds);
-    decoder.Seek(target);
-
-    // 5. Bounded forward-discard: NextFrame decodes forward from the
-    //    keyframe; keep the LAST successfully decoded frame and stop at
-    //    the first one at/after the target. At EOF (NextFrame false)
-    //    `kept` still holds the last decoded frame — the EOF fallback.
-    //    IMPORTANT: NextFrame resizes AND zero-fills its output vector
-    //    before decoding (ffmpeg_video_decoder.cc), so a failed call
-    //    leaves `pixels` zeroed — the decoded frame must be swapped
-    //    into `kept` on every SUCCESS, never read after a failure.
-    constexpr int kMaxForwardFrames = 300;
-    std::vector<std::uint8_t> pixels;
-    std::vector<std::uint8_t> kept;
-    int width = 0;
-    int height = 0;
-    int kept_w = 0;
-    int kept_h = 0;
-    for (int i = 0; i < kMaxForwardFrames &&
-                    decoder.NextFrame(pixels, width, height);
-         ++i) {
-        pixels.swap(kept);  // kept = just-decoded frame; pixels = scratch
-        kept_w = width;
-        kept_h = height;
-        if (decoder.GetPositionSeconds() >= target) {
-            break;
-        }
-    }
-    if (kept_w <= 0 || kept_h <= 0 || kept.empty()) {
-        return Fail(error_out, "no frames decoded");
-    }
-    const std::size_t expected_bytes =
-        static_cast<std::size_t>(kept_w) *
-        static_cast<std::size_t>(kept_h) * 4u;
-    if (kept.size() != expected_bytes) {
-        return Fail(error_out, "decoded frame size mismatch");
-    }
-
-    // 6. Copy the kept packed-BGRA pixels into a video::Frame.
     video::Frame frame;
-    if (!frame.Allocate(kept_w, kept_h, video::PixelFormat::BGRA8)) {
-        return Fail(error_out, "frame allocation failed");
+    if (!DecodeFrameAt(decoder, target, &frame, error_out)) {
+        return false;
     }
-    std::memcpy(frame.Data(), kept.data(), kept.size());
 
-    // 7. PNG export. FrameExporter::ToFile is PNG-only (codec_name
+    // 5. PNG export. FrameExporter::ToFile is PNG-only (codec_name
     //    "png") and re-checks Bridge::FFmpeg::IsAvailable() itself.
     video::FrameExporter exporter;
     if (!exporter.ToFile(utf8_out_png_path, frame)) {
@@ -116,6 +130,34 @@ bool ClipPoster::Extract(const std::string& utf8_source_path,
                     "PNG export failed for " + utf8_out_png_path);
     }
     return true;
+}
+
+bool ClipPoster::GetPosterAt(const std::string& utf8_source_path,
+                             double seconds,
+                             video::Frame* frame_out,
+                             std::string* error_out) {
+    if (frame_out == nullptr) {
+        return Fail(error_out, "frame_out is required");
+    }
+    // Same open + audio-only gate as Extract — one decode path.
+    FFmpeg::VideoDecoder decoder;
+    if (!decoder.Open(utf8_source_path, error_out)) {
+        return false;
+    }
+    if (decoder.GetWidth() <= 0 || decoder.GetHeight() <= 0) {
+        return Fail(error_out, "no video stream (audio-only file)");
+    }
+
+    // Out-of-range times fall back to the mid-stream frame (spec §5) —
+    // negative or beyond-duration requests get the same poster the
+    // catalog extracts by default. An unknown/zero duration collapses
+    // the fallback to 0 (decode from the start).
+    const double duration = decoder.GetDurationSeconds();
+    double target = seconds;
+    if (!(target >= 0.0) || (duration > 0.0 && target > duration)) {
+        target = duration > 0.0 ? duration * 0.5 : 0.0;
+    }
+    return DecodeFrameAt(decoder, target, frame_out, error_out);
 }
 
 }  // namespace XER::VideoEditor

@@ -14,18 +14,6 @@ const wchar_t kHostClass[] = L"XERParamHost";
 const COLORREF kKeyColor = RGB(255, 0, 255);
 bool g_class_registered = false;
 
-void RegisterHostClass() {
-    if (g_class_registered) return;
-    WNDCLASSEXW wc{};
-    wc.cbSize = sizeof(wc);
-    wc.style = CS_HREDRAW | CS_VREDRAW;
-    wc.lpfnWndProc = &NodeParamHost::HostProc;
-    wc.hInstance = GetModuleHandleW(nullptr);
-    wc.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
-    wc.lpszClassName = kHostClass;
-    g_class_registered = RegisterClassExW(&wc) != 0;
-}
-
 std::wstring ToWide(const std::string& s) {
     if (s.empty()) return {};
     const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(),
@@ -37,6 +25,18 @@ std::wstring ToWide(const std::string& s) {
 }
 
 } // namespace
+
+void NodeParamHost::RegisterHostClass() {
+    if (g_class_registered) return;
+    WNDCLASSEXW wc{};
+    wc.cbSize = sizeof(wc);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = &NodeParamHost::HostProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.hCursor = LoadCursorW(nullptr, reinterpret_cast<LPCWSTR>(IDC_ARROW));
+    wc.lpszClassName = kHostClass;
+    g_class_registered = RegisterClassExW(&wc) != 0;
+}
 
 bool NodeParamHost::Create(void* parent_hwnd) {
     if (host_ != nullptr || parent_hwnd == nullptr) return false;

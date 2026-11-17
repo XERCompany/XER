@@ -1,7 +1,7 @@
 # Shim config: maps vcpkg package name onto system packages.
 include(CMakeFindDependencyMacro)
 find_dependency(PkgConfig)
-pkg_check_modules(XER_MKL_0 REQUIRED mkl-dynamic-lp64-seq)
+pkg_check_modules(XER_MKL_0 QUIET mkl-dynamic-lp64-seq)
 
 if(XER_MKL_0_FOUND)
     if(NOT TARGET MKL::MKL)

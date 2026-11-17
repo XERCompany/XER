@@ -75,9 +75,10 @@ void Slider::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
         kTrackHeight / 2.0f
     );
     if (ratio > 0.0f) {
+        // Value fill reads as the editor accent, not plain foreground.
         renderer.FillRect(
             {track_left, track_y, track_width * ratio, kTrackHeight},
-            IsEnabled() ? tokens.foreground : tokens.muted,
+            IsEnabled() ? tokens.accent : tokens.muted,
             kTrackHeight / 2.0f
         );
     }
@@ -93,12 +94,12 @@ void Slider::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
     };
     renderer.FillRect(
         thumb,
-        IsEnabled() ? tokens.surface : tokens.muted,
+        IsEnabled() ? tokens.surface : tokens.secondary,
         thumb_d / 2.0f
     );
     renderer.StrokeRect(
         thumb,
-        IsEnabled() ? tokens.foreground : tokens.border,
+        IsEnabled() ? tokens.accent : tokens.border,
         2.0f,
         thumb_d / 2.0f
     );

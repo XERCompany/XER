@@ -164,7 +164,9 @@
         "ENABLE_V8": "OFF",
         "ENABLE_CUDA": "OFF",
         "ENABLE_CUDNN": "OFF",
-        "BUILD_TESTING": "ON"
+        "BUILD_TESTING": "ON",
+        "CMAKE_DISABLE_FIND_PACKAGE_OpenBLAS": "ON",
+        "FFTW3f_DIR": "${sourceDir}/cmake/deps/configs/FFTW3f"
       }
     }
   ],

@@ -1,0 +1,1212 @@
+#include "timeline_widget.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdio>
+#include <deque>
+#include <memory>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "frame.h"
+#include "media_catalog.h"
+#include "rendering/renderer.h"
+#include "theme/tokens.h"
+
+namespace XER::VideoEditor::Ui {
+namespace {
+
+using XER::UI::Layout::Point;
+using XER::UI::Layout::Rect;
+using XER::UI::Theme::Color;
+
+constexpr float kHeaderWidth = 148.0f;
+constexpr float kMarkerLaneHeight = 16.0f;
+constexpr float kRulerHeight = 30.0f;
+constexpr float kWorkBarHeight = 10.0f;   // band at the ruler's top edge
+constexpr float kTrackHeight = 58.0f;
+constexpr float kTrackGap = 4.0f;
+constexpr float kClipInset = 3.0f;
+constexpr float kEdgeGrabPx = 7.0f;
+constexpr float kHeaderButtonSize = 16.0f;
+constexpr float kHeaderButtonStep = 20.0f;
+constexpr double kMinZoom = 8.0;
+constexpr double kMaxZoom = 600.0;
+constexpr std::chrono::milliseconds kDoubleClick{450};
+constexpr std::size_t kMaxWaveRows = 24;   // downsampled-waveform LRU
+constexpr std::size_t kMaxPosters = 48;    // poster-frame LRU
+constexpr double kPosterQuantize = 0.25;   // poster cache quantum (s)
+constexpr double kFallbackSampleRate = 48000.0;  // when bounds are unknown
+
+Color WithAlpha(Color color, float alpha) {
+    color.a = alpha;
+    return color;
+}
+
+Color MarkerColor(const Marker& marker) {
+    return Color{marker.color[0] / 255.0f, marker.color[1] / 255.0f,
+                 marker.color[2] / 255.0f, marker.color[3] / 255.0f};
+}
+
+std::string Basename(const std::string& path) {
+    const std::size_t pos = path.find_last_of("/\\");
+    return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+std::string FormatTime(double seconds) {
+    if (!std::isfinite(seconds) || seconds < 0.0) return "0:00";
+    const int minutes = static_cast<int>(seconds / 60.0);
+    const int whole = static_cast<int>(std::fmod(seconds, 60.0));
+    const int millis = static_cast<int>(
+        std::round((seconds - std::floor(seconds)) * 1000.0));
+    char buffer[24];
+    std::snprintf(buffer, sizeof(buffer), "%d:%02d.%03d", minutes, whole,
+                  millis == 1000 ? 999 : millis);
+    return buffer;
+}
+
+std::vector<Color> ClipPalette() {
+    return {
+        {0.18f, 0.48f, 0.95f, 1.0f},  // blue
+        {0.16f, 0.62f, 0.45f, 1.0f},  // green
+        {0.58f, 0.36f, 0.86f, 1.0f},  // violet
+        {0.88f, 0.42f, 0.20f, 1.0f},  // orange
+        {0.16f, 0.65f, 0.73f, 1.0f},  // cyan
+    };
+}
+
+// The three header toggle buttons: 0 = mute, 1 = hidden/eye, 2 = lock.
+Rect HeaderButtonRect(const Rect& label_rect, int button) {
+    return Rect{label_rect.x + label_rect.width - 4.0f -
+                    (3 - button) * kHeaderButtonStep,
+                label_rect.y + label_rect.height - 22.0f,
+                kHeaderButtonSize, kHeaderButtonSize};
+}
+
+const char* HeaderButtonLabel(int button) {
+    switch (button) {
+        case 0: return "M";   // Track::muted
+        case 1: return "H";   // Track::hidden (eye)
+        default: return "L";  // Track::locked
+    }
+}
+
+// Diamond outline (marker glyph) — four DrawLine segments, no polygon
+// primitive in the renderer.
+void DrawDiamond(XER::UI::Rendering::Renderer& renderer, Point center,
+                 float radius, Color color, float width) {
+    renderer.DrawLine({center.x, center.y - radius},
+                      {center.x + radius, center.y}, color, width);
+    renderer.DrawLine({center.x + radius, center.y},
+                      {center.x, center.y + radius}, color, width);
+    renderer.DrawLine({center.x, center.y + radius},
+                      {center.x - radius, center.y}, color, width);
+    renderer.DrawLine({center.x - radius, center.y},
+                      {center.x, center.y - radius}, color, width);
+}
+
+}  // namespace
+
+TimelineWidget::TimelineWidget(Hooks hooks) : hooks_(std::move(hooks)) {
+    SetFocusable(true);
+    SetClipsChildren(true);
+    // One instance per tool — the active id picks the receiver of
+    // pointer events (SetTool never allocates on the hot path).
+    static constexpr ToolId kAllTools[] = {
+        ToolId::Selection, ToolId::Razor,     ToolId::RippleEdit,
+        ToolId::RollingEdit, ToolId::Slip,    ToolId::Slide,
+        ToolId::RateStretch, ToolId::Hand,    ToolId::Zoom,
+    };
+    for (ToolId id : kAllTools) {
+        tools_[id] = MakeEditTool(id);
+    }
+}
+
+void TimelineWidget::SetProject(const Project* project) {
+    project_ = project;
+    // The project object may have been rebuilt by a commit — drop any
+    // stale tool previews keyed by old clip ids.
+    clip_previews_.clear();
+    Invalidate();
+}
+
+void TimelineWidget::SetPlayhead(double seconds) {
+    playhead_ = std::max(0.0, seconds);
+    if (project_ != nullptr) {
+        const double duration = std::max(project_->duration(), 1.0);
+        const double visible_start = scroll_seconds_;
+        const double visible_end =
+            scroll_seconds_ + timeline_area_.width / px_per_second_;
+        if (playhead_ < visible_start) {
+            scroll_seconds_ = playhead_;
+        } else if (playhead_ > visible_end - 0.2) {
+            scroll_seconds_ =
+                std::max(0.0, playhead_ - duration * 0.1);
+        }
+    }
+    Invalidate();
+}
+
+void TimelineWidget::SetSelectedClip(const std::string& clip_id) {
+    selected_clip_id_ = clip_id;
+    Invalidate();
+}
+
+void TimelineWidget::SetSnapEnabled(bool enabled) {
+    snap_enabled_ = enabled;
+    Invalidate();
+}
+
+void TimelineWidget::SetZoom(double px_per_second) {
+    px_per_second_ = std::clamp(px_per_second, kMinZoom, kMaxZoom);
+    Invalidate();
+}
+
+void TimelineWidget::SetTool(ToolId tool) {
+    if (tool == active_tool_) return;
+    if (EditTool* current = ActiveToolImpl()) {
+        current->Cancel(*this);
+    }
+    active_tool_ = tool;
+    if (EditTool* next = ActiveToolImpl()) {
+        SetStatus(std::string("Tool: ") + next->Name() + " — " +
+                  next->CursorHint());
+    }
+    Invalidate();
+}
+
+const char* TimelineWidget::ActiveToolName() const {
+    const EditTool* tool = ActiveToolImpl();
+    return tool != nullptr ? tool->Name() : "?";
+}
+
+const char* TimelineWidget::ActiveToolCursorHint() const {
+    const EditTool* tool = ActiveToolImpl();
+    return tool != nullptr ? tool->CursorHint() : "";
+}
+
+EditTool* TimelineWidget::ActiveToolImpl() const {
+    const auto it = tools_.find(active_tool_);
+    return it != tools_.end() ? it->second.get() : nullptr;
+}
+
+double TimelineWidget::TimeAtX(float x) const {
+    const float local = x - (timeline_area_.x + kHeaderWidth);
+    return std::max(0.0, scroll_seconds_ + local / px_per_second_);
+}
+
+float TimelineWidget::XAtTime(double t) const {
+    return timeline_area_.x + kHeaderWidth +
+           static_cast<float>((t - scroll_seconds_) * px_per_second_);
+}
+
+int TimelineWidget::TrackAtY(float y) const {
+    if (project_ == nullptr) return -1;
+    const float row_top =
+        timeline_area_.y + kMarkerLaneHeight + kRulerHeight;
+    const float local = y - row_top;
+    if (local < 0.0f) return -1;
+    const int index = static_cast<int>(local / (kTrackHeight + kTrackGap));
+    const float row_y = local - index * (kTrackHeight + kTrackGap);
+    if (index < 0 || index >= static_cast<int>(project_->tracks.size()) ||
+        row_y > kTrackHeight) {
+        return -1;
+    }
+    return index;
+}
+
+Rect TimelineWidget::TrackRect(int index) const {
+    return Rect{timeline_area_.x + kHeaderWidth,
+                timeline_area_.y + kMarkerLaneHeight + kRulerHeight +
+                    index * (kTrackHeight + kTrackGap),
+                std::max(0.0f, timeline_area_.width - kHeaderWidth),
+                kTrackHeight};
+}
+
+Rect TimelineWidget::HeaderRect(int index) const {
+    const Rect row = TrackRect(index);
+    return Rect{timeline_area_.x + 10.0f, row.y, kHeaderWidth - 18.0f,
+                row.height};
+}
+
+Rect TimelineWidget::RealClipRect(const Clip& clip) const {
+    const Rect track = TrackRect(clip.track);
+    const float x0 = XAtTime(clip.timeline_start);
+    const float x1 = XAtTime(ClipEndSeconds(clip));
+    return Rect{x0, track.y + kClipInset,
+                std::max(3.0f, x1 - x0),
+                track.height - kClipInset * 2.0f};
+}
+
+Rect TimelineWidget::ClipRect(const Clip& clip) const {
+    const auto it = clip_previews_.find(clip.id);
+    if (it != clip_previews_.end()) {
+        const Rect track = TrackRect(clip.track);
+        const float x0 = XAtTime(it->second.first);
+        const float x1 = XAtTime(it->second.second);
+        return Rect{x0, track.y + kClipInset,
+                    std::max(3.0f, x1 - x0),
+                    track.height - kClipInset * 2.0f};
+    }
+    return RealClipRect(clip);
+}
+
+TimelineWidget::ClipHit TimelineWidget::HitClip(Point p) const {
+    if (project_ == nullptr ||
+        p.x < timeline_area_.x + kHeaderWidth) {
+        return {};
+    }
+    for (auto it = project_->clips.rbegin(); it != project_->clips.rend();
+         ++it) {
+        const Clip& clip = *it;
+        const Rect rect = ClipRect(clip);
+        if (!rect.Contains(p)) continue;
+        if (p.x - rect.x <= kEdgeGrabPx) return {&clip, ClipPart::EdgeIn};
+        if (rect.x + rect.width - p.x <= kEdgeGrabPx) {
+            return {&clip, ClipPart::EdgeOut};
+        }
+        return {&clip, ClipPart::Body};
+    }
+    return {};
+}
+
+TimelineWidget::HeaderHit TimelineWidget::HitHeaderButton(
+    Point p) const {
+    if (project_ == nullptr ||
+        p.x >= timeline_area_.x + kHeaderWidth) {
+        return {};
+    }
+    for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
+        const Rect label = HeaderRect(static_cast<int>(i));
+        if (p.y < label.y || p.y >= label.y + label.height) continue;
+        for (int button = 0; button < 3; ++button) {
+            if (HeaderButtonRect(label, button).Contains(p)) {
+                return HeaderHit{static_cast<int>(i), button};
+            }
+        }
+        return {};
+    }
+    return {};
+}
+
+const Marker* TimelineWidget::MarkerAtX(float x) const {
+    if (project_ == nullptr) return nullptr;
+    const Marker* best = nullptr;
+    float best_dist = 7.0f;
+    for (const Marker& marker : project_->markers) {
+        const float dist = std::fabs(XAtTime(marker.time) - x);
+        if (dist <= best_dist) {
+            best = &marker;
+            best_dist = dist;
+        }
+    }
+    return best;
+}
+
+int TimelineWidget::TopZoneAt(Point p) const {
+    // Only called inside the ruler band (below the marker lane).
+    const float band_top = timeline_area_.y + kMarkerLaneHeight;
+    if (project_ == nullptr || p.y >= band_top + kWorkBarHeight) {
+        return 0;
+    }
+    const double in =
+        work_drag_ != WorkDrag::None ? work_drag_in_ : project_->work_in;
+    const double out = work_drag_ != WorkDrag::None ? work_drag_out_
+                                                    : project_->work_out;
+    if (out <= in) return 0;   // whole-project work area: no handles
+    const float xi = XAtTime(in);
+    const float xo = XAtTime(out);
+    if (std::fabs(p.x - xi) <= 6.0f) return 1;
+    if (std::fabs(p.x - xo) <= 6.0f) return 2;
+    if (p.x > xi && p.x < xo) return 3;
+    return 0;
+}
+
+ToolContext TimelineWidget::MakeContext(
+    const XER::UI::Widgets::Event& event) const {
+    ToolContext ctx;
+    ctx.project = project_;
+    ctx.position = event.position;
+    ctx.time = TimeAtX(event.position.x);
+    ctx.track = TrackAtY(event.position.y);
+    ctx.playhead = playhead_;
+    ctx.px_per_second = px_per_second_;
+    ctx.button = event.mouse_button;
+    ctx.is_ctrl = event.is_ctrl;
+    ctx.is_shift = event.is_shift;
+    ctx.is_alt = event.is_alt;
+    const ClipHit hit = HitClip(event.position);
+    ctx.clip = hit.clip;
+    ctx.clip_part = hit.part;
+    if (hit.clip != nullptr && project_ != nullptr) {
+        constexpr double kEps = 1e-4;
+        if (hit.part == ClipPart::EdgeOut) {
+            const double end = ClipEndSeconds(*hit.clip);
+            const Clip* next =
+                NextClipOnTrack(*project_, hit.clip->track, end);
+            if (next != nullptr &&
+                std::fabs(next->timeline_start - end) <= kEps) {
+                ctx.roll_from = hit.clip;
+                ctx.roll_to = next;
+            }
+        } else if (hit.part == ClipPart::EdgeIn) {
+            const Clip* prev = PrevClipOnTrack(
+                *project_, hit.clip->track, hit.clip->timeline_start);
+            if (prev != nullptr &&
+                std::fabs(ClipEndSeconds(*prev) -
+                          hit.clip->timeline_start) <= kEps) {
+                ctx.roll_from = prev;
+                ctx.roll_to = hit.clip;
+            }
+        }
+    }
+    return ctx;
+}
+
+void TimelineWidget::SetStatus(const std::string& text, bool is_error) {
+    if (hooks_.on_status) hooks_.on_status(text, is_error);
+}
+
+// ---- media caches ----
+
+const AudioPeaks* TimelineWidget::PeaksFor(const std::string& path) {
+    if (!hooks_.get_audio_peaks || path.empty()) return nullptr;
+    if (peaks_missing_.count(path) != 0u) return nullptr;
+    const auto it = peaks_cache_.find(path);
+    if (it != peaks_cache_.end()) return it->second.get();
+    auto fresh = std::make_shared<AudioPeaks>();
+    if (hooks_.get_audio_peaks(path, fresh.get()) &&
+        fresh->buckets > 0 && fresh->channels > 0) {
+        peaks_cache_[path] = fresh;
+        return fresh.get();
+    }
+    peaks_missing_.insert(path);   // miss is cached too — no re-probe
+    return nullptr;
+}
+
+double TimelineWidget::MediaDurationFor(const std::string& path) {
+    if (!hooks_.get_media_bounds || path.empty()) return 0.0;
+    const auto it = media_duration_cache_.find(path);
+    if (it != media_duration_cache_.end()) return it->second;
+    double duration = 0.0;
+    MediaBounds bounds;
+    if (hooks_.get_media_bounds(path, &bounds) &&
+        bounds.duration_seconds > 0.0) {
+        duration = bounds.duration_seconds;
+    }
+    media_duration_cache_[path] = duration;
+    return duration;
+}
+
+const TimelineWidget::WaveRow* TimelineWidget::WaveFor(
+    const std::string& path, int columns) {
+    const AudioPeaks* peaks = PeaksFor(path);
+    if (peaks == nullptr || columns <= 0) return nullptr;
+    // AudioPeaks carries no sample rate: the whole-media span comes
+    // from the media-bounds hook; the 48 kHz fallback keeps the
+    // waveform approximately aligned when bounds are unavailable.
+    double span = MediaDurationFor(path);
+    if (span <= 0.0) {
+        span = static_cast<double>(peaks->buckets) *
+               peaks->samples_per_peak / kFallbackSampleRate;
+    }
+    const std::string key =
+        path + "@" + std::to_string(columns);
+    const auto it = wave_cache_.find(key);
+    if (it != wave_cache_.end() &&
+        std::fabs(it->second.span_seconds - span) < 1e-6) {
+        return &it->second;
+    }
+    WaveRow* slot;
+    if (it != wave_cache_.end()) {
+        // Rebuild in place (media duration became known after the
+        // first estimate) — the LRU position is kept, no duplicate.
+        slot = &it->second;
+    } else {
+        wave_lru_.push_back(key);
+        while (wave_lru_.size() > kMaxWaveRows) {
+            wave_cache_.erase(wave_lru_.front());
+            wave_lru_.pop_front();
+        }
+        slot = &wave_cache_[key];
+    }
+    WaveRow row;
+    row.span_seconds = span;
+    row.columns = columns;
+    row.minmax.assign(static_cast<std::size_t>(columns) * 2u, 0.0f);
+    const double sec_per_bucket =
+        span / static_cast<double>(peaks->buckets);
+    const auto& data = peaks->data;
+    const std::size_t buckets = peaks->buckets;
+    const int channels = peaks->channels;
+    for (int c = 0; c < columns; ++c) {
+        const double t0 = span * c / columns;
+        const double t1 = span * (c + 1) / columns;
+        std::size_t b0 = static_cast<std::size_t>(std::max(
+            0.0, std::floor(t0 / sec_per_bucket)));
+        std::size_t b1 = static_cast<std::size_t>(std::max(
+            0.0, std::ceil(t1 / sec_per_bucket)));
+        b0 = std::min(b0, buckets - 1);
+        b1 = std::min(std::max(b1, b0 + 1), buckets);
+        float mn = 1.0f, mx = -1.0f;
+        for (int ch = 0; ch < channels; ++ch) {
+            const std::size_t base =
+                static_cast<std::size_t>(ch) * buckets * 2u;
+            for (std::size_t b = b0; b < b1; ++b) {
+                mn = std::min(mn, data[base + b * 2u]);
+                mx = std::max(mx, data[base + b * 2u + 1u]);
+            }
+        }
+        if (!(mn <= mx)) {
+            mn = 0.0f;
+            mx = 0.0f;
+        }
+        row.minmax[static_cast<std::size_t>(c) * 2u] =
+            std::clamp(mn, -1.0f, 1.0f);
+        row.minmax[static_cast<std::size_t>(c) * 2u + 1u] =
+            std::clamp(mx, -1.0f, 1.0f);
+    }
+    *slot = std::move(row);
+    return slot;
+}
+
+const video::Frame* TimelineWidget::PosterFor(const std::string& path,
+                                              double seconds) {
+    if (!hooks_.get_poster || path.empty()) return nullptr;
+    const std::int64_t quantized =
+        static_cast<std::int64_t>(
+            std::llround(seconds / kPosterQuantize)) *
+        static_cast<std::int64_t>(kPosterQuantize * 1000.0);
+    const PosterKey key{path, quantized};
+    const std::string miss_key =
+        path + "@" + std::to_string(quantized);
+    if (poster_missing_.count(miss_key) != 0u) return nullptr;
+    const auto it = poster_cache_.find(key);
+    if (it != poster_cache_.end()) return it->second.get();
+    auto frame = std::make_shared<video::Frame>();
+    if (hooks_.get_poster(path, seconds, frame.get()) &&
+        frame->IsValid() && frame->Width() > 0 && frame->Height() > 0 &&
+        frame->Format() == video::PixelFormat::BGRA8) {
+        poster_cache_[key] = frame;
+        poster_lru_.push_back(key);
+        while (poster_lru_.size() > kMaxPosters) {
+            poster_cache_.erase(poster_lru_.front());
+            poster_lru_.pop_front();
+        }
+        return frame.get();
+    }
+    poster_missing_.insert(miss_key);
+    return nullptr;
+}
+
+// ---- rendering ----
+
+void TimelineWidget::Render(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens) {
+    const Rect bounds = GetBounds();
+    renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
+    renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
+    if (project_ == nullptr) return;
+
+    const float lane_bottom = bounds.y + kMarkerLaneHeight;
+    const float ruler_bottom = lane_bottom + kRulerHeight;
+
+    const Rect header{bounds.x + 12.0f, bounds.y + 2.0f,
+                      kHeaderWidth - 16.0f,
+                      kMarkerLaneHeight + kRulerHeight - 4.0f};
+    renderer.DrawText("TIMELINE", header,
+                      {tokens.muted, tokens.font_small, 700});
+    if (const EditTool* tool = ActiveToolImpl()) {
+        renderer.DrawText(
+            std::string("tool: ") + tool->Name(),
+            Rect{header.x, bounds.y + kMarkerLaneHeight + 16.0f,
+                 header.width, 18.0f},
+            {tokens.accent, tokens.font_small, 600});
+    }
+
+    // Ruler ticks — adaptive step so labels stay readable at any zoom.
+    static constexpr double kSteps[] = {0.1, 0.25, 0.5, 1.0, 2.0,
+                                        5.0, 10.0, 30.0, 60.0, 120.0};
+    double step = 1.0;
+    for (double candidate : kSteps) {
+        if (candidate * px_per_second_ >= 72.0) {
+            step = candidate;
+            break;
+        }
+    }
+    const double visible_end =
+        scroll_seconds_ + timeline_area_.width / px_per_second_;
+    double tick = std::floor(scroll_seconds_ / step) * step;
+    for (; tick <= visible_end + step; tick += step) {
+        const float x = XAtTime(tick);
+        renderer.DrawLine({x, lane_bottom + 12.0f},
+                          {x, ruler_bottom}, tokens.border, 1.0f);
+        char label[32];
+        std::snprintf(label, sizeof(label), "%.2f", tick);
+        renderer.DrawText(label,
+                          Rect{x + 3.0f, lane_bottom + 14.0f, 64.0f,
+                               16.0f},
+                          {tokens.muted, tokens.font_small, 400});
+    }
+    renderer.DrawLine({timeline_area_.x + kHeaderWidth, ruler_bottom},
+                      {bounds.x + bounds.width, ruler_bottom},
+                      tokens.border, 1.0f);
+
+    RenderMarkers(renderer, tokens, bounds);
+    RenderWorkArea(renderer, tokens, bounds);
+
+    const auto palette = ClipPalette();
+    for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
+        const Track& track = project_->tracks[i];
+        const Rect row = TrackRect(static_cast<int>(i));
+        const Rect label_rect = HeaderRect(static_cast<int>(i));
+        renderer.FillRect(label_rect, tokens.background,
+                          tokens.radius_medium);
+        renderer.StrokeRect(label_rect, tokens.border, 1.0f,
+                            tokens.radius_medium);
+        const std::string name =
+            (track.kind == TrackKind::Video ? "V" : "A") +
+            std::to_string(i + 1) + "  " + track.name;
+        renderer.DrawText(name, label_rect,
+                          {track.locked ? tokens.muted : tokens.foreground,
+                           tokens.font_small, 600});
+        std::string flags;
+        if (track.muted) flags += "muted ";
+        if (track.hidden) flags += "hidden ";
+        if (track.locked) flags += "locked";
+        if (!flags.empty()) {
+            renderer.DrawText(
+                flags,
+                Rect{label_rect.x + 8.0f, label_rect.y + 4.0f,
+                     label_rect.width - 16.0f, 16.0f},
+                {tokens.danger, tokens.font_small, 400});
+        }
+        RenderHeaderButtons(renderer, tokens, track, label_rect);
+
+        Color row_color = track.kind == TrackKind::Video
+            ? WithAlpha(tokens.accent, 0.045f)
+            : WithAlpha(tokens.secondary, 0.45f);
+        if (track.locked) {
+            row_color = WithAlpha(row_color, row_color.a * 0.55f);
+        }
+        renderer.FillRect(row, row_color, tokens.radius_small);
+        renderer.StrokeRect(row, tokens.border, 1.0f,
+                            tokens.radius_small);
+    }
+
+    // Clips render inside the track-area viewport only — a clip that
+    // starts before the scroll offset must not bleed under the header
+    // column.
+    const Rect tracks_viewport{timeline_area_.x + kHeaderWidth,
+                               ruler_bottom,
+                               std::max(0.0f, timeline_area_.width -
+                                                  kHeaderWidth),
+                               std::max(0.0f, bounds.y + bounds.height -
+                                                  ruler_bottom)};
+    renderer.PushClip(tracks_viewport);
+    for (const Clip& clip : project_->clips) {
+        if (clip.track < 0 ||
+            clip.track >= static_cast<int>(project_->tracks.size())) {
+            continue;
+        }
+        const Track& track = project_->tracks[clip.track];
+        const Rect rect = ClipRect(clip);
+        if (rect.x + rect.width < timeline_area_.x + kHeaderWidth ||
+            rect.x > timeline_area_.x + timeline_area_.width) {
+            continue;
+        }
+        const Color base = palette[static_cast<std::size_t>(clip.track) %
+                                   palette.size()];
+        const bool previewed = clip_previews_.count(clip.id) != 0u;
+        if (previewed) {
+            // Original position stays as a dim ghost under the
+            // previewed span (Premiere's edit preview).
+            const Rect real = RealClipRect(clip);
+            renderer.FillRect(real, WithAlpha(base, 0.14f),
+                              tokens.radius_medium);
+            renderer.StrokeRect(real, WithAlpha(tokens.border, 0.5f),
+                                1.0f, tokens.radius_medium);
+        }
+        float alpha = clip.muted || track.hidden ? 0.28f : 0.72f;
+        if (track.locked) alpha *= 0.5f;   // locked tracks dim
+        renderer.FillRect(rect, WithAlpha(base, alpha),
+                          tokens.radius_medium);
+        const Color stroke =
+            previewed ? tokens.accent
+                      : clip.id == selected_clip_id_ ? tokens.ring
+                                                     : tokens.border;
+        renderer.StrokeRect(
+            rect, stroke,
+            previewed || clip.id == selected_clip_id_ ? 2.0f : 1.0f,
+            tokens.radius_medium);
+
+        renderer.PushClip(rect);
+        if (track.kind == TrackKind::Audio) {
+            RenderWaveform(renderer, tokens, clip, rect);
+        } else {
+            RenderThumbnails(renderer, tokens, clip, rect);
+        }
+        const Color label_color =
+            track.locked || clip.muted || track.hidden
+                ? WithAlpha(tokens.accent_foreground, 0.6f)
+                : tokens.accent_foreground;
+        renderer.DrawText(Basename(clip.source_path),
+                          Rect{rect.x + 8.0f, rect.y + 6.0f,
+                               rect.width - 14.0f, 18.0f},
+                          {label_color, tokens.font_small, 600});
+        std::string sub = FormatTime(clip.duration);
+        if (std::fabs(clip.playback_rate - 1.0) > 1e-6) {
+            char rate[16];
+            std::snprintf(rate, sizeof(rate), "  %.2fx",
+                          clip.playback_rate);
+            sub += rate;
+        }
+        renderer.DrawText(sub,
+                          Rect{rect.x + 8.0f, rect.y + 28.0f,
+                               rect.width - 14.0f, 16.0f},
+                          {WithAlpha(label_color, 0.78f),
+                           tokens.font_small, 400});
+        if (track.locked) {
+            renderer.DrawText("locked",
+                              Rect{rect.x + rect.width - 54.0f,
+                                   rect.y + 4.0f, 50.0f, 16.0f},
+                              {WithAlpha(tokens.danger, 0.85f),
+                               tokens.font_small, 600});
+        }
+        renderer.PopClip();
+
+        // Trim affordances.
+        renderer.FillRect(Rect{rect.x, rect.y, 4.0f, rect.height},
+                          WithAlpha(tokens.foreground, 0.30f), 2.0f);
+        renderer.FillRect(Rect{rect.x + rect.width - 4.0f, rect.y,
+                               4.0f, rect.height},
+                          WithAlpha(tokens.foreground, 0.30f), 2.0f);
+    }
+
+    // Transition badges at cuts.
+    for (const Transition& transition : project_->transitions) {
+        const Clip* from = FindClip(*project_, transition.from_clip);
+        const Clip* to = FindClip(*project_, transition.to_clip);
+        if (from == nullptr || to == nullptr) continue;
+        const float x = XAtTime(ClipEndSeconds(*from));
+        const Rect row = TrackRect(from->track);
+        renderer.FillRect(Rect{x - 11.0f, row.y + 18.0f, 22.0f, 22.0f},
+                          tokens.accent, 11.0f);
+        renderer.DrawText("T", Rect{x - 11.0f, row.y + 21.0f, 22.0f, 18.0f},
+                          {tokens.accent_foreground, tokens.font_small,
+                           700});
+    }
+    renderer.PopClip();   // tracks_viewport
+
+    // Zoom marquee (rubber band) across the full track area.
+    if (marquee_active_ && marquee_x1_ > marquee_x0_) {
+        const Rect band{marquee_x0_, ruler_bottom,
+                        marquee_x1_ - marquee_x0_,
+                        bounds.y + bounds.height - ruler_bottom};
+        renderer.FillRect(band, WithAlpha(tokens.accent, 0.12f), 0.0f);
+        renderer.StrokeRect(band, tokens.accent, 1.0f, 0.0f);
+    }
+
+    const float play_x = XAtTime(playhead_);
+    renderer.DrawLine({play_x, bounds.y},
+                      {play_x, bounds.y + bounds.height}, tokens.danger,
+                      2.0f);
+    renderer.FillRect(Rect{play_x - 6.0f, bounds.y, 12.0f, 10.0f},
+                      tokens.danger, 2.0f);
+}
+
+void TimelineWidget::RenderMarkers(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const Rect& bounds) {
+    const Rect lane{timeline_area_.x + kHeaderWidth, bounds.y,
+                    std::max(0.0f, bounds.width - kHeaderWidth),
+                    kMarkerLaneHeight};
+    renderer.FillRect(lane, WithAlpha(tokens.background, 0.55f), 0.0f);
+    renderer.DrawLine({lane.x, bounds.y + kMarkerLaneHeight},
+                      {lane.x + lane.width, bounds.y + kMarkerLaneHeight},
+                      tokens.border, 1.0f);
+    const float mid = bounds.y + kMarkerLaneHeight * 0.5f;
+    for (const Marker& marker : project_->markers) {
+        const float x = XAtTime(marker.time);
+        if (x < lane.x - 8.0f || x > lane.x + lane.width + 8.0f) {
+            continue;
+        }
+        const Color color = MarkerColor(marker);
+        DrawDiamond(renderer, {x, mid}, 5.0f, color, 1.5f);
+        if (!marker.name.empty()) {
+            renderer.DrawText(marker.name,
+                              Rect{x + 8.0f, bounds.y + 2.0f, 120.0f,
+                                   kMarkerLaneHeight - 3.0f},
+                              {color, tokens.font_small, 500});
+        }
+    }
+}
+
+void TimelineWidget::RenderWorkArea(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const Rect& bounds) {
+    const double in =
+        work_drag_ != WorkDrag::None ? work_drag_in_ : project_->work_in;
+    const double out = work_drag_ != WorkDrag::None ? work_drag_out_
+                                                    : project_->work_out;
+    if (out <= in) return;   // work_out <= work_in = whole project
+    const float xi = XAtTime(in);
+    const float xo = XAtTime(out);
+    const float band_top = bounds.y + kMarkerLaneHeight + 1.0f;
+    const Rect band{xi, band_top, std::max(1.0f, xo - xi),
+                    kWorkBarHeight - 2.0f};
+    renderer.FillRect(band, WithAlpha(tokens.accent, 0.22f), 2.0f);
+    renderer.DrawLine({xi, band_top}, {xo, band_top}, tokens.accent,
+                      2.0f);
+    // Edge handles — the drag grab zones TopZoneAt reports.
+    renderer.FillRect(Rect{xi - 3.0f, band_top - 1.0f, 6.0f,
+                           kWorkBarHeight},
+                      tokens.accent, 1.0f);
+    renderer.FillRect(Rect{xo - 3.0f, band_top - 1.0f, 6.0f,
+                           kWorkBarHeight},
+                      tokens.accent, 1.0f);
+}
+
+void TimelineWidget::RenderHeaderButtons(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const Track& track,
+    const Rect& label_rect) {
+    const bool active[3] = {track.muted, track.hidden, track.locked};
+    for (int button = 0; button < 3; ++button) {
+        const Rect r = HeaderButtonRect(label_rect, button);
+        const Color fill = active[button]
+            ? (button == 2 ? tokens.danger : tokens.accent)
+            : WithAlpha(tokens.muted, 0.25f);
+        const Color text = active[button] ? tokens.accent_foreground
+                                          : tokens.muted;
+        renderer.FillRect(r, fill, 3.0f);
+        renderer.StrokeRect(r, tokens.border, 1.0f, 3.0f);
+        renderer.DrawText(HeaderButtonLabel(button),
+                          Rect{r.x, r.y + 1.0f, r.width, r.height},
+                          {text, tokens.font_small, 700});
+    }
+}
+
+void TimelineWidget::RenderWaveform(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const Clip& clip,
+    const Rect& rect) {
+    if (!hooks_.get_audio_peaks || clip.source_path.empty() ||
+        clip.source.kind != SourceKind::Media) {
+        return;
+    }
+    const int columns = std::max(1, static_cast<int>(rect.width));
+    const WaveRow* wave = WaveFor(clip.source_path, columns);
+    if (wave == nullptr || wave->span_seconds <= 0.0) return;
+    const double src0 = clip.in_point;
+    const double src1 =
+        clip.in_point + clip.duration * clip.playback_rate;
+    if (!(src1 > src0)) return;
+    const float mid = rect.y + rect.height * 0.58f;
+    const float half = rect.height * 0.38f;
+    const Color color = WithAlpha(tokens.accent_foreground, 0.55f);
+    for (int px = 0; px < columns; ++px) {
+        const double t0 = src0 + (src1 - src0) * px / columns;
+        const double t1 = src0 + (src1 - src0) * (px + 1) / columns;
+        int c0 = static_cast<int>(
+            std::floor(t0 / wave->span_seconds * wave->columns));
+        int c1 = static_cast<int>(
+                     std::ceil(t1 / wave->span_seconds * wave->columns)) -
+                 1;
+        c0 = std::clamp(c0, 0, wave->columns - 1);
+        c1 = std::clamp(c1, c0, wave->columns - 1);
+        float mn = 1.0f, mx = -1.0f;
+        for (int c = c0; c <= c1; ++c) {
+            mn = std::min(mn, wave->minmax[static_cast<std::size_t>(c) * 2u]);
+            mx = std::max(
+                mx, wave->minmax[static_cast<std::size_t>(c) * 2u + 1u]);
+        }
+        const float x = rect.x + static_cast<float>(px) + 0.5f;
+        float y0 = mid - mx * half;
+        float y1 = mid - mn * half;
+        if (y1 - y0 < 1.0f) {
+            y0 = mid - 0.5f;
+            y1 = mid + 0.5f;
+        }
+        renderer.DrawLine({x, y0}, {x, y1}, color, 1.0f);
+    }
+}
+
+void TimelineWidget::RenderThumbnails(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const Clip& clip,
+    const Rect& rect) {
+    (void)tokens;
+    if (!hooks_.get_poster || clip.source_path.empty() ||
+        clip.source.kind != SourceKind::Media) {
+        return;
+    }
+    const float slot_h = rect.height - 18.0f;
+    if (slot_h < 10.0f || px_per_second_ <= 0.0) return;
+    const float slot_w = std::max(24.0f, slot_h * (16.0f / 9.0f));
+    for (float x = rect.x + 2.0f; x + 8.0f < rect.x + rect.width;
+         x += slot_w + 4.0f) {
+        const double center_offset =
+            (x + slot_w * 0.5f - rect.x) / px_per_second_;
+        const double source_t =
+            clip.in_point + center_offset * clip.playback_rate;
+        const video::Frame* frame =
+            PosterFor(clip.source_path, source_t);
+        if (frame == nullptr) continue;
+        const float aspect =
+            static_cast<float>(frame->Width()) / frame->Height();
+        float dst_w = slot_w, dst_h = slot_h;
+        if (aspect > slot_w / slot_h) {
+            dst_h = slot_w / aspect;
+        } else {
+            dst_w = slot_h * aspect;
+        }
+        const Rect dst{x + (slot_w - dst_w) * 0.5f,
+                       rect.y + 2.0f + (slot_h - dst_h) * 0.5f,
+                       dst_w, dst_h};
+        renderer.DrawFrameBgra(frame->Data(), frame->Width(),
+                               frame->Height(), dst, 0.85f);
+    }
+}
+
+// ---- input ----
+
+void TimelineWidget::Layout(const XER::UI::Layout::Rect& bounds) {
+    SetBounds(bounds);
+    timeline_area_ = bounds;
+}
+
+bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
+    using XER::UI::Widgets::Event;
+    using XER::UI::Widgets::KeyCode;
+    using XER::UI::Widgets::MouseButton;
+    if (!IsEnabled() || project_ == nullptr) return false;
+
+    if (event.type == Event::Type::MouseWheel) {
+        const double anchor = TimeAtX(event.position.x);
+        if (event.is_shift) {
+            scroll_seconds_ -= event.wheel_delta / 120.0;
+        } else {
+            const double factor =
+                std::pow(1.16, event.wheel_delta / 120.0);
+            const double next =
+                std::clamp(px_per_second_ * factor, kMinZoom, kMaxZoom);
+            px_per_second_ = next;
+            scroll_seconds_ = std::max(
+                0.0, anchor -
+                         (event.position.x -
+                          (timeline_area_.x + kHeaderWidth)) /
+                             px_per_second_);
+        }
+        scroll_seconds_ = std::max(0.0, scroll_seconds_);
+        Invalidate();
+        return true;
+    }
+
+    const Point p = event.position;
+    const float lane_bottom = timeline_area_.y + kMarkerLaneHeight;
+    const float ruler_bottom = lane_bottom + kRulerHeight;
+    const bool in_top_strip =
+        p.x >= timeline_area_.x + kHeaderWidth &&
+        p.y >= timeline_area_.y && p.y < ruler_bottom;
+    const bool in_lane = in_top_strip && p.y < lane_bottom;
+
+    if (event.type == Event::Type::MouseDown &&
+        event.mouse_button == MouseButton::Right) {
+        // Right-click a marker diamond to remove it.
+        if (in_lane) {
+            if (const Marker* marker = MarkerAtX(p.x)) {
+                if (hooks_.on_remove_marker) {
+                    hooks_.on_remove_marker(marker->time);
+                }
+            }
+            return true;
+        }
+        return in_top_strip;
+    }
+
+    if (event.type == Event::Type::MouseDown &&
+        event.mouse_button == MouseButton::Left) {
+        SetFocused(true);
+
+        // Track-header toggle buttons (mute / hidden-eye / lock).
+        if (const HeaderHit hit = HitHeaderButton(p);
+            hit.track >= 0 && hit.button >= 0) {
+            const Track& track = project_->tracks[hit.track];
+            if (hit.button == 0 && hooks_.on_track_mute) {
+                hooks_.on_track_mute(hit.track, !track.muted);
+            } else if (hit.button == 1 && hooks_.on_track_hidden) {
+                hooks_.on_track_hidden(hit.track, !track.hidden);
+            } else if (hit.button == 2 && hooks_.on_track_locked) {
+                hooks_.on_track_locked(hit.track, !track.locked);
+            }
+            Invalidate();
+            return true;
+        }
+
+        if (in_top_strip) {
+            const double t = TimeAtX(p.x);
+            // Double-click on the ruler or marker lane drops a marker.
+            const auto now = std::chrono::steady_clock::now();
+            const bool double_click =
+                last_ruler_click_valid_ &&
+                now - last_ruler_click_ < kDoubleClick &&
+                std::fabs(p.x - last_ruler_click_x_) <= 6.0f;
+            last_ruler_click_ = now;
+            last_ruler_click_x_ = p.x;
+            last_ruler_click_valid_ = true;
+            if (double_click) {
+                last_ruler_click_valid_ = false;
+                if (hooks_.on_add_marker) {
+                    hooks_.on_add_marker(t, "");
+                }
+                Invalidate();
+                return true;
+            }
+            // Work-area bar handles live in the ruler's top band.
+            if (!in_lane) {
+                switch (TopZoneAt(p)) {
+                    case 1: work_drag_ = WorkDrag::In; break;
+                    case 2: work_drag_ = WorkDrag::Out; break;
+                    case 3: work_drag_ = WorkDrag::Move; break;
+                    default: break;
+                }
+                if (work_drag_ != WorkDrag::None) {
+                    work_drag_in_ = project_->work_in;
+                    work_drag_out_ = project_->work_out;
+                    work_drag_anchor_ = t;
+                    work_drag_orig_in_ = project_->work_in;
+                    work_drag_orig_out_ = project_->work_out;
+                    return true;
+                }
+            }
+            if (hooks_.on_seek) hooks_.on_seek(t);
+            return true;
+        }
+
+        // Pointer events inside the track area belong to the active
+        // tool — it resolves hit/drag/commit via ToolCommit.
+        const ToolContext ctx = MakeContext(event);
+        EditTool* tool = ActiveToolImpl();
+        const bool used =
+            tool != nullptr && tool->OnPointerDown(ctx, *this);
+        return used || ctx.track >= 0;
+    }
+
+    if (event.type == Event::Type::MouseMove) {
+        if (work_drag_ != WorkDrag::None) {
+            const double t = SnapCandidate(TimeAtX(p.x), -1);
+            switch (work_drag_) {
+                case WorkDrag::In:
+                    work_drag_in_ =
+                        std::clamp(t, 0.0, work_drag_out_);
+                    break;
+                case WorkDrag::Out:
+                    work_drag_out_ = std::max(t, work_drag_in_);
+                    break;
+                case WorkDrag::Move: {
+                    double shift = t - work_drag_anchor_;
+                    if (work_drag_orig_in_ + shift < 0.0) {
+                        shift = -work_drag_orig_in_;
+                    }
+                    work_drag_in_ = work_drag_orig_in_ + shift;
+                    work_drag_out_ = work_drag_orig_out_ + shift;
+                    break;
+                }
+                default:
+                    break;
+            }
+            SetStatus("Work area " + FormatTime(work_drag_in_) +
+                      " - " + FormatTime(work_drag_out_));
+            Invalidate();
+            return true;
+        }
+        if (EditTool* tool = ActiveToolImpl();
+            tool != nullptr && tool->IsDragging()) {
+            const ToolContext ctx = MakeContext(event);
+            return tool->OnPointerMove(ctx, *this);
+        }
+        return false;
+    }
+
+    if (event.type == Event::Type::MouseUp &&
+        event.mouse_button == MouseButton::Left) {
+        if (work_drag_ != WorkDrag::None) {
+            work_drag_ = WorkDrag::None;
+            const double in =
+                std::min(work_drag_in_, work_drag_out_);
+            const double out =
+                std::max(work_drag_in_, work_drag_out_);
+            if (hooks_.on_set_work_area) {
+                hooks_.on_set_work_area(in, out);
+            }
+            Invalidate();
+            return true;
+        }
+        if (EditTool* tool = ActiveToolImpl();
+            tool != nullptr && tool->IsDragging()) {
+            const ToolContext ctx = MakeContext(event);
+            return tool->OnPointerUp(ctx, *this);
+        }
+        return false;
+    }
+
+    if (event.type == Event::Type::KeyDown) {
+        if (event.key == KeyCode::Escape) {
+            if (work_drag_ != WorkDrag::None) {
+                work_drag_ = WorkDrag::None;
+                Invalidate();
+                return true;
+            }
+            if (EditTool* tool = ActiveToolImpl();
+                tool != nullptr && tool->IsDragging()) {
+                tool->Cancel(*this);
+                return true;
+            }
+            return false;
+        }
+        const double frame_step = project_->fps_num > 0
+            ? static_cast<double>(project_->fps_den) / project_->fps_num
+            : 1.0 / 30.0;
+        if (event.key == KeyCode::ArrowLeft ||
+            event.key == KeyCode::ArrowRight) {
+            const double direction =
+                event.key == KeyCode::ArrowLeft ? -1.0 : 1.0;
+            const double t = playhead_ +
+                direction * (event.is_shift ? 1.0 : frame_step);
+            if (hooks_.on_seek) hooks_.on_seek(t);
+            return true;
+        }
+        if (event.key == KeyCode::Delete &&
+            !selected_clip_id_.empty()) {
+            // Alt+Delete = ripple delete (remove + close the gap);
+            // plain Delete stays the classic remove.
+            if (event.is_alt && hooks_.on_ripple_delete) {
+                hooks_.on_ripple_delete(selected_clip_id_);
+            } else if (hooks_.on_delete_clip) {
+                hooks_.on_delete_clip(selected_clip_id_);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+// ---- ToolCommit ----
+
+void TimelineWidget::SelectClip(const std::string& clip_id) {
+    if (hooks_.on_select_clip) hooks_.on_select_clip(clip_id);
+}
+
+double TimelineWidget::SnapCandidate(double seconds, int track) const {
+    if (!snap_enabled_ || project_ == nullptr) return seconds;
+    // CollectSnapPoints already feeds clip edges on the track (all
+    // tracks when < 0), marker times, work-area edges and the playhead.
+    return SnapTime(*project_, track, seconds, 8.0 / px_per_second_,
+                    playhead_);
+}
+
+void TimelineWidget::SetClipPreview(const std::string& clip_id,
+                                    double start_seconds,
+                                    double end_seconds) {
+    clip_previews_[clip_id] = {start_seconds, end_seconds};
+}
+
+void TimelineWidget::ClearClipPreviews() { clip_previews_.clear(); }
+
+void TimelineWidget::SetMarquee(bool active, float x0, float x1) {
+    marquee_active_ = active;
+    marquee_x0_ = x0;
+    marquee_x1_ = x1;
+}
+
+void TimelineWidget::MoveClip(const std::string& clip_id,
+                              double new_start) {
+    if (hooks_.on_move_clip) hooks_.on_move_clip(clip_id, new_start);
+}
+
+void TimelineWidget::TrimClip(const std::string& clip_id, TrimEdge edge,
+                              double new_point) {
+    if (hooks_.on_trim_clip) {
+        hooks_.on_trim_clip(clip_id, edge, new_point);
+    }
+}
+
+void TimelineWidget::RippleTrim(const std::string& clip_id,
+                                TrimEdge edge, double new_point) {
+    if (hooks_.on_ripple_trim) {
+        hooks_.on_ripple_trim(clip_id, edge, new_point);
+    } else {
+        TrimClip(clip_id, edge, new_point);
+    }
+}
+
+void TimelineWidget::SplitClip(const std::string& clip_id,
+                               double at_seconds) {
+    if (hooks_.on_split_clip) hooks_.on_split_clip(clip_id, at_seconds);
+}
+
+void TimelineWidget::RollingEdit(const std::string& from_id,
+                                 const std::string& to_id,
+                                 double delta_seconds) {
+    if (hooks_.on_rolling_edit) {
+        hooks_.on_rolling_edit(from_id, to_id, delta_seconds);
+    }
+}
+
+void TimelineWidget::SlipClip(const std::string& clip_id,
+                              double delta_seconds) {
+    if (hooks_.on_slip_clip) hooks_.on_slip_clip(clip_id, delta_seconds);
+}
+
+void TimelineWidget::SlideClip(const std::string& clip_id,
+                               double delta_seconds) {
+    if (hooks_.on_slide_clip) {
+        hooks_.on_slide_clip(clip_id, delta_seconds);
+    }
+}
+
+void TimelineWidget::SetClipRate(const std::string& clip_id,
+                                 double new_rate) {
+    if (hooks_.on_rate_stretch) {
+        hooks_.on_rate_stretch(clip_id, new_rate);
+    }
+}
+
+void TimelineWidget::PanBy(double seconds) {
+    scroll_seconds_ = std::max(0.0, scroll_seconds_ + seconds);
+    Invalidate();
+}
+
+void TimelineWidget::ZoomAt(double factor, double anchor_seconds) {
+    const double next =
+        std::clamp(px_per_second_ * factor, kMinZoom, kMaxZoom);
+    if (next == px_per_second_) return;
+    const float anchor_x = XAtTime(anchor_seconds);
+    px_per_second_ = next;
+    scroll_seconds_ = std::max(
+        0.0, anchor_seconds -
+                 (anchor_x - (timeline_area_.x + kHeaderWidth)) / next);
+    Invalidate();
+}
+
+void TimelineWidget::ZoomToRange(double t0, double t1) {
+    if (!(t1 > t0)) return;
+    const double width_px =
+        std::max(1.0f, timeline_area_.width - kHeaderWidth);
+    px_per_second_ =
+        std::clamp(width_px / (t1 - t0), kMinZoom, kMaxZoom);
+    scroll_seconds_ = std::max(0.0, t0);
+    Invalidate();
+}
+
+void TimelineWidget::Tick(double dt_seconds) { (void)dt_seconds; }
+
+}  // namespace XER::VideoEditor::Ui

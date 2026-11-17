@@ -386,6 +386,413 @@ private:
     int track_index_;
 };
 
+class RippleDeleteCommand : public ClipEditCommand {
+public:
+    // affected = the deleted clip + every clip on its track (the
+    // followers shift left to close the gap).
+    RippleDeleteCommand(std::string id,
+                        std::vector<std::string> affected_ids)
+        : ClipEditCommand(std::move(affected_ids), false),
+          id_(std::move(id)) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        if (!RippleDeleteClip(project, id_, error)) {
+            return false;
+        }
+        // The deleted clip is gone; every other affected clip persists
+        // (shifted) — Revert erases them, then reinserts the captured
+        // pre-delete versions (deleted clip included) at old indices.
+        std::vector<std::string> after = affected_ids();
+        after.erase(std::remove(after.begin(), after.end(), id_),
+                    after.end());
+        NoteAfter(std::move(after));
+        return true;
+    }
+    std::string Label() const override { return "Ripple delete"; }
+
+private:
+    std::string id_;
+};
+
+// Base for ops that mint fresh clip ids INSIDE the model call
+// (LiftRange boundary splits, OverwriteClipAt range clearing):
+// re-running the op on redo would produce different generated ids, so
+// the command snapshots the full clips+transitions vectors before AND
+// after the first Apply and replays the after-state verbatim on redo
+// (undo→redo is byte-identical — the SplitClipCommand determinism
+// contract). The affected state is exactly clips+transitions: these
+// ops touch nothing else.
+class TimelineSnapshotCommand : public Command {
+public:
+    bool Apply(Project& project) override {
+        if (captured_) {
+            project.clips = after_clips_;
+            project.transitions = after_transitions_;
+            return true;
+        }
+        before_clips_ = project.clips;
+        before_transitions_ = project.transitions;
+        last_error_.clear();
+        if (!ApplyOp(project, &last_error_)) {
+            return false;
+        }
+        after_clips_ = project.clips;
+        after_transitions_ = project.transitions;
+        captured_ = true;
+        return true;
+    }
+    bool Revert(Project& project) override {
+        project.clips = before_clips_;
+        project.transitions = before_transitions_;
+        return true;
+    }
+    const std::string& last_error() const { return last_error_; }
+
+protected:
+    virtual bool ApplyOp(Project& project, std::string* error) = 0;
+
+private:
+    std::vector<Clip> before_clips_, after_clips_;
+    std::vector<Transition> before_transitions_, after_transitions_;
+    bool captured_ = false;
+    std::string last_error_;
+};
+
+class LiftRangeCommand : public TimelineSnapshotCommand {
+public:
+    LiftRangeCommand(double t0, double t1, bool close_gap)
+        : t0_(t0), t1_(t1), close_gap_(close_gap) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        return LiftRange(project, t0_, t1_, close_gap_, error);
+    }
+    std::string Label() const override { return "Lift/extract"; }
+
+private:
+    double t0_, t1_;
+    bool close_gap_;
+};
+
+class RollingEditCommand : public ClipEditCommand {
+public:
+    RollingEditCommand(std::string from, std::string to, double delta,
+                       MediaBounds from_bounds, MediaBounds to_bounds)
+        : ClipEditCommand({from, to}, false),
+          from_(std::move(from)),
+          to_(std::move(to)),
+          delta_(delta),
+          from_bounds_(from_bounds),
+          to_bounds_(to_bounds) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        if (!RollingEdit(project, from_, to_, delta_, from_bounds_,
+                         to_bounds_, error)) {
+            return false;
+        }
+        NoteAfter({from_, to_});   // both persist (re-timed)
+        return true;
+    }
+    std::string Label() const override { return "Rolling edit"; }
+    // A rolling-edit drag is one gesture — consecutive rolls on the
+    // same cut coalesce by summing deltas (rolling is linear in
+    // delta). Same transition-change caveat as MoveClipCommand.
+    bool MergeWith(const Command& other) override {
+        const auto* r = dynamic_cast<const RollingEditCommand*>(&other);
+        if (r == nullptr || r->from_ != from_ || r->to_ != to_) {
+            return false;
+        }
+        if (TransitionsChanged() || r->TransitionsChanged()) {
+            return false;
+        }
+        delta_ += r->delta_;
+        return true;
+    }
+
+private:
+    std::string from_;
+    std::string to_;
+    double delta_;
+    MediaBounds from_bounds_;
+    MediaBounds to_bounds_;
+};
+
+class SlipClipCommand : public ClipEditCommand {
+public:
+    SlipClipCommand(std::string id, double delta, MediaBounds bounds)
+        : ClipEditCommand({id}, false),
+          id_(std::move(id)),
+          delta_(delta),
+          bounds_(bounds) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        if (!SlipClip(project, id_, delta_, bounds_, error)) {
+            return false;
+        }
+        NoteAfter({id_});
+        return true;
+    }
+    std::string Label() const override { return "Slip clip"; }
+    // Slips are linear in delta — a drag coalesces by summing.
+    bool MergeWith(const Command& other) override {
+        const auto* s = dynamic_cast<const SlipClipCommand*>(&other);
+        if (s == nullptr || s->id_ != id_) {
+            return false;
+        }
+        if (TransitionsChanged() || s->TransitionsChanged()) {
+            return false;
+        }
+        delta_ += s->delta_;
+        return true;
+    }
+
+private:
+    std::string id_;
+    double delta_;
+    MediaBounds bounds_;
+};
+
+class SlideClipCommand : public ClipEditCommand {
+public:
+    // affected = the slid clip + every clip on its track (only the
+    // immediate neighbours change, but capturing the whole track is
+    // the established slice pattern and makes Revert trivially exact).
+    SlideClipCommand(std::string id, double delta, MediaBounds bounds,
+                     std::vector<std::string> affected_ids)
+        : ClipEditCommand(std::move(affected_ids), false),
+          id_(std::move(id)),
+          delta_(delta),
+          bounds_(bounds) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        if (!SlideClip(project, id_, delta_, bounds_, error)) {
+            return false;
+        }
+        NoteAfter(affected_ids());   // nothing is added or removed
+        return true;
+    }
+    std::string Label() const override { return "Slide clip"; }
+    // Slides are linear in delta — a drag coalesces by summing.
+    bool MergeWith(const Command& other) override {
+        const auto* s = dynamic_cast<const SlideClipCommand*>(&other);
+        if (s == nullptr || s->id_ != id_) {
+            return false;
+        }
+        if (TransitionsChanged() || s->TransitionsChanged()) {
+            return false;
+        }
+        delta_ += s->delta_;
+        return true;
+    }
+
+private:
+    std::string id_;
+    double delta_;
+    MediaBounds bounds_;
+};
+
+class SetClipRateCommand : public ClipEditCommand {
+public:
+    SetClipRateCommand(std::string id, double rate, MediaBounds bounds)
+        : ClipEditCommand({id}, false),
+          id_(std::move(id)),
+          rate_(rate),
+          bounds_(bounds) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        if (!SetClipRate(project, id_, rate_, bounds_, error)) {
+            return false;
+        }
+        NoteAfter({id_});
+        return true;
+    }
+    std::string Label() const override { return "Set speed"; }
+
+private:
+    std::string id_;
+    double rate_;
+    MediaBounds bounds_;
+};
+
+class InsertClipAtCommand : public ClipEditCommand {
+public:
+    // affected = the new clip + every clip on its track (followers
+    // shift right to open the insert gap).
+    InsertClipAtCommand(Clip clip, MediaBounds bounds,
+                        std::vector<std::string> affected_ids)
+        : ClipEditCommand(std::move(affected_ids), false),
+          clip_(std::move(clip)),
+          bounds_(bounds) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        if (!InsertClipAt(project, clip_, bounds_, error)) {
+            return false;
+        }
+        NoteAfter(affected_ids());   // shifted clips + the new clip
+        return true;
+    }
+    std::string Label() const override { return "Insert clip"; }
+
+private:
+    Clip clip_;
+    MediaBounds bounds_;
+};
+
+class OverwriteClipAtCommand : public TimelineSnapshotCommand {
+public:
+    OverwriteClipAtCommand(Clip clip, MediaBounds bounds)
+        : clip_(std::move(clip)), bounds_(bounds) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        return OverwriteClipAt(project, clip_, bounds_, error);
+    }
+    std::string Label() const override { return "Overwrite clip"; }
+
+private:
+    Clip clip_;
+    MediaBounds bounds_;
+};
+
+class SetClipLinkGroupCommand : public ClipEditCommand {
+public:
+    SetClipLinkGroupCommand(std::string id, std::string group)
+        : ClipEditCommand({id}, false),
+          id_(std::move(id)),
+          group_(std::move(group)) {}
+    bool ApplyOp(Project& project, std::string*) override {
+        if (!SetClipLinkGroup(project, id_, group_)) {
+            return false;   // clip not found — model op has no error_out
+        }
+        NoteAfter({id_});
+        return true;
+    }
+    std::string Label() const override { return "Link clips"; }
+
+private:
+    std::string id_;
+    std::string group_;
+};
+
+class SetClipKeyframesCommand : public ClipEditCommand {
+public:
+    SetClipKeyframesCommand(std::string id, KeyProp prop,
+                            std::vector<Keyframe> keys)
+        : ClipEditCommand({id}, false),
+          id_(std::move(id)),
+          prop_(prop),
+          keys_(std::move(keys)) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        if (!SetClipKeyframes(project, id_, prop_, keys_, error)) {
+            return false;
+        }
+        NoteAfter({id_});
+        return true;
+    }
+    std::string Label() const override { return "Set keyframes"; }
+
+private:
+    std::string id_;
+    KeyProp prop_;
+    std::vector<Keyframe> keys_;
+};
+
+// Track-lock toggles are dedicated (like the transition commands):
+// they mutate a single Track field — outside the clip slice — so the
+// command stores the prior flag and restores it on Revert.
+class SetTrackLockedCommand : public Command {
+public:
+    SetTrackLockedCommand(int track_index, bool locked)
+        : track_index_(track_index), locked_(locked) {}
+    bool Apply(Project& project) override {
+        last_error_.clear();
+        if (track_index_ < 0 ||
+            track_index_ >= static_cast<int>(project.tracks.size())) {
+            last_error_ = "track index out of range";
+            return false;
+        }
+        before_ = project.tracks[static_cast<std::size_t>(track_index_)]
+                      .locked;
+        return SetTrackLocked(project, track_index_, locked_,
+                              &last_error_);
+    }
+    bool Revert(Project& project) override {
+        if (track_index_ >= 0 &&
+            track_index_ < static_cast<int>(project.tracks.size())) {
+            project.tracks[static_cast<std::size_t>(track_index_)]
+                .locked = before_;
+        }
+        return true;
+    }
+    std::string Label() const override { return "Toggle track lock"; }
+    const std::string& last_error() const { return last_error_; }
+
+private:
+    int track_index_;
+    bool locked_;
+    bool before_ = false;
+    std::string last_error_;
+};
+
+// Marker ops are dedicated: project.markers sits outside the clip
+// slice, so the whole (small) vector is snapshotted before Apply and
+// restored verbatim on Revert — exact for both add and remove.
+class AddMarkerCommand : public Command {
+public:
+    explicit AddMarkerCommand(Marker marker)
+        : marker_(std::move(marker)) {}
+    bool Apply(Project& project) override {
+        before_ = project.markers;
+        last_error_.clear();
+        return AddMarker(project, marker_, &last_error_);
+    }
+    bool Revert(Project& project) override {
+        project.markers = before_;
+        return true;
+    }
+    std::string Label() const override { return "Add marker"; }
+    const std::string& last_error() const { return last_error_; }
+
+private:
+    Marker marker_;
+    std::vector<Marker> before_;
+    std::string last_error_;
+};
+
+class RemoveMarkerCommand : public Command {
+public:
+    explicit RemoveMarkerCommand(double time) : time_(time) {}
+    bool Apply(Project& project) override {
+        before_ = project.markers;
+        return RemoveMarker(project, time_);
+    }
+    bool Revert(Project& project) override {
+        project.markers = before_;
+        return true;
+    }
+    std::string Label() const override { return "Remove marker"; }
+
+private:
+    double time_;
+    std::vector<Marker> before_;
+};
+
+// Work-area changes are dedicated: two scalar fields snapshot-restored
+// on Revert.
+class SetWorkAreaCommand : public Command {
+public:
+    SetWorkAreaCommand(double in_seconds, double out_seconds)
+        : in_(in_seconds), out_(out_seconds) {}
+    bool Apply(Project& project) override {
+        before_in_ = project.work_in;
+        before_out_ = project.work_out;
+        last_error_.clear();
+        return SetWorkArea(project, in_, out_, &last_error_);
+    }
+    bool Revert(Project& project) override {
+        project.work_in = before_in_;
+        project.work_out = before_out_;
+        return true;
+    }
+    std::string Label() const override { return "Set work area"; }
+    const std::string& last_error() const { return last_error_; }
+
+private:
+    double in_, out_;
+    double before_in_ = 0.0, before_out_ = 0.0;
+    std::string last_error_;
+};
+
 // Transition commands are dedicated (not slice-based): they mutate
 // project.transitions directly and restore the exact Transition.
 class AddTransitionCommand : public Command {
@@ -541,6 +948,22 @@ std::string TimelineHistory::UndoLabel() const {
 
 std::string TimelineHistory::RedoLabel() const {
     return redo_.empty() ? "" : redo_.back()->Label();
+}
+
+std::vector<std::string> TimelineHistory::UndoLabels() const {
+    std::vector<std::string> labels;
+    labels.reserve(undo_.size());
+    for (const auto& cmd : undo_) labels.push_back(cmd->Label());
+    return labels;
+}
+
+std::vector<std::string> TimelineHistory::RedoLabels() const {
+    std::vector<std::string> labels;
+    labels.reserve(redo_.size());
+    for (auto it = redo_.rbegin(); it != redo_.rend(); ++it) {
+        labels.push_back((*it)->Label());
+    }
+    return labels;
 }
 
 void TimelineHistory::Clear() {
@@ -715,6 +1138,248 @@ bool TimelineHistory::RemoveTrack(int track_index, std::string* error_out) {
     }
     auto cmd = std::make_unique<RemoveTrackCommand>(track_index,
                                                   std::move(affected));
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::RippleDeleteClip(const std::string& clip_id,
+                                       std::string* error_out) {
+    // The deleted clip plus every clip on its track — followers shift
+    // when the gap closes, so the slice must cover all of them.
+    std::vector<std::string> affected{clip_id};
+    if (const Clip* clip = FindClip(project_, clip_id)) {
+        for (const auto& other : project_.clips) {
+            if (other.track == clip->track && other.id != clip_id) {
+                affected.push_back(other.id);
+            }
+        }
+    }
+    auto cmd = std::make_unique<RippleDeleteCommand>(clip_id,
+                                                     std::move(affected));
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::LiftRange(double t0, double t1, bool close_gap,
+                                std::string* error_out) {
+    auto cmd = std::make_unique<LiftRangeCommand>(t0, t1, close_gap);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::RollingEdit(const std::string& from_clip,
+                                  const std::string& to_clip,
+                                  double delta_seconds,
+                                  const MediaBounds& from_bounds,
+                                  const MediaBounds& to_bounds,
+                                  std::string* error_out) {
+    auto cmd = std::make_unique<RollingEditCommand>(
+        from_clip, to_clip, delta_seconds, from_bounds, to_bounds);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SlipClip(const std::string& clip_id,
+                               double delta_seconds,
+                               const MediaBounds& bounds,
+                               std::string* error_out) {
+    auto cmd = std::make_unique<SlipClipCommand>(clip_id, delta_seconds,
+                                                 bounds);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SlideClip(const std::string& clip_id,
+                                double delta_seconds,
+                                const MediaBounds& bounds,
+                                std::string* error_out) {
+    // The slid clip plus every clip on its track — the neighbours that
+    // absorb the slide live in that set.
+    std::vector<std::string> affected{clip_id};
+    if (const Clip* clip = FindClip(project_, clip_id)) {
+        for (const auto& other : project_.clips) {
+            if (other.track == clip->track && other.id != clip_id) {
+                affected.push_back(other.id);
+            }
+        }
+    }
+    auto cmd = std::make_unique<SlideClipCommand>(
+        clip_id, delta_seconds, bounds, std::move(affected));
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetClipRate(const std::string& clip_id,
+                                  double rate, const MediaBounds& bounds,
+                                  std::string* error_out) {
+    auto cmd = std::make_unique<SetClipRateCommand>(clip_id, rate,
+                                                    bounds);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::InsertClipAt(Clip clip, const MediaBounds& bounds,
+                                   std::string* clip_id_out,
+                                   std::string* error_out) {
+    if (clip.id.empty()) {
+        clip.id = NewClipId();   // once — redo reuses the stored clip
+    }
+    const std::string id = clip.id;
+    std::vector<std::string> affected{id};
+    for (const auto& other : project_.clips) {
+        if (other.track == clip.track) {
+            affected.push_back(other.id);
+        }
+    }
+    auto cmd = std::make_unique<InsertClipAtCommand>(
+        std::move(clip), bounds, std::move(affected));
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    if (clip_id_out) {
+        *clip_id_out = id;
+    }
+    return true;
+}
+
+bool TimelineHistory::OverwriteClipAt(Clip clip,
+                                      const MediaBounds& bounds,
+                                      std::string* clip_id_out,
+                                      std::string* error_out) {
+    if (clip.id.empty()) {
+        clip.id = NewClipId();
+    }
+    const std::string id = clip.id;
+    auto cmd = std::make_unique<OverwriteClipAtCommand>(std::move(clip),
+                                                      bounds);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    if (clip_id_out) {
+        *clip_id_out = id;
+    }
+    return true;
+}
+
+bool TimelineHistory::AddMarker(const Marker& marker,
+                                std::string* error_out) {
+    auto cmd = std::make_unique<AddMarkerCommand>(marker);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::RemoveMarker(double time) {
+    return Execute(std::make_unique<RemoveMarkerCommand>(time));
+}
+
+bool TimelineHistory::SetWorkArea(double in_seconds, double out_seconds,
+                                  std::string* error_out) {
+    auto cmd = std::make_unique<SetWorkAreaCommand>(in_seconds,
+                                                    out_seconds);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetTrackLocked(int track_index, bool locked,
+                                     std::string* error_out) {
+    auto cmd = std::make_unique<SetTrackLockedCommand>(track_index,
+                                                       locked);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::SetClipLinkGroup(const std::string& clip_id,
+                                       const std::string& group) {
+    return Execute(
+        std::make_unique<SetClipLinkGroupCommand>(clip_id, group));
+}
+
+bool TimelineHistory::SetClipKeyframes(const std::string& clip_id,
+                                       KeyProp prop,
+                                       std::vector<Keyframe> keys,
+                                       std::string* error_out) {
+    auto cmd = std::make_unique<SetClipKeyframesCommand>(
+        clip_id, prop, std::move(keys));
     auto* raw = cmd.get();
     if (!cmd->Apply(project_)) {
         if (error_out) {
