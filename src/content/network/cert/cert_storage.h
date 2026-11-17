@@ -23,11 +23,16 @@ public:
     // Returns all trusted certificates.
     const std::vector<std::string>& trusted() const { return certs_; }
 
+    // Path the bundle was loaded from ("" when certs were added
+    // programmatically via AddTrusted).
+    const std::string& bundle_path() const { return bundle_path_; }
+
     // Returns the system default CA bundle path.
     static std::string SystemCaBundlePath();
 
 private:
     std::vector<std::string> certs_;
+    std::string bundle_path_;
 };
 
 }  // namespace XER::Network::Cert

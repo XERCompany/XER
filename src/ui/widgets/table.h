@@ -32,6 +32,11 @@ public:
     void SetOnCellClick(std::function<void(int, int)> cb);
     void ScrollTo(int row);
 
+    // Row under a y coordinate in widget-space (global layout) units;
+    // -1 when outside the rows area. Read-only hit-test for callers
+    // building row context menus.
+    int RowAtY(float y) const;
+
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;
     using Widget::Layout;
@@ -44,7 +49,6 @@ public:
 
 private:
     explicit Table();
-    int RowAtY(float y) const;
     int ColAtX(float x) const;
     Layout::Rect CellRect(int row, int col, const Layout::Rect& b) const;
 

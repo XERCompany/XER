@@ -28,6 +28,22 @@ std::string ToUpperAscii(std::string text) {
     return text;
 }
 
+std::size_t Utf8Length(std::string_view text) {
+    std::size_t count = 0;
+    for (const unsigned char byte : text) {
+        if ((byte & 0xC0u) != 0x80u) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// Pre-render width estimate (~7px/codepoint at the 12-12.5px label fonts);
+// Render replaces it with real measured widths on the first frame.
+float EstimatedTextWidth(std::string_view text) {
+    return static_cast<float>(Utf8Length(text)) * 7.0f;
+}
+
 std::string DeriveInitials(const std::string& name) {
     std::string clean;
     clean.reserve(name.size());
@@ -59,6 +75,7 @@ AppTitleBar::AppTitleBar(std::string app_label)
 void AppTitleBar::SetWorkspaceLabel(std::string label) {
     if (workspace_label_ == label) return;
     workspace_label_ = std::move(label);
+    workspace_label_w_ = 0.0f;  // drop width measured for the old label
     Invalidate();
     RequestLayout();
 }
@@ -162,6 +179,7 @@ void AppTitleBar::SetActionPill(std::string text,
     action_pill_text_ = std::move(text);
     on_action_pill_ = std::move(on_click);
     action_pill_active_ = active;
+    action_pill_text_w_ = 0.0f;  // drop width measured for the old label
     RequestLayout();
     Invalidate();
 }
@@ -169,6 +187,7 @@ void AppTitleBar::SetActionPill(std::string text,
 void AppTitleBar::ClearActionPill() {
     action_pill_text_.clear();
     on_action_pill_ = nullptr;
+    action_pill_text_w_ = 0.0f;
     RequestLayout();
     Invalidate();
 }
@@ -345,38 +364,16 @@ void AppTitleBar::Tick(double dt_seconds) {
     }
 }
 
-void AppTitleBar::Render(Rendering::Renderer& r,
-                         const Theme::Tokens& tokens) {
-    const auto b = GetBounds();
-    bounds_ = b;
+void AppTitleBar::ComputeZoneRects(const Layout::Rect& b) {
     const float cy = b.y + b.height * 0.5f;
     const float item_y = cy - kControlH * 0.5f;
-    const bool ws_hot = hovered_zone_ == HitZone::Workspace ||
-                        pressed_zone_ == HitZone::Workspace;
-    const bool nav_b_hot = hovered_zone_ == HitZone::NavBack ||
-                           pressed_zone_ == HitZone::NavBack;
-    const bool nav_f_hot = hovered_zone_ == HitZone::NavForward ||
-                           pressed_zone_ == HitZone::NavForward;
-    const bool lp_hot = hovered_zone_ == HitZone::LeftPanel ||
-                        pressed_zone_ == HitZone::LeftPanel;
-    const bool rp_hot = hovered_zone_ == HitZone::RightPanel ||
-                        pressed_zone_ == HitZone::RightPanel;
-    const bool tt_hot = hovered_zone_ == HitZone::ThemeToggle ||
-                        pressed_zone_ == HitZone::ThemeToggle;
-    const bool av_hot = hovered_zone_ == HitZone::Avatar ||
-                        pressed_zone_ == HitZone::Avatar;
-    const bool ap_hot = hovered_zone_ == HitZone::ActionPill ||
-                        pressed_zone_ == HitZone::ActionPill;
-    const bool cc_hot = hovered_zone_ == HitZone::CenterCommand ||
-                        pressed_zone_ == HitZone::CenterCommand;
-
-    // ---- Pass 1: geometry (left cluster walk, right cluster walk, center) --
     float x = b.x + kBarHPad;
 
     // Workspace pill: [glyph] Label chevron
     {
-        const Rendering::TextStyle label_style{tokens.foreground, 12.5f, 600};
-        const float label_w = r.MeasureText(workspace_label_, label_style).width;
+        const float label_w = workspace_label_w_ > 0.0f
+            ? workspace_label_w_
+            : EstimatedTextWidth(workspace_label_);
         const float w_width = 5.0f + 20.0f + 7.0f + label_w + 6.0f + 12.0f + 6.0f;
         workspace_rect_ = Layout::Rect{x, item_y, w_width, kControlH};
         x += w_width + 6.0f;
@@ -400,9 +397,9 @@ void AppTitleBar::Render(Rendering::Renderer& r,
 
     // Menu rects
     for (auto& m : menus_) {
-        const Rendering::TextStyle m_style{tokens.foreground, 12.0f, 450};
-        const float tw = r.MeasureText(m.label, m_style).width;
-        const float mw = tw + 20.0f;
+        const float mw = m.width > 0.0f
+            ? m.width
+            : EstimatedTextWidth(m.label) + 20.0f;
         m.rect = Layout::Rect{x, item_y, mw, kControlH};
         m.width = mw;
         x += mw + 2.0f;
@@ -421,10 +418,9 @@ void AppTitleBar::Render(Rendering::Renderer& r,
     right_cursor -= kWindowBtnW + 8.0f;
 
     if (!action_pill_text_.empty() && on_action_pill_) {
-        const Rendering::TextStyle pill_text_style{tokens.accent_foreground,
-                                                   12.0f, 600};
-        const float tw =
-            r.MeasureText(action_pill_text_, pill_text_style).width;
+        const float tw = action_pill_text_w_ > 0.0f
+            ? action_pill_text_w_
+            : EstimatedTextWidth(action_pill_text_);
         const float pw = tw + 40.0f;
         action_pill_rect_ = Layout::Rect{right_cursor - pw, item_y, pw,
                                          kControlH};
@@ -460,6 +456,68 @@ void AppTitleBar::Render(Rendering::Renderer& r,
     const float pill_x = center_left + (avail_center_w - pill_w) * 0.5f;
     center_bar_rect_ = Layout::Rect{pill_x, cy - kCenterBarH * 0.5f,
                                     pill_w, kCenterBarH};
+}
+
+void AppTitleBar::Render(Rendering::Renderer& r,
+                         const Theme::Tokens& tokens) {
+    const auto b = GetBounds();
+    bounds_ = b;
+    const float cy = b.y + b.height * 0.5f;
+    const float item_y = cy - kControlH * 0.5f;
+    const bool ws_hot = hovered_zone_ == HitZone::Workspace ||
+                        pressed_zone_ == HitZone::Workspace;
+    const bool nav_b_hot = hovered_zone_ == HitZone::NavBack ||
+                           pressed_zone_ == HitZone::NavBack;
+    const bool nav_f_hot = hovered_zone_ == HitZone::NavForward ||
+                           pressed_zone_ == HitZone::NavForward;
+    const bool lp_hot = hovered_zone_ == HitZone::LeftPanel ||
+                        pressed_zone_ == HitZone::LeftPanel;
+    const bool rp_hot = hovered_zone_ == HitZone::RightPanel ||
+                        pressed_zone_ == HitZone::RightPanel;
+    const bool tt_hot = hovered_zone_ == HitZone::ThemeToggle ||
+                        pressed_zone_ == HitZone::ThemeToggle;
+    const bool av_hot = hovered_zone_ == HitZone::Avatar ||
+                        pressed_zone_ == HitZone::Avatar;
+    const bool ap_hot = hovered_zone_ == HitZone::ActionPill ||
+                        pressed_zone_ == HitZone::ActionPill;
+    const bool cc_hot = hovered_zone_ == HitZone::CenterCommand ||
+                        pressed_zone_ == HitZone::CenterCommand;
+
+    // ---- Pass 1: geometry ------------------------------------------------
+    // Zone rects are computed in Layout (they double as hit zones). Here we
+    // only refresh the cached text metrics; when they move, rebuild the
+    // zones so this frame's paint and hit-testing agree.
+    {
+        const Rendering::TextStyle label_style{tokens.foreground, 12.5f, 600};
+        const Rendering::TextStyle menu_style{tokens.foreground, 12.0f, 450};
+        const Rendering::TextStyle pill_style{tokens.accent_foreground,
+                                              12.0f, 600};
+        bool zones_dirty = false;
+        const float label_w =
+            r.MeasureText(workspace_label_, label_style).width;
+        if (std::abs(label_w - workspace_label_w_) > 0.01f) {
+            workspace_label_w_ = label_w;
+            zones_dirty = true;
+        }
+        for (auto& m : menus_) {
+            const float mw = r.MeasureText(m.label, menu_style).width + 20.0f;
+            if (std::abs(mw - m.width) > 0.01f) {
+                m.width = mw;
+                zones_dirty = true;
+            }
+        }
+        const float pill_tw =
+            (!action_pill_text_.empty() && on_action_pill_)
+                ? r.MeasureText(action_pill_text_, pill_style).width
+                : 0.0f;
+        if (std::abs(pill_tw - action_pill_text_w_) > 0.01f) {
+            action_pill_text_w_ = pill_tw;
+            zones_dirty = true;
+        }
+        if (zones_dirty) {
+            ComputeZoneRects(b);
+        }
+    }
 
     // ---- Pass 2: backgrounds (hover / active fills under all content) -----
     // Pressed zones get the stronger `pressed` fill so a held click is
@@ -723,7 +781,7 @@ void AppTitleBar::Layout(const Layout::Rect& bounds,
     CacheLayoutTokens(tokens);
     SetBounds(bounds);
     bounds_ = bounds;
-    RequestLayout();
+    ComputeZoneRects(bounds);
 }
 
 bool AppTitleBar::HandleEvent(const Event& event) {

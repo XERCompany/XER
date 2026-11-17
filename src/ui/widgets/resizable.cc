@@ -20,6 +20,7 @@ Resizable::Resizable(Direction dir) : dir_(dir) {
 void Resizable::AddPanel(Panel panel) {
     if (panel.widget) AddChild(panel.widget);
     panels_.push_back(std::move(panel));
+    collapsed_.push_back(false);
     sizes_.assign(panels_.size(), 0.0f);
     sizes_.back() = panels_.back().size;
     RequestLayout();
@@ -28,6 +29,7 @@ void Resizable::AddPanel(Panel panel) {
 void Resizable::ClearPanels() {
     panels_.clear();
     sizes_.clear();
+    collapsed_.clear();
     handle_rects_.clear();
     RequestLayout();
 }
@@ -49,13 +51,36 @@ void Resizable::SetOnLayout(
 
 void Resizable::SetCollapsed(int index, bool collapsed) {
     if (index < 0 || index >= static_cast<int>(panels_.size())) return;
-    sizes_[index] = collapsed ? 0.0f : panels_[index].size;
+    const auto i = static_cast<std::size_t>(index);
+    if (collapsed) {
+        // Stash the resolved share so expanding restores the dragged size,
+        // not just the originally configured fraction.
+        panels_[i].size = sizes_[i];
+        collapsed_[i] = true;
+    } else {
+        collapsed_[i] = false;
+        // Give the panel its stashed share back and rescale the remaining
+        // panels into the rest — the other panels were normalized to fill
+        // the whole span while this one was collapsed.
+        float others = 0.0f;
+        for (std::size_t j = 0; j < sizes_.size(); ++j) {
+            if (j != i && !collapsed_[j]) others += sizes_[j];
+        }
+        const float restored = panels_[i].size;
+        if (others > 0.0001f) {
+            const float scale = std::max(0.0f, 1.0f - restored) / others;
+            for (std::size_t j = 0; j < sizes_.size(); ++j) {
+                if (j != i && !collapsed_[j]) sizes_[j] *= scale;
+            }
+        }
+        sizes_[i] = restored;
+    }
     RequestLayout();
 }
 
 bool Resizable::IsCollapsed(int index) const {
-    if (index < 0 || index >= static_cast<int>(sizes_.size())) return false;
-    return sizes_[index] <= 0.001f;
+    return index >= 0 && index < static_cast<int>(collapsed_.size()) &&
+           collapsed_[static_cast<std::size_t>(index)];
 }
 
 void Resizable::NotifyLayout() {
@@ -74,9 +99,13 @@ void Resizable::RecomputeSizes(const Layout::Rect& bounds) {
     }
 
     // Sum of explicit fractions; panels without a size share the remainder.
+    // Collapsed panels contribute nothing and never join the auto pool.
     float explicit_sum = 0.0f;
     int auto_count = 0;
+    int active_count = 0;
     for (int i = 0; i < n; ++i) {
+        if (collapsed_[static_cast<std::size_t>(i)]) continue;
+        ++active_count;
         if (sizes_[i] > 0.0f) explicit_sum += sizes_[i];
         else ++auto_count;
     }
@@ -87,6 +116,7 @@ void Resizable::RecomputeSizes(const Layout::Rect& bounds) {
     std::vector<float> px(n, 0.0f);
     float assigned = 0.0f;
     for (int i = 0; i < n; ++i) {
+        if (collapsed_[static_cast<std::size_t>(i)]) continue;
         const float frac = sizes_[i] > 0.0f ? sizes_[i] : auto_each;
         const float min_frac =
             panels_[i].min_size > 0.0f
@@ -97,9 +127,15 @@ void Resizable::RecomputeSizes(const Layout::Rect& bounds) {
     }
     // Normalize to fill (or shrink proportionally if over).
     if (assigned > 0.0001f) {
-        for (auto& v : px) v /= assigned;
-    } else {
-        std::fill(px.begin(), px.end(), 1.0f / n);
+        for (int i = 0; i < n; ++i) {
+            if (!collapsed_[static_cast<std::size_t>(i)]) px[i] /= assigned;
+        }
+    } else if (active_count > 0) {
+        for (int i = 0; i < n; ++i) {
+            if (!collapsed_[static_cast<std::size_t>(i)]) {
+                px[i] = 1.0f / static_cast<float>(active_count);
+            }
+        }
     }
     sizes_ = px;
     NotifyLayout();
@@ -199,10 +235,15 @@ bool Resizable::HandleEvent(const Event& event) {
                     dir_ == Direction::Horizontal
                         ? GetBounds().width
                         : GetBounds().height;
-                const float dfrac = delta / std::max(1.0f, span);
+                // Fractions apply to the usable span (minus handle strips);
+                // dividing pixel deltas by the full span undershoots.
+                const int n = static_cast<int>(sizes_.size());
+                const float usable = std::max(
+                    1.0f, span - handle_size_ * static_cast<float>(n - 1));
+                const float dfrac = delta / usable;
                 const int left = drag_handle_;
                 const int right = drag_handle_ + 1;
-                if (left >= 0 && right < static_cast<int>(sizes_.size())) {
+                if (left >= 0 && right < n) {
                     // Steal/give fraction between the two adjacent panels,
                     // keeping every other panel's share intact.
                     const float others =
@@ -211,13 +252,11 @@ bool Resizable::HandleEvent(const Event& event) {
                     const float avail = 1.0f - others;
                     const float floor_l =
                         std::min(0.05f, panels_[left].min_size > 0.0f
-                                              ? panels_[left].min_size /
-                                                    std::max(1.0f, span)
+                                              ? panels_[left].min_size / usable
                                               : 0.05f);
                     const float floor_r =
                         std::min(0.05f, panels_[right].min_size > 0.0f
-                                               ? panels_[right].min_size /
-                                                     std::max(1.0f, span)
+                                               ? panels_[right].min_size / usable
                                                : 0.05f);
                     float nl = drag_start_frac_ + dfrac;
                     nl = std::clamp(nl, floor_l, avail - floor_r);
@@ -229,7 +268,7 @@ bool Resizable::HandleEvent(const Event& event) {
             }
             return false;
         case Event::Type::MouseUp:
-            if (drag_handle_ >= 0) {
+            if (drag_handle_ >= 0 && event.mouse_button == MouseButton::Left) {
                 drag_handle_ = -1;
                 NotifyLayout();
                 return true;

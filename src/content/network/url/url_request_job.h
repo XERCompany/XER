@@ -15,10 +15,14 @@ class URLRequestJob {
 public:
     explicit URLRequestJob(const URLRequestContext& context);
 
+    // Executes the request synchronously — follows 3xx redirects up to
+    // request.max_redirects when request.follow_redirects is set,
+    // decodes chunked bodies, and applies the context's TLS policy
+    // (cert storage, skip_ssl_verify, SNI) to the connection.
     bool Run(const URLRequest& request,
              URLResponse* response,
              std::string* error);
-             
+
     bool ParseURL(const std::string& url,
                   std::string* scheme,
                   std::string* host,
@@ -26,6 +30,11 @@ public:
                   std::string* path) const;
 
 private:
+    // Single request/response exchange — Run() wraps it in the
+    // redirect loop.
+    bool RunOnce(const URLRequest& request,
+                 URLResponse* response,
+                 std::string* error);
 
     const URLRequestContext& ctx_;
 };

@@ -387,8 +387,16 @@ LRESULT Canvas::Impl::HandleMessage(Canvas* owner, HWND hwnd, UINT msg,
             if (GetKeyState(VK_CONTROL) & 0x8000) mods |= 2;
             if (GetKeyState(VK_MENU) & 0x8000) mods |= 4;
             const float scale = dpi_scale_;
-            const int cx = static_cast<int>(static_cast<short>(LOWORD(lParam)) / scale);
-            const int cy = static_cast<int>(static_cast<short>(HIWORD(lParam)) / scale);
+            // WM_MOUSEWHEEL is the odd one out: lParam is in screen
+            // coordinates, not client coordinates.
+            POINT point{
+                static_cast<LONG>(static_cast<short>(LOWORD(lParam))),
+                static_cast<LONG>(static_cast<short>(HIWORD(lParam)))};
+            if (msg == WM_MOUSEWHEEL) {
+                ScreenToClient(hwnd, &point);
+            }
+            const int cx = static_cast<int>(point.x / scale);
+            const int cy = static_cast<int>(point.y / scale);
             if (owner->input_callback_(msg, cx, cy, button, wheel, key, mods)) {
                 return 0;
             }

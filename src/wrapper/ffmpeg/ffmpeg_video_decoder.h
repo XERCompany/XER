@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <memory>
@@ -94,6 +95,11 @@ public:
     // (Seek/Close). Audio consumers stamp decoded chunks with it to drop
     // stale pre-seek data that was still in flight.
     std::uint64_t GetAudioEpoch() const;
+
+    // Packets currently queued for ReadAudioFrames(). The tap queue is
+    // bounded (oldest packets are dropped when full), so audio-only pump
+    // loops use this to pace NextFrame() calls against consumption.
+    std::size_t GetAudioTapQueueSize() const;
 
 private:
     struct Impl;

@@ -232,6 +232,9 @@ bool WidgetTree::HandleEvent(const Event& event) {
         const auto pressed_target = left_mouse_down_target_.lock();
         if (event.mouse_button == MouseButton::Left) {
             left_mouse_down_target_.reset();
+            // Capture held hover frozen during the drag; refresh it now so
+            // the widget under the cursor gets its highlight back.
+            UpdateHover(hit);
         }
         const auto target = event.mouse_button == MouseButton::Left &&
                 pressed_target != nullptr
@@ -274,8 +277,9 @@ bool WidgetTree::HandleEvent(const Event& event) {
         return true;
     }
     // Global shortcuts: only reached when nothing focused consumed the key,
-    // so typing in a TextInput never triggers transport shortcuts.
-    if (key_handler_ != nullptr &&
+    // so typing in a TextInput never triggers transport shortcuts. A modal
+    // overlay owns all input — shortcuts must not fire behind it.
+    if (key_handler_ != nullptr && overlay_ == nullptr &&
         (event.type == Event::Type::KeyDown || event.type == Event::Type::KeyUp ||
          event.type == Event::Type::TextInput)) {
         return key_handler_(event);

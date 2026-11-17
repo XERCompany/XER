@@ -88,9 +88,15 @@ Widgets::MouseButton TranslateMouseButton(UINT message) {
 Widgets::Event InputTranslator::CreateEvent(Widgets::Event::Type type) const {
     Widgets::Event event;
     event.type = type;
-    event.is_shift = shift_down_;
-    event.is_ctrl = control_down_;
-    event.is_alt = alt_down_;
+    // Tracked flags alone miss modifiers that were already held when the
+    // window gained focus (no WM_KEY* arrived here). OR in the live state;
+    // WM_KILLFOCUS clears the flags so the sampled half can't go stale.
+    event.is_shift =
+        shift_down_ || (GetKeyState(VK_SHIFT) & 0x8000) != 0;
+    event.is_ctrl =
+        control_down_ || (GetKeyState(VK_CONTROL) & 0x8000) != 0;
+    event.is_alt =
+        alt_down_ || (GetKeyState(VK_MENU) & 0x8000) != 0;
     return event;
 }
 

@@ -55,6 +55,9 @@ private:
     float handle_size_ = 6.0f;
     std::vector<Panel> panels_;
     std::vector<float> sizes_;   // resolved fractions per panel
+    // Collapsed panels get 0px and are excluded from the auto-size pool;
+    // sizes_ alone can't express this (0 there means "auto").
+    std::vector<bool> collapsed_;
     std::vector<Layout::Rect> handle_rects_;
     int drag_handle_ = -1;
     float drag_start_ = 0.0f;

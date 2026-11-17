@@ -27,9 +27,6 @@ namespace {
 
 #ifdef _WIN32
 constexpr double kDriftSeekSeconds = 0.08;
-// Tolerance for treating a queued chunk as "at" the playhead rather than
-// a gap to skip over.
-constexpr double kGapToleranceSec = 0.03;
 #endif
 
 // Linear-interpolation resampler for the (rare) case where the stream rate
@@ -73,6 +70,7 @@ bool VideoAudioPlayer::Attach(
     }
     av_decoder_ = std::move(decoder);
     audio_time_base_ = av_decoder_->GetAudioTimeBase();
+    audio_start_sec_ = av_decoder_->GetAudioStartSeconds();
     const bool has_audio = av_decoder_->HasAudio();
     has_audio_.store(has_audio, std::memory_order_release);
     if (!has_audio) {
@@ -86,6 +84,7 @@ bool VideoAudioPlayer::Attach(
     output_ready_.store(false, std::memory_order_relaxed);
     stream_stop_.store(false, std::memory_order_release);
     worker_done_.store(false, std::memory_order_relaxed);
+    stream_drained_.store(false, std::memory_order_relaxed);
     playhead_sec_.store(0.0, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(audio_mutex_);
@@ -120,6 +119,8 @@ void VideoAudioPlayer::Close() {
     output_ready_.store(false, std::memory_order_relaxed);
     av_decoder_.reset();
     audio_time_base_ = 0.0;
+    audio_start_sec_ = 0.0;
+    stream_drained_.store(false, std::memory_order_relaxed);
     playhead_sec_.store(0.0, std::memory_order_relaxed);
     out_rate_ = 0;
     out_channels_ = 0;
@@ -160,14 +161,18 @@ void VideoAudioPlayer::StreamWorker() {
     auto decoder = av_decoder_;  // keep the decoder alive for this thread
     if (!decoder) {
         worker_done_.store(true, std::memory_order_release);
+        stream_drained_.store(true, std::memory_order_release);
         return;
     }
 
     SourceChunk cur;
     bool cur_open = false;
     double prev_frame_end_sec = -1.0;  // PTS-less fallback clock
-    double prev_frame_dur = 0.0;
     bool saw_eof = false;
+    // The audio epoch this worker is decoding in. decoder->Seek() bumps
+    // it (FlushAudioState) and clears AudioDrained — a parked worker
+    // watches for that to resume instead of having exited for good.
+    std::uint64_t epoch = decoder->GetAudioEpoch();
 
     auto pts_sec = [&](std::int64_t pts, std::int64_t bet) -> double {
         const std::int64_t v =
@@ -181,9 +186,64 @@ void VideoAudioPlayer::StreamWorker() {
         return static_cast<double>(v) * audio_time_base_;
     };
 
+    // Flush pending source chunks once enough audio is banked (or the
+    // stream ended) and the device format is known.
+    const auto maybe_convert = [&]() {
+        if (!output_ready_.load(std::memory_order_acquire)) return;
+        std::deque<SourceChunk> batch;
+        {
+            std::lock_guard<std::mutex> lock(audio_mutex_);
+            std::size_t total = 0;
+            for (const auto& c : pending_src_) total += c.frames;
+            const bool drain = saw_eof || stream_stop_.load();
+            if (!drain && total < kConvertThreshold) return;
+            // Back-pressure: the render thread consumes play_queue_ in
+            // real time, so a stalled consumer (paused) must not bank
+            // the whole stream. Conversion waits for queue space rather
+            // than shedding everything — the old clear() dropped ~80 s
+            // of audio and left a giant hole plus a desync on resume.
+            std::size_t queued = 0;
+            for (const auto& q : play_queue_) queued += q.data.size();
+            if (queued >= kPlayQueueMaxBytes) return;
+            batch.swap(pending_src_);
+        }
+        for (auto& chunk : batch) {
+            // Drop chunks decoded before the latest seek/flush — their
+            // timestamps belong to the old position.
+            if (chunk.epoch != decoder->GetAudioEpoch()) continue;
+            const double dur =
+                chunk.frames > 0 && src_rate_ > 0
+                    ? static_cast<double>(chunk.frames) / src_rate_
+                    : 0.0;
+            if (dur > 0.0 &&
+                chunk.start_sec + dur <
+                    playhead_sec_.load(std::memory_order_relaxed) - 0.5) {
+                continue;  // wholly in the past — seek already passed it
+            }
+            ConvertChunk(chunk);
+        }
+        audio_cv_.notify_all();
+    };
+
     std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> frames;
     while (!stream_stop_.load(std::memory_order_acquire)) {
         if (!decoder->IsOpen()) break;
+
+        // Cap the decoded-but-unconverted backlog — without this a
+        // paused consumer banks the entire stream in pending_src_.
+        bool pending_full = false;
+        {
+            std::lock_guard<std::mutex> lock(audio_mutex_);
+            std::size_t pending = 0;
+            for (const auto& c : pending_src_) pending += c.frames;
+            pending_full = pending >= kPendingSrcMaxFrames;
+        }
+        if (pending_full) {
+            maybe_convert();
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
         frames.clear();
         if (!decoder->ReadAudioFrames(&frames, 64)) {
             {
@@ -191,48 +251,6 @@ void VideoAudioPlayer::StreamWorker() {
                 load_error_ = "audio decode failed";
             }
             break;
-        }
-
-        // Flush pending source chunks once enough audio is banked (or the
-        // stream ended) and the device format is known.
-        const auto maybe_convert = [&]() {
-            if (!output_ready_.load(std::memory_order_acquire)) return;
-            std::deque<SourceChunk> batch;
-            {
-                std::lock_guard<std::mutex> lock(audio_mutex_);
-                std::size_t total = 0;
-                for (const auto& c : pending_src_) total += c.frames;
-                const bool drain = saw_eof || stream_stop_.load();
-                if (!drain && total < kConvertThreshold) return;
-                batch.swap(pending_src_);
-            }
-            for (auto& chunk : batch) {
-                // Drop chunks decoded before the latest seek/flush — their
-                // timestamps belong to the old position.
-                if (chunk.epoch != decoder->GetAudioEpoch()) continue;
-                const double dur =
-                    chunk.frames > 0 && src_rate_ > 0
-                        ? static_cast<double>(chunk.frames) / src_rate_
-                        : 0.0;
-                if (dur > 0.0 &&
-                    chunk.start_sec + dur <
-                        playhead_sec_.load(std::memory_order_relaxed) - 0.5) {
-                    continue;  // wholly in the past — seek already passed it
-                }
-                ConvertChunk(chunk);
-            }
-            audio_cv_.notify_all();
-        };
-
-        if (frames.empty()) {
-            if (decoder->AudioDrained()) {
-                saw_eof = true;
-                maybe_convert();
-                break;
-            }
-            maybe_convert();
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
-            continue;
         }
 
         for (const auto& frame : frames) {
@@ -267,10 +285,12 @@ void VideoAudioPlayer::StreamWorker() {
             } else if (prev_frame_end_sec >= 0.0) {
                 sec = prev_frame_end_sec;
             } else {
-                sec = 0.0;
+                // PTS-less stream: the decoder reports the first PCM
+                // sample lands at GetAudioStartSeconds() media time —
+                // seed the fallback clock there, not at zero.
+                sec = audio_start_sec_;
             }
             prev_frame_end_sec = sec + frame_dur;
-            prev_frame_dur = frame_dur;
 
             if (!cur_open) {
                 cur.channels.assign(
@@ -302,7 +322,51 @@ void VideoAudioPlayer::StreamWorker() {
                 cur_open = false;
             }
         }
+
+        if (decoder->AudioDrained()) {
+            // End of stream for this epoch: flush the partially filled
+            // chunk, then keep draining pending_src_ into play_queue_ —
+            // the queue cap can defer the tail, so publish
+            // stream_drained_ only once nothing is left to convert
+            // (the render thread parks on drained + empty queue).
+            if (!saw_eof) {
+                saw_eof = true;
+                if (cur_open && cur.frames > 0) {
+                    std::lock_guard<std::mutex> lock(audio_mutex_);
+                    if (cur.epoch == decoder->GetAudioEpoch()) {
+                        pending_src_.push_back(std::move(cur));
+                    }
+                }
+                cur = SourceChunk{};
+                cur_open = false;
+            }
+            maybe_convert();
+            {
+                std::lock_guard<std::mutex> lock(audio_mutex_);
+                if (pending_src_.empty()) {
+                    stream_drained_.store(true, std::memory_order_release);
+                }
+            }
+            audio_cv_.notify_all();
+            // Park instead of exiting: decoder->Seek() bumps the epoch
+            // and clears AudioDrained, so loop replay and post-EOF seeks
+            // resume decoding here rather than going silent forever.
+            if (decoder->GetAudioEpoch() == epoch) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
+            epoch = decoder->GetAudioEpoch();
+            saw_eof = false;
+            prev_frame_end_sec = -1.0;
+            stream_drained_.store(false, std::memory_order_release);
+            continue;
+        }
+
         maybe_convert();
+        if (frames.empty()) {
+            // Decoder starved but demux still live — wait for packets.
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
     }
 
 done:
@@ -328,13 +392,28 @@ done:
         audio_cv_.notify_all();
     }
     worker_done_.store(true, std::memory_order_release);
+    stream_drained_.store(true, std::memory_order_release);
     {
         std::string msg;
         {
             std::lock_guard<std::mutex> lock(decode_mutex_);
             msg = load_error_;
         }
-        if (ready_cb_) ready_cb_(msg.empty(), msg);
+        // Only a real failure is worth reporting. Natural EOS never
+        // reaches here (the worker parks at EOS waiting for the next
+        // epoch), so re-firing ready_cb_ at end-of-stream — which used
+        // to bounce the engine through a bogus kAudioReady — is gone;
+        // shutdown must not fire callbacks into a torn-down engine.
+        if (!stream_stop_.load(std::memory_order_acquire) && ready_cb_) {
+            if (!msg.empty()) {
+                ready_cb_(false, msg);
+            } else if (!ready_notified_) {
+                // Clean early exit before the sink ever became ready —
+                // say so or the engine waits on a ready that never comes.
+                ready_cb_(false,
+                          "audio stream ended before output was ready");
+            }
+        }
     }
 #else
     (void)0;
@@ -398,13 +477,20 @@ void VideoAudioPlayer::ConvertChunk(const SourceChunk& chunk) {
                  static_cast<double>(frames) / out_rate_;
 
     std::lock_guard<std::mutex> lock(audio_mutex_);
-    // Bound the queue: ~32 MB of float PCM ≈ 80+ s stereo — far beyond any
-    // legitimate lead the demuxer can build.
+    // Bound the queue (~8 MB of float PCM ≈ 80+ s stereo — far beyond
+    // any legitimate lead). maybe_convert normally stops converting once
+    // the cap is hit; this is the intra-batch overflow guard, and it
+    // must shed the OLDEST chunks — clearing the whole queue leaves a
+    // multi-second silence plus a desync when the consumer resumes.
     std::size_t queued = 0;
     for (const auto& q : play_queue_) queued += q.data.size();
-    if (queued + pc.data.size() >
-        static_cast<std::size_t>(8u * 1024u * 1024u)) {
-        play_queue_.clear();  // consumer stalled — restart cleanly
+    while (!play_queue_.empty() &&
+           queued + pc.data.size() > kPlayQueueMaxBytes) {
+        queued -= play_queue_.front().data.size();
+        play_queue_.pop_front();
+    }
+    if (queued + pc.data.size() > kPlayQueueMaxBytes) {
+        return;  // a single chunk larger than the cap — drop it whole
     }
     play_queue_.push_back(std::move(pc));
 #endif
@@ -452,6 +538,10 @@ bool VideoAudioPlayer::InitWasapi() {
 
     HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return false;
+    // S_OK/S_FALSE mean this call took (or deepened) our apartment
+    // reference and must be balanced; RPC_E_CHANGED_MODE means another
+    // component owns the apartment — balancing it would break them.
+    com_initialized_ = SUCCEEDED(hr);
 
     hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
                           CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
@@ -492,7 +582,10 @@ void VideoAudioPlayer::CleanupWasapi() {
     if (device_) { device_->Release(); device_ = nullptr; }
     if (enumerator_) { enumerator_->Release(); enumerator_ = nullptr; }
     buffer_frame_count_ = 0;
-    CoUninitialize();
+    if (com_initialized_) {
+        CoUninitialize();
+        com_initialized_ = false;
+    }
 }
 #endif
 
@@ -696,15 +789,38 @@ void VideoAudioPlayer::Seek(double seconds) {
         const double dur = av_decoder_->GetDurationSeconds();
         if (dur > 0.0) limit = dur;
     }
+#ifdef _WIN32
+    // The WASAPI queue still holds up to ~200 ms of audio rendered from
+    // the OLD position. Stop the stream (Pause joins the render thread),
+    // then Reset discards that queued audio — without it a seek audibly
+    // replays the previous position before the new one starts.
+    const bool was_playing = playing_.load(std::memory_order_acquire);
+    if (was_playing) {
+        Pause();
+    }
+    if (audio_client_ != nullptr) {
+        // Reset needs a stopped stream; on a never-started one it just
+        // returns AUDCLNT_E_NOT_STOPPED — harmless either way.
+        audio_client_->Reset();
+    }
+#endif
     playhead_sec_.store(
         std::clamp(seconds, 0.0, limit), std::memory_order_relaxed);
-    // Drop queued device audio — it belongs to the old position. Source
-    // chunks still in flight are filtered by timestamp/epoch downstream.
+    // Drop queued device audio AND the decoded-but-unconverted chunks —
+    // both belong to the old position. Anything decoded between this
+    // clear and the decoder's own Seek() carries a stale epoch and is
+    // filtered at conversion time.
     {
         std::lock_guard<std::mutex> lock(audio_mutex_);
         play_queue_.clear();
+        pending_src_.clear();
     }
     audio_cv_.notify_all();
+#ifdef _WIN32
+    if (was_playing) {
+        Play();
+    }
+#endif
 }
 
 void VideoAudioPlayer::SyncTo(double video_position_seconds) {
@@ -716,9 +832,23 @@ void VideoAudioPlayer::SyncTo(double video_position_seconds) {
 }
 
 double VideoAudioPlayer::GetPosition() const {
-    return has_audio_.load(std::memory_order_acquire)
-               ? playhead_sec_.load(std::memory_order_relaxed)
-               : -1.0;
+    if (!has_audio_.load(std::memory_order_acquire)) return -1.0;
+    double heard = playhead_sec_.load(std::memory_order_relaxed);
+#ifdef _WIN32
+    // playhead_sec_ tracks the WRITE head — samples already handed to
+    // WASAPI, up to a full device buffer (~200 ms) ahead of what the DAC
+    // has actually played. Subtract the still-queued padding so callers
+    // (SyncTo's drift check) see the heard position instead of a
+    // systematic buffer-length lead that trips the seek threshold.
+    if (audio_client_ != nullptr && out_rate_ > 0) {
+        UINT32 padding = 0;
+        if (SUCCEEDED(audio_client_->GetCurrentPadding(&padding))) {
+            heard -= static_cast<double>(padding) /
+                     static_cast<double>(out_rate_);
+        }
+    }
+#endif
+    return heard;
 }
 
 double VideoAudioPlayer::GetDuration() const {
@@ -729,6 +859,11 @@ double VideoAudioPlayer::GetDuration() const {
 
 void VideoAudioPlayer::RenderThreadMain() {
 #ifdef _WIN32
+    // This thread makes WASAPI calls, so it needs its own COM apartment.
+    // Balance the init only when it succeeded — RPC_E_CHANGED_MODE is a
+    // failure and must not be paired with CoUninitialize.
+    const bool com_initialized =
+        SUCCEEDED(CoInitializeEx(nullptr, COINIT_MULTITHREADED));
     unsigned int cw = 0;
     _controlfp_s(&cw, _DN_FLUSH, _MCW_DN);
 
@@ -812,14 +947,37 @@ void VideoAudioPlayer::RenderThreadMain() {
         playhead_sec_.store(playhead, std::memory_order_relaxed);
         render_client_->ReleaseBuffer(available, 0);
 
-        // End of stream: worker finished and nothing is queued.
-        if (queue_empty && worker_done_.load(std::memory_order_acquire)) {
-            playing_.store(false, std::memory_order_release);
-            audio_client_->Stop();
-            break;
+        // End of stream: the worker reported drained and nothing is
+        // left queued. Park here instead of exiting — a post-EOF seek
+        // bumps the decoder's audio epoch, the worker clears
+        // stream_drained_ and starts feeding again, and playback resumes
+        // right here without needing a full Play(). The client keeps
+        // running: the tail already written plays out, then the device
+        // outputs silence until new data arrives.
+        if (queue_empty &&
+            stream_drained_.load(std::memory_order_acquire)) {
+            while (!render_stop_.load(std::memory_order_acquire) &&
+                   playing_.load(std::memory_order_acquire)) {
+                bool have_data = false;
+                {
+                    std::lock_guard<std::mutex> lock(audio_mutex_);
+                    have_data = !play_queue_.empty();
+                }
+                if (have_data ||
+                    !stream_drained_.load(std::memory_order_acquire)) {
+                    break;
+                }
+                Sleep(5);
+            }
+            if (render_stop_.load(std::memory_order_acquire) ||
+                !playing_.load(std::memory_order_acquire)) {
+                break;
+            }
+            continue;
         }
         Sleep(1);
     }
+    if (com_initialized) CoUninitialize();
 #endif
 }
 
