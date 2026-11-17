@@ -59,6 +59,10 @@ jobs:
         shell: msys2 {0}
         run: |
           set -ex
+          echo "== env =="
+          which pacman || true
+          pacman --version | head -2 || true
+          ls /etc/pacman.d/ || true
           mirrors=(
             "https://repo.msys2.org"
             "https://mirrors.tuna.tsinghua.edu.cn/msys2"
@@ -69,23 +73,27 @@ jobs:
             "https://mirror.yandex.ru/mirrors/msys2"
           )
           for f in /etc/pacman.d/mirrorlist.*; do
-            suffix=$(sed -n 's|^Server = https://mirror\.msys2\.org/\(\S*\)|\1|p' "$f" | head -n1)
-            [ -n "$suffix" ] || suffix=$(sed -n 's|^Server = https://repo\.msys2\.org/\(\S*\)|\1|p' "$f" | head -n1)
+            [ -f "$f" ] || continue
+            suffix=$(sed -n 's|^Server = https://mirror\.msys2\.org/\(\S*\)|\1|p' "$f" 2>/dev/null | head -n1 || true)
+            [ -n "$suffix" ] || suffix=$(sed -n 's|^Server = https://repo\.msys2\.org/\(\S*\)|\1|p' "$f" 2>/dev/null | head -n1 || true)
             [ -n "$suffix" ] || continue
             {
               for m in "${mirrors[@]}"; do echo "Server = $m/$suffix"; done
-              grep '^Server' "$f"
+              grep '^Server' "$f" 2>/dev/null || true
             } > "$f.new" && mv "$f.new" "$f"
           done
-          # Fresh base (update:false) has no pacman keyring yet — init it
-          # or every -S fails instantly with "keyring is not writable" /
-          # "signature is unknown trust".
+          head -12 /etc/pacman.d/mirrorlist.clang64 2>/dev/null || true
+          head -12 /etc/pacman.d/mirrorlist.mingw 2>/dev/null || true
+          # Fresh base (update:false) has no pacman keyring — without it
+          # db signature checks fail instantly ("signature is unknown
+          # trust" / "invalid or corrupted database").
+          echo "== keyring =="
           pacman-key --init || true
-          pacman-key --populate msys2 || true
-          pacman -Sy --noconfirm
-          # The msys2-runtime core update can kill this shell mid-run;
-          # retry so the transaction finishes.
-          pacman -Su --noconfirm || pacman -Su --noconfirm
+          pacman-key --populate msys2 || pacman-key --populate msys2
+          pacman -Syy --noconfirm
+          # The msys2-runtime core update can kill this shell mid-run —
+          # retry, then continue on the base system if it still fails.
+          pacman -Su --noconfirm || pacman -Su --noconfirm || echo "::warning::system update failed; continuing on base MSYS2"
 
       # Toolchain + all library dependencies, mirroring InstallTools.ps1.
       # `cache: true` on setup-msys2 caches downloaded pacman packages
