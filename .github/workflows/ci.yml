@@ -58,42 +58,44 @@ jobs:
       - name: Reorder pacman mirrors + system update
         shell: msys2 {0}
         run: |
-          set -ex
-          echo "== env =="
-          which pacman || true
-          pacman --version | head -2 || true
-          ls /etc/pacman.d/ || true
-          mirrors=(
-            "https://repo.msys2.org"
-            "https://mirrors.tuna.tsinghua.edu.cn/msys2"
-            "https://mirrors.ustc.edu.cn/msys2"
-            "https://mirror.clarkson.edu/msys2"
-            "https://ftp.nluug.nl/pub/os/windows/msys2/builds"
-            "https://download.nus.edu.sg/mirror/msys2"
-            "https://mirror.yandex.ru/mirrors/msys2"
-          )
-          for f in /etc/pacman.d/mirrorlist.*; do
-            [ -f "$f" ] || continue
-            suffix=$(sed -n 's|^Server = https://mirror\.msys2\.org/\(\S*\)|\1|p' "$f" 2>/dev/null | head -n1 || true)
-            [ -n "$suffix" ] || suffix=$(sed -n 's|^Server = https://repo\.msys2\.org/\(\S*\)|\1|p' "$f" 2>/dev/null | head -n1 || true)
-            [ -n "$suffix" ] || continue
-            {
-              for m in "${mirrors[@]}"; do echo "Server = $m/$suffix"; done
-              grep '^Server' "$f" 2>/dev/null || true
-            } > "$f.new" && mv "$f.new" "$f"
-          done
-          head -12 /etc/pacman.d/mirrorlist.clang64 2>/dev/null || true
-          head -12 /etc/pacman.d/mirrorlist.mingw 2>/dev/null || true
-          # Fresh base (update:false) has no pacman keyring — without it
-          # db signature checks fail instantly ("signature is unknown
-          # trust" / "invalid or corrupted database").
-          echo "== keyring =="
-          pacman-key --init || true
-          pacman-key --populate msys2 || pacman-key --populate msys2
-          pacman -Syy --noconfirm
-          # The msys2-runtime core update can kill this shell mid-run —
-          # retry, then continue on the base system if it still fails.
-          pacman -Su --noconfirm || pacman -Su --noconfirm || echo "::warning::system update failed; continuing on base MSYS2"
+          set -x
+          # Best-effort: the install step below is the real gate (3x
+          # retry). Whatever fails here stays visible in the -x trace
+          # but must not abort the job — a dead mirror or a flaky
+          # keyring on a fresh base is recoverable at install time.
+          (
+            set -e
+            which pacman && pacman --version | head -2
+            ls /etc/pacman.d/
+            mirrors=(
+              "https://repo.msys2.org"
+              "https://mirrors.tuna.tsinghua.edu.cn/msys2"
+              "https://mirrors.ustc.edu.cn/msys2"
+              "https://mirror.clarkson.edu/msys2"
+              "https://ftp.nluug.nl/pub/os/windows/msys2/builds"
+              "https://download.nus.edu.sg/mirror/msys2"
+              "https://mirror.yandex.ru/mirrors/msys2"
+            )
+            for f in /etc/pacman.d/mirrorlist.*; do
+              [ -f "$f" ] || continue
+              suffix=$(sed -n 's|^Server = https://mirror\.msys2\.org/\(\S*\)|\1|p' "$f" 2>/dev/null | head -n1 || true)
+              [ -n "$suffix" ] || suffix=$(sed -n 's|^Server = https://repo\.msys2\.org/\(\S*\)|\1|p' "$f" 2>/dev/null | head -n1 || true)
+              [ -n "$suffix" ] || continue
+              {
+                for m in "${mirrors[@]}"; do echo "Server = $m/$suffix"; done
+                grep '^Server' "$f" 2>/dev/null || true
+              } > "$f.new" && mv "$f.new" "$f"
+            done
+            head -15 /etc/pacman.d/mirrorlist.clang64 2>/dev/null || true
+            head -15 /etc/pacman.d/mirrorlist.mingw 2>/dev/null || true
+            # Fresh base (update:false) has no pacman keyring — without it
+            # db signature checks fail ("signature is unknown trust").
+            pacman-key --init || true
+            pacman-key --populate msys2 || true
+            pacman -Syy --noconfirm
+            # The msys2-runtime core update can kill this shell mid-run.
+            pacman -Su --noconfirm || pacman -Su --noconfirm
+          ) || echo "::warning::pacman bootstrap failed — install step retries anyway"
 
       # Toolchain + all library dependencies, mirroring InstallTools.ps1.
       # `cache: true` on setup-msys2 caches downloaded pacman packages
@@ -176,9 +178,13 @@ jobs:
             mingw-w64-clang-x86_64-yaml-cpp
             mingw-w64-clang-x86_64-onednn
           )
+          # Self-sufficient: works even if the reorder/update step above
+          # was skipped by a transient failure.
+          pacman-key --populate msys2 2>/dev/null || true
           for attempt in 1 2 3; do
             pacman -S --needed --noconfirm "${pkgs[@]}" && break
             [ "$attempt" = 3 ] && exit 1
+            pacman -Sy --noconfirm || true
             sleep 10
           done
 
