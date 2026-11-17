@@ -6,7 +6,10 @@
 #include "media_catalog.h"
 
 #include <chrono>
+#include <cmath>
+#include <cstring>
 #include <filesystem>
+#include <limits>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -16,16 +19,22 @@
 
 #include "clip_poster.h"
 #include "content/video/video_info.h"
+#include "frame.h"
 #include "helper/env_utils.h"
 #include "helper/path_utils.h"
 #include "sql/content/value.h"
 #include "sql/storage/sqlite_database.h"
+#include "string_utils.h"                           // ToLowerAscii
+#include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"   // AudioFrameInfo def
+#include "wrapper/ffmpeg/ffmpeg_video_decoder.h"
 
 namespace XER::VideoEditor {
 namespace {
 
 namespace Path = XER::Helper::Path;  // UTF-8 <-> fs::path helpers
 namespace Video = XER::Content::Video;
+namespace FFmpeg = XER::Bridge::FFmpeg;
+using XER::SQL::Content::Blob;
 using XER::SQL::Content::Value;
 using XER::SQL::Storage::Row;
 using XER::SQL::Storage::SQLiteDatabase;
@@ -40,6 +49,7 @@ bool Fail(std::string* error_out, const std::string& message) {
 Value VStr(const std::string& s) { return Value{s}; }
 Value VInt(std::int64_t v) { return Value{v}; }
 Value VReal(double v) { return Value{v}; }
+Value VBlob(const Blob& b) { return Value{b}; }
 // SQL::Content::Value has no bool alternative — has_audio is an INTEGER
 // column, so booleans bind as 0/1 int64.
 Value VBool(bool b) { return Value{static_cast<std::int64_t>(b ? 1 : 0)}; }
@@ -67,6 +77,9 @@ double AsReal(const Value& v) {
     return 0.0;
 }
 bool AsBool(const Value& v) { return AsInt(v) != 0; }
+Blob AsBlob(const Value& v) {
+    return std::holds_alternative<Blob>(v) ? std::get<Blob>(v) : Blob{};
+}
 
 std::int64_t NowUnixSeconds() {
     return std::chrono::duration_cast<std::chrono::seconds>(
@@ -100,6 +113,18 @@ constexpr const char* kSchemaStatements[] = {
     // "d:/a.mp4"). Non-ASCII case edges are accepted — NOCASE folds
     // ASCII only.
     "CREATE UNIQUE INDEX IF NOT EXISTS media_path_uq ON media(path)",
+    // Waveform peaks cache (Phase 2 spec §5): one row per canonical
+    // media path; `mtime` invalidates the cached `data` blob when the
+    // file is rewritten. `data` holds AudioPeaks::data as raw
+    // little-endian IEEE-754 float32 — channels * buckets * 2 floats.
+    R"sql(CREATE TABLE IF NOT EXISTS peaks (
+    path TEXT PRIMARY KEY COLLATE NOCASE,
+    mtime INTEGER NOT NULL DEFAULT 0,
+    channels INTEGER NOT NULL DEFAULT 0,
+    spp INTEGER NOT NULL DEFAULT 0,
+    buckets INTEGER NOT NULL DEFAULT 0,
+    data BLOB NOT NULL DEFAULT X''
+))sql",
 };
 
 constexpr const char* kSelectColumns =
@@ -136,6 +161,24 @@ bool CanonicalizeMediaPath(const std::string& utf8_path,
     }
     *canon_out = Path::ToUtf8(canon);
     return true;
+}
+
+// File mtime as unix seconds; 0 when the file is missing/unstattable.
+// std::chrono::clock_cast is not implemented by libc++; converts
+// through the relative offset between the file and system clocks.
+std::int64_t FileMtimeUnix(const std::filesystem::path& fs_path) {
+    std::error_code ec;
+    const auto ftime = std::filesystem::last_write_time(fs_path, ec);
+    if (ec) {
+        return 0;
+    }
+    const auto sys =
+        std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+            ftime - decltype(ftime)::clock::now() +
+            std::chrono::system_clock::now());
+    return std::chrono::duration_cast<std::chrono::seconds>(
+               sys.time_since_epoch())
+        .count();
 }
 
 // Serialized VideoInfo snapshot stored in probe_json — compact JSON,
@@ -178,6 +221,459 @@ CatalogEntry EntryFromRow(const Row& row) {
     e.poster_path = AsString(row.columns[12]);
     e.added_at_unix = AsInt(row.columns[13]);
     return e;
+}
+
+// ------------------------------------------------------------------
+// Audio peaks decode — the SAME pipeline AudioMixer runs: one
+// FFmpeg::VideoDecoder with EnableAudioTap() BEFORE Open();
+// NextFrame() pumps demux packets into the tap queue (its return is
+// ignored — audio-only containers always return false yet MUST still
+// be called), ReadAudioFrames() drains decoded AudioFrameInfo blocks
+// until AudioDrained() reports EOF. The PCM sample-format handling
+// mirrors audio_mixer.cc's (u8/s16/s32/flt/dbl, planar + interleaved)
+// but keeps EVERY channel instead of downmixing to stereo.
+// ------------------------------------------------------------------
+
+constexpr std::int64_t kNoPts =
+    (std::numeric_limits<std::int64_t>::min)();  // AV_NOPTS_VALUE
+constexpr int kPeaksSamplesPerPeak = 256;
+// Decode cap: at most the first 10 minutes of audio are scanned — a
+// peaks miss is synchronous, so this bounds the worst-case cost on
+// multi-hour files (documented on GetAudioPeaks).
+constexpr double kMaxPeaksDecodeSeconds = 600.0;
+// Pump-loop guards — same values as the mixer.
+constexpr int kMaxPumpIterations = 20000;
+constexpr int kReadBatch = 64;
+// Timestamp holes larger than this are treated as corrupt — same
+// bound as the mixer's kMaxGapFillSeconds.
+constexpr double kMaxGapFillSeconds = 30.0;
+
+enum class PcmKind { kU8, kS16, kS32, kFlt, kDbl };
+
+struct PcmLayout {
+    PcmKind kind = PcmKind::kS16;
+    int bytes_per_sample = 2;
+    bool planar = false;
+};
+
+// Parses "u8"/"s16"/"s32"/"flt"/"dbl" plus the FFmpeg "...p" planar
+// suffix — identical rules to audio_mixer.cc's ParsePcmLayout.
+bool ParsePcmLayout(const FFmpeg::AudioFrameInfo& frame,
+                    PcmLayout* out) {
+    std::string fmt = XER::Helper::String::ToLowerAscii(
+        frame.sample_format);
+    bool planar = frame.planar;
+    if (!fmt.empty() && fmt.back() == 'p') {
+        planar = true;
+        fmt.pop_back();
+    }
+    PcmLayout layout;
+    layout.planar = planar;
+    if (fmt == "u8") {
+        layout.kind = PcmKind::kU8;
+        layout.bytes_per_sample = 1;
+    } else if (fmt == "s16") {
+        layout.kind = PcmKind::kS16;
+        layout.bytes_per_sample = 2;
+    } else if (fmt == "s32") {
+        layout.kind = PcmKind::kS32;
+        layout.bytes_per_sample = 4;
+    } else if (fmt == "flt") {
+        layout.kind = PcmKind::kFlt;
+        layout.bytes_per_sample = 4;
+    } else if (fmt == "dbl") {
+        layout.kind = PcmKind::kDbl;
+        layout.bytes_per_sample = 8;
+    } else {
+        return false;
+    }
+    *out = layout;
+    return true;
+}
+
+float ReadPcmSample(PcmKind kind, const std::uint8_t* p) {
+    switch (kind) {
+        case PcmKind::kU8:
+            return (static_cast<float>(*p) - 128.0f) / 128.0f;
+        case PcmKind::kS16: {
+            std::int16_t v;
+            std::memcpy(&v, p, sizeof(v));
+            return static_cast<float>(v) / 32768.0f;
+        }
+        case PcmKind::kS32: {
+            std::int32_t v;
+            std::memcpy(&v, p, sizeof(v));
+            return static_cast<float>(v) / 2147483648.0f;
+        }
+        case PcmKind::kFlt: {
+            float v;
+            std::memcpy(&v, p, sizeof(v));
+            return v;
+        }
+        case PcmKind::kDbl: {
+            double v;
+            std::memcpy(&v, p, sizeof(v));
+            return static_cast<float>(v);
+        }
+    }
+    return 0.0f;
+}
+
+// Reads channel `c` of frame `i` as a [-1,1] float — the mixer's
+// ChannelValue generalized past stereo (peaks keep every channel).
+// Callers validate the payload first, so the bounds checks below are
+// defensive only.
+bool ChannelValue(const FFmpeg::AudioFrameInfo& frame,
+                  const PcmLayout& layout, int frame_index,
+                  int channel, float* out) {
+    const int bps = layout.bytes_per_sample;
+    const std::uint8_t* base = frame.data.data();
+    if (layout.planar) {
+        if (channel >= static_cast<int>(frame.plane_sizes.size())) {
+            return false;
+        }
+        std::size_t offset = 0;
+        for (int c = 0; c < channel; ++c) {
+            offset += static_cast<std::size_t>(frame.plane_sizes[c]);
+        }
+        const std::size_t idx =
+            offset + static_cast<std::size_t>(frame_index) *
+                         static_cast<std::size_t>(bps);
+        if (idx + static_cast<std::size_t>(bps) > frame.data.size()) {
+            return false;
+        }
+        *out = ReadPcmSample(layout.kind, base + idx);
+        return true;
+    }
+    const std::size_t idx =
+        (static_cast<std::size_t>(frame_index) * frame.channels +
+         channel) *
+            static_cast<std::size_t>(bps);
+    if (idx + static_cast<std::size_t>(bps) > frame.data.size()) {
+        return false;
+    }
+    *out = ReadPcmSample(layout.kind, base + idx);
+    return true;
+}
+
+// Running per-channel min/max accumulation over the absolute sample
+// timeline (sample 0 = first decoded block's media-time anchor).
+struct PeakBuilder {
+    int channels = 0;
+    int rate = 0;
+    double audio_tb = 0.0;      // s per pts tick (0 = untimestamped)
+    double audio_origin = 0.0;  // GetAudioStartSeconds
+    bool have_anchor = false;
+    double anchor = 0.0;        // media seconds of absolute sample 0
+    std::int64_t emitted = 0;   // samples folded into buckets so far
+    std::int64_t cap_samples =
+        std::numeric_limits<std::int64_t>::max();
+    bool capped = false;        // 10-minute decode cap reached
+    std::size_t buckets = 0;
+    std::vector<std::vector<float>> mins;  // [channel][bucket]
+    std::vector<std::vector<float>> maxs;
+};
+
+void EnsureBucket(PeakBuilder& b, std::size_t bucket) {
+    while (b.buckets <= bucket) {
+        for (int c = 0; c < b.channels; ++c) {
+            b.mins[static_cast<std::size_t>(c)].push_back(
+                std::numeric_limits<float>::max());
+            b.maxs[static_cast<std::size_t>(c)].push_back(
+                -std::numeric_limits<float>::max());
+        }
+        ++b.buckets;
+    }
+}
+
+// Zero-fill for a timestamp hole: silence still tightens min/max —
+// a gap must draw as flat, not as a hole in the waveform.
+void EmitZeroRun(PeakBuilder& b, std::int64_t count) {
+    const std::int64_t room = b.cap_samples - b.emitted;
+    if (count > room) {
+        count = room;
+        b.capped = true;
+    }
+    if (count <= 0) {
+        return;
+    }
+    const std::size_t first =
+        static_cast<std::size_t>(b.emitted) / kPeaksSamplesPerPeak;
+    const std::size_t last =
+        static_cast<std::size_t>(b.emitted + count - 1) /
+        kPeaksSamplesPerPeak;
+    for (std::size_t bucket = first; bucket <= last; ++bucket) {
+        EnsureBucket(b, bucket);
+        for (int c = 0; c < b.channels; ++c) {
+            float& mn = b.mins[static_cast<std::size_t>(c)][bucket];
+            float& mx = b.maxs[static_cast<std::size_t>(c)][bucket];
+            if (mn > 0.0f) mn = 0.0f;
+            if (mx < 0.0f) mx = 0.0f;
+        }
+    }
+    b.emitted += count;
+}
+
+void EmitSample(PeakBuilder& b, const FFmpeg::AudioFrameInfo& frame,
+                const PcmLayout& layout, int frame_index) {
+    const std::size_t bucket =
+        static_cast<std::size_t>(b.emitted) / kPeaksSamplesPerPeak;
+    EnsureBucket(b, bucket);
+    for (int c = 0; c < b.channels; ++c) {
+        float v = 0.0f;
+        ChannelValue(frame, layout, frame_index, c, &v);
+        float& mn = b.mins[static_cast<std::size_t>(c)][bucket];
+        float& mx = b.maxs[static_cast<std::size_t>(c)][bucket];
+        if (v < mn) mn = v;
+        if (v > mx) mx = v;
+    }
+    ++b.emitted;
+}
+
+// Folds one decoded block into the peak timeline. Returns false on
+// malformed input (unparseable format, truncated payload, absurd
+// timestamp gap, mid-stream format change) — the caller then fails
+// the whole peaks request rather than caching a half-decoded file.
+bool ConsumeAudioBlock(PeakBuilder& b,
+                       const FFmpeg::AudioFrameInfo& frame,
+                       std::string* error_out) {
+    const int count = frame.sample_count;
+    const int channels = frame.channels;
+    if (count <= 0 || channels <= 0 || frame.sample_rate <= 0 ||
+        frame.data.empty()) {
+        return Fail(error_out, "malformed audio frame");
+    }
+    // One rate/channel layout per file — a mid-stream change cannot be
+    // represented in fixed-resolution buckets (same rule as the mixer).
+    if (b.rate == 0) {
+        b.rate = frame.sample_rate;
+        b.channels = channels;
+        b.cap_samples = static_cast<std::int64_t>(std::llround(
+            kMaxPeaksDecodeSeconds * static_cast<double>(b.rate)));
+        b.mins.assign(static_cast<std::size_t>(channels), {});
+        b.maxs.assign(static_cast<std::size_t>(channels), {});
+    } else if (frame.sample_rate != b.rate ||
+               channels != b.channels) {
+        return Fail(error_out,
+                    "audio sample rate/channels changed mid-stream");
+    }
+    const double rate = static_cast<double>(b.rate);
+
+    PcmLayout layout;
+    if (!ParsePcmLayout(frame, &layout)) {
+        return Fail(error_out, "unsupported audio sample format '" +
+                               frame.sample_format + "'");
+    }
+    // Payload validation — same strictness as the mixer: planar needs
+    // one sized plane per channel; interleaved needs count*ch*bps bytes.
+    const int bps = layout.bytes_per_sample;
+    if (layout.planar) {
+        if (frame.plane_sizes.size() <
+            static_cast<std::size_t>(channels)) {
+            return Fail(error_out,
+                        "planar audio frame missing plane sizes");
+        }
+        std::size_t need = 0;
+        for (int c = 0; c < channels; ++c) {
+            const std::size_t plane_bytes =
+                static_cast<std::size_t>(count) *
+                static_cast<std::size_t>(bps);
+            if (static_cast<std::size_t>(
+                    frame.plane_sizes[static_cast<std::size_t>(c)]) <
+                plane_bytes) {
+                return Fail(error_out,
+                            "planar audio frame plane truncated");
+            }
+            need += plane_bytes;
+        }
+        if (frame.data.size() < need) {
+            return Fail(error_out,
+                        "planar audio frame payload truncated");
+        }
+    } else {
+        const std::size_t need =
+            static_cast<std::size_t>(count) *
+            static_cast<std::size_t>(channels) *
+            static_cast<std::size_t>(bps);
+        if (frame.data.size() < need) {
+            return Fail(error_out,
+                        "interleaved audio frame payload truncated");
+        }
+    }
+
+    // Block media start: best_effort_timestamp preferred, else pts,
+    // both * the audio time base; missing timestamps continue from the
+    // emitted end (first block anchors at GetAudioStartSeconds — the
+    // AAC priming / stream-offset case). Same rules as the mixer.
+    std::int64_t stamp = frame.best_effort_timestamp;
+    if (stamp == kNoPts) {
+        stamp = frame.pts;
+    }
+    double block_start;
+    if (stamp != kNoPts && b.audio_tb > 0.0) {
+        block_start = static_cast<double>(stamp) * b.audio_tb;
+    } else {
+        block_start = b.have_anchor
+                          ? b.anchor +
+                                static_cast<double>(b.emitted) / rate
+                          : b.audio_origin;
+    }
+    if (!b.have_anchor) {
+        b.anchor = block_start;
+        b.have_anchor = true;
+    }
+
+    // Map onto the absolute sample timeline: forward gaps zero-fill
+    // (bounded), backward overlaps drop the already-covered prefix.
+    std::int64_t target = static_cast<std::int64_t>(
+        std::llround((block_start - b.anchor) * rate));
+    if (target < 0) {
+        target = 0;
+    }
+    std::size_t skip = 0;
+    if (target > b.emitted) {
+        const double gap_seconds =
+            static_cast<double>(target - b.emitted) / rate;
+        if (gap_seconds > kMaxGapFillSeconds) {
+            return Fail(error_out,
+                        "excessive audio timestamp gap (>30 s)");
+        }
+        EmitZeroRun(b, target - b.emitted);
+    } else if (target < b.emitted) {
+        const std::int64_t drop = b.emitted - target;
+        skip = static_cast<std::size_t>(std::min<std::int64_t>(
+            drop, count));
+    }
+
+    for (std::size_t i = skip; i < static_cast<std::size_t>(count);
+         ++i) {
+        if (b.emitted >= b.cap_samples) {
+            b.capped = true;
+            break;
+        }
+        EmitSample(b, frame, layout, static_cast<int>(i));
+    }
+    return true;
+}
+
+bool FinalizePeaks(const PeakBuilder& b, AudioPeaks* out) {
+    if (b.channels <= 0 || b.emitted <= 0 || b.buckets == 0) {
+        return false;
+    }
+    out->channels = b.channels;
+    out->samples_per_peak = kPeaksSamplesPerPeak;
+    out->buckets = b.buckets;
+    out->data.assign(
+        static_cast<std::size_t>(b.channels) * b.buckets * 2u, 0.0f);
+    for (int c = 0; c < b.channels; ++c) {
+        const std::size_t cc = static_cast<std::size_t>(c);
+        for (std::size_t i = 0; i < b.buckets; ++i) {
+            float mn = b.mins[cc][i];
+            float mx = b.maxs[cc][i];
+            if (!(mn <= mx)) {
+                mn = 0.0f;   // untouched sentinel — defensive only:
+                mx = 0.0f;   // gap/overlap handling covers all buckets
+            }
+            const std::size_t o = (cc * b.buckets + i) * 2u;
+            out->data[o] = mn;
+            out->data[o + 1u] = mx;
+        }
+    }
+    return true;
+}
+
+// Full-stream decode -> AudioPeaks. Synchronous; the caller owns the
+// "10-minute cap" documentation.
+bool DecodeAudioPeaks(const std::string& canon_path, AudioPeaks* out,
+                      std::string* error_out) {
+    FFmpeg::VideoDecoder decoder;
+    decoder.EnableAudioTap(true);   // BEFORE Open — hard contract
+    if (!decoder.Open(canon_path, error_out)) {
+        return false;
+    }
+    if (!decoder.HasAudio()) {
+        return Fail(error_out, "no audio stream: " + canon_path);
+    }
+    PeakBuilder b;
+    b.audio_tb = decoder.GetAudioTimeBase();
+    b.audio_origin = decoder.GetAudioStartSeconds();
+
+    // Same pump pattern as the mixer's EnsureCoverage: NextFrame feeds
+    // the tap queue (audio-only files return false but MUST still be
+    // called), ReadAudioFrames drains decoded blocks. Completion is
+    // governed by AudioDrained() / the decode cap, not NextFrame.
+    std::vector<std::uint8_t> bgra;
+    int width = 0;
+    int height = 0;
+    std::vector<FFmpeg::AudioFrameInfo> frames;
+    int guard = 0;
+    while (!decoder.AudioDrained() && !b.capped) {
+        if (guard++ >= kMaxPumpIterations) {
+            return Fail(error_out,
+                        "audio decode starvation: " + canon_path);
+        }
+        decoder.NextFrame(bgra, width, height);
+        frames.clear();
+        decoder.ReadAudioFrames(&frames, kReadBatch);
+        for (const FFmpeg::AudioFrameInfo& frame : frames) {
+            if (!ConsumeAudioBlock(b, frame, error_out)) {
+                return false;
+            }
+            if (b.capped) {
+                break;
+            }
+        }
+    }
+    if (!FinalizePeaks(b, out)) {
+        return Fail(error_out,
+                    "audio stream yielded no samples: " + canon_path);
+    }
+    return true;
+}
+
+// AudioPeaks::data <-> raw little-endian float32 blob (explicit LE —
+// the cache must read back identically on any host).
+Blob SerializePeaks(const AudioPeaks& peaks) {
+    Blob blob(peaks.data.size() * sizeof(float));
+    for (std::size_t i = 0; i < peaks.data.size(); ++i) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &peaks.data[i], sizeof(bits));
+        blob[i * 4u + 0u] = static_cast<std::uint8_t>(bits & 0xffu);
+        blob[i * 4u + 1u] =
+            static_cast<std::uint8_t>((bits >> 8u) & 0xffu);
+        blob[i * 4u + 2u] =
+            static_cast<std::uint8_t>((bits >> 16u) & 0xffu);
+        blob[i * 4u + 3u] =
+            static_cast<std::uint8_t>((bits >> 24u) & 0xffu);
+    }
+    return blob;
+}
+
+bool DeserializePeaks(std::int64_t channels, std::int64_t spp,
+                      std::int64_t buckets, const Blob& blob,
+                      AudioPeaks* out) {
+    if (channels <= 0 || spp <= 0 || buckets <= 0) {
+        return false;
+    }
+    const std::size_t floats =
+        static_cast<std::size_t>(channels) *
+        static_cast<std::size_t>(buckets) * 2u;
+    if (blob.size() != floats * sizeof(float)) {
+        return false;
+    }
+    out->channels = static_cast<int>(channels);
+    out->samples_per_peak = static_cast<int>(spp);
+    out->buckets = static_cast<std::size_t>(buckets);
+    out->data.resize(floats);
+    for (std::size_t i = 0; i < floats; ++i) {
+        const std::uint32_t bits =
+            static_cast<std::uint32_t>(blob[i * 4u + 0u]) |
+            (static_cast<std::uint32_t>(blob[i * 4u + 1u]) << 8u) |
+            (static_cast<std::uint32_t>(blob[i * 4u + 2u]) << 16u) |
+            (static_cast<std::uint32_t>(blob[i * 4u + 3u]) << 24u);
+        std::memcpy(&out->data[i], &bits, sizeof(float));
+    }
+    return true;
 }
 
 }  // namespace
@@ -284,20 +780,7 @@ bool MediaCatalog::Import(const std::string& utf8_path,
     }
     const std::filesystem::path canon_fs = Path::FromUtf8(canon);
 
-    std::int64_t mtime_unix = 0;
-    {
-        std::error_code ec;
-        const auto ftime =
-            std::filesystem::last_write_time(canon_fs, ec);
-        if (!ec) {
-            const auto sys =
-                std::chrono::clock_cast<std::chrono::system_clock>(ftime);
-            mtime_unix =
-                std::chrono::duration_cast<std::chrono::seconds>(
-                    sys.time_since_epoch())
-                    .count();
-        }
-    }
+    const std::int64_t mtime_unix = FileMtimeUnix(canon_fs);
 
     // ProbeVideo already fills file_size_bytes; fall back to a direct
     // stat when it could not (e.g. permission quirks on the probe path).
@@ -476,6 +959,83 @@ bool MediaCatalog::Remove(std::int64_t id,
         std::filesystem::remove(Path::FromUtf8(poster_path), ec);
     }
     return true;
+}
+
+bool MediaCatalog::GetAudioPeaks(const std::string& utf8_path,
+                                 AudioPeaks* out,
+                                 std::string* error_out) {
+    if (!IsOpen() || out == nullptr) {
+        return Fail(error_out, "catalog is not open");
+    }
+    std::string canon;
+    if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
+        return false;
+    }
+    const std::filesystem::path canon_fs = Path::FromUtf8(canon);
+    {
+        std::error_code ec;
+        if (ec || !std::filesystem::exists(canon_fs, ec)) {
+            // A cached row for a vanished file is stale — drop it
+            // (best-effort) so the table tracks the filesystem.
+            db_->Execute("DELETE FROM peaks WHERE path = ?",
+                         {VStr(canon)}, nullptr);
+            return Fail(error_out, "media file not found: " + canon);
+        }
+    }
+    const std::int64_t mtime_unix = FileMtimeUnix(canon_fs);
+
+    // Cache hit: a row with the CURRENT mtime and a blob that round-
+    // trips. A stale-mtime or corrupt row falls through to re-decode.
+    {
+        std::vector<Row> rows;
+        if (!db_->Query(
+                "SELECT mtime, channels, spp, buckets, data"
+                " FROM peaks WHERE path = ?",
+                {VStr(canon)}, rows, error_out)) {
+            return false;
+        }
+        if (!rows.empty() && rows.front().columns.size() >= 5u &&
+            AsInt(rows.front().columns[0]) == mtime_unix) {
+            const auto& cols = rows.front().columns;
+            AudioPeaks cached;
+            if (DeserializePeaks(AsInt(cols[1]), AsInt(cols[2]),
+                                 AsInt(cols[3]), AsBlob(cols[4]),
+                                 &cached)) {
+                *out = std::move(cached);
+                return true;
+            }
+        }
+    }
+
+    // Cache miss / stale / corrupt: decode (10-minute cap — see the
+    // header doc) and upsert. Decode failures are NOT cached.
+    AudioPeaks computed;
+    if (!DecodeAudioPeaks(canon, &computed, error_out)) {
+        return false;
+    }
+    const Blob blob = SerializePeaks(computed);
+    if (!db_->Execute(
+            "INSERT OR REPLACE INTO peaks(path, mtime, channels, spp,"
+            " buckets, data) VALUES(?, ?, ?, ?, ?, ?)",
+            {VStr(canon), VInt(mtime_unix), VInt(computed.channels),
+             VInt(computed.samples_per_peak),
+             VInt(static_cast<std::int64_t>(computed.buckets)),
+             VBlob(blob)},
+            error_out)) {
+        return false;
+    }
+    *out = std::move(computed);
+    return true;
+}
+
+bool MediaCatalog::GetPosterAt(const std::string& utf8_path,
+                               double seconds, video::Frame* frame_out,
+                               std::string* error_out) {
+    std::string canon;
+    if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
+        return false;
+    }
+    return ClipPoster::GetPosterAt(canon, seconds, frame_out, error_out);
 }
 
 }  // namespace XER::VideoEditor

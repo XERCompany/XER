@@ -438,6 +438,34 @@ double ChunkMean(const FFmpeg::AudioFrameInfo& chunk) {
     return sum / (2.0 * static_cast<double>(frames));
 }
 
+// Signed mean over ONE channel (ch 0 = L, 1 = R) — pan checks.
+double ChunkMeanChannel(const FFmpeg::AudioFrameInfo& chunk, int ch) {
+    const auto* pcm =
+        reinterpret_cast<const std::int16_t*>(chunk.data.data());
+    const std::size_t frames = chunk.data.size() / 4;
+    if (frames == 0) {
+        return 0.0;
+    }
+    double sum = 0.0;
+    for (std::size_t i = 0; i < frames; ++i) {
+        sum += static_cast<double>(pcm[i * 2 + ch]);
+    }
+    return sum / static_cast<double>(frames);
+}
+
+// Peak |sample| over ONE channel — meter/pan assertions.
+double ChunkPeakChannel(const FFmpeg::AudioFrameInfo& chunk, int ch) {
+    const auto* pcm =
+        reinterpret_cast<const std::int16_t*>(chunk.data.data());
+    const std::size_t frames = chunk.data.size() / 4;
+    double peak = 0.0;
+    for (std::size_t i = 0; i < frames; ++i) {
+        peak = std::max(
+            peak, std::abs(static_cast<double>(pcm[i * 2 + ch])));
+    }
+    return peak;
+}
+
 bool ChunkAllZero(const FFmpeg::AudioFrameInfo& chunk) {
     for (std::uint8_t b : chunk.data) {
         if (b != 0) {
@@ -1236,6 +1264,184 @@ void TestFfmpegWavIntegration() {
     XER_VE_CHECK(tail_signal);
 }
 
+// ------------------------------------------------------------------
+// Case 9 — Phase-2: pan, track gain, gain keyframes, rate, meters
+// ------------------------------------------------------------------
+
+void TestPanTrackGainRateMeters() {
+    // Equal-power stereo balance: hard-right keeps the dominant
+    // channel at unity and silences the left; hard-left mirrors.
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        Clip c = MakeClip("c1", 1, 0.0, 1.0, "dc.wav");
+        c.pan = 1.0f;
+        p.clips.push_back(c);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(std::abs(ChunkMeanChannel(chunk, 0)) < 300.0);
+        XER_VE_CHECK(std::abs(ChunkMeanChannel(chunk, 1) -
+                              0.5 * 32767.0) < 600.0);
+    }
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        Clip c = MakeClip("c1", 1, 0.0, 1.0, "dc.wav");
+        c.pan = -1.0f;
+        p.clips.push_back(c);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(std::abs(ChunkMeanChannel(chunk, 1)) < 300.0);
+        XER_VE_CHECK(std::abs(ChunkMeanChannel(chunk, 0) -
+                              0.5 * 32767.0) < 600.0);
+    }
+
+    // pan = 0.5: dominant (R) stays at unity -> full DC level; L is
+    // attenuated but not silent (equal-power ratio ~0.41).
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        Clip c = MakeClip("c1", 1, 0.0, 1.0, "dc.wav");
+        c.pan = 0.5f;
+        p.clips.push_back(c);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        const double l = ChunkMeanChannel(chunk, 0);
+        const double r = ChunkMeanChannel(chunk, 1);
+        XER_VE_CHECK(std::abs(r - 0.5 * 32767.0) < 600.0);
+        XER_VE_CHECK(l > 3000.0);
+        XER_VE_CHECK(l < r * 0.75);
+    }
+
+    // Track gain_db: -6 dB on the audio track -> ~0.5x amplitude.
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        p.tracks[1].gain_db = -6.0f;
+        p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, "dc.wav"));
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(std::abs(ChunkMean(chunk) - 0.25 * 32767.0) <
+                     800.0);
+    }
+
+    // Track gain stacks with clip gain: -6 dB each -> ~0.25x.
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        p.tracks[1].gain_db = -6.0f;
+        Clip c = MakeClip("c1", 1, 0.0, 1.0, "dc.wav");
+        c.gain_db = -6.0f;
+        p.clips.push_back(c);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(std::abs(ChunkMean(chunk) - 0.125 * 32767.0) <
+                     600.0);
+    }
+
+    // GainDb keyframes: 0 dB at u=0 fading to -40 dB at u=1 —
+    // evaluated once per chunk at the chunk's clip-local start.
+    // Chunk 0 starts at u=0 -> full level; chunk 40 (u ~ 0.85) ->
+    // ~-34 dB -> near silence.
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        Clip c = MakeClip("c1", 1, 0.0, 1.0, "dc.wav");
+        c.keyframes[XER::VideoEditor::KeyProp::GainDb] = {
+            XER::VideoEditor::Keyframe{
+                0.0, 0.0f, XER::VideoEditor::KeyEase::Linear},
+            XER::VideoEditor::Keyframe{
+                1.0, -40.0f, XER::VideoEditor::KeyEase::Linear}};
+        p.clips.push_back(c);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(0, &chunk, &err));
+        XER_VE_CHECK(ChunkPeak(chunk) > 12000.0);
+        XER_VE_CHECK(mixer.GetChunk(40, &chunk, &err));
+        XER_VE_CHECK(ChunkPeak(chunk) < 1500.0);
+    }
+
+    // playback_rate in the source map: +0.8 DC on media [0,0.5),
+    // -0.8 DC on [0.5,1.0). Clip [0,0.5) at rate 2.0 hits the negative
+    // region from t=0.25 on — rate 1 would stay positive the whole
+    // clip.
+    {
+        auto bank = std::make_shared<FakeBank>();
+        FakeSpec spec;
+        spec.sample_rate = 48000;
+        spec.channels = 2;
+        spec.time_base = 1.0 / 48000.0;
+        spec.duration = 1.0;
+        for (double start = 0.0; start < 0.5; start += 0.05) {
+            FFmpeg::AudioFrameInfo f;
+            FillS16DC(&f, 48000, 2, 2400, 0.8);
+            AddBlock(&spec, start, std::move(f));
+        }
+        for (double start = 0.5; start < 1.0; start += 0.05) {
+            FFmpeg::AudioFrameInfo f;
+            FillS16DC(&f, 48000, 2, 2400, -0.8);
+            AddBlock(&spec, start, std::move(f));
+        }
+        bank->specs["signs.wav"] = std::move(spec);
+        Project p = MakeProject();
+        Clip c = MakeClip("c1", 1, 0.0, 0.5, "signs.wav");
+        c.playback_rate = 2.0;
+        p.clips.push_back(c);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        // chunk 4: t ~ 0.085 -> src ~0.17 -> +0.8 region.
+        XER_VE_CHECK(mixer.GetChunk(4, &chunk, &err));
+        XER_VE_CHECK(ChunkMean(chunk) > 15000.0);
+        // chunk 14: t ~ 0.30 -> src ~0.60 -> -0.8 region.
+        XER_VE_CHECK(mixer.GetChunk(14, &chunk, &err));
+        XER_VE_CHECK(ChunkMean(chunk) < -15000.0);
+    }
+
+    // LastChunkPeaks: {0,0} before rendering, ~the source amplitude
+    // after — meters for the UI.
+    {
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["dc.wav"] = MakeDCSpec(1.0, 0.5);
+        Project p = MakeProject();
+        p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, "dc.wav"));
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        XER_VE_CHECK(mixer.LastChunkPeaks().first == 0.0f);
+        XER_VE_CHECK(mixer.LastChunkPeaks().second == 0.0f);
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        const auto peaks = mixer.LastChunkPeaks();
+        XER_VE_CHECK(peaks.first > 0.45f && peaks.first < 0.55f);
+        XER_VE_CHECK(peaks.second > 0.45f && peaks.second < 0.55f);
+    }
+}
+
 }  // namespace
 
 int XER_VideoEditor_RunMixerTests() {
@@ -1247,5 +1453,6 @@ int XER_VideoEditor_RunMixerTests() {
     TestAnchoringAndSparsePts();
     TestLifecycle();
     TestFfmpegWavIntegration();
+    TestPanTrackGainRateMeters();
     return 0;
 }

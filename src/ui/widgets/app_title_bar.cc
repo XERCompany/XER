@@ -462,45 +462,73 @@ void AppTitleBar::Render(Rendering::Renderer& r,
                                     pill_w, kCenterBarH};
 
     // ---- Pass 2: backgrounds (hover / active fills under all content) -----
+    // Pressed zones get the stronger `pressed` fill so a held click is
+    // visibly distinct from hover.
+    const auto zone_fill = [&](HitZone zone) {
+        return pressed_zone_ == zone ? tokens.pressed : tokens.hover;
+    };
     if (ws_hot) {
-        r.FillRect(workspace_rect_, tokens.hover, tokens.radius_medium);
+        r.FillRect(workspace_rect_, zone_fill(HitZone::Workspace),
+                   tokens.radius_medium);
     }
     if (nav_b_hot && show_nav_) {
-        r.FillRect(nav_back_rect_, tokens.hover, tokens.radius_small);
+        r.FillRect(nav_back_rect_, zone_fill(HitZone::NavBack),
+                   tokens.radius_small);
     }
     if (nav_f_hot && show_nav_) {
-        r.FillRect(nav_fwd_rect_, tokens.hover, tokens.radius_small);
+        r.FillRect(nav_fwd_rect_, zone_fill(HitZone::NavForward),
+                   tokens.radius_small);
     }
     if (show_left_panel_ && (lp_hot || left_panel_active_)) {
-        r.FillRect(left_panel_rect_, tokens.hover, tokens.radius_small);
+        r.FillRect(left_panel_rect_,
+                   left_panel_active_ && !lp_hot ? tokens.secondary
+                                                 : zone_fill(HitZone::LeftPanel),
+                   tokens.radius_small);
     }
     for (std::size_t i = 0; i < menus_.size(); ++i) {
         if (hovered_menu_index_ == static_cast<int>(i)) {
-            r.FillRect(menus_[i].rect, tokens.hover, tokens.radius_small);
+            r.FillRect(menus_[i].rect, zone_fill(HitZone::Menu),
+                       tokens.radius_small);
         }
     }
 
-    // Center command pill background
-    r.FillRect(center_bar_rect_, tokens.secondary, tokens.radius_large);
-    r.StrokeRect(center_bar_rect_, tokens.border, 1.0f, tokens.radius_large);
+    // Center command pill: recessed input field look.
+    r.FillRect(center_bar_rect_, cc_hot ? tokens.hover : tokens.input,
+               tokens.radius_large);
+    r.StrokeRect(center_bar_rect_,
+                 cc_hot ? tokens.muted : tokens.border, 1.0f,
+                 tokens.radius_large);
 
     if (show_right_panel_ && (rp_hot || right_panel_active_)) {
-        r.FillRect(right_panel_rect_, tokens.hover, tokens.radius_small);
+        r.FillRect(right_panel_rect_,
+                   right_panel_active_ && !rp_hot
+                       ? tokens.secondary
+                       : zone_fill(HitZone::RightPanel),
+                   tokens.radius_small);
     }
     if (tt_hot) {
-        r.FillRect(theme_toggle_rect_, tokens.hover, tokens.radius_small);
+        r.FillRect(theme_toggle_rect_, zone_fill(HitZone::ThemeToggle),
+                   tokens.radius_small);
     }
     if (av_hot) {
-        r.FillRect(avatar_rect_, tokens.hover, tokens.radius_medium);
+        r.FillRect(avatar_rect_, zone_fill(HitZone::Avatar),
+                   tokens.radius_medium);
     }
 
-    // Window button hover backgrounds (close gets danger fill)
+    // Window button hover backgrounds (close gets danger fill; pressed
+    // deepens both so the held state reads).
     auto win_btn_bg = [&](const Layout::Rect& rect, HitZone zone,
                           bool is_close) {
         const bool wh = hovered_zone_ == zone || pressed_zone_ == zone;
         if (!wh) return;
-        r.FillRect(rect,
-                   is_close ? tokens.danger : tokens.hover, 0.0f);
+        Theme::Color fill =
+            is_close ? tokens.danger : zone_fill(zone);
+        if (pressed_zone_ == zone && is_close) {
+            fill = Motion::LerpColor(tokens.danger,
+                                     Theme::Color{0.0f, 0.0f, 0.0f, 1.0f},
+                                     0.25f);
+        }
+        r.FillRect(rect, fill, 0.0f);
     };
     win_btn_bg(minimize_rect_, HitZone::Minimize, false);
     win_btn_bg(maximize_rect_, HitZone::Maximize, false);

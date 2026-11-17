@@ -5,6 +5,7 @@
 // (transitions), matching the timeline model's invariants.
 #include "project_store.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -15,6 +16,8 @@
 #include <utility>
 
 #include <json/json.h>
+
+#include <cstdlib>
 
 #include "helper/path_utils.h"
 
@@ -74,6 +77,12 @@ const char* TransitionTypeToString(Transition::Type type) {
             return "slide_up";
         case Transition::Type::SlideDown:
             return "slide_down";
+        case Transition::Type::DipToBlack:
+            return "dip_to_black";
+        case Transition::Type::DipToWhite:
+            return "dip_to_white";
+        case Transition::Type::AdditiveDissolve:
+            return "additive_dissolve";
     }
     return "crossfade";  // unreachable
 }
@@ -93,6 +102,9 @@ bool TransitionTypeFromString(const std::string& text,
         {"slide_right", Transition::Type::SlideRight},
         {"slide_up", Transition::Type::SlideUp},
         {"slide_down", Transition::Type::SlideDown},
+        {"dip_to_black", Transition::Type::DipToBlack},
+        {"dip_to_white", Transition::Type::DipToWhite},
+        {"additive_dissolve", Transition::Type::AdditiveDissolve},
     };
     for (const auto& entry : kTypes) {
         if (text == entry.name) {
@@ -101,6 +113,144 @@ bool TransitionTypeFromString(const std::string& text,
         }
     }
     return false;
+}
+
+const char* BlendModeToString(BlendMode mode) {
+    switch (mode) {
+        case BlendMode::Normal: return "normal";
+        case BlendMode::Add: return "add";
+        case BlendMode::Multiply: return "multiply";
+        case BlendMode::Screen: return "screen";
+        case BlendMode::Overlay: return "overlay";
+        case BlendMode::Darken: return "darken";
+        case BlendMode::Lighten: return "lighten";
+    }
+    return "normal";  // unreachable
+}
+
+bool BlendModeFromString(const std::string& text, BlendMode* out) {
+    static const struct {
+        const char* name;
+        BlendMode mode;
+    } kModes[] = {
+        {"normal", BlendMode::Normal},
+        {"add", BlendMode::Add},
+        {"multiply", BlendMode::Multiply},
+        {"screen", BlendMode::Screen},
+        {"overlay", BlendMode::Overlay},
+        {"darken", BlendMode::Darken},
+        {"lighten", BlendMode::Lighten},
+    };
+    for (const auto& entry : kModes) {
+        if (text == entry.name) {
+            *out = entry.mode;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool MaskShapeFromString(const std::string& text, MaskShape* out) {
+    if (text == "rect") { *out = MaskShape::Rect; return true; }
+    if (text == "ellipse") { *out = MaskShape::Ellipse; return true; }
+    return false;
+}
+
+const char* MaskShapeToString(MaskShape shape) {
+    return shape == MaskShape::Rect ? "rect" : "ellipse";
+}
+
+bool KeyPropFromString(const std::string& text, KeyProp* out) {
+    static const struct {
+        const char* name;
+        KeyProp prop;
+    } kProps[] = {
+        {"pos_x", KeyProp::PosX},
+        {"pos_y", KeyProp::PosY},
+        {"scale", KeyProp::Scale},
+        {"rotation", KeyProp::Rotation},
+        {"opacity", KeyProp::Opacity},
+        {"gain_db", KeyProp::GainDb},
+    };
+    for (const auto& entry : kProps) {
+        if (text == entry.name) {
+            *out = entry.prop;
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* KeyPropToString(KeyProp prop) {
+    switch (prop) {
+        case KeyProp::PosX: return "pos_x";
+        case KeyProp::PosY: return "pos_y";
+        case KeyProp::Scale: return "scale";
+        case KeyProp::Rotation: return "rotation";
+        case KeyProp::Opacity: return "opacity";
+        case KeyProp::GainDb: return "gain_db";
+    }
+    return "pos_x";  // unreachable
+}
+
+bool KeyEaseFromString(const std::string& text, KeyEase* out) {
+    static const struct {
+        const char* name;
+        KeyEase ease;
+    } kEases[] = {
+        {"linear", KeyEase::Linear},
+        {"ease_in", KeyEase::EaseIn},
+        {"ease_out", KeyEase::EaseOut},
+        {"ease_in_out", KeyEase::EaseInOut},
+        {"hold", KeyEase::Hold},
+    };
+    for (const auto& entry : kEases) {
+        if (text == entry.name) {
+            *out = entry.ease;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SourceKindFromString(const std::string& text, SourceKind* out) {
+    static const struct {
+        const char* name;
+        SourceKind kind;
+    } kKinds[] = {
+        {"media", SourceKind::Media},
+        {"color_matte", SourceKind::ColorMatte},
+        {"color_bars", SourceKind::ColorBars},
+        {"text", SourceKind::Text},
+    };
+    for (const auto& entry : kKinds) {
+        if (text == entry.name) {
+            *out = entry.kind;
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* SourceKindToString(SourceKind kind) {
+    switch (kind) {
+        case SourceKind::Media: return "media";
+        case SourceKind::ColorMatte: return "color_matte";
+        case SourceKind::ColorBars: return "color_bars";
+        case SourceKind::Text: return "text";
+    }
+    return "media";  // unreachable
+}
+
+const char* KeyEaseToString(KeyEase ease) {
+    switch (ease) {
+        case KeyEase::Linear: return "linear";
+        case KeyEase::EaseIn: return "ease_in";
+        case KeyEase::EaseOut: return "ease_out";
+        case KeyEase::EaseInOut: return "ease_in_out";
+        case KeyEase::Hold: return "hold";
+    }
+    return "linear";  // unreachable
 }
 
 // Typed field reader bound to one JSON object. An absent key yields
@@ -200,11 +350,14 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
         if (!r.GetI64("version", ProjectStore::kVersion, &version)) {
             return false;
         }
-        if (version != ProjectStore::kVersion) {
-            return Fail(error_out,
-                        "unsupported project version " +
-                            std::to_string(version) + " (expected " +
-                            std::to_string(ProjectStore::kVersion) + ")");
+        if (version < ProjectStore::kMinSupportedVersion ||
+            version > ProjectStore::kVersion) {
+            return Fail(
+                error_out,
+                "unsupported project version " + std::to_string(version) +
+                    " (supported " +
+                    std::to_string(ProjectStore::kMinSupportedVersion) +
+                    ".." + std::to_string(ProjectStore::kVersion) + ")");
         }
     }
 
@@ -284,6 +437,7 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             if (!r.GetStr("name", "", &track.name) ||
                 !r.GetBool("muted", track.muted, &track.muted) ||
                 !r.GetBool("hidden", track.hidden, &track.hidden) ||
+                !r.GetBool("locked", track.locked, &track.locked) ||
                 !r.GetF32("gain_db", track.gain_db, &track.gain_db)) {
                 return false;
             }
@@ -321,10 +475,6 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             }
             if (!r.GetStr("source", "", &clip.source_path)) {
                 return false;
-            }
-            if (clip.source_path.empty()) {
-                return Fail(error_out,
-                            where + ".source: required non-empty");
             }
 
             std::int64_t track_index = 0;
@@ -364,10 +514,59 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             clip.duration = t;
 
             if (!r.GetBool("muted", clip.muted, &clip.muted) ||
+                !r.GetBool("adjustment", clip.is_adjustment,
+                           &clip.is_adjustment) ||
                 !r.GetF32("gain_db", clip.gain_db, &clip.gain_db) ||
                 !r.GetF64("fade_in", clip.fade_in, &clip.fade_in) ||
-                !r.GetF64("fade_out", clip.fade_out, &clip.fade_out)) {
+                !r.GetF64("fade_out", clip.fade_out, &clip.fade_out) ||
+                !r.GetF64("playback_rate", clip.playback_rate,
+                          &clip.playback_rate) ||
+                !r.GetF32("pan", clip.pan, &clip.pan) ||
+                !r.GetStr("link_group", clip.link_group,
+                          &clip.link_group)) {
                 return false;
+            }
+            if (!std::isfinite(clip.playback_rate) ||
+                clip.playback_rate <= 0.0) {
+                return Fail(error_out,
+                            where + ".playback_rate: must be > 0");
+            }
+            if (!std::isfinite(clip.pan) || clip.pan < -1.0f ||
+                clip.pan > 1.0f) {
+                return Fail(error_out,
+                            where + ".pan: out of range [-1, 1]");
+            }
+            if (cj.isMember("blend_mode")) {
+                std::string mode_text;
+                if (!r.GetStr("blend_mode", "", &mode_text)) {
+                    return false;
+                }
+                if (!BlendModeFromString(mode_text, &clip.blend_mode)) {
+                    return Fail(error_out,
+                                where + ".blend_mode: unknown mode '" +
+                                    mode_text + "'");
+                }
+            }
+            if (cj.isMember("source_kind")) {
+                std::string kind_text;
+                if (!r.GetStr("source_kind", "", &kind_text)) {
+                    return false;
+                }
+                if (!SourceKindFromString(kind_text,
+                                          &clip.source.kind)) {
+                    return Fail(error_out,
+                                where + ".source_kind: unknown kind '" +
+                                    kind_text + "'");
+                }
+            }
+            if (!r.GetStr("source_param", clip.source.param,
+                          &clip.source.param)) {
+                return false;
+            }
+            if (clip.source.kind == SourceKind::Media &&
+                !clip.is_adjustment && clip.source_path.empty()) {
+                return Fail(error_out,
+                            where + ".source: required non-empty");
             }
 
             // transform: optional object; absent fields keep Transform{}.
@@ -433,6 +632,169 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                         }
                     }
                     clip.effects.push_back(effect);
+                }
+            }
+
+            // masks: optional array of {shape, cx, cy, w, h, feather,
+            // inverted}; unknown shape strings are errors.
+            if (cj.isMember("masks")) {
+                const Json::Value& mj = cj["masks"];
+                if (!mj.isArray()) {
+                    return Fail(error_out,
+                                where + ".masks: expected array");
+                }
+                for (Json::ArrayIndex j = 0; j < mj.size(); ++j) {
+                    const Json::Value& mm = mj[j];
+                    const std::string mwhere =
+                        where + ".masks[" + std::to_string(j) + "]";
+                    if (!mm.isObject()) {
+                        return Fail(error_out,
+                                    mwhere + ": expected object");
+                    }
+                    Reader mr{mm, mwhere, error_out};
+                    ClipMask mask;
+                    if (mm.isMember("shape")) {
+                        std::string shape_text;
+                        if (!mr.GetStr("shape", "", &shape_text)) {
+                            return false;
+                        }
+                        if (!MaskShapeFromString(shape_text,
+                                                 &mask.shape)) {
+                            return Fail(
+                                error_out,
+                                mwhere + ".shape: unknown shape '" +
+                                    shape_text + "'");
+                        }
+                    }
+                    if (!mr.GetF32("cx", mask.cx, &mask.cx) ||
+                        !mr.GetF32("cy", mask.cy, &mask.cy) ||
+                        !mr.GetF32("w", mask.w, &mask.w) ||
+                        !mr.GetF32("h", mask.h, &mask.h) ||
+                        !mr.GetF32("feather", mask.feather,
+                                   &mask.feather) ||
+                        !mr.GetBool("inverted", mask.inverted,
+                                    &mask.inverted)) {
+                        return false;
+                    }
+                    clip.masks.push_back(mask);
+                }
+            }
+
+            // keyframes: optional object {prop_name: [{time, value,
+            // ease}]}; unknown property/ease strings are errors.
+            if (cj.isMember("keyframes")) {
+                const Json::Value& kj = cj["keyframes"];
+                if (!kj.isObject()) {
+                    return Fail(error_out,
+                                where + ".keyframes: expected object");
+                }
+                for (const std::string& prop_name : kj.getMemberNames()) {
+                    KeyProp prop;
+                    if (!KeyPropFromString(prop_name, &prop)) {
+                        return Fail(error_out,
+                                    where + ".keyframes: unknown "
+                                            "property '" +
+                                        prop_name + "'");
+                    }
+                    const Json::Value& kv = kj[prop_name];
+                    if (!kv.isArray()) {
+                        return Fail(error_out,
+                                    where + ".keyframes." + prop_name +
+                                        ": expected array");
+                    }
+                    std::vector<Keyframe> keys;
+                    for (Json::ArrayIndex j = 0; j < kv.size(); ++j) {
+                        const Json::Value& kk = kv[j];
+                        const std::string kwhere =
+                            where + ".keyframes." + prop_name + "[" +
+                            std::to_string(j) + "]";
+                        if (!kk.isObject()) {
+                            return Fail(error_out,
+                                        kwhere + ": expected object");
+                        }
+                        Reader kr{kk, kwhere, error_out};
+                        Keyframe key;
+                        if (!kr.GetF64("time", key.time, &key.time) ||
+                            !kr.GetF32("value", key.value, &key.value)) {
+                            return false;
+                        }
+                        if (kk.isMember("ease")) {
+                            std::string ease_text;
+                            if (!kr.GetStr("ease", "", &ease_text)) {
+                                return false;
+                            }
+                            if (!KeyEaseFromString(ease_text,
+                                                   &key.easing)) {
+                                return Fail(
+                                    error_out,
+                                    kwhere + ".ease: unknown ease '" +
+                                        ease_text + "'");
+                            }
+                        }
+                        keys.push_back(key);
+                    }
+                    clip.keyframes[prop] = std::move(keys);
+                }
+            }
+
+            // audio_fx: optional array of hosted plugins
+            // {path, name, enabled, params: {"<id>": value}}.
+            if (cj.isMember("audio_fx")) {
+                const Json::Value& fj = cj["audio_fx"];
+                if (!fj.isArray()) {
+                    return Fail(error_out,
+                                where + ".audio_fx: expected array");
+                }
+                for (Json::ArrayIndex j = 0; j < fj.size(); ++j) {
+                    const Json::Value& ff = fj[j];
+                    const std::string fwhere =
+                        where + ".audio_fx[" + std::to_string(j) + "]";
+                    if (!ff.isObject()) {
+                        return Fail(error_out,
+                                    fwhere + ": expected object");
+                    }
+                    Reader fr{ff, fwhere, error_out};
+                    ClipAudioFx fx;
+                    if (!fr.GetStr("path", "", &fx.plugin_path)) {
+                        return false;
+                    }
+                    if (fx.plugin_path.empty()) {
+                        return Fail(error_out,
+                                    fwhere + ".path: required non-empty");
+                    }
+                    if (!fr.GetStr("name", fx.name, &fx.name) ||
+                        !fr.GetBool("enabled", fx.enabled,
+                                    &fx.enabled)) {
+                        return false;
+                    }
+                    if (ff.isMember("params")) {
+                        const Json::Value& pj = ff["params"];
+                        if (!pj.isObject()) {
+                            return Fail(
+                                error_out,
+                                fwhere + ".params: expected object");
+                        }
+                        for (const std::string& pid :
+                             pj.getMemberNames()) {
+                            const Json::Value& pv = pj[pid];
+                            if (!pv.isDouble()) {
+                                return Fail(error_out,
+                                            fwhere + ".params." + pid +
+                                                ": expected number");
+                            }
+                            char* end = nullptr;
+                            const unsigned long id =
+                                std::strtoul(pid.c_str(), &end, 10);
+                            if (end == pid.c_str() || *end != '\0') {
+                                return Fail(error_out,
+                                            fwhere + ".params: bad id '" +
+                                                pid + "'");
+                            }
+                            fx.params[static_cast<std::uint32_t>(id)] =
+                                static_cast<float>(pv.asDouble());
+                        }
+                    }
+                    clip.audio_fx.push_back(std::move(fx));
                 }
             }
 
@@ -505,6 +867,71 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
         }
     }
 
+    // markers: lenient — entries with non-finite/negative times are
+    // dropped; malformed entries are errors like other primary data.
+    if (root.isMember("markers")) {
+        const Json::Value& mv = root["markers"];
+        if (!mv.isArray()) {
+            return Fail(error_out, "markers: expected array");
+        }
+        for (Json::ArrayIndex i = 0; i < mv.size(); ++i) {
+            const Json::Value& mj = mv[i];
+            const std::string where =
+                "marker[" + std::to_string(i) + "]";
+            if (!mj.isObject()) {
+                return Fail(error_out, where + ": expected object");
+            }
+            Reader r{mj, where, error_out};
+            Marker marker;
+            if (!r.GetF64("time", marker.time, &marker.time) ||
+                !r.GetStr("name", marker.name, &marker.name)) {
+                return false;
+            }
+            if (!std::isfinite(marker.time) || marker.time < 0.0) {
+                continue;  // self-heal
+            }
+            if (mj.isMember("color")) {
+                const Json::Value& cj = mj["color"];
+                if (!cj.isArray() || cj.size() != 4u) {
+                    return Fail(error_out,
+                                where + ".color: expected array of 4");
+                }
+                for (Json::ArrayIndex k = 0; k < 4; ++k) {
+                    const Json::Value& e = cj[k];
+                    if (!e.isInt64() || e.asInt64() < 0 ||
+                        e.asInt64() > 255) {
+                        return Fail(error_out,
+                                    where + ".color: components 0-255");
+                    }
+                    marker.color[k] =
+                        static_cast<std::uint8_t>(e.asInt64());
+                }
+            }
+            project.markers.push_back(marker);
+        }
+        std::sort(project.markers.begin(), project.markers.end(),
+                  [](const Marker& a, const Marker& b) {
+                      return a.time < b.time;
+                  });
+    }
+
+    {
+        Reader r{root, "project", error_out};
+        if (!r.GetF64("work_in", project.work_in, &project.work_in) ||
+            !r.GetF64("work_out", project.work_out, &project.work_out)) {
+            return false;
+        }
+        if (!std::isfinite(project.work_in) ||
+            !std::isfinite(project.work_out) || project.work_in < 0.0 ||
+            project.work_out < 0.0) {
+            return Fail(error_out, "work area must be finite and >= 0");
+        }
+        if (project.work_out <= project.work_in) {
+            project.work_in = 0.0;
+            project.work_out = 0.0;
+        }
+    }
+
     // Self-heal: transitions referencing missing clips, clips on
     // different or non-video tracks, or non-adjacent clips are dropped
     // rather than failing the load.
@@ -521,6 +948,7 @@ Json::Value TrackToJson(const Track& track) {
     out["name"] = track.name;
     out["muted"] = track.muted;
     out["hidden"] = track.hidden;
+    out["locked"] = track.locked;
     out["gain_db"] = static_cast<double>(track.gain_db);
     return out;
 }
@@ -537,6 +965,77 @@ Json::Value ClipToJson(const Clip& clip) {
     out["gain_db"] = static_cast<double>(clip.gain_db);
     out["fade_in"] = clip.fade_in;
     out["fade_out"] = clip.fade_out;
+    out["playback_rate"] = clip.playback_rate;
+    out["pan"] = static_cast<double>(clip.pan);
+    if (clip.blend_mode != BlendMode::Normal) {
+        out["blend_mode"] = BlendModeToString(clip.blend_mode);
+    }
+    if (clip.source.kind != SourceKind::Media) {
+        out["source_kind"] = SourceKindToString(clip.source.kind);
+    }
+    if (!clip.source.param.empty()) {
+        out["source_param"] = clip.source.param;
+    }
+    if (clip.is_adjustment) {
+        out["adjustment"] = true;   // absent on load => false
+    }
+    if (!clip.link_group.empty()) {
+        out["link_group"] = clip.link_group;
+    }
+
+    if (!clip.audio_fx.empty()) {
+        Json::Value audio_fx(Json::arrayValue);
+        for (const ClipAudioFx& fx : clip.audio_fx) {
+            Json::Value fj(Json::objectValue);
+            fj["path"] = fx.plugin_path;
+            fj["name"] = fx.name;
+            fj["enabled"] = fx.enabled;
+            if (!fx.params.empty()) {
+                Json::Value params(Json::objectValue);
+                for (const auto& entry : fx.params) {
+                    params[std::to_string(entry.first)] =
+                        static_cast<double>(entry.second);
+                }
+                fj["params"] = params;
+            }
+            audio_fx.append(fj);
+        }
+        out["audio_fx"] = audio_fx;
+    }
+
+    if (!clip.masks.empty()) {
+        Json::Value masks(Json::arrayValue);
+        for (const ClipMask& mask : clip.masks) {
+            Json::Value mj(Json::objectValue);
+            mj["shape"] = MaskShapeToString(mask.shape);
+            mj["cx"] = static_cast<double>(mask.cx);
+            mj["cy"] = static_cast<double>(mask.cy);
+            mj["w"] = static_cast<double>(mask.w);
+            mj["h"] = static_cast<double>(mask.h);
+            mj["feather"] = static_cast<double>(mask.feather);
+            mj["inverted"] = mask.inverted;
+            masks.append(mj);
+        }
+        out["masks"] = masks;
+    }
+
+    if (!clip.keyframes.empty()) {
+        Json::Value keyframes(Json::objectValue);
+        for (const auto& entry : clip.keyframes) {
+            Json::Value keys(Json::arrayValue);
+            for (const Keyframe& key : entry.second) {
+                Json::Value kj(Json::objectValue);
+                kj["time"] = key.time;
+                kj["value"] = static_cast<double>(key.value);
+                if (key.easing != KeyEase::Linear) {
+                    kj["ease"] = KeyEaseToString(key.easing);
+                }
+                keys.append(kj);
+            }
+            keyframes[KeyPropToString(entry.first)] = keys;
+        }
+        out["keyframes"] = keyframes;
+    }
 
     Json::Value transform(Json::objectValue);
     transform["offset_x"] =
@@ -606,6 +1105,26 @@ Json::Value ProjectToJson(const Project& project) {
         transitions.append(TransitionToJson(transition));
     }
     root["transitions"] = transitions;
+
+    if (!project.markers.empty()) {
+        Json::Value markers(Json::arrayValue);
+        for (const Marker& marker : project.markers) {
+            Json::Value mj(Json::objectValue);
+            mj["time"] = marker.time;
+            mj["name"] = marker.name;
+            Json::Value color(Json::arrayValue);
+            for (const std::uint8_t component : marker.color) {
+                color.append(static_cast<int>(component));
+            }
+            mj["color"] = color;
+            markers.append(mj);
+        }
+        root["markers"] = markers;
+    }
+    if (project.work_out > project.work_in) {
+        root["work_in"] = project.work_in;
+        root["work_out"] = project.work_out;
+    }
     return root;
 }
 

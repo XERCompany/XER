@@ -90,6 +90,7 @@ private:
         bool aux_placed = false;
     };
 
+    static void RegisterHostClass();
     static LRESULT CALLBACK HostProc(HWND hwnd, UINT msg, WPARAM wp,
                                      LPARAM lp);
     Ctrl* FindByHwnd(HWND hwnd, bool* is_aux);

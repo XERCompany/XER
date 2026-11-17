@@ -50,10 +50,31 @@ bool ClipsEqual(const Clip& a, const Clip& b) {
     if (!NearlyEq(a.timeline_start, b.timeline_start) ||
         !NearlyEq(a.in_point, b.in_point) ||
         !NearlyEq(a.duration, b.duration) ||
+        !NearlyEq(a.playback_rate, b.playback_rate) ||
         !NearlyEq(a.gain_db, b.gain_db) ||
+        !NearlyEq(a.pan, b.pan) ||
         !NearlyEq(a.fade_in, b.fade_in) ||
         !NearlyEq(a.fade_out, b.fade_out)) {
         return false;
+    }
+    if (a.blend_mode != b.blend_mode || a.link_group != b.link_group ||
+        a.masks.size() != b.masks.size() ||
+        a.keyframes.size() != b.keyframes.size()) {
+        return false;
+    }
+    for (const auto& [prop, keys] : a.keyframes) {
+        const auto it = b.keyframes.find(prop);
+        if (it == b.keyframes.end() ||
+            it->second.size() != keys.size()) {
+            return false;
+        }
+        for (std::size_t i = 0; i < keys.size(); ++i) {
+            if (!NearlyEq(keys[i].time, it->second[i].time) ||
+                !NearlyEq(keys[i].value, it->second[i].value) ||
+                keys[i].easing != it->second[i].easing) {
+                return false;
+            }
+        }
     }
     const Transform& x = a.transform;
     const Transform& y = b.transform;
@@ -100,7 +121,8 @@ bool ProjectsEqual(const Project& a, const Project& b) {
         const Track& x = a.tracks[i];
         const Track& y = b.tracks[i];
         if (x.kind != y.kind || x.name != y.name || x.muted != y.muted ||
-            x.hidden != y.hidden || !NearlyEq(x.gain_db, y.gain_db)) {
+            x.hidden != y.hidden || x.locked != y.locked ||
+            !NearlyEq(x.gain_db, y.gain_db)) {
             return fail("track fields");
         }
     }
@@ -123,6 +145,19 @@ bool ProjectsEqual(const Project& a, const Project& b) {
             x.type != y.type || !NearlyEq(x.duration, y.duration)) {
             return fail("transition fields");
         }
+    }
+    if (a.markers.size() != b.markers.size()) {
+        return fail("marker count");
+    }
+    for (std::size_t i = 0; i < a.markers.size(); ++i) {
+        if (!NearlyEq(a.markers[i].time, b.markers[i].time) ||
+            a.markers[i].name != b.markers[i].name) {
+            return fail("marker fields");
+        }
+    }
+    if (!NearlyEq(a.work_in, b.work_in) ||
+        !NearlyEq(a.work_out, b.work_out)) {
+        return fail("work area");
     }
     return true;
 }
@@ -581,6 +616,199 @@ int XER_VideoEditor_RunHistoryTests() {
         XER_VE_CHECK(history.Redo());
         XER_VE_CHECK(history.Redo());
         XER_VE_CHECK(ProjectsEqual(p, sequential_end));
+    }
+
+    // -- 15. RippleDeleteClip: follower shift + transition restore ------
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 5.0), video_bounds, &err);
+        AddClip(p, MakeClip("b", 0, 5.0, 0.0, 5.0), video_bounds, &err);
+        AddClip(p, MakeClip("c", 0, 10.0, 0.0, 5.0), video_bounds, &err);
+        AddTransition(p, "b", "c", Transition::Type::Crossfade, 1.0,
+                      &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        XER_VE_CHECK(history.RippleDeleteClip("b", &err));
+        XER_VE_CHECK(FindClip(p, "b") == nullptr);
+        XER_VE_CHECK(std::abs(FindClip(p, "c")->timeline_start - 5.0) <
+                     1e-9);
+        XER_VE_CHECK(p.transitions.empty());   // b->c died with b
+        const Project rippled = p;
+        XER_VE_CHECK(history.UndoLabel() == "Ripple delete");
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before));  // clip AND transition
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, rippled));
+    }
+
+    // -- 16. LiftRange extract: multi-clip undo/redo --------------------
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 10.0), video_bounds, &err);
+        AddClip(p, MakeClip("b", 0, 10.0, 0.0, 10.0), video_bounds, &err);
+        AddClip(p, MakeClip("c", 0, 20.0, 0.0, 10.0), video_bounds, &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        XER_VE_CHECK(history.LiftRange(5.0, 15.0, true, &err));
+        XER_VE_CHECK(history.UndoLabel() == "Lift/extract");
+        XER_VE_CHECK(FindClip(p, "b") == nullptr);
+        XER_VE_CHECK(std::abs(FindClip(p, "c")->timeline_start - 10.0) <
+                     1e-9);
+        const Project extracted = p;
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before));
+        // Redo replays the snapshot — the generated split-piece ids are
+        // identical to the first apply (deterministic redo).
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, extracted));
+        // A rejected range pushes no undo entry.
+        XER_VE_CHECK(!history.LiftRange(9.0, 4.0, true, &err));
+        XER_VE_CHECK(ProjectsEqual(p, extracted));
+    }
+
+    // -- 17. RollingEdit + SlipClip: undo and delta-merge ---------------
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 10.0), video_bounds, &err);
+        AddClip(p, MakeClip("b", 0, 10.0, 30.0, 10.0), video_bounds,
+                &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        XER_VE_CHECK(history.RollingEdit("a", "b", 1.0, video_bounds,
+                                         video_bounds, &err));
+        XER_VE_CHECK(history.RollingEdit("a", "b", 1.0, video_bounds,
+                                         video_bounds, &err));
+        // two 1-second rolls coalesce into ONE undo step
+        XER_VE_CHECK(std::abs(FindClip(p, "a")->duration - 12.0) < 1e-9);
+        XER_VE_CHECK(std::abs(FindClip(p, "b")->in_point - 32.0) < 1e-9);
+        const Project rolled = p;
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before));
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, rolled));
+        // slips coalesce the same way (deltas sum)
+        const Project before_slip = p;
+        XER_VE_CHECK(history.SlipClip("a", 1.0, video_bounds, &err));
+        XER_VE_CHECK(history.SlipClip("a", 2.0, video_bounds, &err));
+        XER_VE_CHECK(std::abs(FindClip(p, "a")->in_point - 3.0) < 1e-9);
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before_slip));
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(std::abs(FindClip(p, "a")->in_point - 3.0) < 1e-9);
+    }
+
+    // -- 18. SlideClip (three-clip restore) + SetClipRate ---------------
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 10.0), video_bounds, &err);
+        AddClip(p, MakeClip("m", 0, 10.0, 40.0, 5.0), video_bounds,
+                &err);
+        AddClip(p, MakeClip("n", 0, 15.0, 10.0, 10.0), video_bounds,
+                &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        XER_VE_CHECK(history.SlideClip("m", 2.0, video_bounds, &err));
+        XER_VE_CHECK(std::abs(FindClip(p, "a")->duration - 12.0) < 1e-9);
+        XER_VE_CHECK(std::abs(FindClip(p, "n")->in_point - 12.0) < 1e-9);
+        const Project slid = p;
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before));
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, slid));
+        XER_VE_CHECK(history.SetClipRate("m", 2.0, video_bounds, &err));
+        XER_VE_CHECK(std::abs(FindClip(p, "m")->duration - 2.5) < 1e-9);
+        const Project rated = p;
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, slid));
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, rated));
+    }
+
+    // -- 19. InsertClipAt / OverwriteClipAt undo/redo -------------------
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 5.0), video_bounds, &err);
+        AddClip(p, MakeClip("b", 0, 5.0, 0.0, 5.0), video_bounds, &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        std::string id;
+        XER_VE_CHECK(history.InsertClipAt(
+            MakeClip("", 0, 5.0, 0.0, 3.0), video_bounds, &id, &err));
+        XER_VE_CHECK(!id.empty());                  // wrapper filled the id
+        XER_VE_CHECK(std::abs(FindClip(p, "b")->timeline_start - 8.0) <
+                     1e-9);
+        const Project inserted = p;
+        XER_VE_CHECK(history.UndoLabel() == "Insert clip");
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, before));
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, inserted));   // same inserted id
+        // Overwrite at [3,7): splits a and the inserted clip, mints a
+        // fresh id for the surviving [7,8) tail — the snapshot command
+        // makes redo reproduce those generated ids verbatim.
+        const Project pre_over = p;
+        XER_VE_CHECK(history.OverwriteClipAt(
+            MakeClip("", 0, 3.0, 0.0, 4.0), video_bounds, &id, &err));
+        const Project overwritten = p;
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(ProjectsEqual(p, pre_over));
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(ProjectsEqual(p, overwritten));
+    }
+
+    // -- 20. Simple wrappers: lock/link/keyframes/markers/work area -----
+    {
+        Project p = MakeProject();
+        std::string err;
+        AddClip(p, MakeClip("a", 0, 0.0, 0.0, 10.0), video_bounds, &err);
+        TimelineHistory history(p);
+        const Project before = p;
+        // lock toggle
+        XER_VE_CHECK(history.SetTrackLocked(0, true, &err));
+        XER_VE_CHECK(p.tracks[0].locked);
+        XER_VE_CHECK(history.UndoLabel() == "Toggle track lock");
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(!p.tracks[0].locked);
+        // link group
+        XER_VE_CHECK(history.SetClipLinkGroup("a", "g1"));
+        XER_VE_CHECK(FindClip(p, "a")->link_group == "g1");
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(FindClip(p, "a")->link_group.empty());
+        // keyframes
+        std::vector<Keyframe> keys = {{0.0, 0.0f, KeyEase::Linear},
+                                      {10.0, 1.0f, KeyEase::Linear}};
+        XER_VE_CHECK(history.SetClipKeyframes("a", KeyProp::Opacity,
+                                              keys, &err));
+        XER_VE_CHECK(FindClip(p, "a")->keyframes.size() == 1);
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(FindClip(p, "a")->keyframes.empty());
+        // markers: add, undo, redo, remove, undo
+        Marker m;
+        m.time = 4.0;
+        m.name = "mid";
+        XER_VE_CHECK(history.AddMarker(m, &err));
+        XER_VE_CHECK(p.markers.size() == 1);
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(p.markers.empty());
+        XER_VE_CHECK(history.Redo());
+        XER_VE_CHECK(p.markers.size() == 1 &&
+                     p.markers[0].name == "mid");
+        XER_VE_CHECK(history.RemoveMarker(4.0));
+        XER_VE_CHECK(p.markers.empty());
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(p.markers.size() == 1);
+        // work area
+        XER_VE_CHECK(history.SetWorkArea(2.0, 8.0, &err));
+        XER_VE_CHECK(p.work_in == 2.0 && p.work_out == 8.0);
+        XER_VE_CHECK(history.Undo());
+        XER_VE_CHECK(p.work_out <= p.work_in);
+        XER_VE_CHECK(history.Undo());   // reverts the marker re-add
+        XER_VE_CHECK(ProjectsEqual(p, before));
     }
 
     return 0;

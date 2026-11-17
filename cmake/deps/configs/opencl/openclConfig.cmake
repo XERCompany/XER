@@ -12,7 +12,8 @@ if(XER_OPENCL_0_FOUND)
             INTERFACE_LINK_DIRECTORIES "${XER_OPENCL_0_LIBRARY_DIRS}")
     endif()
     find_path(XER_OPENCL_INC NAMES CL/cl.h OpenCL/cl.h
-        PATHS /usr/include /usr/local/include /opt/homebrew/include)
+        PATHS ${XER_OPENCL_0_INCLUDE_DIRS}
+              /usr/include /usr/local/include /opt/homebrew/include)
     if(XER_OPENCL_INC AND NOT TARGET OpenCL::Headers)
         add_library(OpenCL::Headers INTERFACE IMPORTED GLOBAL)
         set_target_properties(OpenCL::Headers PROPERTIES

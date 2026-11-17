@@ -1,4 +1,4 @@
-// .xerproj JSON v1 persistence for the VideoEditor timeline model
+// .xerproj JSON v2 persistence for the VideoEditor timeline model
 // (XER Studio Phase 1B). Static and UI-free; all paths are UTF-8
 // std::strings. Save is crash-safe: the JSON is written to
 // <path>.tmp and then renamed over the target, so a crash mid-write
@@ -11,8 +11,11 @@
 
 namespace XER::VideoEditor {
 
-// Loads/saves Project as .xerproj JSON (format version 1 — key layout
-// per docs/superpowers/specs/2026-11-15-video-editor-design.md).
+// Loads/saves Project as .xerproj JSON. Save always writes the current
+// kVersion; Load accepts any version in [1, kVersion] — v2 adds
+// optional-only fields (playback_rate, blend_mode, pan, link_group,
+// masks, keyframes, track.locked, markers, work area, new transition
+// types), so v1 files load cleanly with defaults.
 // Load is lenient about absent optional fields and self-heals
 // transitions that reference missing/non-adjacent clips via
 // DropInvalidTransitions; it errors on absent required fields, wrong
@@ -20,7 +23,8 @@ namespace XER::VideoEditor {
 // negative times/durations. Never throws.
 class ProjectStore {
 public:
-    static constexpr int kVersion = 1;
+    static constexpr int kVersion = 2;
+    static constexpr int kMinSupportedVersion = 1;
 
     // UTF-8 paths. Save writes <path>.tmp then renames (crash-safe);
     // on Windows rename-over-existing may need remove+retry — handled

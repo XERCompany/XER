@@ -16,7 +16,7 @@ namespace XER::Network::Cert {
 
 namespace {
 
-std::string X509NameOneLine(X509_NAME* name) {
+std::string X509NameOneLine(const X509_NAME* name) {
     if (!name) return {};
     char buf[256]{};
     X509_NAME_oneline(name, buf, sizeof(buf));
@@ -103,7 +103,7 @@ bool CertVerifier::Verify(const std::string& pem_cert,
         const int idx = X509_NAME_get_index_by_NID(
             X509_get_subject_name(cert), NID_commonName, -1);
         if (idx >= 0) {
-            X509_NAME_ENTRY* entry = X509_NAME_get_entry(
+            const X509_NAME_ENTRY* entry = X509_NAME_get_entry(
                 X509_get_subject_name(cert), idx);
             const char* cn = reinterpret_cast<const char*>(
                 ASN1_STRING_get0_data(X509_NAME_ENTRY_get_data(entry)));

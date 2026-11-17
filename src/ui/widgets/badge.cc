@@ -82,9 +82,9 @@ void Badge::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
             break;
     }
     if (!IsEnabled()) {
-        fill_color = tokens.muted;
+        fill_color = tokens.secondary;
         stroke_color = tokens.border;
-        text_color = tokens.background;
+        text_color = tokens.disabled;
         has_stroke = true;
         has_fill = true;
     }

@@ -14,8 +14,12 @@
 // affine Transform into a canvas-sized layer (WarpClipFrame — the
 // contract the 1D preview must match), transition pairs combine via
 // ApplyTransitionPixels, and track layers alpha-over bottom->top onto
-// bg_color. Skia is used ONLY inside VideoEffects dispatch; the
-// compositor's own pixel loops are plain CPU BGRA.
+// bg_color. A clip with Clip::is_adjustment instead runs its
+// effect/mask chain on a snapshot of the already-composited canvas
+// (everything below its track) and writes the result back through its
+// transform rect — a Premiere adjustment layer. Skia is used ONLY
+// inside VideoEffects dispatch; the compositor's own pixel loops are
+// plain CPU BGRA.
 #pragma once
 
 #include <atomic>
@@ -86,6 +90,36 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
 // Returns false on invalid inputs/allocation failure.
 bool WarpClipFrame(const video::Frame& src, const Transform& tr,
                    int canvas_w, int canvas_h, video::Frame* out_layer);
+
+// Multiplies `frame`'s alpha by the product of all `masks` (straight
+// alpha — only the A channel is scaled; RGB passes through). Masks are
+// defined in CLIP-FRAME fractions: shape centered at
+// (cx*W, cy*H) sized (w*W, h*H) pixels; feather is a linear alpha
+// falloff over feather*min(w_px, h_px) pixels centered on the shape
+// boundary (0 -> hard edge); inverted flips inside/outside. Multiple
+// masks MULTIPLY coverage. Degenerate masks (non-positive or
+// non-finite w/h) cover nothing (coverage 0, or 1 when inverted).
+// Returns false when `frame` is null/not a valid BGRA8 frame; an empty
+// `masks` list is a no-op true.
+bool ApplyMaskPixels(video::Frame* frame,
+                     const std::vector<ClipMask>& masks);
+
+// Composites `src` onto `dst` (both packed straight-alpha BGRA8, same
+// dims) using `mode`: dst <- src OVER dst where the source's effective
+// rgb is the W3C-style blend of (backdrop, source):
+//   Cb    = blend(dst_rgb_norm, src_rgb_norm)     (per channel)
+//   Cs'   = sA*Cb + (1-sA)*src_rgb_norm           (spec'd effective src)
+//   out_c = (sA*Cs' + dA*(1-sA)*dst_rgb_norm)/oA  (standard alpha-over)
+//   out_a = alpha-over(sA, dA)
+// Opaque src over opaque dst yields exactly Cb. Blend formulas
+// (normalized 0..1): Add = min(1,b+s); Multiply = b*s;
+// Screen = 1-(1-b)(1-s); Overlay = b<=0.5 ? 2*b*s : 1-2*(1-b)*(1-s);
+// Darken = min(b,s); Lighten = max(b,s). BlendMode::Normal reduces
+// EXACTLY to plain alpha-over (Cb = src) — the compositor still keeps
+// its dedicated alpha-over fast path for Normal.
+// Returns false on size/format mismatch or invalid frames.
+bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
+                          const video::Frame& src);
 
 // ---- the compositor ----
 

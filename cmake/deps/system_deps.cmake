@@ -173,5 +173,27 @@ if(NOT TARGET Tesseract::libtesseract)
     endif()
 endif()
 
+# ---------------------------------------------------------------------------
+# Vendored deps without a system package (Windows/MSYS2 only)
+# ---------------------------------------------------------------------------
+
+# dlfcn-win32: POSIX dlopen/dlsym/dlclose/dlerror/dladdr for Windows. A few
+# sources include <dlfcn.h> unconditionally (content/device/cast/aura/
+# aura_lc3_decoder.cc, native/plugin/pxer/pxer_host.cc; crash_stack_trace.cc
+# is V8-gated). Under vcpkg the header is globally visible via the
+# toolchain's -external:I include dir; mirror that here so every target in
+# the tree resolves <dlfcn.h> the same way. WIN32-gated: Linux/macOS have a
+# native dlfcn.h that must NOT be shadowed, and the vcpkg presets never
+# include this file. The compiled side (dlopen & friends) stays opt-in via
+# find_package(dlfcn-win32) → dlfcn-win32::dl — no binary links the
+# dlopen callers today, same as under vcpkg.
+if(WIN32)
+    set(_xer_dlfcn_vendor "${CMAKE_SOURCE_DIR}/third_party/dlfcn-win32/src")
+    if(IS_DIRECTORY "${_xer_dlfcn_vendor}")
+        include_directories("${_xer_dlfcn_vendor}")
+    endif()
+    unset(_xer_dlfcn_vendor)
+endif()
+
 message(STATUS "XER deps: system provider active "
                "(configs=${CMAKE_CURRENT_LIST_DIR}/configs)")

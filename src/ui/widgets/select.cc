@@ -381,23 +381,26 @@ void Select::SetOnChanged(std::function<void(int)> callback) {
 
 void Select::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
-    const bool hovered = IsHovered() && IsEnabled();
+    const bool enabled = IsEnabled();
+    const bool hovered = IsHovered() && enabled;
 
     Theme::Color stroke = tokens.border;
     if (IsFocused()) {
-        stroke = tokens.foreground;
+        stroke = tokens.ring;
     } else if (hovered) {
         stroke = tokens.muted;
     }
     if (open_) {
-        stroke = tokens.foreground;
+        stroke = tokens.ring;
     }
-    renderer.FillRect(bounds, tokens.surface, tokens.radius_medium);
+    renderer.FillRect(bounds, enabled ? tokens.input : tokens.secondary,
+                      tokens.radius_medium);
     renderer.StrokeRect(bounds, stroke, IsFocused() || open_ ? 1.5f : 1.0f, tokens.radius_medium);
 
     const bool has_value = selected_index_ >= 0 && selected_index_ < static_cast<int>(options_.size());
     const Rendering::TextStyle text_style{
-        has_value ? tokens.foreground : tokens.muted,
+        !enabled ? tokens.disabled
+                 : (has_value ? tokens.foreground : tokens.muted),
         tokens.font_body,
         400
     };
@@ -421,7 +424,7 @@ void Select::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
     // Chevron: v / ^ when open.
     const float cx = bounds.x + bounds.width - 18.0f;
     const float cy = bounds.y + bounds.height * 0.5f;
-    const Theme::Color chevron = tokens.muted;
+    const Theme::Color chevron = enabled ? tokens.muted : tokens.disabled;
     if (open_) {
         renderer.DrawLine(Layout::Point{cx - 4.0f, cy + 2.0f}, Layout::Point{cx, cy - 2.0f}, chevron, 1.5f);
         renderer.DrawLine(Layout::Point{cx, cy - 2.0f}, Layout::Point{cx + 4.0f, cy + 2.0f}, chevron, 1.5f);

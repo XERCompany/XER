@@ -1,0 +1,19 @@
+name: Release
+
+# Tagged releases: builds the portable XER Studio package through the
+# shared CI pipeline and attaches the zip to a GitHub release.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_tag: ${{ github.ref_name }}
+    permissions:
+      contents: write

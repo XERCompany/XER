@@ -56,6 +56,10 @@ public:
     bool CanRedo() const { return !redo_.empty(); }
     std::string UndoLabel() const;
     std::string RedoLabel() const;
+    // Full-stack labels for the History panel: undo is oldest→newest
+    // (rendered newest-on-top by the panel), redo is next-to-redo first.
+    std::vector<std::string> UndoLabels() const;
+    std::vector<std::string> RedoLabels() const;
     // Drops undo/redo/macro state. REQUIRED before loading a different
     // project into the bound Project& — see the class comment.
     void Clear();
@@ -87,6 +91,46 @@ public:
                           const std::string& to_clip);
     int  AddTrack(TrackKind kind, const std::string& name);
     bool RemoveTrack(int track_index, std::string* error_out = nullptr);
+
+    // Phase-2 ops — same wrapper contract: rejected edits push no
+    // undo entry; clip_id_out mirrors AddClip (empty id gets a
+    // generated one).
+    bool RippleDeleteClip(const std::string& clip_id,
+                          std::string* error_out = nullptr);
+    bool LiftRange(double t0, double t1, bool close_gap,
+                   std::string* error_out = nullptr);
+    bool RollingEdit(const std::string& from_clip,
+                     const std::string& to_clip, double delta_seconds,
+                     const MediaBounds& from_bounds,
+                     const MediaBounds& to_bounds,
+                     std::string* error_out = nullptr);
+    bool SlipClip(const std::string& clip_id, double delta_seconds,
+                  const MediaBounds& bounds,
+                  std::string* error_out = nullptr);
+    bool SlideClip(const std::string& clip_id, double delta_seconds,
+                   const MediaBounds& bounds,
+                   std::string* error_out = nullptr);
+    bool SetClipRate(const std::string& clip_id, double rate,
+                     const MediaBounds& bounds,
+                     std::string* error_out = nullptr);
+    bool InsertClipAt(Clip clip, const MediaBounds& bounds,
+                      std::string* clip_id_out = nullptr,
+                      std::string* error_out = nullptr);
+    bool OverwriteClipAt(Clip clip, const MediaBounds& bounds,
+                         std::string* clip_id_out = nullptr,
+                         std::string* error_out = nullptr);
+    bool AddMarker(const Marker& marker,
+                   std::string* error_out = nullptr);
+    bool RemoveMarker(double time);
+    bool SetWorkArea(double in_seconds, double out_seconds,
+                     std::string* error_out = nullptr);
+    bool SetTrackLocked(int track_index, bool locked,
+                        std::string* error_out = nullptr);
+    bool SetClipLinkGroup(const std::string& clip_id,
+                          const std::string& group);
+    bool SetClipKeyframes(const std::string& clip_id, KeyProp prop,
+                          std::vector<Keyframe> keys,
+                          std::string* error_out = nullptr);
 
 private:
     class MacroCommand;

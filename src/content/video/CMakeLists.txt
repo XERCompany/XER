@@ -62,6 +62,11 @@ set(_xer_video_links
     avif             # libavif (AVIF stills)
     ${_xer_video_encoders}
 )
+if(WIN32)
+    # WASAPI GUIDs (KSDATAFORMAT_SUBTYPE_IEEE_FLOAT lives in ksguid via
+    # ksuser) + COM for MMDeviceEnumerator.
+    list(APPEND _xer_video_links ksuser ksguid ole32)
+endif()
 # Dawn/WebGPU backend is optional — absent on system-package builds.
 if(TARGET dawn::webgpu_dawn)
     list(APPEND _xer_video_links

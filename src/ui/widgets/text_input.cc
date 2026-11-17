@@ -92,16 +92,23 @@ void TextInput::SetOnSubmit(std::function<void()> callback) {
 void TextInput::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
     constexpr float kHorizontalPadding = 12.0f;
+    const bool enabled = IsEnabled();
+    const bool focused = IsFocused();
+    // Recessed field: darker than surrounding panels in dark themes.
     renderer.FillRect(
         bounds,
-        IsEnabled() ? tokens.surface : tokens.secondary,
+        enabled ? tokens.input : tokens.secondary,
         tokens.radius_small
     );
-    renderer.StrokeRect(bounds, IsFocused() ? tokens.ring : tokens.border,
-                        1.0f, tokens.radius_small);
+    const Theme::Color border = !enabled
+        ? tokens.border
+        : focused ? tokens.ring
+                  : (IsHovered() ? tokens.muted : tokens.border);
+    renderer.StrokeRect(bounds, border, focused ? 1.5f : 1.0f,
+                        tokens.radius_small);
 
     const Rendering::TextStyle style{
-        IsEnabled() ? tokens.foreground : tokens.muted,
+        enabled ? tokens.foreground : tokens.disabled,
         tokens.font_body,
         400
     };
@@ -116,10 +123,33 @@ void TextInput::Render(Rendering::Renderer& renderer, const Theme::Tokens& token
         pending_caret_x_.reset();
     }
 
+    // Horizontal scroll: keep the caret inside the visible text band when
+    // the value is wider than the field.
+    const float text_w = renderer.MeasureText(display, style).width;
+    const float view_w = text_bounds.width;
+    if (!focused || text_w <= view_w) {
+        scroll_x_ = 0.0f;
+    } else {
+        const auto caret_prefix =
+            DisplayText(std::string_view(value_).substr(0, caret_));
+        const float caret_offset =
+            renderer.MeasureText(caret_prefix, style).width;
+        const float caret_px = caret_offset - scroll_x_;
+        constexpr float kCaretSlop = 2.0f;
+        if (caret_px < kCaretSlop) {
+            scroll_x_ = std::max(0.0f, caret_offset - kCaretSlop);
+        } else if (caret_px > view_w - kCaretSlop) {
+            scroll_x_ += caret_px - (view_w - kCaretSlop);
+        }
+        scroll_x_ = std::clamp(scroll_x_, 0.0f,
+                               std::max(0.0f, text_w - view_w));
+    }
+
     const auto x_for = [&](std::size_t pos) {
         const auto prefix = DisplayText(std::string_view(value_).substr(0, pos));
         return std::clamp(
-            text_bounds.x + renderer.MeasureText(prefix, style).width,
+            text_bounds.x + renderer.MeasureText(prefix, style).width -
+                scroll_x_,
             text_bounds.x,
             text_bounds.x + text_bounds.width
         );
@@ -128,7 +158,7 @@ void TextInput::Render(Rendering::Renderer& renderer, const Theme::Tokens& token
     // Clip text + caret to the field: long values must not paint outside
     // the rounded input box.
     renderer.PushClip(bounds);
-    if (IsFocused() && HasSelection()) {
+    if (focused && HasSelection()) {
         const auto [begin, end] = SelectionRange();
         const float x0 = x_for(begin);
         const float x1 = x_for(end);
@@ -141,10 +171,16 @@ void TextInput::Render(Rendering::Renderer& renderer, const Theme::Tokens& token
         const Rendering::TextStyle ph{tokens.muted, tokens.font_body, 400};
         renderer.DrawText(placeholder_, text_bounds, ph);
     } else {
-        renderer.DrawText(display, text_bounds, style);
+        renderer.DrawText(display,
+                          Layout::Rect{text_bounds.x - scroll_x_,
+                                       text_bounds.y,
+                                       std::max(view_w + scroll_x_,
+                                                text_w + 4.0f),
+                                       text_bounds.height},
+                          style);
     }
 
-    if (IsFocused()) {
+    if (focused) {
         const float caret_x = x_for(caret_);
         renderer.DrawLine(
             {caret_x, text_bounds.y},
@@ -425,7 +461,7 @@ std::size_t TextInput::CaretIndexForX(
     const Layout::Rect& text_bounds,
     const Rendering::TextStyle& style
 ) const {
-    const float local_x = x - text_bounds.x;
+    const float local_x = x - text_bounds.x + scroll_x_;
     if (local_x <= 0.0f) {
         return 0;
     }

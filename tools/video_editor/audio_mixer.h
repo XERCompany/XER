@@ -21,10 +21,12 @@
 // spec-mandated pump cost). Audio is decoded at the source rate into
 // a bounded media-time-indexed stereo-float window, then mixed on
 // demand: per output sample, each contributing clip maps timeline
-// time -> source media time (in_point + (tau - timeline_start)),
-// linear-interpolates in media time, and applies gain_db, fade
-// envelopes and transition crossfade weights. Resampling is thus
-// implicit (media-time interpolation), never a separate pass.
+// time -> source media time (in_point + (tau - timeline_start)*rate),
+// linear-interpolates in media time, and applies clip/track gain_db
+// (GainDb keyframes evaluated once per chunk at its start), clip pan
+// (equal-power stereo balance), fade envelopes and transition
+// crossfade weights. Resampling is thus implicit (media-time
+// interpolation), never a separate pass.
 //
 // Sync notes (the primary risk area): audio-only containers have no
 // usable GetPositionSeconds — all timing comes from AudioFrameInfo
@@ -41,10 +43,12 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "media_decoder.h"     // IMediaDecoder + MediaDecoderFactory
 #include "timeline_model.h"    // Project / Clip / Track / Transition
+#include "vst/plugin_instance.h"  // Vst::PluginInstanceFactory
 
 namespace XER::Bridge::FFmpeg {
 struct AudioFrameInfo;   // fwd — full def lives in
@@ -61,6 +65,11 @@ struct AudioMixerOptions {
     int sample_rate = 48000;    // output rate (export contract: 48 kHz)
     int channels = 2;           // output channels — v1 is stereo-only
     int chunk_samples = 1024;   // provider chunk size
+    // Per-clip audio plugin chain backend (clip.audio_fx, Phase 2).
+    // Null -> production VST3 host via vst/vst3_factory.cc (dual-mono
+    // Vst3HostInterface per node). Tests inject fakes through
+    // Vst::IPluginInstance — no VST3 SDK needed.
+    Vst::PluginInstanceFactory plugin_factory;
 };
 
 // Timeline -> interleaved s16 stereo PCM chunk producer for the export
@@ -74,8 +83,15 @@ struct AudioMixerOptions {
 // !(track.muted on an AUDIO-kind track — video-track `muted` is
 // ignored per the model contract), NOT (video-kind track AND
 // track.hidden — hidden removes video AND embedded audio), and the
-// lazily-opened decoder reports HasAudio(). track.gain_db is a Phase-2
-// field and is ignored here (clip.gain_db applies).
+// lazily-opened decoder reports HasAudio(). Phase-2 clip fields apply:
+// playback_rate scales the timeline->source map (handles are timeline
+// time, so they map rate-scaled too), clip.gain_db + GainDb keyframes +
+// track.gain_db set the per-chunk gain, and clip.pan steers the stereo
+// balance. Clips with a non-empty `audio_fx` list additionally run
+// their contribution through an ordered plugin chain
+// (vst/vst3_chain.h) AFTER gain/pan/fades and BEFORE accumulation —
+// missing or broken plugins warn once via Warnings() and are
+// bypassed, never failing the mix.
 class AudioMixer {
 public:
     AudioMixer();
@@ -112,6 +128,15 @@ public:
     bool GetChunk(std::size_t index,
                   XER::Bridge::FFmpeg::AudioFrameInfo* out,
                   std::string* error_out = nullptr);
+
+    // UI meter accessor: {peak |L|, peak |R|} of the most recently
+    // rendered chunk, as float sample magnitudes (may exceed 1.0 when
+    // the mix clips — meters can show the overs). Values are valid
+    // only after a successful GetChunk; {0,0} before the first render
+    // or after Shutdown. Re-requesting the cached chunk index does not
+    // update them (they describe the rendered chunk, which is the same
+    // one being returned).
+    std::pair<float, float> LastChunkPeaks() const;
 
     void Cancel();          // cooperative; checked per GetChunk
     bool Cancelled() const;

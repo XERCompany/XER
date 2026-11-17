@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <format>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -39,13 +38,14 @@ D2D1_RECT_F ToRect(Layout::Rect rect) {
     return D2D1::RectF(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height);
 }
 
-void ValidateRect(Layout::Rect rect) {
-    if (rect.width < 0.0f || rect.height < 0.0f) {
-        throw std::invalid_argument(std::format(
-            "Drawing rectangles cannot have negative dimensions "
-            "(x={:.1f} y={:.1f} w={:.1f} h={:.1f})",
-            rect.x, rect.y, rect.width, rect.height));
-    }
+Layout::Rect NormalizeRect(Layout::Rect rect) {
+    // Widgets occasionally compute negative extents (overflowed columns,
+    // empty tracks, undersized panels). Degenerate geometry must not
+    // abort the whole paint pass — clamp to zero so the call becomes a
+    // no-op instead of throwing mid-frame.
+    rect.width = std::max(0.0f, rect.width);
+    rect.height = std::max(0.0f, rect.height);
+    return rect;
 }
 
 std::wstring ToWideString(std::string_view text) {
@@ -351,6 +351,7 @@ void Direct2DRenderer::EndFrame() {
 
 void Direct2DRenderer::PushClip(Layout::Rect rect) {
     RequireFrame();
+    rect = NormalizeRect(rect);
     dc_->PushAxisAlignedClip(
         D2D1::RectF(rect.x, rect.y, rect.x + rect.width, rect.y + rect.height),
         D2D1_ANTIALIAS_MODE_ALIASED
@@ -364,7 +365,10 @@ void Direct2DRenderer::PopClip() {
 
 void Direct2DRenderer::FillRect(Layout::Rect rect, Theme::Color color, float radius) {
     RequireFrame();
-    ValidateRect(rect);
+    rect = NormalizeRect(rect);
+    if (rect.width <= 0.0f || rect.height <= 0.0f) {
+        return;
+    }
     auto* brush = Brush();
     brush->SetColor(ToColor(color));
 
@@ -385,9 +389,9 @@ void Direct2DRenderer::StrokeRect(
     float radius
 ) {
     RequireFrame();
-    ValidateRect(rect);
-    if (!(width > 0.0f)) {
-        throw std::invalid_argument("Stroke width must be greater than zero");
+    rect = NormalizeRect(rect);
+    if (rect.width <= 0.0f || rect.height <= 0.0f || !(width > 0.0f)) {
+        return;
     }
     auto* brush = Brush();
     brush->SetColor(ToColor(color));
@@ -410,7 +414,7 @@ void Direct2DRenderer::DrawLine(
 ) {
     RequireFrame();
     if (!(width > 0.0f)) {
-        throw std::invalid_argument("Line width must be greater than zero");
+        return;
     }
     auto* brush = Brush();
     brush->SetColor(ToColor(color));
@@ -424,8 +428,8 @@ void Direct2DRenderer::DrawLine(
 
 void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextStyle style) {
     RequireFrame();
-    ValidateRect(rect);
-    if (text.empty()) {
+    rect = NormalizeRect(rect);
+    if (text.empty() || rect.width <= 0.0f || rect.height <= 0.0f) {
         return;
     }
     if (text.size() > std::numeric_limits<UINT32>::max()) {
@@ -664,7 +668,7 @@ Microsoft::WRL::ComPtr<ID2D1Bitmap> Direct2DRenderer::LoadImageBitmap(
 bool Direct2DRenderer::DrawImage(std::string_view path, Layout::Rect rect,
                                  float opacity, float corner_radius) {
     RequireFrame();
-    ValidateRect(rect);
+    rect = NormalizeRect(rect);
     if (path.empty() || rect.width <= 0.0f || rect.height <= 0.0f ||
         !(opacity > 0.0f)) {
         return false;
@@ -723,7 +727,7 @@ bool Direct2DRenderer::DrawImage(std::string_view path, Layout::Rect rect,
 bool Direct2DRenderer::DrawFrameBgra(const void* bgra, int width, int height,
                                      Layout::Rect dst_rect, float opacity) {
     RequireFrame();
-    ValidateRect(dst_rect);
+    dst_rect = NormalizeRect(dst_rect);
     if (bgra == nullptr || width <= 0 || height <= 0 ||
         dst_rect.width <= 0.0f || dst_rect.height <= 0.0f ||
         !(opacity > 0.0f)) {

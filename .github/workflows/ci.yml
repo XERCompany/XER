@@ -1,0 +1,191 @@
+name: CI
+
+# XER Studio (tools/video_editor) build + test + package pipeline.
+#
+# Toolchain: MSYS2 clang64 (clang + libc++, Itanium ABI) — the only
+# supported Windows toolchain since the migration away from vcpkg/MSVC.
+# Dependencies are MSYS2 mingw-w64-clang-x86_64-* packages; CMake resolves
+# them via cmake/platforms/windows-msys2-clang64.cmake + cmake/deps shims.
+#
+# Steps:
+#   1. msys2/setup-msys2 installs the toolchain + ~70 dependency packages
+#      (list mirrors InstallTools.ps1).
+#   2. cmake --preset windows-clang-msys2 configures the build.
+#   3. Ninja builds video_editor (+ POST_BUILD DLL deploy via CopyDLL.ps1)
+#      and the XER_VideoEditor_Tests runner.
+#   4. Tests + CLI smoke checks.
+#   5. video_editor_dist produces the portable package -> artifact.
+#
+# release.yml calls this workflow for tagged releases.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+    inputs:
+      release_tag:
+        description: 'Tag to attach dist assets to (empty = no release)'
+        required: false
+        type: string
+
+permissions:
+  contents: write  # release step attaches assets; read for plain CI runs
+
+jobs:
+  windows-msys2:
+    name: windows-x64 (MSYS2 clang64)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Toolchain + all library dependencies, mirroring InstallTools.ps1.
+      # `cache: true` caches downloaded pacman packages between runs.
+      - name: Setup MSYS2 (clang64)
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: CLANG64
+          update: true
+          cache: true
+          install: >-
+            git
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-lld
+            mingw-w64-clang-x86_64-libc++
+            mingw-w64-clang-x86_64-compiler-rt
+            mingw-w64-clang-x86_64-llvm-openmp
+            mingw-w64-clang-x86_64-llvm
+            mingw-w64-clang-x86_64-pkgconf
+            mingw-w64-clang-x86_64-cmake
+            mingw-w64-clang-x86_64-ninja
+            mingw-w64-clang-x86_64-ccache
+            mingw-w64-clang-x86_64-zlib
+            mingw-w64-clang-x86_64-openssl
+            mingw-w64-clang-x86_64-icu
+            mingw-w64-clang-x86_64-ffmpeg
+            mingw-w64-clang-x86_64-libuv
+            mingw-w64-clang-x86_64-range-v3
+            mingw-w64-clang-x86_64-re2
+            mingw-w64-clang-x86_64-abseil-cpp
+            mingw-w64-clang-x86_64-flatbuffers
+            mingw-w64-clang-x86_64-jsoncpp
+            mingw-w64-clang-x86_64-fmt
+            mingw-w64-clang-x86_64-skia
+            mingw-w64-clang-x86_64-opencv
+            mingw-w64-clang-x86_64-libraw
+            mingw-w64-clang-x86_64-fftw
+            mingw-w64-clang-x86_64-ggml
+            mingw-w64-clang-x86_64-sqlite
+            mingw-w64-clang-x86_64-zstd
+            mingw-w64-clang-x86_64-brotli
+            mingw-w64-clang-x86_64-curl
+            mingw-w64-clang-x86_64-bzip2
+            mingw-w64-clang-x86_64-fast_float
+            mingw-w64-clang-x86_64-boost
+            mingw-w64-clang-x86_64-eigen3
+            mingw-w64-clang-x86_64-cereal
+            mingw-w64-clang-x86_64-mimalloc
+            mingw-w64-clang-x86_64-folly
+            mingw-w64-clang-x86_64-pugixml
+            mingw-w64-clang-x86_64-libarchive
+            mingw-w64-clang-x86_64-assimp
+            mingw-w64-clang-x86_64-libmupdf
+            mingw-w64-clang-x86_64-libffi
+            mingw-w64-clang-x86_64-shaderc
+            mingw-w64-clang-x86_64-spirv-tools
+            mingw-w64-clang-x86_64-glslang
+            mingw-w64-clang-x86_64-vulkan-headers
+            mingw-w64-clang-x86_64-vulkan-loader
+            mingw-w64-clang-x86_64-vulkan-memory-allocator
+            mingw-w64-clang-x86_64-vulkan-utility-libraries
+            mingw-w64-clang-x86_64-asmjit
+            mingw-w64-clang-x86_64-nlohmann-json
+            mingw-w64-clang-x86_64-rapidjson
+            mingw-w64-clang-x86_64-tinyxml2
+            mingw-w64-clang-x86_64-chrono-date
+            mingw-w64-clang-x86_64-lz4
+            mingw-w64-clang-x86_64-snappy
+            mingw-w64-clang-x86_64-leptonica
+            mingw-w64-clang-x86_64-libxml2
+            mingw-w64-clang-x86_64-openblas
+            mingw-w64-clang-x86_64-libavif
+            mingw-w64-clang-x86_64-tesseract-ocr
+            mingw-w64-clang-x86_64-libyuv
+            mingw-w64-clang-x86_64-lame
+            mingw-w64-clang-x86_64-onnx
+            mingw-w64-clang-x86_64-onnxruntime
+            mingw-w64-clang-x86_64-opencl-icd
+            mingw-w64-clang-x86_64-opencl-headers
+            mingw-w64-clang-x86_64-protobuf
+            mingw-w64-clang-x86_64-yaml-cpp
+            mingw-w64-clang-x86_64-onednn
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: ${{ runner.os }}-ccache-${{ github.sha }}
+          restore-keys: ${{ runner.os }}-ccache-
+
+      # MSYS2 root is resolved dynamically — setup-msys2 does not guarantee
+      # a fixed install drive/path.
+      - name: Resolve MSYS2 root
+        id: msys2root
+        shell: msys2 {0}
+        run: echo "root=$(cygpath -m /)" >> "$GITHUB_OUTPUT"
+
+      - name: Configure
+        shell: msys2 {0}
+        run: >
+          cmake --preset windows-clang-msys2
+          -DXER_MSYS2_ROOT="${{ steps.msys2root.outputs.root }}"
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache
+          -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      # POST_BUILD deploys runtime DLLs next to video_editor.exe via
+      # CopyDLL.ps1 (llvm-objdump import scan), so bin/ is immediately
+      # runnable — including inside this job's test/smoke steps.
+      - name: Build
+        shell: msys2 {0}
+        run: >
+          cmake --build --preset windows-clang-msys2
+          --target video_editor XER_VideoEditor_Tests video_editor_dist
+
+      - name: Tests
+        shell: msys2 {0}
+        run: ./out/build/windows-clang-msys2/bin/XER_VideoEditor_Tests.exe
+
+      - name: Smoke — CLI help + DLL check
+        shell: msys2 {0}
+        run: |
+          set -e
+          BIN=out/build/windows-clang-msys2/bin
+          "$BIN/video_editor.exe" --help
+          echo "deployed dlls: $(ls "$BIN"/*.dll | wc -l)"
+
+      - name: Package dist zip
+        shell: pwsh
+        run: |
+          $src = 'out/build/windows-clang-msys2/dist/video_editor'
+          $zip = 'xer-studio-windows-x64.zip'
+          Compress-Archive -Path "$src/*" -DestinationPath $zip -Force
+          Get-Item $zip | Format-List Name, Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xer-studio-windows-x64
+          path: xer-studio-windows-x64.zip
+          retention-days: 30
+          if-no-files-found: error
+
+      - name: Create GitHub release
+        if: inputs.release_tag != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release_tag }}
+          files: xer-studio-windows-x64.zip
+          generate_release_notes: true

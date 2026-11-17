@@ -97,14 +97,18 @@ void Textarea::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens
 
     Theme::Color stroke = tokens.border;
     if (IsFocused()) {
-        stroke = tokens.foreground;
+        stroke = tokens.ring;
     } else if (hovered && IsEnabled()) {
         stroke = tokens.muted;
     }
-    renderer.FillRect(bounds, tokens.surface, tokens.radius_medium);
+    renderer.FillRect(bounds,
+                      IsEnabled() ? tokens.input : tokens.secondary,
+                      tokens.radius_medium);
     renderer.StrokeRect(bounds, stroke, IsFocused() ? 1.5f : 1.0f, tokens.radius_medium);
 
-    const Rendering::TextStyle style{tokens.foreground, tokens.font_body, 400};
+    const Rendering::TextStyle style{
+        IsEnabled() ? tokens.foreground : tokens.disabled,
+        tokens.font_body, 400};
     const Rendering::TextStyle placeholder_style{tokens.muted, tokens.font_body, 400};
     // Cache the metrics event-time code (click resolution, CaretRect)
     // uses, so clicks land where text was actually painted.

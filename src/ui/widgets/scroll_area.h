@@ -65,8 +65,11 @@ public:
 private:
     friend class ScrollBarWidget;
 
-    static constexpr float kBarWidth = 10.0f;
+    // Thin editor-style scrollbar: an 8px rail floating 2px off the edge,
+    // with a slightly wider invisible strip for easier grabbing.
+    static constexpr float kBarWidth = 8.0f;
     static constexpr float kBarPad = 2.0f;
+    static constexpr float kHitWidth = 14.0f;
 
     void EnsureChildrenAttached();
     void RelayoutContent();

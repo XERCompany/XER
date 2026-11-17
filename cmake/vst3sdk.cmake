@@ -99,6 +99,25 @@ else()
         URL_HASH "SHA512=d902a7b3f0d925e95d343df2378f4b701309d6460c970dfa064f0c2f24b0b4ca700ea15b3a4b63b3fc5f38cc5d6b2d55e5a3946fd10dd45960a86f948c868552"
         SOURCE_DIR "${XER_VST3SDK_SRC}/public.sdk")
 
+    # MinGW/clang lacks std::aligned_alloc (no UCRT implementation), so
+    # route the SDK's aligned allocator through _aligned_malloc — the
+    # same branch MSVC takes. Applied in-place after the fetch; skipped
+    # when the file is already patched (idempotent on re-configure).
+    if(MINGW)
+        set(_xer_vst3sdk_alignedalloc
+            "${XER_VST3SDK_SRC}/public.sdk/source/vst/utility/alignedalloc.h")
+        if(EXISTS "${_xer_vst3sdk_alignedalloc}")
+            file(READ "${_xer_vst3sdk_alignedalloc}" _xer_vst3sdk_alignedalloc_src)
+            if(NOT _xer_vst3sdk_alignedalloc_src MATCHES "__MINGW32__")
+                string(REPLACE "defined(_MSC_VER)"
+                    "defined(_MSC_VER) || defined(__MINGW32__)"
+                    _xer_vst3sdk_alignedalloc_src "${_xer_vst3sdk_alignedalloc_src}")
+                file(WRITE "${_xer_vst3sdk_alignedalloc}" "${_xer_vst3sdk_alignedalloc_src}")
+                message(STATUS "VST3 SDK: patched alignedalloc.h for MinGW")
+            endif()
+        endif()
+    endif()
+
     # Match the vcpkg port: no examples, no VSTGUI, no plugin link helper.
     set(SMTG_ENABLE_VST3_PLUGIN_EXAMPLES OFF)
     set(SMTG_ENABLE_VST3_HOSTING_EXAMPLES OFF)

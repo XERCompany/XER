@@ -1,0 +1,135 @@
+// Object Lab control panel (Phase 2): Photoshop-style object ops on
+// the monitor frame — cut out, remove (inpaint), copy to layer.
+// The panel owns an Lab::AsyncOp worker; the app's on_run hook runs on
+// that worker thread, supplies the current frame, calls the ops in
+// lab/object_ops.h and places the result (e.g. as a new clip layer).
+// Progress/cancel flow through Lab::JobControl.
+#pragma once
+
+#include <functional>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "lab/async_op.h"
+#include "lab/object_ops.h"
+#include "widgets/widget.h"
+
+namespace XER::UI::Widgets {
+class Button;
+class Label;
+class Progress;
+class Slider;
+class TextInput;
+}
+
+namespace XER::VideoEditor::Ui {
+
+class LabPanel final : public XER::UI::Widgets::Widget {
+public:
+    enum class Mode {
+        Cutout,       // CutOutRect / CutOutLasso -> new frame
+        Remove,       // InpaintRect / InpaintMask on the region
+        CopyToLayer,  // CopyRegionToLayer -> masked layer payload
+    };
+
+    struct Region {
+        int x = 0;
+        int y = 0;
+        int w = 0;
+        int h = 0;
+    };
+
+    struct RunParams {
+        Mode mode = Mode::Cutout;
+        Region region;
+        int feather_px = 0;
+        int search_radius = 24;              // inpaint only
+        std::vector<Lab::IntPoint> polygon;  // lasso; empty => rect
+        // Effective mask choice for Cutout/CopyToLayer/Remove:
+        // polygon (>=3 pts) wins over the rect when present.
+        bool UseLasso() const { return polygon.size() >= 3; }
+    };
+
+    struct Hooks {
+        // Runs on the AsyncOp WORKER thread — do not touch UI state
+        // inside; stash results and apply them on the next tick. The
+        // app decodes/grabs the current monitor frame, runs the
+        // requested Lab op and returns success. Poll
+        // ctl.ShouldCancel() in long loops (inpaint wiring does this).
+        std::function<bool(const RunParams&, const Lab::JobControl&)>
+            on_run;
+        // Always invoked on the UI thread from the panel itself.
+        std::function<void(const std::string&, bool is_error)> on_status;
+    };
+
+    explicit LabPanel(Hooks hooks = {});
+    ~LabPanel() override;
+
+    // Monitor-drawn rect pushed by the app; syncs the x/y/w/h fields.
+    void SetRegion(Region region);
+    Region GetRegion() const { return region_; }
+    // Monitor-drawn lasso points; empty clears back to rect mode.
+    void SetPolygon(std::vector<Lab::IntPoint> points);
+    void SetMode(Mode mode);
+    Mode GetMode() const { return mode_; }
+    bool IsBusy() const { return busy_; }
+
+    void Render(XER::UI::Rendering::Renderer& renderer,
+                const XER::UI::Theme::Tokens& tokens) override;
+    void Layout(const XER::UI::Layout::Rect& bounds) override;
+    using Widget::Layout;
+    bool HandleEvent(const XER::UI::Widgets::Event& event) override;
+    void Tick(double dt_seconds) override;
+
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {230.0f, 300.0f};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return {320.0f, 430.0f};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {100000.0f, 100000.0f};
+    }
+
+private:
+    enum class Field { X, Y, W, H, Feather };
+
+    void EnsureChildren();
+    bool CollectParams(RunParams* params);
+    void StartRun();
+    void RequestCancelJob();
+    void SetStatus(const std::string& text, bool is_error = false);
+    void SyncModeButtons();
+    void SyncRegionInputs();
+    void UpdateRadiusLabel();
+    static const char* ModeName(Mode mode);
+
+    Hooks hooks_;
+    Mode mode_ = Mode::Cutout;
+    Region region_;
+    std::vector<Lab::IntPoint> polygon_;
+    Lab::AsyncOp op_;
+    bool busy_ = false;
+    bool children_attached_ = false;
+    bool syncing_ = false;
+
+    std::shared_ptr<XER::UI::Widgets::Label> title_;
+    std::shared_ptr<XER::UI::Widgets::Button> cutout_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> remove_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> layer_btn_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> x_input_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> y_input_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> w_input_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> h_input_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> feather_input_;
+    std::shared_ptr<XER::UI::Widgets::Label> lasso_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> radius_slider_;
+    std::shared_ptr<XER::UI::Widgets::Label> radius_label_;
+    std::shared_ptr<XER::UI::Widgets::Button> run_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> cancel_btn_;
+    std::shared_ptr<XER::UI::Widgets::Progress> progress_;
+    std::shared_ptr<XER::UI::Widgets::Label> status_;
+};
+
+}  // namespace XER::VideoEditor::Ui
