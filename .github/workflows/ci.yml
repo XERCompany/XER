@@ -181,6 +181,9 @@ jobs:
             mingw-w64-clang-x86_64-protobuf
             mingw-w64-clang-x86_64-yaml-cpp
             mingw-w64-clang-x86_64-onednn
+            mingw-w64-clang-x86_64-v8
+            mingw-w64-clang-x86_64-opencolorio
+            mingw-w64-clang-x86_64-openimageio
           )
           # Self-sufficient: works even if the reorder/update step above
           # was skipped by a transient failure.
