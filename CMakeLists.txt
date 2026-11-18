@@ -181,7 +181,7 @@ add_subdirectory(src/watch)
 # XER language implementation (lexer/compiler/runtime) and the V8-gated
 # JavaScript bridge layer.
 add_subdirectory(src/xer)
-add_subdirectory(src/javascript)
+add_subdirectory(src/javascript) 
 
 # Engine-runtime support files that live at the src/ root: EngineParams,
 # AppCommand, config helpers, Feature/Provider/ResourceGuard. They back the
@@ -484,6 +484,8 @@ include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
 endif()
+
+add_subdirectory(demo)
 
 add_executable(Editor
     ${SOURCES}
