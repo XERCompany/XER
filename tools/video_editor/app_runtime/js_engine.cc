@@ -16,8 +16,10 @@
 
 #include "js_engine.h"
 
+#if defined(XER_VE_HAS_V8)
 #include <libplatform/libplatform.h>
 #include <v8.h>
+#endif
 
 #include <cstdio>
 #include <exception>
@@ -29,6 +31,8 @@
 
 namespace XER::VideoEditor::AppRuntime {
 namespace {
+
+#if defined(XER_VE_HAS_V8)
 
 // Single handle table for BOTH function handlers and module objects —
 // OutValue::Handler carries an index here regardless of the underlying
@@ -102,6 +106,8 @@ std::string FormatException(v8::Isolate* isolate, v8::Local<v8::Context> ctx,
     return out.empty() ? std::string("unknown script error") : out;
 }
 
+#endif  // XER_VE_HAS_V8
+
 void JsonEscapeInto(std::string& out, const std::string& s) {
     for (const char c : s) {
         switch (c) {
@@ -125,6 +131,8 @@ void JsonEscapeInto(std::string& out, const std::string& s) {
         }
     }
 }
+
+#if defined(XER_VE_HAS_V8)
 
 // Structured JS values (plain objects/arrays) round-trip into C++ as
 // JSON text under Kind::Json — e.g. concat's {join: "/"} options object.
@@ -183,7 +191,11 @@ v8::Local<v8::Value> ToV8Value(v8::Isolate* isolate,
     }
 }
 
+#endif  // XER_VE_HAS_V8
+
 }  // namespace
+
+#if defined(XER_VE_HAS_V8)
 
 struct JsEngine::Impl {
     JsEngine* owner = nullptr;
@@ -504,6 +516,72 @@ bool JsEngine::CallHandler(const std::string& key,
     return true;
 }
 
+v8::Isolate* JsEngine::isolate() const { return impl_->isolate; }
+
+#else   // !XER_VE_HAS_V8 — no system V8: inert stubs, Boot() keeps
+        // compiled-in defaults (the js engine error is non-fatal).
+
+struct JsEngine::Impl {
+    std::unordered_map<std::string, OutValue> out_data;
+};
+
+std::unique_ptr<JsEngine> JsEngine::Create(std::string* error) {
+    if (error) *error = "built without V8 (XER_VE_HAS_V8 undefined)";
+    return nullptr;
+}
+
+JsEngine::~JsEngine() = default;
+
+bool JsEngine::RunSource(const std::string&, const std::string&,
+                         std::string* error) {
+    if (error) *error = "built without V8";
+    return false;
+}
+
+bool JsEngine::RunFile(const std::string&, std::string* error) {
+    if (error) *error = "built without V8";
+    return false;
+}
+
+int JsEngine::NewObject() { return -1; }
+
+bool JsEngine::DefineFunction(int, const std::string&, NativeFn) {
+    return false;
+}
+
+bool JsEngine::SetObjectProperty(int, const std::string&, const OutValue&) {
+    return false;
+}
+
+bool JsEngine::RegisterModule(const std::string&, ModuleFactory) {
+    return false;
+}
+
+void JsEngine::SetOutData(const std::string& key, const OutValue& value) {
+    impl_->out_data[key] = value;
+}
+
+OutValue JsEngine::GetOutData(const std::string& key) const {
+    const auto it = impl_->out_data.find(key);
+    return it != impl_->out_data.end() ? it->second : OutValue{};
+}
+
+bool JsEngine::CallHandler(const std::string& key,
+                           const std::vector<OutValue>&,
+                           std::string* error) {
+    const auto it = impl_->out_data.find(key);
+    // Absent handlers stay no-ops, same contract as the V8 path.
+    if (it == impl_->out_data.end() ||
+        it->second.kind == OutValue::Kind::Undefined)
+        return true;
+    if (error) *error = "CallHandler: '" + key + "' needs V8";
+    return false;
+}
+
+v8::Isolate* JsEngine::isolate() const { return nullptr; }
+
+#endif  // XER_VE_HAS_V8
+
 OutValue JsEngine::MakeObjectArg(
     const std::vector<std::pair<std::string, std::string>>& fields) {
     std::string json = "{";
@@ -523,8 +601,6 @@ OutValue JsEngine::MakeObjectArg(
     out.str = std::move(json);
     return out;
 }
-
-v8::Isolate* JsEngine::isolate() const { return impl_->isolate; }
 
 OutValue StrVal(std::string s) {
     OutValue v;
