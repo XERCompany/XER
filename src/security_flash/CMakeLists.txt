@@ -24,7 +24,7 @@ target_link_libraries(XER_SecurityFlash
     PUBLIC
         absl::strings
         absl::str_format
-        jsoncpp_lib
+        XER_JsonCpp
         OpenSSL::Crypto
 )
 

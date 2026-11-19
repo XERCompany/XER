@@ -48,7 +48,7 @@ target_link_libraries(XER_ContentAI
         cereal::cereal
         OpenSSL::SSL
         OpenSSL::Crypto
-        jsoncpp_lib
+        XER_JsonCpp
         ICU::uc
         ICU::i18n
         ZLIB::ZLIB

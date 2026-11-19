@@ -36,7 +36,6 @@ target_link_libraries(XER_ContentApps_Smoke PRIVATE
     XER_ContentModelDiff
     XER_ContentFormatConv
     XER_ContentPasswordGen
-    XER_ContentDawn
     XER_ContentSim
     XER_ContentNetTest
     XER_Network
@@ -45,6 +44,12 @@ target_link_libraries(XER_ContentApps_Smoke PRIVATE
 target_include_directories(XER_ContentApps_Smoke PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_features(XER_ContentApps_Smoke PRIVATE cxx_std_23)
 add_test(NAME XER_ContentApps_Smoke COMMAND XER_ContentApps_Smoke)
+
+add_executable(XER_Media_Smoke media_smoke.cc)
+target_link_libraries(XER_Media_Smoke PRIVATE XER_Media XER_Video)
+target_include_directories(XER_Media_Smoke PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(XER_Media_Smoke PRIVATE cxx_std_23)
+add_test(NAME XER_Media_Smoke COMMAND XER_Media_Smoke)
 
 # Dawn's D3D12 backend loads d3dcompiler_47.dll / dxcompiler.dll /
 # dxil.dll through its runtime search paths (module dir, exe dir).

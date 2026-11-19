@@ -383,7 +383,14 @@ $script:Msys2Packages = @(
     'mingw-w64-clang-x86_64-opencl-headers',
     'mingw-w64-clang-x86_64-protobuf',
     'mingw-w64-clang-x86_64-yaml-cpp',
-    'mingw-w64-clang-x86_64-onednn'
+    'mingw-w64-clang-x86_64-onednn',
+    # V8 for the video_editor app_runtime JS layer (js_engine.cc) — the
+    # V8::V8 shim resolves it via pkg-config (v8/v8_libbase/v8_libplatform).
+    'mingw-w64-clang-x86_64-v8',
+    # OCIO/OIIO for video_editor color transform + image io — the tests
+    # require both (ocio_config, oiio_roundtrip).
+    'mingw-w64-clang-x86_64-opencolorio',
+    'mingw-w64-clang-x86_64-openimageio'
 )
 
 $script:ChocoFailed  = New-Object 'System.Collections.Generic.List[string]'

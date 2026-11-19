@@ -2,10 +2,12 @@
 
 #include "../widgets/widget.h"
 #include "../widgets/widget_tree.h"
+#include "ui_events.h"
 #include "../rendering/windows/direct2d_renderer.h"
 #include "../platform/windows/input_translator.h"
 #include "application.h"
 #include "helper/string_utils.h"
+#include "theme/theme_loader.h"
 
 #include <algorithm>
 #include <atomic>
@@ -50,13 +52,13 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return window->HandleNativeMessage(hwnd, msg, wParam, lParam);
         } catch (const std::exception& e) {
             fprintf(stderr, "WndProc exception msg=%u: %s\n", msg, e.what());
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
         } catch (...) {
             fprintf(stderr, "WndProc exception msg=%u: unknown\n", msg);
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
     }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 // Private implementation
@@ -279,6 +281,29 @@ public:
         }
     }
 
+    void SetRenderer(std::unique_ptr<Rendering::Renderer> renderer) {
+        renderer_ = std::move(renderer);
+    }
+
+    void SetEventBus(std::shared_ptr<UiEventBus> bus) {
+        event_bus_ = std::move(bus);
+        widget_tree_.SetEventBus(event_bus_.get());
+    }
+
+    bool SetThemeFile(const std::string& path, std::string* error) {
+        std::string err;
+        if (!Theme::ThemeLoader::ApplyToProvider(theme_, path, &err)) {
+            if (error != nullptr) {
+                *error = std::move(err);
+            }
+            return false;
+        }
+        Invalidate();
+        return true;
+    }
+
+    std::shared_ptr<UiEventBus> GetEventBus() const { return event_bus_; }
+
     void SetFrameCallback(std::function<void()> callback, std::uint32_t interval_ms) {
         frame_callback_ = std::move(callback);
         frame_interval_ms_ = interval_ms == 0 ? 33 : interval_ms;
@@ -415,7 +440,7 @@ public:
                     FlushDirtyState(message_hwnd);
                     return 0;
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
 
             case WM_SIZE:
             {
@@ -487,7 +512,7 @@ public:
                 // lParam carries screen coordinates for wheel messages.
                 POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 if (!ScreenToClient(message_hwnd, &point)) {
-                    return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                    return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                 }
                 Widgets::Event event;
                 event.type = Widgets::Event::Type::MouseWheel;
@@ -528,7 +553,7 @@ public:
                         return 0;
                     }
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
             }
 
             case WM_NCHITTEST: {
@@ -583,13 +608,13 @@ public:
                         }
                     }
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
             }
 
             case WM_GETMINMAXINFO: {
                 auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
                 if (info == nullptr) {
-                    return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                    return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                 }
                 if (min_width_ > 0) {
                     info->ptMinTrackSize.x = min_width_;
@@ -655,19 +680,19 @@ public:
                         ReleaseCapture();
                     }
                     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
-                        return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                        return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                     }
                     if (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) {
-                        return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                        return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                     }
                     return 0;
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
             }
 
             case WM_NCDESTROY: {
                 renderer_.reset();
-                const LRESULT result = DefWindowProc(message_hwnd, msg, wParam, lParam);
+                const LRESULT result = DefWindowProcW(message_hwnd, msg, wParam, lParam);
                 if (hwnd_ == message_hwnd) {
                     hwnd_ = nullptr;
                 }
@@ -675,7 +700,7 @@ public:
             }
 
             default:
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
         }
     }
 
@@ -842,7 +867,27 @@ private:
                         px_to_dip,
                     static_cast<float>(paint_rect.bottom - paint_rect.top) *
                         px_to_dip};
+                if (event_bus_ != nullptr &&
+                    event_bus_->HasRenderHooks(
+                        UiEventBus::RenderPhase::kBeforeFrame)) {
+                    UiRenderFrame frame{};
+                    frame.bounds = root_widget_->GetBounds();
+                    frame.damage = damage;
+                    frame.damage_valid = true;
+                    frame.last_frame_ms = render_stats_.last_frame_ms;
+                    event_bus_->NotifyRender(
+                        UiEventBus::RenderPhase::kBeforeFrame, frame);
+                }
                 widget_tree_.Render(*renderer_, theme_.GetTokens(), &damage);
+                if (event_bus_ != nullptr) {
+                    UiRenderFrame frame{};
+                    frame.bounds = root_widget_->GetBounds();
+                    frame.damage = damage;
+                    frame.damage_valid = true;
+                    frame.last_frame_ms = render_stats_.last_frame_ms;
+                    event_bus_->NotifyRender(
+                        UiEventBus::RenderPhase::kAfterFrame, frame);
+                }
                 // Damage coverage: union of this paint's DIP rect vs the
                 // client area. ~100% means a full repaint (resize, layout,
                 // explicit Invalidate); small values mean a regional update.
@@ -919,7 +964,8 @@ private:
     Widgets::WidgetTree widget_tree_;
     Theme::Provider theme_;
     Platform::Windows::InputTranslator input_translator_;
-    std::unique_ptr<Rendering::Windows::Direct2DRenderer> renderer_;
+    std::unique_ptr<Rendering::Renderer> renderer_;
+    std::shared_ptr<UiEventBus> event_bus_;
     std::string last_render_error_;
     RenderStats render_stats_;
 
@@ -1000,6 +1046,10 @@ Theme::Variant Window::GetTheme() const {
     return impl_->GetTheme();
 }
 
+bool Window::SetThemeFile(const std::string& path, std::string* error) {
+    return impl_->SetThemeFile(path, error);
+}
+
 std::string Window::GetLastRenderError() const {
     return impl_->GetLastRenderError();
 }
@@ -1026,6 +1076,18 @@ void Window::RemoveCloseHook(std::uint64_t id) {
 
 void Window::Invalidate() {
     impl_->Invalidate();
+}
+
+void Window::SetRenderer(std::unique_ptr<Rendering::Renderer> renderer) {
+    impl_->SetRenderer(std::move(renderer));
+}
+
+void Window::SetEventBus(std::shared_ptr<UiEventBus> bus) {
+    impl_->SetEventBus(std::move(bus));
+}
+
+std::shared_ptr<UiEventBus> Window::GetEventBus() const {
+    return impl_->GetEventBus();
 }
 
 void Window::SetFrameCallback(std::function<void()> callback, std::uint32_t interval_ms) {
@@ -1082,7 +1144,7 @@ LRESULT Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
 LRESULT Window::HandleNativeMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (impl_ == nullptr) {
-        return DefWindowProc(hwnd, msg, wParam, lParam);
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     return impl_->HandleMessage(hwnd, msg, wParam, lParam);
 }

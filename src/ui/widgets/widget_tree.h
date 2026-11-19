@@ -17,6 +17,10 @@ namespace XER::UI::Rendering {
 class Renderer;
 }
 
+namespace XER::UI::Core {
+class UiEventBus;
+}
+
 namespace XER::UI::Widgets {
 
 class WidgetTree {
@@ -38,6 +42,13 @@ public:
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
                 const Layout::Rect* damage = nullptr) const;
     bool HandleEvent(const Event& event);
+
+    // Event bus shared with the owning Window. When set, every incoming
+    // event passes through the bus's filter chain (which may mutate or
+    // swallow it) and is then published to bus listeners before the tree
+    // dispatches it to widgets. Not owned.
+    void SetEventBus(Core::UiEventBus* bus) { event_bus_ = bus; }
+    Core::UiEventBus* GetEventBus() const { return event_bus_; }
 
     // Per-frame tick for tree-level animation state (hover tooltips). Widget
     // subtrees are ticked separately by the host via Widget::TickTree.
@@ -144,6 +155,7 @@ private:
     bool layout_in_progress_ = false;
     std::function<bool(const Event&)> context_menu_handler_;
     std::function<bool(const Event&)> key_handler_;
+    Core::UiEventBus* event_bus_ = nullptr;
 };
 
 } // namespace XER::UI::Widgets

@@ -1,0 +1,39 @@
+{
+  // Named virtual audio cables created and held by this process.
+  // Other processes open them by name (OpenRead/OpenWrite or
+  // 'XERVac --send/--recv/--play/--cap/--tap').
+  "cables": [
+    {"name": "VAC-A", "rate": 48000, "channels": 2, "buffer_ms": 250},
+    {"name": "VAC-B", "rate": 48000, "channels": 2, "buffer_ms": 250},
+    {"name": "VAC-C", "rate": 48000, "channels": 2, "buffer_ms": 500}
+  ],
+
+  // Pump routes: source -> FX chain -> sink.
+  //   source/sink type: "cable" | "loopback" | "capture"/"mic" |
+  //                     "render"/"device" | "wav" | "null"
+  //   arg/name/path:    cable name, WASAPI device id (see --devices),
+  //                     or file path
+  //   chain stages:     {"type":"vst3","path":"..."},
+  //                     {"type":"fx","name":"gain|softclip|compressor|
+  //                              gate|limiter","params":{...}},
+  //                     {"type":"bypass","index":0}
+  "routes": [
+    {
+      "source": {"type": "cable", "name": "VAC-A"},
+      "chain": [
+        {"type": "fx", "name": "gain", "params": {"db": -3}},
+        {"type": "fx", "name": "compressor",
+         "params": {"threshold_db": -18, "ratio": 4}}
+      ],
+      "sink": {"type": "cable", "name": "VAC-B"}
+    },
+    {
+      "source": {"type": "loopback"},
+      "chain": [
+        {"type": "vst3",
+         "path": "C:/Program Files/Common Files/VST3/SomeFx.vst3"}
+      ],
+      "sink": {"type": "cable", "name": "VAC-C"}
+    }
+  ]
+}

@@ -14,7 +14,13 @@ namespace XER::UI::Widgets {
 class Widget;
 }
 
+namespace XER::UI::Rendering {
+class Renderer;
+}
+
 namespace XER::UI::Core {
+
+class UiEventBus;
 
 // Per-painted-frame render diagnostics. Updated on every successful WM_PAINT;
 // use it to quantify "broken frames" (frame time, repaint coverage) instead of
@@ -68,10 +74,29 @@ public:
     std::shared_ptr<Widgets::Widget> GetContent() const;
     void SetTheme(Theme::Variant variant);
     Theme::Variant GetTheme() const;
+    // Loads custom design tokens from a JSON theme file
+    // (theme/theme_loader.h: colors + metrics over a Light/Dark base)
+    // and repaints. Returns false and fills `error` on parse failure;
+    // the previous theme is kept.
+    bool SetThemeFile(const std::string& path, std::string* error = nullptr);
     // Empty after a successful paint; otherwise returns the most recent native paint error.
     std::string GetLastRenderError() const;
     // Frame-time and damage-coverage counters for the last painted frames.
     RenderStats GetRenderStats() const;
+
+    // Injects a custom Renderer implementation (e.g. a stream renderer
+    // that forwards frames to xer_engine_ui_render.exe). Call before or
+    // after Create(); an existing default renderer is replaced. The
+    // window takes ownership. Passing nullptr restores the default
+    // Direct2D renderer on the next frame.
+    void SetRenderer(std::unique_ptr<Rendering::Renderer> renderer);
+
+    // UI event system shared with the WidgetTree: event filters +
+    // listeners observe/mutate input events before dispatch, render
+    // hooks run around each painted frame. The window keeps the bus
+    // alive; the WidgetTree sees it via SetEventBus.
+    void SetEventBus(std::shared_ptr<UiEventBus> bus);
+    std::shared_ptr<UiEventBus> GetEventBus() const;
 
     // Schedules a full client-area repaint on the next WM_PAINT.
     void Invalidate();

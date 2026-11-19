@@ -32,6 +32,8 @@ target_link_libraries(XER_Image
 )
 
 find_package(libxml2 CONFIG QUIET)
+xer_retarget_imported_to_static("^LibXml2::")
+xer_retarget_imported_to_ya_dll("^LibXml2::" YA_LibXml2)
 if(TARGET LibXml2::LibXml2)
     target_link_libraries(XER_Image PUBLIC LibXml2::LibXml2)
     target_compile_definitions(XER_Image PUBLIC XER_IMAGE_HAS_LIBXML2=1)

@@ -301,7 +301,7 @@ bool VideoDecoder::Open(const std::string& path, std::string* error_out) {
         av_find_best_stream(p.fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     p.has_audio = p.audio_stream_index >= 0;
     p.duration = (p.fmt->duration != AV_NOPTS_VALUE)
-        ? p.fmt->duration / AV_TIME_BASE : 0.0;
+        ? p.fmt->duration / static_cast<double>(AV_TIME_BASE) : 0.0;
 
     if (p.video_stream_index < 0) {
         // Audio-only container: succeed so the audio tap works.

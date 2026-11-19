@@ -29,12 +29,25 @@ public:
     // Mono in -> mono out (first channel of the first output bus).
     bool Process(const float* input, float* output, uint32_t frames);
 
+    // Multi-channel in -> multi-channel out through the first audio bus:
+    // inputs[i]/outputs[i] point to `channels` per-channel buffers of
+    // `frames` samples. Fewer input channels than bus channels repeats the
+    // last input (dual-mono for a mono source); extra input channels are
+    // ignored. Fewer output channels than bus channels zero-fills the
+    // remainder.
+    bool ProcessChannels(const float* const* inputs, float* const* outputs,
+                         int32_t channels, uint32_t frames);
+
     // Parameter values are normalized [0, 1] per the VST3 spec.
     bool SetParameter(uint32_t id, float value);
     bool GetParameter(uint32_t id, float* value) const;
     std::vector<PluginParameterInfo> GetParameters() const;
 
     std::string GetPluginName() const;
+
+    // Bundle Contents\Resources dir for system-installed plugins
+    // ("" when the plugin has no bundle resources).
+    std::string GetResourcesPath() const;
 
     // Native editor view (IPlugView). On Windows the parent is a HWND and
     // rects are client-area pixels of that window.

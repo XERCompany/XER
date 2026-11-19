@@ -29,7 +29,7 @@ if(TARGET CEF::libcef)
         CEF::libcef CEF::libcef_dll_wrapper
         XER_Tz            # xer-ext:// serves members from TZ archives
         XER_NetClient     # shell_commands net.* built-ins
-        jsoncpp_lib)      # args/result marshaling
+        XER_JsonCpp)      # args/result marshaling
     message(STATUS "XER_Cef: CEF browser embedding ENABLED (${CEF_ROOT})")
 
     # XERBrowserShell — own CEF subprocess (replaces stock
@@ -45,6 +45,8 @@ if(TARGET CEF::libcef)
     set_target_properties(xer_browser_shell PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 else()
-    target_compile_definitions(XER_Cef PRIVATE XER_HAS_CEF=0)
+    # Do NOT define XER_HAS_CEF here: sources test it with
+    # `#if defined(XER_HAS_CEF)`, which stays true even for =0 and would
+    # pull in the absent CEF headers. Leaving it undefined selects stubs.
     message(STATUS "XER_Cef: CEF not found — stub build")
 endif()

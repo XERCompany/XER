@@ -79,7 +79,20 @@ Variant Provider::GetVariant() const noexcept {
 }
 
 const Tokens& Provider::GetTokens() const noexcept {
+    if (has_custom_) {
+        return custom_;
+    }
     return variant_ == Variant::Dark ? kDarkTokens : kLightTokens;
+}
+
+void Provider::SetTokens(Tokens tokens, Variant variant) {
+    custom_ = tokens;
+    variant_ = variant;
+    has_custom_ = true;
+}
+
+void Provider::ClearTokens() noexcept {
+    has_custom_ = false;
 }
 
 } // namespace XER::UI::Theme
