@@ -1,0 +1,52 @@
+# Audio subsystem
+
+[English](README_en.md) | [Русский](README_ru.md)
+
+The `src/audio` directory contains the project’s audio pipeline and DSP-oriented functionality. It is built to support signal processing, media file handling, effect logic, and integration with the broader runtime.
+
+## Scope
+
+- audio engine and core processing path
+- DSP algorithms and spectral processing
+- built-in effect and plugin-oriented processing
+- analysis and metadata extraction
+- file I/O for common media formats
+- optional media integrations and acceleration paths
+
+## Main areas
+
+- `audio_core/` — core audio engine, source loading, virtual audio cable
+  (named cross-process PCM pipes, WASAPI bridges, per-cable FX/VST3 chain)
+- `dsp_algorithms/` — FFT, filters, transforms, and processing blocks
+- `effects_rack/` — effect chain and processing pipeline utilities
+- `analysis_ai/` — analysis and feature extraction logic
+- `file_io_codecs/` — media format handling
+- `plugin_wrappers/` — plugin-host integration points (VST3 scanning via
+  isolated `EngineScanVST3.exe --probe` processes, `std::async` bounded
+  by CPU cores)
+
+## Design goals
+
+- modular audio processing pipeline
+- hardware-aware and SIMD-friendly implementation paths
+- support for async and batch-style processing
+- integration with the broader runtime and I/O infrastructure
+
+## Example
+
+```cpp
+Engine::Audio::Core::AudioSourceLoadOptions opts;
+opts.input_path = "audio.mp3";
+opts.target_sample_rate = 48000;
+opts.target_channels = 2;
+
+Engine::Audio::Core::AudioSourceBuffer buffer;
+std::string error;
+if (!Engine::Audio::Core::AudioSourceLoader::Load(opts, &buffer, &error)) {
+    // handle error
+}
+```
+
+## Notes
+
+This subsystem is intentionally extensible and can serve both lightweight runtime audio tasks and heavier media-processing workflows. The exact feature set depends on the active build configuration and available platform libraries.

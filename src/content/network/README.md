@@ -1,41 +1,4 @@
 # Network subsystem
 
-The `src/content/network` directory contains the project’s networking stack. It is intended to provide a reusable, layered networking foundation for runtime and application components.
-
-## Scope
-
-- HTTP and HTTPS logic
-- URL handling and request/response lifecycle
-- sockets and transport abstractions
-- DNS, proxy, and certificate support
-- event-driven or asynchronous network execution patterns
-- integration with the broader I/O and runtime infrastructure
-
-## Layered structure
-
-- `core/` — network context and service runtime
-- `url/` — request/response handling and URL processing
-- `http/` — HTTP protocol behavior
-- `socket/` — low-level socket abstractions
-- `dns/` — DNS resolution, lookups, and caching
-- `proxy/` — proxy configuration and tunneling
-- `cert/` — certificate management and verification
-
-## Design goals
-
-- clean separation between protocol, transport, and policy layers
-- compatibility with asynchronous execution patterns
-- safe integration with the rest of the runtime
-- support for layered networking scenarios without forcing a single API style
-
-## Example
-
-```cpp
-#include "content/network/url/url_request_util.h"
-
-std::string response = network::url::SyncGet("https://example.com");
-```
-
-## Notes
-
-This module is part of the broader runtime architecture and should be viewed as a reusable networking foundation rather than a standalone web server implementation. Specific protocol support and feature depth depend on the project’s current build configuration and dependencies.
+**English:** [README_en.md](README_en.md)  
+**Русский:** [README_ru.md](README_ru.md)
