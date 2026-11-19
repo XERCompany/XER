@@ -50,13 +50,13 @@ static LRESULT CALLBACK WindowProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lP
             return window->HandleNativeMessage(hwnd, msg, wParam, lParam);
         } catch (const std::exception& e) {
             fprintf(stderr, "WndProc exception msg=%u: %s\n", msg, e.what());
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
         } catch (...) {
             fprintf(stderr, "WndProc exception msg=%u: unknown\n", msg);
-            return DefWindowProc(hwnd, msg, wParam, lParam);
+            return DefWindowProcW(hwnd, msg, wParam, lParam);
         }
     }
-    return DefWindowProc(hwnd, msg, wParam, lParam);
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
 // Private implementation
@@ -415,7 +415,7 @@ public:
                     FlushDirtyState(message_hwnd);
                     return 0;
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
 
             case WM_SIZE:
             {
@@ -487,7 +487,7 @@ public:
                 // lParam carries screen coordinates for wheel messages.
                 POINT point{ GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
                 if (!ScreenToClient(message_hwnd, &point)) {
-                    return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                    return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                 }
                 Widgets::Event event;
                 event.type = Widgets::Event::Type::MouseWheel;
@@ -528,7 +528,7 @@ public:
                         return 0;
                     }
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
             }
 
             case WM_NCHITTEST: {
@@ -583,13 +583,13 @@ public:
                         }
                     }
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
             }
 
             case WM_GETMINMAXINFO: {
                 auto* info = reinterpret_cast<MINMAXINFO*>(lParam);
                 if (info == nullptr) {
-                    return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                    return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                 }
                 if (min_width_ > 0) {
                     info->ptMinTrackSize.x = min_width_;
@@ -655,19 +655,19 @@ public:
                         ReleaseCapture();
                     }
                     if (msg == WM_SETFOCUS || msg == WM_KILLFOCUS) {
-                        return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                        return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                     }
                     if (msg == WM_SYSKEYDOWN || msg == WM_SYSKEYUP) {
-                        return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                        return DefWindowProcW(message_hwnd, msg, wParam, lParam);
                     }
                     return 0;
                 }
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
             }
 
             case WM_NCDESTROY: {
                 renderer_.reset();
-                const LRESULT result = DefWindowProc(message_hwnd, msg, wParam, lParam);
+                const LRESULT result = DefWindowProcW(message_hwnd, msg, wParam, lParam);
                 if (hwnd_ == message_hwnd) {
                     hwnd_ = nullptr;
                 }
@@ -675,7 +675,7 @@ public:
             }
 
             default:
-                return DefWindowProc(message_hwnd, msg, wParam, lParam);
+                return DefWindowProcW(message_hwnd, msg, wParam, lParam);
         }
     }
 
@@ -1082,7 +1082,7 @@ LRESULT Window::HandleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
 LRESULT Window::HandleNativeMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     if (impl_ == nullptr) {
-        return DefWindowProc(hwnd, msg, wParam, lParam);
+        return DefWindowProcW(hwnd, msg, wParam, lParam);
     }
     return impl_->HandleMessage(hwnd, msg, wParam, lParam);
 }

@@ -32,6 +32,22 @@ struct HostEvents {
     std::function<void(bool loading)> on_loading;
     // Browser window closed/crashed — host becomes unusable.
     std::function<void()> on_closed;
+
+    // Audio capture (CefAudioHandler). When on_audio_packet is set,
+    // Chromium routes the browser's decoded audio to these callbacks
+    // INSTEAD of the system output device — the browser is silent on
+    // speakers and playback becomes the caller's job.
+    // Nonzero audio_* fields are applied via GetAudioParameters.
+    int audio_sample_rate = 0;        // Hz; 0 keeps CEF's default
+    int audio_channel_layout = 0;     // cef_channel_layout_t; 0 = default
+    int audio_frames_per_buffer = 0;  // 0 keeps CEF's default
+    // Stream lifecycle — CEF UI thread.
+    std::function<void(int sample_rate, int channels)> on_audio_started;
+    // PCM packets — planar float32, one pointer per channel. Runs on a
+    // realtime audio thread: no blocking/allocation; push into a FIFO.
+    std::function<void(const float* const* data, int channels, int frames,
+                       int64_t pts_ms)> on_audio_packet;
+    std::function<void()> on_audio_stopped;
 };
 
 class CefHost final {

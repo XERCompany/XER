@@ -9,6 +9,7 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 namespace XER::Cef {
 
@@ -20,9 +21,16 @@ struct RuntimeOptions {
     std::string locales_dir;     // default: <resources>/locales
     std::string subprocess_path; // default: <exe>/bootstrap.exe
     std::string cache_dir;       // empty -> in-memory cache
+    std::string log_file;        // empty -> debug.log; set to a path to
+                                 // redirect the Chromium log
+    int log_severity = -1;       // -1 -> WARNING; else cef_log_severity_t
+                                 // (LOGSEVERITY_DISABLE silences stderr too)
     bool headless = false;       // windowless rendering (no GPU browser)
     bool enable_remote_debug = false;
     int remote_debug_port = 0;
+    // Extra Chromium switches applied via OnBeforeCommandLineProcessing.
+    // Each entry is a switch name with optional "name=value" (no "--").
+    std::vector<std::string> command_line_switches;
 };
 
 // Must be invoked before anything else in main(): CEF subprocesses

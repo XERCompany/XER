@@ -56,6 +56,7 @@ if(TARGET SDL2::SDL2)
     target_link_libraries(XER_AudioCore PUBLIC SDL2::SDL2)
 endif()
 
+
 # Link with LAME when available (codec_mp3_lame.cc compiles its encoder path
 # when <lame/lame.h> is present, so the lib must be linked whenever it exists)
 find_library(XER_LAME_LIBRARY NAMES mp3lame lame)

@@ -54,6 +54,7 @@ bool Vst3HostInterface::Initialize(double sample_rate, uint32_t max_block_size) 
 
 bool Vst3HostInterface::LoadPlugin(const std::string& plugin_path) {
 	external_host_.reset();
+	last_load_error_.clear();
 
 	// Non-builtin references are treated as real VST3 plugin paths
 	// (.vst3 bundle directory or module file) and hosted through the SDK.
@@ -66,6 +67,7 @@ bool Vst3HostInterface::LoadPlugin(const std::string& plugin_path) {
 			external_host_ = std::move(host);
 			return true;
 		}
+		last_load_error_ = error;
 	}
 
     if (!builtin_host_.Load(plugin_path)) {
@@ -96,6 +98,30 @@ bool Vst3HostInterface::Process(const float* input, float* output, uint32_t fram
     perf_counter_.StartCounter("vst3_process");
     const bool ok = builtin_host_.Process(input, output, frames);
     perf_counter_.StopCounter("vst3_process");
+    return ok;
+}
+
+bool Vst3HostInterface::ProcessChannels(const float* const* inputs,
+                                        float* const* outputs,
+                                        int32_t channels, uint32_t frames) {
+    if (inputs == nullptr || outputs == nullptr || channels <= 0 ||
+        frames == 0 || frames > max_block_size_) {
+        return false;
+    }
+    if (backend_mode_ == BackendMode::kExternal) {
+        perf_counter_.StartCounter("vst3_process");
+        const bool ok =
+            external_host_->ProcessChannels(inputs, outputs, channels, frames);
+        perf_counter_.StopCounter("vst3_process");
+        return ok;
+    }
+    if (backend_mode_ != BackendMode::kBuiltin) {
+        return false;
+    }
+    bool ok = true;
+    for (int32_t c = 0; c < channels; ++c) {
+        ok = Process(inputs[c], outputs[c], frames) && ok;
+    }
     return ok;
 }
 
@@ -152,6 +178,17 @@ std::string Vst3HostInterface::GetPluginName() const {
         return external_host_->GetPluginName();
     }
     return {};
+}
+
+std::string Vst3HostInterface::GetResourcesPath() const {
+    if (backend_mode_ == BackendMode::kExternal && external_host_) {
+        return external_host_->GetResourcesPath();
+    }
+    return {};
+}
+
+std::string Vst3HostInterface::GetLastLoadError() const {
+    return last_load_error_;
 }
 
 bool Vst3HostInterface::HasPluginEditor() const {

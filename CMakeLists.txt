@@ -222,7 +222,8 @@ target_include_directories(EngineScanVST3 PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 target_compile_features(EngineScanVST3 PUBLIC cxx_std_23)
-target_link_libraries(EngineScanVST3 PRIVATE XER_AudioCore XER_Helper)
+target_link_libraries(EngineScanVST3 PRIVATE
+    XER_AudioCore XER_Helper XER_AsyncIO)
 set_target_properties(EngineScanVST3 PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 
