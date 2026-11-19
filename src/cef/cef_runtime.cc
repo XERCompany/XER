@@ -29,10 +29,23 @@ namespace {
 // embedding; browser-process handler is the default implementation.
 class XERCefApp final : public CefApp, public CefBrowserProcessHandler {
 public:
-    XERCefApp() = default;
+    explicit XERCefApp(std::vector<std::string> switches)
+        : switches_(std::move(switches)) {}
     CefRefPtr<CefBrowserProcessHandler> GetBrowserProcessHandler()
         override {
         return this;
+    }
+    void OnBeforeCommandLineProcessing(
+        const CefString&, CefRefPtr<CefCommandLine> cl) override {
+        for (const auto& s : switches_) {
+            const auto eq = s.find('=');
+            if (eq == std::string::npos) {
+                cl->AppendSwitch(s);
+            } else {
+                cl->AppendSwitchWithValue(s.substr(0, eq),
+                                          s.substr(eq + 1));
+            }
+        }
     }
     void OnContextInitialized() override {
         // xer-ext:// serves .xexrj extension pages from verified TZ
@@ -45,6 +58,7 @@ public:
     XERCefApp& operator=(const XERCefApp&) = delete;
 
 private:
+    std::vector<std::string> switches_;
     IMPLEMENT_REFCOUNTING(XERCefApp);
 };
 
@@ -109,7 +123,15 @@ bool Initialize(const RuntimeOptions& options, std::string* error_out) {
     // CEF runs its own UI thread — our Win32 loop stays untouched.
     settings.multi_threaded_message_loop = true;
     settings.windowless_rendering_enabled = options.headless;
-    settings.log_severity = LOGSEVERITY_WARNING;
+    // Note: CEF also echoes ERROR+ to stderr on console builds; only
+    // FATAL/DISABLE keeps the console clean (see cef_log_severity_t).
+    settings.log_severity =
+        options.log_severity >= 0
+            ? static_cast<cef_log_severity_t>(options.log_severity)
+            : LOGSEVERITY_WARNING;
+    if (!options.log_file.empty()) {
+        CefString(&settings.log_file) = Utf8(options.log_file);
+    }
     // Newer CEF ships bootstrap.exe as the subprocess launcher; it must
     // sit beside the executable (deploy step does this). Resource files
     // (*.pak, icudtl.dat, locales/) are also deployed beside the exe.
@@ -138,7 +160,7 @@ bool Initialize(const RuntimeOptions& options, std::string* error_out) {
         settings.remote_debugging_port = options.remote_debug_port;
     }
 
-    g_app = new XERCefApp();
+    g_app = new XERCefApp(options.command_line_switches);
     CefMainArgs args(GetModuleHandle(nullptr));
     if (!CefInitialize(args, settings, g_app.get(), nullptr)) {
         g_last_error = "CEF: CefInitialize failed (resources or version "

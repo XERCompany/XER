@@ -4,6 +4,8 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <utility>
 
@@ -39,23 +41,38 @@ HWND HwndOf(CefHostNativeHandle h) { return static_cast<HWND>(h); }
 // CEF's base::BindOnce deliberately rejects capturing lambdas — every
 // browser op is a stateless function and arguments are bound directly.
 
+bool DbgLog() { return std::getenv("XER_XB_DEBUG") != nullptr; }
+
 void CreateBrowserOnUI(CefRefPtr<CefClient> client,
                        CefHostNativeHandle parent, CefRect rect,
                        CefString url, CefRefPtr<CefBrowser>* out,
                        bool* done, std::mutex* m,
-                       std::condition_variable* cv) {
+                       std::condition_variable* cv, HANDLE done_event) {
     CefWindowInfo info;
     info.SetAsChild(static_cast<HWND>(parent), rect);
+    if (DbgLog()) {
+        std::fprintf(stderr,
+                     "[xb] create parent=%p bounds=%d,%d %dx%d url=%s\n",
+                     parent, rect.x, rect.y, rect.width, rect.height,
+                     url.ToString().c_str());
+    }
     CefBrowserSettings bs;
     bs.background_color = CefColorSetARGB(255, 24, 24, 28);   // dark
     CefRefPtr<CefBrowser> b = CefBrowserHost::CreateBrowserSync(
         info, client, url, bs, nullptr, nullptr);
+    if (DbgLog() && b != nullptr) {
+        std::fprintf(stderr, "[xb] created hwnd=%p\n",
+                     (void*)b->GetHost()->GetWindowHandle());
+    }
     {
         std::lock_guard<std::mutex> lk(*m);
         *out = std::move(b);
         *done = true;
     }
     cv->notify_one();
+    if (done_event != nullptr) {
+        SetEvent(done_event);
+    }
 }
 
 void DoWasHidden(CefRefPtr<CefBrowser> b, bool hidden) {
@@ -86,7 +103,8 @@ void DoClose(CefRefPtr<CefBrowser> b) {
 class XERCefClient final : public CefClient,
                            public CefDisplayHandler,
                            public CefLifeSpanHandler,
-                           public CefLoadHandler {
+                           public CefLoadHandler,
+                           public CefAudioHandler {
 public:
     XERCefClient(HostEvents events, std::atomic<bool>* loading)
         : events_(std::move(events)), loading_(loading) {}
@@ -98,6 +116,63 @@ public:
         return this;
     }
     CefRefPtr<CefLoadHandler> GetLoadHandler() override { return this; }
+    // Only advertise the audio handler when a packet sink is installed —
+    // otherwise Chromium would keep routing audio to the OS anyway and a
+    // bare handler would just add capture overhead.
+    CefRefPtr<CefAudioHandler> GetAudioHandler() override {
+        std::fprintf(stderr, "[dbg] GetAudioHandler on_packet=%d\n",
+                     events_.on_audio_packet ? 1 : 0);
+        return events_.on_audio_packet ? this : nullptr;
+    }
+
+    bool GetAudioParameters(CefRefPtr<CefBrowser>,
+                            CefAudioParameters& params) override {
+        if (events_.audio_sample_rate > 0) {
+            params.sample_rate = events_.audio_sample_rate;
+        }
+        if (events_.audio_channel_layout > 0) {
+            params.channel_layout = static_cast<ChannelLayout>(
+                events_.audio_channel_layout);
+        }
+        if (events_.audio_frames_per_buffer > 0) {
+            params.frames_per_buffer = events_.audio_frames_per_buffer;
+        }
+        return true;
+    }
+    void OnAudioStreamStarted(CefRefPtr<CefBrowser>,
+                              const CefAudioParameters& params,
+                              int channels) override {
+        std::fprintf(stderr, "[dbg] audio started rate=%d ch=%d\n",
+                     params.sample_rate, channels);
+        audio_channels_.store(channels);
+        if (events_.on_audio_started) {
+            events_.on_audio_started(params.sample_rate, channels);
+        }
+    }
+    void OnAudioStreamPacket(CefRefPtr<CefBrowser>, const float** data,
+                             int frames, int64_t pts) override {
+        static std::atomic<int> dbg{0};
+        if (dbg.fetch_add(1) < 3) {
+            std::fprintf(stderr, "[dbg] packet frames=%d\n", frames);
+        }
+        const int channels = audio_channels_.load();
+        if (events_.on_audio_packet && channels > 0) {
+            events_.on_audio_packet(data, channels, frames, pts);
+        }
+    }
+    void OnAudioStreamStopped(CefRefPtr<CefBrowser>) override {
+        audio_channels_.store(0);
+        if (events_.on_audio_stopped) {
+            events_.on_audio_stopped();
+        }
+    }
+    void OnAudioStreamError(CefRefPtr<CefBrowser>,
+                            const CefString& message) override {
+        audio_channels_.store(0);
+        if (events_.on_audio_stopped) {
+            events_.on_audio_stopped();
+        }
+    }
 
     void OnTitleChange(CefRefPtr<CefBrowser>, const CefString& title)
         override {
@@ -140,6 +215,8 @@ public:
 private:
     HostEvents events_;
     std::atomic<bool>* loading_;   // owned by CefHost::Impl
+    // Channel count arrives in OnAudioStreamStarted; packets don't carry it.
+    std::atomic<int> audio_channels_{0};
 
     XERCefClient(const XERCefClient&) = delete;
     XERCefClient& operator=(const XERCefClient&) = delete;
@@ -175,14 +252,43 @@ bool CefHost::Create(CefHostNativeHandle parent, int x, int y, int w,
     std::mutex m;
     std::condition_variable cv;
     bool done = false;
-    CefPostTask(TID_UI,
-                base::BindOnce(&CreateBrowserOnUI,
-                               CefRefPtr<CefClient>(impl_->client.get()),
-                               parent, CefRect(x, y, w, h),
-                               CefString(impl_->current_url),
-                               &impl_->browser, &done, &m, &cv));
-    std::unique_lock<std::mutex> lk(m);
-    cv.wait(lk, [&] { return done; });
+    // While Chromium creates the child browser window it synchronously
+    // SendMessage's the parent HWND (WM_PARENTNOTIFY). If the caller owns
+    // that parent, a plain condition_variable wait never services inbound
+    // sent messages and both threads deadlock. Wait alertably instead:
+    // MsgWaitForMultipleObjects wakes for inbound sent messages and
+    // PeekMessage delivers them, keeping the sender unblocked. A
+    // non-window-owning caller takes the same path harmlessly — the event
+    // fires on completion either way.
+    const HANDLE done_event =
+        CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    const bool posted = CefPostTask(
+        TID_UI,
+        base::BindOnce(&CreateBrowserOnUI,
+                       CefRefPtr<CefClient>(impl_->client.get()),
+                       parent, CefRect(x, y, w, h),
+                       CefString(impl_->current_url),
+                       &impl_->browser, &done, &m, &cv, done_event));
+    if (posted && done_event != nullptr) {
+        for (;;) {
+            const DWORD wait = MsgWaitForMultipleObjects(
+                1, &done_event, FALSE, INFINITE, QS_SENDMESSAGE);
+            if (wait != WAIT_OBJECT_0 + 1) {
+                break;  // signaled, or a wait error — check done below
+            }
+            // Deliver the inbound sent message so the remote SendMessage
+            // returns; PM_NOREMOVE keeps posted messages in the queue for
+            // the caller's own message loop.
+            MSG msg;
+            PeekMessage(&msg, nullptr, 0, 0, PM_NOREMOVE);
+        }
+    } else if (posted) {
+        std::unique_lock<std::mutex> lk(m);
+        cv.wait(lk, [&] { return done; });
+    }
+    if (done_event != nullptr) {
+        CloseHandle(done_event);
+    }
     if (!impl_->browser) {
         impl_->client = nullptr;
         return false;
@@ -195,6 +301,10 @@ void CefHost::Resize(int x, int y, int w, int h) {
     // The browser HWND is a real child of our parent — SetWindowPos
     // re-fits it; Chromium repaints itself.
     if (impl_->child != nullptr) {
+        if (DbgLog()) {
+            std::fprintf(stderr, "[xb] resize hwnd=%p -> %d,%d %dx%d\n",
+                         (void*)impl_->child, x, y, w, h);
+        }
         ::SetWindowPos(impl_->child, nullptr, x, y, w, h,
                        SWP_NOZORDER | SWP_NOACTIVATE);
     }
@@ -202,6 +312,10 @@ void CefHost::Resize(int x, int y, int w, int h) {
 
 void CefHost::Show(bool visible) {
     if (impl_->child != nullptr) {
+        if (DbgLog()) {
+            std::fprintf(stderr, "[xb] show hwnd=%p vis=%d\n",
+                         (void*)impl_->child, visible ? 1 : 0);
+        }
         ::ShowWindow(impl_->child, visible ? SW_SHOW : SW_HIDE);
     }
     if (impl_->browser) {
@@ -266,12 +380,16 @@ void CefHost::Focus() {
     }
 }
 void CefHost::ShowDevTools() {
-    if (impl_->browser) {
-        CefPostTask(TID_UI,
-                    base::BindOnce(&DoShowDevTools, impl_->browser,
-                                   CefRefPtr<CefClient>(
-                                       impl_->client.get())));
+    if (!impl_->browser) {
+        return;
     }
+    // DevTools gets a bare client: sharing impl_->client would route the
+    // DevTools browser's title/address/close events into our HostEvents —
+    // a DevTools popup close would then look like the main browser closed.
+    CefRefPtr<CefClient> devtools_client = new XERCefClient({}, nullptr);
+    CefPostTask(TID_UI,
+                base::BindOnce(&DoShowDevTools, impl_->browser,
+                               devtools_client));
 }
 
 bool CefHost::HasBrowser() const {

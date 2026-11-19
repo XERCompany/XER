@@ -31,12 +31,23 @@ public:
     bool Initialize(double sample_rate, uint32_t max_block_size);
     bool LoadPlugin(const std::string& plugin_path);
     bool Process(const float* input, float* output, uint32_t frames);
+    // Multi-channel variant: `channels` per-channel buffers of `frames`
+    // samples; maps onto the plugin's main audio bus.
+    bool ProcessChannels(const float* const* inputs, float* const* outputs,
+                         int32_t channels, uint32_t frames);
     bool SetParameter(uint32_t id, float value);
     bool GetParameter(uint32_t id, float* value) const;
     std::vector<PluginParameterInfo> GetParameters() const;
     std::string GetLoadedPluginId() const;
 	std::string GetBackendMode() const;
 	std::string GetPluginName() const;
+
+	// Bundle Contents\Resources dir for system-installed plugins
+	// ("" when the loaded plugin has no bundle resources).
+	std::string GetResourcesPath() const;
+
+	// Failure detail from the last LoadPlugin() call ("" on success).
+	std::string GetLastLoadError() const;
 
 	// Native editor view (IPlugView). Only external plugins can provide one.
 	bool HasPluginEditor() const;
@@ -53,6 +64,7 @@ private:
     double sample_rate_ = 44100.0;
     uint32_t max_block_size_ = 512;
     std::string plugin_path_;
+	std::string last_load_error_;
 	BackendMode backend_mode_ = BackendMode::kNone;
 };
 

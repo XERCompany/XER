@@ -23,7 +23,10 @@ find_package(OpenImageIO QUIET)
 find_package(librsvg QUIET)
 find_package(CEF QUIET)
 if(TARGET CEF::libcef)
-    add_custom_target(XER_VST3_CEF
+    # CEF runtime: libcef.dll + resources beside the exe — CefRuntime
+    # opens them from the executable directory. Manual install via
+    # InstallCef.ps1 -> third_party/cef/cef_windows64.
+    add_custom_target(XER_VST3_CEF_cef_deploy
         COMMAND ${CMAKE_COMMAND} -E copy_directory
                 "${CEF_RELEASE_DIR}"
                 "$<TARGET_FILE_DIR:XER_VST3_CEF>"
@@ -32,8 +35,8 @@ if(TARGET CEF::libcef)
                 "$<TARGET_FILE_DIR:XER_VST3_CEF>"
         COMMENT "Deploying CEF runtime (libcef.dll, *.pak, locales)"
         VERBATIM)
-    add_dependencies(XER_VST3_CEF XER_VST3_CEF)
-    message(STATUS "CEF deploy target enabled (${CEF_ROOT})")
+    add_dependencies(XER_VST3_CEF XER_VST3_CEF_cef_deploy)
+    message(STATUS "XER_VST3_CEF: CEF deploy target enabled (${CEF_ROOT})")
 endif()
 target_link_libraries(XER_VST3_CEF
     PUBLIC
@@ -51,8 +54,9 @@ target_link_libraries(XER_VST3_CEF
         XER_Tz             # .xexrj archives (extensions/ext_host)
         XER_Cef            # xer-ext:// scheme (stub when CEF absent)
         XER_Helper         # Path/env/jsoncpp helpers
-        jsoncpp_lib        # project_store (.xerproj)
         XER_AudioCore      # VST3 host (plugin_wrappers) + DSP
+        XER_ContentAudio   # AudioPlayer — WASAPI output + file decode
+        XER_UI_Core        # Application/Window + widgets (src/ui)
 ) 
  
 if(TARGET libuv::uv_a OR TARGET libuv::uv)
@@ -99,9 +103,51 @@ else()
 endif()
  
 if(WIN32) 
-    target_link_libraries(XER_VST3_CEF PUBLIC ws2_32 iphlpapi ole32 wbemuuid)
+    target_link_libraries(XER_VST3_CEF PUBLIC ws2_32 iphlpapi ole32 wbemuuid comdlg32)
 elseif(APPLE)
     # macOS: no extra libs required for the providers in this module.
 else()
     # Linux: nothing extra required (/proc, /sys, getifaddrs are libc).
+endif()
+
+# ---- XBrowser: tabbed Chromium browser (src/ui + XER::Cef) ------------
+
+add_executable(XBrowser xbrowser.cc)
+
+target_include_directories(XBrowser
+    PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_CURRENT_SOURCE_DIR}/..
+)
+
+if(TARGET CEF::libcef)
+    add_custom_target(XBrowser_cef_deploy
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CEF_RELEASE_DIR}"
+                "$<TARGET_FILE_DIR:XBrowser>"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CEF_RESOURCES_DIR}"
+                "$<TARGET_FILE_DIR:XBrowser>"
+        COMMENT "Deploying CEF runtime for XBrowser"
+        VERBATIM)
+    add_dependencies(XBrowser XBrowser_cef_deploy)
+endif()
+
+target_link_libraries(XBrowser
+    PUBLIC
+        XER_Cef
+        XER_Helper
+        XER_UI_Core
+)
+
+target_compile_features(XBrowser PUBLIC cxx_std_23)
+
+if(MSVC)
+    target_compile_options(XBrowser PRIVATE /W4 /WX- /O2)
+else()
+    target_compile_options(XBrowser PRIVATE -Wall -Wextra -Wpedantic -O3)
+endif()
+
+if(WIN32)
+    target_link_libraries(XBrowser PUBLIC ole32)
 endif()
