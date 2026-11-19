@@ -136,6 +136,47 @@ if(XER_FFMPEG_STATIC)
             list(APPEND _FF_D -lvulkan-1)
         endif()
 
+        # Delay-load the dynamic tail: deps that ship only .dll.a
+        # (whisper, ggml, shaderc, vulkan) then load lazily — binaries
+        # start without them next to the exe and only pull them when an
+        # FFmpeg feature actually calls in. System DLLs stay normal.
+        set(_ff_delayload)
+        get_filename_component(_ff_bindir "${_libdir}/../bin" ABSOLUTE)
+        foreach(_flag IN LISTS _FF_D)
+            if(_flag MATCHES "\\.dll\\.a$")
+                # Full import-lib path: lib<name>.dll.a -> the runtime
+                # DLL is lib<name>.dll or <name>.dll.
+                get_filename_component(_f "${_flag}" NAME)
+                string(REGEX REPLACE "^lib" "" _n "${_f}")
+                string(REGEX REPLACE "\\.dll\\.a$" "" _n "${_n}")
+            elseif(_flag MATCHES "^-l(.+)$")
+                set(_n "${CMAKE_MATCH_1}")
+                if(_n MATCHES "^(ntdll|avrt|ws2_32|bcrypt|crypt32|ncrypt|secur32|advapi32|user32|kernel32|ole32|oleaut32|shell32|shlwapi|gdi32|userenv|iphlpapi|dnsapi|rpcrt4|dwrite|gdiplus|msimg32|avicap32|winmm|setupapi|version|cfgmgr32|mf|mfplat|dxva2|dxgi|d3d11|d3d12|comdlg32|winspool|uuid|wbemuuid|comctl32|normaliz|wlanapi|winhttp|bthprops)$")
+                    continue()
+                endif()
+                foreach(_cand "lib${_n}.dll" "${_n}.dll"
+                              "lib${_n}-1.dll" "${_n}-1.dll")
+                    if(EXISTS "${_ff_bindir}/${_cand}")
+                        list(APPEND _ff_delayload "${_cand}")
+                        break()
+                    endif()
+                endforeach()
+                if(NOT _n MATCHES "ntdll|avrt|ws2_32")
+                    # Versioned runtime names (ggml -> ggml-1.dll etc.):
+                    # glob the toolchain bin dir for any matching DLL.
+                    file(GLOB _vg "${_ff_bindir}/lib${_n}*.dll"
+                                 "${_ff_bindir}/${_n}*.dll")
+                    foreach(_v IN LISTS _vg)
+                        get_filename_component(_v "${_v}" NAME)
+                        list(APPEND _ff_delayload "${_v}")
+                    endforeach()
+                endif()
+            endif()
+        endforeach()
+        list(REMOVE_DUPLICATES _ff_delayload)
+        set(XER_FFMPEG_DELAYLOAD_DLLS "${_ff_delayload}"
+            CACHE INTERNAL "FFmpeg deps delay-loaded by YA.MediaDecoderUniversal")
+
         # XER_FFMPEG_YA_DLL: pack the static closure into shared
         # YA.FFmpeg.dll once instead of ~170 MB into every executable.
         # The public libav*/libsw* archives are whole-archived (full API

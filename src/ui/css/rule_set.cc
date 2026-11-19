@@ -54,12 +54,16 @@ void RuleSet::AddToIndex(const CompoundSelector& rightmost,
     // the right-most compound as the index key.
     const SimpleSelector* best = nullptr;
     auto rank = [](SimpleSelector::Type t) {
+        using T = SimpleSelector::Type;
         switch (t) {
-            case SimpleSelector::Type::kClass: return 4;
-            case SimpleSelector::Type::kId: return 3;
-            case SimpleSelector::Type::kAttribute: return 2;
-            case SimpleSelector::Type::kTag: return 1;
-            case SimpleSelector::Type::kFocus: return 0;
+            case T::kClass: return 4;
+            case T::kId: return 3;
+            case T::kAttribute: return 2;
+            case T::kTag: return 1;
+            case T::kFocus: case T::kHover: case T::kActive:
+            case T::kFirstChild: case T::kLastChild: case T::kNthChild:
+                return 0;   // doc: fallback features when nothing better
+            case T::kUniversal: return -1;  // never an index key
         }
         return 0;
     };

@@ -597,7 +597,7 @@ void TestStyleSheetParser() {
         "ul li:first-child { top: 0 } "
         "input[type=text] { border: 1 } "
         "p:nth-child(2n+1) { z: 9 }");
-    CHECK(sheet.rules.size() == 4, "parse: rule count");
+    CHECK(sheet.rules.size() == 5, "parse: rule count");
 
     auto root = std::make_unique<C::CSSNode>();
     root->tag = "div";
@@ -657,7 +657,7 @@ void TestBufferedDataSource() {
     namespace M = XER::Media;
     std::string err;
     auto* raw = M::DataSource::CreateFileSource(
-        "CMakeLists.txt", &err);
+        "D:/Developers/XER3/CMakeLists.txt", &err);
     if (!raw) {
         CHECK(false, "bds: file source open");
         return;

@@ -140,12 +140,23 @@ if(MINGW AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     # -lxml2 static only when libxml2 is NOT served by YA.LibXml2.dll —
     # the early archive would shadow the import lib and keep embedding
     # a static copy into every UI exe.
-    set(_xer_rt_static "-Wl,-Bstatic,-lc++,-lc++abi,-lunwind,-lwinpthread,-liconv,-lz,-lbcrypt")
+    # -licudt: static ICU's data archive — self-contained (no external
+    # refs), so it is safe to list for every target; it is pulled only
+    # when icuuc objects actually reference icudt78_dat.
+    set(_xer_rt_static "-Wl,-Bstatic,-lc++,-lc++abi,-lunwind,-lwinpthread,-liconv,-lz,-lbz2,-llzma,-lbcrypt,-licudt")
     if(NOT TARGET YA_LibXml2)
         string(APPEND _xer_rt_static ",-lxml2")
     endif()
     string(APPEND _xer_rt_static ",-Bdynamic")
+    # Static archives (OpenSSL/curl/…) need these system import libs —
+    # they are always dynamic, so listing them for every target is safe.
+    string(APPEND _xer_rt_static " -lws2_32 -lcrypt32 -lsecur32 -lncrypt -lwldap32")
     string(APPEND CMAKE_EXE_LINKER_FLAGS " ${_xer_rt_static}")
+    # YA.* modules get the same static runtime — an exe only stays
+    # MSYS2-DLL-free when its YA dependencies are too. Third-party .a
+    # archives are repointed per-target by xer_retarget_imported_to_static
+    # (global -l injection would drag unused archives into every module).
+    string(APPEND CMAKE_SHARED_LINKER_FLAGS " ${_xer_rt_static}")
 endif()
 
 # Kept for call sites that already use it — flags now come from
@@ -176,6 +187,41 @@ function(xer_retarget_imported_to_static namespace_regex)
         if(NOT _t MATCHES "${namespace_regex}")
             continue()
         endif()
+        # Repoint INTERFACE_LINK_LIBRARIES first — interface-only
+        # targets (PkgConfig::*, module shims) have no implib at all;
+        # bare names ("curl"), "-lfoo" flags and full .dll.a paths
+        # become absolute .a paths so pkg-config dep chains (curl's
+        # nghttp2/idn2/psl, fftw3f, mupdf) resolve statically.
+        get_property(_iface_libs TARGET ${_t}
+                     PROPERTY INTERFACE_LINK_LIBRARIES)
+        if(_iface_libs)
+            set(_new_libs "")
+            set(_changed OFF)
+            foreach(_lib IN LISTS _iface_libs)
+                set(_cand "")
+                if(_lib MATCHES "\\.dll\\.a$")
+                    string(REGEX REPLACE "\\.dll\\.a$" ".a"
+                           _cand "${_lib}")
+                elseif(_lib MATCHES "^-l(.+)$")
+                    set(_cand
+                        "${_xer_static_lib_dir}/lib${CMAKE_MATCH_1}.a")
+                elseif(_lib MATCHES "^[A-Za-z0-9_.+-]+$" AND
+                       NOT _lib MATCHES "${_xer_static_lib_skip}")
+                    set(_cand "${_xer_static_lib_dir}/lib${_lib}.a")
+                endif()
+                if(_cand AND EXISTS "${_cand}")
+                    list(APPEND _new_libs "${_cand}")
+                    set(_changed ON)
+                else()
+                    list(APPEND _new_libs "${_lib}")
+                endif()
+            endforeach()
+            if(_changed)
+                set_property(TARGET ${_t}
+                    PROPERTY INTERFACE_LINK_LIBRARIES "${_new_libs}")
+            endif()
+        endif()
+
         get_property(_implib TARGET ${_t}
                      PROPERTY IMPORTED_IMPLIB_RELEASE)
         if(NOT _implib)
@@ -211,6 +257,13 @@ function(xer_retarget_imported_to_static namespace_regex)
     endforeach()
 endfunction()
 
+# Search dir + skip-list used by the interface-rewrite above.
+get_filename_component(_xer_cc_dir "${CMAKE_CXX_COMPILER}" DIRECTORY)
+get_filename_component(_xer_static_lib_dir "${_xer_cc_dir}/../lib"
+                       ABSOLUTE)
+set(_xer_static_lib_skip
+    "^(ws2_32|wldap32|advapi32|user32|gdi32|gdiplus|ole32|oleaut32|uuid|shell32|comdlg32|winspool|dbghelp|psapi|userenv|winmm|iphlpapi|dnsapi|synchronization|rpcrt4|crypt32|secur32|bcrypt|ncrypt|kernel32|ntdll|msvcrt|msimg32|avicap32|dwrite|setupapi|version|cfgmgr32|avrt|powrprof|normaliz|comctl32|shlwapi|wlanapi|winhttp|bthprops|onecore|comsuppw|vulkan-1|mf|mfplat|mfreadwrite|mfuuid|dxva2|dxgi|d3d9|d3d11|d3d12|d3dcompiler|strmiids|evr|amstrmid|quartz)$")
+
 # Repoints imported targets matching a namespace regex at the import
 # library of a YA.* wrapper DLL (bin/YA.<name>.dll) so the archive code
 # is shared instead of embedded per-exe. Call after find_package in the
@@ -242,6 +295,32 @@ function(xer_retarget_imported_to_ya_dll namespace_regex ya_target)
 endfunction()
 
 xer_retarget_imported_to_static("^absl::")
+# Catch-all: repoint every imported target whose import lib has a .a
+# sibling (ICU/CURL/OpenSSL/sqlite3/zstd/brotli/FFTW3f/...). Libs that
+# ship only .dll.a (skia, ggml, whisper, shaderc_shared, vulkan-1)
+# keep their import lib automatically — the EXISTS check skips them.
+xer_retarget_imported_to_static("^")
+
+if(MINGW)
+    # Defines required by the static variants' public headers — without
+    # them the headers still mark symbols dllimport and the .a fails to
+    # resolve (__imp_* references).
+    add_compile_definitions(
+        CURL_STATICLIB
+        U_STATIC_IMPLEMENTATION
+        LZMA_API_STATIC
+        ARCHIVE_STATIC
+        JSONCPP_STATIC_DEFINE)
+
+    # find_package results in subdirectories get the same .dll.a -> .a
+    # repointing. The macro executes in the calling directory scope, so
+    # each subdir's DIRECTORY IMPORTED_TARGETS property is the right
+    # one; find_dependency calls inside config files are covered too.
+    macro(find_package)
+        _find_package(${ARGV})
+        xer_retarget_imported_to_static("^")
+    endmacro()
+endif()
 find_package(re2 CONFIG REQUIRED)
 find_package(unofficial-sqlite3 CONFIG REQUIRED) 
 find_package(zstd CONFIG REQUIRED)
@@ -273,6 +352,28 @@ endif()
 find_package(Boost CONFIG REQUIRED)
 find_package(cereal CONFIG REQUIRED)
 find_package(FFTW3f CONFIG REQUIRED)
+
+# Static libcurl.a does not carry its own dep chain — the msys2
+# CURL::libcurl target has no INTERFACE libs. Append the full static
+# stack so consumers link it in one place.
+if(MINGW AND TARGET CURL::libcurl)
+    set(_xer_curl_deps "")
+    foreach(_d IN ITEMS nghttp2 nghttp3 ngtcp2 ngtcp2_crypto_ossl
+             ssl crypto zstd brotlidec brotlienc brotlicommon
+             idn2 psl ssh2 unistring iconv z)
+        set(_c "${_xer_static_lib_dir}/lib${_d}.a")
+        if(EXISTS "${_c}")
+            list(APPEND _xer_curl_deps "${_c}")
+        endif()
+    endforeach()
+    set_property(TARGET CURL::libcurl
+        APPEND PROPERTY INTERFACE_LINK_LIBRARIES ${_xer_curl_deps})
+endif()
+# Static OpenSSL: ssl needs crypto.
+if(MINGW AND TARGET OpenSSL::SSL AND TARGET OpenSSL::Crypto)
+    set_property(TARGET OpenSSL::SSL
+        APPEND PROPERTY INTERFACE_LINK_LIBRARIES OpenSSL::Crypto)
+endif()
 
 # VST3 SDK (vcpkg copy when installed, otherwise fetched + built from source;
 # see cmake/vst3sdk.cmake — portable across Windows/Linux/macOS).

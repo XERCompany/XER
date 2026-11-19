@@ -31,6 +31,18 @@ if(XER_YA_DLLS AND XER_FFMPEG_API_ARCHIVES)
         ARCHIVES ${XER_FFMPEG_DEP_ARCHIVES}
         LIBS YA_LibXml2 ${XER_FFMPEG_DYN_LIBS}
              absl::strings yuv XER_Helper)
+    # Delay-load .dll.a-only deps (whisper/ggml/shaderc/vulkan): the
+    # module — and every exe depending on it — starts without those
+    # MSYS2 DLLs present; they load on first actual use.
+    if(XER_FFMPEG_DELAYLOAD_DLLS)
+        set(_ff_dl_opts)
+        foreach(_d IN LISTS XER_FFMPEG_DELAYLOAD_DLLS)
+            list(APPEND _ff_dl_opts "-Wl,--delayload,${_d}")
+        endforeach()
+        target_link_options(YA_MediaDecoderUniversal PRIVATE ${_ff_dl_opts})
+        message(STATUS
+            "FFMPEG: delay-loaded DLLs: ${XER_FFMPEG_DELAYLOAD_DLLS}")
+    endif()
     xer_ya_bundle(XER_FFmpeg
         MODULES YA_MediaDecoderUniversal
         DEPS absl::strings yuv XER_Helper
