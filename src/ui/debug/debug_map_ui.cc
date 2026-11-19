@@ -258,9 +258,9 @@ xmlNodePtr DumpNode(const Widgets::Widget& w, int depth, DumpCtx& ctx) {
     return node;
 }
 
-} // namespace
-
 #endif // XER_UI_HAS_LIBXML2
+
+} // namespace
 
 std::string DebugMapUI::ToXml(const Widgets::Widget* override_root,
                               const Options& options) const {

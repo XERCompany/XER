@@ -4,6 +4,12 @@
 file(GLOB APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/*.cc"
 )
+if(XER_YA_DLLS)
+    # app_audio_controller.cc is compiled into YA.UICore (UI widgets
+    # call XER::App::AudioController — see src/ui/CMakeLists.txt).
+    list(REMOVE_ITEM APP_SOURCES
+        "${CMAKE_CURRENT_SOURCE_DIR}/app_audio_controller.cc")
+endif()
 list(APPEND APP_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/../app_command.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/../audio_config_helper.cc"

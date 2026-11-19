@@ -29,7 +29,7 @@ if(TARGET CEF::libcef)
         CEF::libcef CEF::libcef_dll_wrapper
         XER_Tz            # xer-ext:// serves members from TZ archives
         XER_NetClient     # shell_commands net.* built-ins
-        jsoncpp_lib)      # args/result marshaling
+        XER_JsonCpp)      # args/result marshaling
     message(STATUS "XER_Cef: CEF browser embedding ENABLED (${CEF_ROOT})")
 
     # XERBrowserShell — own CEF subprocess (replaces stock

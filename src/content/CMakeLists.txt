@@ -1,10 +1,8 @@
 # XER Content Subsystem CMake Configuration
 
-# Optional 3D/render backends (vcpkg ports: assimp, dawn).
-# When absent, the corresponding content/<module>/ dirs are excluded
-# from the glob below so the rest of XER_Content still builds.
+# Optional 3D backend (assimp). When absent, the corresponding
+# content/<module>/ dirs are excluded from the glob below.
 find_package(assimp QUIET)
-find_package(Dawn QUIET)
 
 # Collect content sources
 file(GLOB_RECURSE CONTENT_SOURCES
@@ -51,10 +49,6 @@ if(NOT TARGET assimp::assimp)
     list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/(model3d|formatconv)/")
     list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/(model3d|formatconv)/")
 endif()
-if(NOT TARGET dawn::webgpu_dawn)
-    list(FILTER CONTENT_SOURCES EXCLUDE REGEX "/dawn/")
-    list(FILTER CONTENT_HEADERS EXCLUDE REGEX "/dawn/")
-endif()
 
 # Create content library
 add_library(XER_Content STATIC ${CONTENT_SOURCES} ${CONTENT_HEADERS})
@@ -71,7 +65,7 @@ target_link_libraries(XER_Content
         absl::strings
         absl::synchronization
         fmt::fmt
-        jsoncpp_lib
+        XER_JsonCpp
         re2::re2
 )
 
@@ -101,11 +95,6 @@ endif()
 # Optional 3D/render backends
 if(TARGET assimp::assimp)
     target_link_libraries(XER_Content PUBLIC assimp::assimp)
-endif()
-if(TARGET dawn::webgpu_dawn)
-    target_link_libraries(XER_Content PUBLIC
-        dawn::webgpu_dawn
-        dawn::webgpu_upstream_cpp_headers)
 endif()
 
 # AI/ML library backends (gated by ENABLE_AI in root CMakeLists.txt)

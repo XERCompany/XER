@@ -32,8 +32,8 @@ public:
     Direct2DRenderer(const Direct2DRenderer&) = delete;
     Direct2DRenderer& operator=(const Direct2DRenderer&) = delete;
 
-    void SetClearColor(Theme::Color color);
-    void SetDpi(UINT dpi);
+    void SetClearColor(Theme::Color color) override;
+    void SetDpi(unsigned dpi) override;
     void BeginFrame(Layout::Rect bounds) override;
     void EndFrame() override;
     bool TakeTargetsRecreated() override { return targets_recreated_; }

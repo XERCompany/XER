@@ -3,6 +3,12 @@
 file(GLOB MODEL3D_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
 file(GLOB MODEL3D_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
+find_package(assimp CONFIG QUIET)
+if(NOT TARGET assimp::assimp)
+    message(WARNING "assimp not found — XER_ContentModel3D will not build")
+    return()
+endif()
+
 add_library(XER_ContentModel3D STATIC ${MODEL3D_SOURCES} ${MODEL3D_HEADERS})
 
 target_include_directories(XER_ContentModel3D
@@ -11,13 +17,7 @@ target_include_directories(XER_ContentModel3D
         ${CMAKE_CURRENT_SOURCE_DIR}/../..
 )
 
-find_package(assimp CONFIG QUIET)
-if(TARGET assimp::assimp)
-    target_link_libraries(XER_ContentModel3D PUBLIC assimp::assimp)
-else()
-    message(WARNING "assimp not found — XER_ContentModel3D will not build")
-    return()
-endif()
+target_link_libraries(XER_ContentModel3D PUBLIC assimp::assimp)
 
 target_compile_features(XER_ContentModel3D PUBLIC cxx_std_23)
 

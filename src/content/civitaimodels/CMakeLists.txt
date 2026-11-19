@@ -25,6 +25,6 @@ target_link_libraries(XER_CivitaiModels
         XER_Cache
         XER_AsyncIO
         XER_Helper
-        jsoncpp_lib
+        XER_JsonCpp
         OpenSSL::Crypto
 )

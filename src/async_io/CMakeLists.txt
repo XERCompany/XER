@@ -36,7 +36,7 @@ target_link_libraries(XER_AsyncIO
         absl::synchronization
         absl::flat_hash_map
         absl::flat_hash_set
-        jsoncpp_lib
+        XER_JsonCpp
         XER_Hex
 )
 

@@ -37,7 +37,7 @@ target_link_libraries(XER_OpenAI
 )
 
 # Link with jsoncpp from vcpkg
-target_link_libraries(XER_OpenAI PUBLIC jsoncpp_lib)
+target_link_libraries(XER_OpenAI PUBLIC XER_JsonCpp)
 target_compile_definitions(XER_OpenAI PRIVATE OPENAI_JSONCPP_AVAILABLE=1)
 
 # Link with OpenSSL from vcpkg

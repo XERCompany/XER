@@ -30,6 +30,11 @@ public:
     virtual void BeginFrame(Layout::Rect bounds) = 0;
     virtual void EndFrame() = 0;
 
+    // Host-provided environment. Defaults are no-ops so streamed/remote
+    // renderers compile without them.
+    virtual void SetDpi(unsigned dpi) { (void)dpi; }
+    virtual void SetClearColor(Theme::Color color) { (void)color; }
+
     // Optional damage rect (absolute client coords, same space as widget
     // bounds) for the upcoming frame. Retained-mode renderers use it to
     // skip clearing/redrawing unaffected areas; immediate renderers may

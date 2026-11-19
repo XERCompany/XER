@@ -8,6 +8,7 @@ file(GLOB_RECURSE VST3_CEF_HEADERS
 )
  
 add_executable(XER_VST3_CEF ${VST3_CEF_SOURCES} ${VST3_CEF_HEADERS})
+xer_link_msys2_static(XER_VST3_CEF)
 
 target_include_directories(XER_VST3_CEF
     PUBLIC
@@ -27,14 +28,13 @@ if(TARGET CEF::libcef)
     # opens them from the executable directory. Manual install via
     # InstallCef.ps1 -> third_party/cef/cef_windows64.
     add_custom_target(XER_VST3_CEF_cef_deploy
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CEF_RELEASE_DIR}"
-                "$<TARGET_FILE_DIR:XER_VST3_CEF>"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CEF_RESOURCES_DIR}"
-                "$<TARGET_FILE_DIR:XER_VST3_CEF>"
+        COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RELEASE_DIR} -DDST=$<TARGET_FILE_DIR:XER_VST3_CEF>
+                   -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
+        COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RESOURCES_DIR} -DDST=$<TARGET_FILE_DIR:XER_VST3_CEF>
+                   -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
         COMMENT "Deploying CEF runtime (libcef.dll, *.pak, locales)"
         VERBATIM)
+    set_property(TARGET XER_VST3_CEF_cef_deploy PROPERTY JOB_POOL xer_cef_deploy)
     add_dependencies(XER_VST3_CEF XER_VST3_CEF_cef_deploy)
     message(STATUS "XER_VST3_CEF: CEF deploy target enabled (${CEF_ROOT})")
 endif()
@@ -43,7 +43,7 @@ target_link_libraries(XER_VST3_CEF
         absl::synchronization
         absl::flat_hash_map
         absl::flat_hash_set
-        jsoncpp_lib
+        XER_JsonCpp
         XER_Hex
         XER_Video          # video::Frame / FrameExporter (clip_poster)
         XER_ContentVideo   # XER::Content::Video::ProbeVideo (catalog)
@@ -122,14 +122,13 @@ target_include_directories(XBrowser
 
 if(TARGET CEF::libcef)
     add_custom_target(XBrowser_cef_deploy
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CEF_RELEASE_DIR}"
-                "$<TARGET_FILE_DIR:XBrowser>"
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-                "${CEF_RESOURCES_DIR}"
-                "$<TARGET_FILE_DIR:XBrowser>"
+        COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RELEASE_DIR} -DDST=$<TARGET_FILE_DIR:XBrowser>
+                   -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
+        COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RESOURCES_DIR} -DDST=$<TARGET_FILE_DIR:XBrowser>
+                   -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
         COMMENT "Deploying CEF runtime for XBrowser"
         VERBATIM)
+    set_property(TARGET XBrowser_cef_deploy PROPERTY JOB_POOL xer_cef_deploy)
     add_dependencies(XBrowser XBrowser_cef_deploy)
 endif()
 
