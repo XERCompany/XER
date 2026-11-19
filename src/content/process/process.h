@@ -11,8 +11,13 @@
 
 #ifdef _WIN32
 #include <windows.h>
-// Windows has no pid_t; process IDs are DWORDs and always fit in int.
+#if defined(__MINGW32__) || defined(__MINGW64__)
+// mingw-w64 already provides pid_t (_pid_t) via sys/types.h.
+#include <sys/types.h>
+#else
+// MSVC has no pid_t; process IDs are DWORDs and always fit in int.
 using pid_t = int;
+#endif
 #else
 #include <sys/types.h>
 #endif

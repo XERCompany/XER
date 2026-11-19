@@ -127,6 +127,18 @@ else()
 
     add_subdirectory("${XER_VST3SDK_SRC}" "${XER_VST3SDK_BUILD}")
 
+    # The SDK adds hosting/utility sample apps unconditionally even with
+    # SMTG_ENABLE_VST3_*_EXAMPLES=OFF (v3.8.1); we only need the libs, so
+    # drop the sample executables from the default build — e.g. validator
+    # fails to link on MinGW (Win32 subsystem entry, no WinMain).
+    foreach(_xer_sdk_app validator audiohost editorhost inspectorapp
+            moduleinfotool)
+        if(TARGET ${_xer_sdk_app})
+            set_target_properties(${_xer_sdk_app}
+                                  PROPERTIES EXCLUDE_FROM_ALL TRUE)
+        endif()
+    endforeach()
+
     add_library(XER_VST3SDK INTERFACE)
     target_include_directories(XER_VST3SDK INTERFACE "${XER_VST3SDK_SRC}")
     target_link_libraries(XER_VST3SDK INTERFACE

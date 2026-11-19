@@ -2,6 +2,7 @@
 
 #include "../winapi_common.h"
 #include <memory>
+#include <vector>
 
 namespace XER::Content::Platform::WinAPI::Graphics {
 

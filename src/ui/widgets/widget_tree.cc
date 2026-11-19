@@ -7,6 +7,7 @@
 #include <utility>
 
 #include "../debug/debug_internal.h"
+#include "core/ui_events.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widgets/tooltip.h"
@@ -129,32 +130,38 @@ bool WidgetTree::HandleEvent(const Event& event) {
     if (root_ == nullptr) {
         return false;
     }
+    Event filtered_event = event;
+    if (event_bus_ != nullptr && !event_bus_->Dispatch(filtered_event)) {
+        // A filter swallowed the event; it counts as handled.
+        return true;
+    }
+    const Event& evt = filtered_event;
     // Presses, wheel and keys dismiss a visible tooltip immediately.
-    if (event.type == Event::Type::MouseDown ||
-        event.type == Event::Type::Click ||
-        event.type == Event::Type::MouseWheel ||
-        event.type == Event::Type::KeyDown) {
+    if (evt.type == Event::Type::MouseDown ||
+        evt.type == Event::Type::Click ||
+        evt.type == Event::Type::MouseWheel ||
+        evt.type == Event::Type::KeyDown) {
         HideTooltip();
     }
     // While an overlay is shown it owns all pointer input (modal semantics);
     // the overlay widget itself decides whether to dismiss on outside clicks.
     const auto& input_root = overlay_ != nullptr ? overlay_ : root_;
-    if (suppress_duplicate_click_ && event.type != Event::Type::Click) {
+    if (suppress_duplicate_click_ && evt.type != Event::Type::Click) {
         suppress_duplicate_click_ = false;
         synthesized_click_target_.reset();
     }
 
-    if (event.type == Event::Type::KeyDown && event.key == KeyCode::Tab) {
-        return MoveFocus(event.is_shift);
+    if (evt.type == Event::Type::KeyDown && evt.key == KeyCode::Tab) {
+        return MoveFocus(evt.is_shift);
     }
 
-    switch (event.type) {
+    switch (evt.type) {
     case Event::Type::MouseWheel: {
-        auto target = FindHitTarget(input_root, event.position, true);
+        auto target = FindHitTarget(input_root, evt.position, true);
         // Wheel events bubble up the parent chain so scroll containers can
         // react even when a leaf widget (slider, button) is under the cursor.
         while (target != nullptr) {
-            if (target->HandleEvent(event)) {
+            if (target->HandleEvent(evt)) {
                 return true;
             }
             target = target->GetParent();
@@ -162,31 +169,31 @@ bool WidgetTree::HandleEvent(const Event& event) {
         return false;
     }
     case Event::Type::MouseMove: {
-        last_pointer_position_ = event.position;
+        last_pointer_position_ = evt.position;
         // While the left button is held, mouse messages stay routed to the
         // widget that received MouseDown (mouse-capture semantics), which is
         // what makes slider dragging work outside the widget bounds.
         const auto captured = left_mouse_down_target_.lock();
         const auto target = captured != nullptr
             ? captured
-            : FindHitTarget(input_root, event.position, true);
+            : FindHitTarget(input_root, evt.position, true);
         if (captured == nullptr) {
             UpdateHover(target);
         }
         if (target == nullptr) {
             return false;
         }
-        return target->HandleEvent(event);
+        return target->HandleEvent(evt);
     }
     case Event::Type::Click: {
-        last_pointer_position_ = event.position;
-        const auto target = FindHitTarget(input_root, event.position, true);
+        last_pointer_position_ = evt.position;
+        const auto target = FindHitTarget(input_root, evt.position, true);
         if (suppress_duplicate_click_) {
             const auto synthesized_target = synthesized_click_target_.lock();
-            const bool duplicate = event.mouse_button == MouseButton::Left &&
+            const bool duplicate = evt.mouse_button == MouseButton::Left &&
                 target == synthesized_target &&
-                event.position.x == synthesized_click_position_.x &&
-                event.position.y == synthesized_click_position_.y;
+                evt.position.x == synthesized_click_position_.x &&
+                evt.position.y == synthesized_click_position_.y;
             suppress_duplicate_click_ = false;
             synthesized_click_target_.reset();
             if (duplicate) {
@@ -199,49 +206,49 @@ bool WidgetTree::HandleEvent(const Event& event) {
         if (target->IsFocusable()) {
             SetFocusedWidget(target);
         }
-        return target->HandleEvent(event);
+        return target->HandleEvent(evt);
     }
     case Event::Type::MouseDown: {
-        last_pointer_position_ = event.position;
-        const auto target = FindHitTarget(input_root, event.position, true);
-        if (event.mouse_button == MouseButton::Left) {
+        last_pointer_position_ = evt.position;
+        const auto target = FindHitTarget(input_root, evt.position, true);
+        if (evt.mouse_button == MouseButton::Left) {
             left_mouse_down_target_ = target;
         }
         UpdateHover(target);
         if (target == nullptr) {
-            if (event.mouse_button == MouseButton::Right && context_menu_handler_) {
-                return context_menu_handler_(event);
+            if (evt.mouse_button == MouseButton::Right && context_menu_handler_) {
+                return context_menu_handler_(evt);
             }
             return false;
         }
         if (target->IsFocusable()) {
             SetFocusedWidget(target);
         }
-        const bool handled = target->HandleEvent(event);
+        const bool handled = target->HandleEvent(evt);
         // Right-clicks that no widget consumed bubble to the tree-level
         // context-menu handler (e.g. AudioPlayerWidget's menu).
-        if (!handled && event.mouse_button == MouseButton::Right &&
+        if (!handled && evt.mouse_button == MouseButton::Right &&
             context_menu_handler_) {
-            return context_menu_handler_(event);
+            return context_menu_handler_(evt);
         }
         return handled;
     }
     case Event::Type::MouseUp: {
-        last_pointer_position_ = event.position;
-        const auto hit = FindHitTarget(input_root, event.position, true);
+        last_pointer_position_ = evt.position;
+        const auto hit = FindHitTarget(input_root, evt.position, true);
         const auto pressed_target = left_mouse_down_target_.lock();
-        if (event.mouse_button == MouseButton::Left) {
+        if (evt.mouse_button == MouseButton::Left) {
             left_mouse_down_target_.reset();
             // Capture held hover frozen during the drag; refresh it now so
             // the widget under the cursor gets its highlight back.
             UpdateHover(hit);
         }
-        const auto target = event.mouse_button == MouseButton::Left &&
+        const auto target = evt.mouse_button == MouseButton::Left &&
                 pressed_target != nullptr
             ? pressed_target
             : hit;
-        const bool released = target != nullptr && target->HandleEvent(event);
-        if (event.mouse_button != MouseButton::Left ||
+        const bool released = target != nullptr && target->HandleEvent(evt);
+        if (evt.mouse_button != MouseButton::Left ||
             hit == nullptr || hit != pressed_target) {
             return released;
         }
@@ -250,7 +257,7 @@ bool WidgetTree::HandleEvent(const Event& event) {
         click.type = Event::Type::Click;
         suppress_duplicate_click_ = true;
         synthesized_click_target_ = target;
-        synthesized_click_position_ = event.position;
+        synthesized_click_position_ = evt.position;
         return target->HandleEvent(click) || released;
     }
     case Event::Type::KeyDown:
@@ -268,21 +275,21 @@ bool WidgetTree::HandleEvent(const Event& event) {
         focusable.end(),
         [](const std::shared_ptr<Widget>& widget) { return widget->IsFocused(); }
     );
-    if (focused != focusable.end() && (*focused)->HandleEvent(event)) {
+    if (focused != focusable.end() && (*focused)->HandleEvent(evt)) {
         return true;
     }
     // Give the overlay root a last shot at keys the focused widget ignored
     // (e.g. Escape closing a Dialog while a child input has focus).
-    if (overlay_ != nullptr && overlay_->HandleEvent(event)) {
+    if (overlay_ != nullptr && overlay_->HandleEvent(evt)) {
         return true;
     }
     // Global shortcuts: only reached when nothing focused consumed the key,
     // so typing in a TextInput never triggers transport shortcuts. A modal
     // overlay owns all input — shortcuts must not fire behind it.
     if (key_handler_ != nullptr && overlay_ == nullptr &&
-        (event.type == Event::Type::KeyDown || event.type == Event::Type::KeyUp ||
-         event.type == Event::Type::TextInput)) {
-        return key_handler_(event);
+        (evt.type == Event::Type::KeyDown || evt.type == Event::Type::KeyUp ||
+         evt.type == Event::Type::TextInput)) {
+        return key_handler_(evt);
     }
     return false;
 }

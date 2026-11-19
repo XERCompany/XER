@@ -1,0 +1,9 @@
+libdir=D:/Developers/XER3/third_party/assimp/lib
+includedir=D:/Developers/XER3/third_party/assimp/include
+
+Name: Assimp
+Description: Import various well-known 3D model formats in an uniform manner.
+Version: 6.0.6
+Libs: -L${libdir} -lassimp
+Libs.private:  
+Cflags: -I${includedir}

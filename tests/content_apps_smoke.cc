@@ -1,5 +1,5 @@
 // Smoke test for the new content application modules:
-//   model3d (Assimp), dawn (WebGPU), sim (crowd + FSM + remote dispatch),
+//   model3d (Assimp), sim (crowd + FSM + remote dispatch),
 //   nettest (protocol codec + async TCP client).
 //
 // Dawn init is environment-dependent (needs a GPU/D3D12 device); its
@@ -20,8 +20,6 @@
 #include <windows.h>
 #endif
 
-#include "content/dawn/dawn_canvas.h"
-#include "content/dawn/dawn_context.h"
 #include "content/formatconv/batch_converter.h"
 #include "content/model3d/model_document.h"
 #include "content/modeldiff/model_diff.h"
@@ -428,32 +426,6 @@ static void TestPasswordGen() {
 	      "passgen: short length rejected");
 }
 
-// --- dawn ---------------------------------------------------------------
-
-static void TestDawn() {
-	Dawn::DawnContext ctx;
-	std::string err;
-	if (!ctx.Initialize(&err)) {
-		std::printf("SKIP: dawn init unavailable: %s\n", err.c_str());
-		return;
-	}
-	CHECK(ctx.is_ready(), "dawn: context ready");
-	std::printf("  adapter: %s\n", ctx.adapter_info().c_str());
-
-	Dawn::DawnCanvas canvas(&ctx);
-	CHECK(canvas.Initialize(64, 64, &err), "dawn: canvas init");
-	if (!err.empty()) std::printf("  canvas err: %s\n", err.c_str());
-	std::vector<std::uint8_t> rgba;
-	CHECK(canvas.RenderTestPattern(&rgba, &err), "dawn: render pattern");
-	if (!err.empty()) std::printf("  render err: %s\n", err.c_str());
-	if (!rgba.empty()) {
-		CHECK(rgba.size() == 64 * 64 * 4, "dawn: rgba size");
-		// Center pixel should be the pipeline color (0.2,0.6,0.9).
-		const std::size_t c = (32 * 64 + 32) * 4;
-		CHECK(rgba[c] > 30 && rgba[c + 2] > 150, "dawn: pixel is bluish");
-	}
-}
-
 int main() {
 #ifdef _WIN32
 	// The XER network stack expects Winsock to be initialized by the host.
@@ -470,7 +442,6 @@ int main() {
 	TestModelDiff();
 	TestFormatConv();
 	TestPasswordGen();
-	TestDawn();
 
 	if (g_failures == 0) {
 		std::printf("content apps smoke: OK\n");

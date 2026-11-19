@@ -3,6 +3,12 @@
 file(GLOB FORMATIC_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/*.cc")
 file(GLOB FORMATIC_HEADERS "${CMAKE_CURRENT_SOURCE_DIR}/*.h")
 
+find_package(assimp CONFIG QUIET)
+if(NOT TARGET assimp::assimp)
+    message(WARNING "assimp not found — XER_ContentFormatConv will not build")
+    return()
+endif()
+
 add_library(XER_ContentFormatConv STATIC ${FORMATIC_SOURCES} ${FORMATIC_HEADERS})
 
 target_include_directories(XER_ContentFormatConv
@@ -11,13 +17,7 @@ target_include_directories(XER_ContentFormatConv
         ${CMAKE_CURRENT_SOURCE_DIR}/../..
 )
 
-find_package(assimp CONFIG QUIET)
-if(TARGET assimp::assimp)
-    target_link_libraries(XER_ContentFormatConv PUBLIC assimp::assimp)
-else()
-    message(WARNING "assimp not found — XER_ContentFormatConv will not build")
-    return()
-endif()
+target_link_libraries(XER_ContentFormatConv PUBLIC assimp::assimp)
 
 if(TARGET XER_AsyncIO)
     target_link_libraries(XER_ContentFormatConv PUBLIC XER_AsyncIO)

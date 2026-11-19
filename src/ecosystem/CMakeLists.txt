@@ -21,7 +21,7 @@ target_link_libraries(XER_Ecosystem
     PUBLIC
         absl::strings
         fmt::fmt
-        jsoncpp_lib
+        XER_JsonCpp
         range-v3::range-v3
         XER_Helper
 )
