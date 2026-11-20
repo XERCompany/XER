@@ -6,6 +6,7 @@
 
 #include "app_command.h"
 #include "audio_config_helper.h"
+#include "config.h"
 #include "content/network/socket/platform/socket_platform.h"
 #include "cache/cache_manager.h"
 
@@ -94,6 +95,11 @@ bool Application::ParseCommandLine(int argc, char** argv) {
     
     if (parsed.type == AppCommand::Type::kHelp) {
         std::cout << AppCommand::BuildHelpText(argv[0]) << std::endl;
+        return false;
+    }
+
+    if (parsed.type == AppCommand::Type::kVersion) {
+        std::cout << "XER " XER_VERSION_STRING << std::endl;
         return false;
     }
     

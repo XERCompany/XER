@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.h"
 #include "xer/xer_value.h"
 
 #include <absl/container/flat_hash_map.h>

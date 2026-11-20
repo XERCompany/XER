@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.h"
 // ResourceGuard – monitors process RSS and script execution wall-clock time.
 // When either limit is breached it requests V8 to terminate the running script
 // and writes a human-readable reason to the provided atomic string.

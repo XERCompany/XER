@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.h"
 #include "xer/encode/sxer84321.h"
 #include "xer/xer_compiler.h"
 #include "xer/xer_buffer.h"
