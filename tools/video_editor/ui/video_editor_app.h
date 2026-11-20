@@ -4,6 +4,7 @@
 // TimelineHistory; preview and export consume snapshots.
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -402,6 +403,32 @@ private:
     std::unique_ptr<IAudioSink> source_audio_sink_;
     std::chrono::steady_clock::time_point audio_sink_retry_at_{};
     bool audio_sink_tried_ = false;
+    // Forwarding sink the engines hold for their whole lifetime —
+    // PreviewOptions::audio_sink is captured once at Init, so a device
+    // that appears LATER (retry path, headphones plugged in) could
+    // never reach an already-initialized engine through the raw
+    // pointer. The binding is atomic: the engine worker can be inside
+    // Write while the UI thread swaps the target.
+    class LateBindingAudioSink : public IAudioSink {
+    public:
+        void Bind(IAudioSink* target) {
+            target_.store(target, std::memory_order_release);
+        }
+        bool Write(const std::int16_t* pcm, int frames,
+                   int rate) override {
+            IAudioSink* t = target_.load(std::memory_order_acquire);
+            return t != nullptr && t->Write(pcm, frames, rate);
+        }
+        std::string LastError() const override {
+            IAudioSink* t = target_.load(std::memory_order_acquire);
+            return t != nullptr ? t->LastError()
+                                : std::string("audio device not open");
+        }
+    private:
+        std::atomic<IAudioSink*> target_{nullptr};
+    };
+    LateBindingAudioSink program_sink_binding_;
+    LateBindingAudioSink source_sink_binding_;
     PreviewEngine preview_engine_;
     bool preview_ready_ = false;
     bool preview_dirty_ = true;   // project changed since last Init

@@ -154,3 +154,39 @@ commit boundary per task.
   was an ABI skew (AudioFrameInfo grew channel_layout mid-commit;
   consistent rebuild → green, 3x3 runs clean).
 - Final: `check_all` 6/6 PASS; smoke 16/16; UI tests 106+.
+
+## Completed 2026-11-20 (wave 10) — "звук не идет" resolved
+
+- **ROOT CAUSE (heap corruption 0xC0000374)**: `VideoDecoder::Open`
+  used `av_find_best_stream(AVMEDIA_TYPE_VIDEO)` which returns the
+  `attached_pic` cover-art stream as "video" → mjpeg pumped through
+  the sws path → heap corruption → mixer worker / process death →
+  silence. Probe isolated it: plain mp3 = 141/141 writes OK, same
+  mp3 + attached_pic = crash. Fix: skip `AV_DISPOSITION_ATTACHED_PIC`
+  in stream selection in BOTH `ffmpeg_video_decoder.cc` and
+  `ffmpeg_engine_bridge.cc::OpenDecoderContext` — decode side now
+  agrees with ProbeVideo classification (mp3+cover = audio-only).
+- **Late-binding audio sink**: `PreviewOptions::audio_sink` is a raw
+  pointer captured at Init — a device appearing later (retry,
+  headphones plugged in) could never reach an already-running engine.
+  Added `LateBindingAudioSink` forwarder (atomic target swap);
+  engines hold it for life, `EnsurePlatformAudioSink` binds on
+  success.
+- **Sink retry actually runs**: `EnsurePreviewEngine` early-returns
+  once ready, so the throttled retry never fired — moved into Tick
+  (retries only for initialized engines missing a sink).
+- **Timeline thumbnail flicker (real fix)**: widget-level
+  `poster_cache_` was insertion-order eviction — hits did not promote,
+  so >48 visible buckets evicted each other → per-frame kPending →
+  blink. Now a true LRU (touch-on-hit, cap 160) + nearest-poster
+  fallback: a pending/missed slot draws the closest cached frame of
+  the same media instead of blanking.
+- **Diagnostics**: `video_editor --audio-probe [file]` — end-to-end
+  PreviewEngine→mixer→real WASAPI run printing per-link verdicts
+  (encode/probe/sink/init/writes/verdict); SEH crash tracer added to
+  the video_editor binary too (worker crashes now print module+RVA
+  + symbolized stack).
+- Stale catalog rows self-heal: re-import upserts probe fields
+  (mp3 misclassified before the cover fix → re-import → audio-only).
+- Final: `check_all` 6/6 PASS; probe cover mp3 = 141 writes,
+  0 fails, all non-silent.

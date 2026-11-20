@@ -1789,7 +1789,13 @@ void VideoEditorAppWidget::EnsurePlatformAudioSink(
     audio_sink_retry_at_ = now + std::chrono::seconds(3);
     std::string sink_error;
     *which = MakePlatformAudioSink(&sink_error);
-    if (!*which && !sink_error.empty()) {
+    if (*which) {
+        // Late bind: engines already initialized keep their forwarding
+        // sink — point it at the device that just came up.
+        (which == &program_audio_sink_ ? program_sink_binding_
+                                       : source_sink_binding_)
+            .Bind(which->get());
+    } else if (!sink_error.empty()) {
         SetStatus("Audio preview unavailable: " + sink_error);
     }
 }
@@ -1803,7 +1809,7 @@ void VideoEditorAppWidget::EnsurePreviewEngine() {
     }
     EnsurePlatformAudioSink(&program_audio_sink_);
     PreviewOptions options;
-    options.audio_sink = program_audio_sink_.get();
+    options.audio_sink = &program_sink_binding_;
     std::string error;
     preview_ready_ = preview_engine_.Init(project_, options,
                                         engine_sink_.get(), &error);
@@ -2134,7 +2140,7 @@ void VideoEditorAppWidget::EnsureSourceEngine() {
         source_sink_ = std::make_unique<SourceEngineSink>(this);
     }
     PreviewOptions options;
-    options.audio_sink = source_audio_sink_.get();
+    options.audio_sink = &source_sink_binding_;
     std::string error;
     source_ready_ =
         source_engine_.Init(source_project_, options,
@@ -4463,6 +4469,16 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
 
 void VideoEditorAppWidget::Tick(double dt_seconds) {
     if (status_toast_) status_toast_->Tick(dt_seconds);
+    // Audio-sink retry lives here — EnsurePreviewEngine early-returns
+    // once initialized, so a device that failed to open at startup
+    // (driver busy, endpoint renegotiating) would never recover. The
+    // late-binding sink forwards to the new device without re-Init.
+    if (preview_ready_ && !program_audio_sink_) {
+        EnsurePlatformAudioSink(&program_audio_sink_);
+    }
+    if (source_ready_ && !source_audio_sink_) {
+        EnsurePlatformAudioSink(&source_audio_sink_);
+    }
     // Media-prep completions: fresh posters/peaks need a repaint;
     // import-poster jobs wrote poster_path rows -> refresh the bin.
     // NotifyMediaChanged drops the timeline's cached media-duration

@@ -486,6 +486,24 @@ bool OpenDecoderContext(AVFormatContext* format_context,
     int stream_index = requested_stream_index;
     if (stream_index < 0) {
         stream_index = av_find_best_stream(format_context, media_type, -1, -1, nullptr, 0);
+        // Attached-picture "video" (audio cover art) is not program
+        // content — ProbeVideo excludes it from classification, so the
+        // decode side must not select it either, or audio files get
+        // decoded as picture+sound pairs.
+        if (stream_index >= 0 && media_type == AVMEDIA_TYPE_VIDEO &&
+            (format_context->streams[stream_index]->disposition &
+             AV_DISPOSITION_ATTACHED_PIC) != 0) {
+            int real_video = -1;
+            for (unsigned i = 0; i < format_context->nb_streams; ++i) {
+                const AVStream* s = format_context->streams[i];
+                if (s->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    (s->disposition & AV_DISPOSITION_ATTACHED_PIC) == 0) {
+                    real_video = static_cast<int>(i);
+                    break;
+                }
+            }
+            stream_index = real_video;
+        }
         if (stream_index < 0) {
             SetError(out_error, "av_find_best_stream failed: " + ErrorString(stream_index));
             return false;

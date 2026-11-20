@@ -5,6 +5,8 @@
 #include <cstdio>
 #include <deque>
 #include <iterator>
+#include <limits>
+#include <list>
 #include <memory>
 #include <string>
 #include <utility>
@@ -42,7 +44,7 @@ constexpr double kMinZoom = 8.0;
 constexpr double kMaxZoom = 600.0;
 constexpr std::chrono::milliseconds kDoubleClick{450};
 constexpr std::size_t kMaxWaveRows = 24;   // downsampled-waveform LRU
-constexpr std::size_t kMaxPosters = 48;    // poster-frame LRU
+constexpr std::size_t kMaxPosters = 160;   // poster-frame LRU
 constexpr std::size_t kMaxPeaks = 32;      // decoded AudioPeaks (MBs each)
 constexpr std::size_t kMaxMediaDurations = 512;  // per-path doubles
 constexpr std::size_t kMaxMissingKeys = 1024;    // negative-result sets
@@ -585,17 +587,27 @@ const video::Frame* TimelineWidget::PosterFor(const std::string& path,
     const PosterKey key{path, quantized};
     const std::string miss_key =
         path + "@" + std::to_string(quantized);
-    if (poster_missing_.count(miss_key) != 0u) return nullptr;
+    if (poster_missing_.count(miss_key) != 0u) {
+        return NearestPoster(path, quantized);
+    }
     const auto it = poster_cache_.find(key);
-    if (it != poster_cache_.end()) return it->second.get();
+    if (it != poster_cache_.end()) {
+        // Hit promotes to MRU — visible thumbs stay cached.
+        poster_lru_.splice(poster_lru_.end(), poster_lru_,
+                           it->second.lru_it);
+        return it->second.frame.get();
+    }
     auto frame = std::make_shared<video::Frame>();
     switch (hooks_.get_poster(path, seconds, frame.get())) {
         case MediaLookup::kReady:
             if (frame->IsValid() && frame->Width() > 0 &&
                 frame->Height() > 0 &&
                 frame->Format() == video::PixelFormat::BGRA8) {
-                poster_cache_[key] = frame;
                 poster_lru_.push_back(key);
+                PosterEntry entry;
+                entry.frame = frame;
+                entry.lru_it = std::prev(poster_lru_.end());
+                poster_cache_[key] = entry;
                 while (poster_lru_.size() > kMaxPosters) {
                     poster_cache_.erase(poster_lru_.front());
                     poster_lru_.pop_front();
@@ -605,15 +617,44 @@ const video::Frame* TimelineWidget::PosterFor(const std::string& path,
             // unusable payload
             TrackMissing(poster_missing_, poster_missing_lru_, miss_key,
                          kMaxMissingKeys);
-            return nullptr;
+            return NearestPoster(path, quantized);
         case MediaLookup::kPending:
-            return nullptr;   // worker decoding — re-asked next frame
+            // Worker decoding — draw the closest frame we already
+            // have for this media so the slot never blanks.
+            return NearestPoster(path, quantized);
         case MediaLookup::kFailed:
             TrackMissing(poster_missing_, poster_missing_lru_, miss_key,
                          kMaxMissingKeys);
-            return nullptr;
+            return NearestPoster(path, quantized);
     }
     return nullptr;
+}
+
+const video::Frame* TimelineWidget::NearestPoster(
+    const std::string& path, std::int64_t quantized_ms) {
+    const video::Frame* best = nullptr;
+    std::int64_t best_dist = std::numeric_limits<std::int64_t>::max();
+    auto best_it = poster_lru_.end();
+    for (auto lit = poster_lru_.begin(); lit != poster_lru_.end();
+         ++lit) {
+        if (lit->path != path) continue;
+        const auto mit = poster_cache_.find(*lit);
+        if (mit == poster_cache_.end()) continue;
+        const std::int64_t dist =
+            lit->quantized_ms > quantized_ms
+                ? lit->quantized_ms - quantized_ms
+                : quantized_ms - lit->quantized_ms;
+        if (dist < best_dist) {
+            best_dist = dist;
+            best = mit->second.frame.get();
+            best_it = lit;
+        }
+    }
+    if (best != nullptr) {
+        // The fallback frame is on screen — promote it too.
+        poster_lru_.splice(poster_lru_.end(), poster_lru_, best_it);
+    }
+    return best;
 }
 
 // ---- rendering ----

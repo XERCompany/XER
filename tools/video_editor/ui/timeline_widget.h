@@ -22,6 +22,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <list>
 #include <map>
 #include <memory>
 #include <string>
@@ -252,6 +253,11 @@ private:
     const WaveRow* WaveFor(const std::string& path, int columns);
     const video::Frame* PosterFor(const std::string& path,
                                   double seconds);
+    // Nearest cached poster for `path` by |quantized_ms - t| — drawn
+    // while the exact bucket decodes so a thumbnail slot shows a
+    // stable (slightly off-time) frame instead of blanking each miss.
+    const video::Frame* NearestPoster(const std::string& path,
+                                      std::int64_t quantized_ms);
 
     // --- ToolCommit (private — only tools reach this) ---
     // SetStatus doubles as ToolCommit::SetStatus -> hooks_.on_status.
@@ -335,11 +341,19 @@ private:
     std::deque<std::string> wave_lru_;
     std::unordered_map<std::string, double> media_duration_cache_;
     std::deque<std::string> duration_lru_;
-    std::unordered_map<PosterKey, std::shared_ptr<video::Frame>,
-                       PosterKeyHash> poster_cache_;
+    // Poster cache: a real LRU — lookups promote entries, eviction
+    // takes the front (previously insertion-order eviction dropped
+    // still-visible thumbnails whenever >48 distinct buckets cycled,
+    // which read back as a per-frame kPending flicker).
+    struct PosterEntry {
+        std::shared_ptr<video::Frame> frame;
+        std::list<PosterKey>::iterator lru_it;
+    };
+    std::unordered_map<PosterKey, PosterEntry, PosterKeyHash>
+        poster_cache_;
     std::unordered_set<std::string> poster_missing_;  // "path@ms"
     std::deque<std::string> poster_missing_lru_;
-    std::deque<PosterKey> poster_lru_;
+    std::list<PosterKey> poster_lru_;   // front = LRU, back = MRU
 
     XER::UI::Layout::Rect timeline_area_{};
 };

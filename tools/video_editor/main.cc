@@ -19,13 +19,19 @@
 #include "content/video/video_info.h"
 #include "export_engine.h"
 #include "helper/path_utils.h"
+#include "playback/audio_output.h"
+#include "playback/audio_sink_factory.h"
+#include "playback/preview_engine.h"
 #include "project_store.h"
 #include "smoke_checks.h"
 #include "timeline_model.h"
+#include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
 #if defined(_WIN32)
 #include <shellapi.h>
 #include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
 
 #include "ui/core/application.h"
 #include "ui/core/window.h"
@@ -40,6 +46,7 @@
 #include "cef/cef_runtime.h"        // CEF subprocess early-out
 
 #include <atomic>
+#include <cmath>
 #include <thread>
 #endif
 
@@ -424,8 +431,240 @@ int RunExport(const std::string& input_path,
 
 }  // namespace
 
+#if defined(_WIN32)
+// `video_editor --audio-probe [file]` — end-to-end audio diagnostic:
+// encodes a 3 s sine (or uses the given media file), plays it through
+// the REAL PreviewEngine -> AudioMixer -> WasapiSink chain for ~3 s
+// and prints a verdict per link. You should HEAR the tone; silence
+// with all checks green points at the endpoint/volume, a red link
+// names the broken stage.
+int RunAudioProbe(const std::string& media_path) {
+    namespace FFmpeg = XER::Bridge::FFmpeg;
+    namespace VE = XER::VideoEditor;
+    std::cout << std::unitbuf;   // unbuffered — survive a hard crash
+
+    // 1. Encode a deterministic 3 s stereo sine WAV — guarantees a
+    //    known-good source no matter what the user's file is.
+    std::string path = media_path;
+    std::string err;
+    if (path.empty()) {
+        path = (std::filesystem::temp_directory_path() /
+                "xer_audio_probe.wav").string();
+        FFmpeg::EncodeAudioParams enc;
+        enc.output_path = path;
+        enc.codec_name = "pcm_s16le";
+        enc.sample_rate = 48000;
+        enc.channels = 2;
+        enc.sample_format = "s16";
+        const int chunk = 1024;
+        const std::size_t chunks =
+            static_cast<std::size_t>(3 * 48000 / chunk);
+        if (!FFmpeg::EncodeAudioStream(
+                enc, chunks,
+                [](std::size_t i, FFmpeg::AudioFrameInfo* out,
+                   std::string*) {
+                    out->sample_rate = 48000;
+                    out->channels = 2;
+                    out->sample_count = 1024;
+                    out->planar = false;
+                    out->sample_format = "s16";
+                    out->data.resize(1024 * 4);
+                    auto* s =
+                        reinterpret_cast<std::int16_t*>(out->data.data());
+                    for (int j = 0; j < 1024; ++j) {
+                        const double t =
+                            (i * 1024.0 + j) / 48000.0;
+                        const auto v = static_cast<std::int16_t>(
+                            std::sin(2 * 3.14159265358979 * 440.0 * t) *
+                            12000);
+                        s[j * 2] = v;
+                        s[j * 2 + 1] = v;
+                    }
+                    return true;
+                },
+                &err)) {
+            std::cerr << "probe[1/6] encode sine FAILED: " << err
+                      << "\n";
+            return 1;
+        }
+        std::cout << "probe[1/6] sine wav encoded -> " << path << "\n";
+    } else {
+        std::cout << "probe[1/6] using media: " << path << "\n";
+    }
+
+    // 2. Probe stream presence via the same code the import path uses.
+    XER::Content::Video::VideoInfo info;
+    if (!XER::Content::Video::ProbeVideo(path, &info, &err)) {
+        std::cerr << "probe[2/6] ProbeVideo FAILED: " << err << "\n";
+        return 1;
+    }
+    std::cout << "probe[2/6] streams: video="
+              << (info.width > 0 ? "yes" : "no")
+              << " audio=" << (info.has_audio ? "yes" : "no")
+              << " dur=" << info.duration_seconds << "s\n";
+    if (!info.has_audio) {
+        std::cerr << "probe[2/6] FAIL: no audio stream detected\n";
+        return 1;
+    }
+
+    // 3. Platform sink — the object the UI creates on its STA thread.
+    auto sink = VE::MakePlatformAudioSink(&err);
+    if (!sink) {
+        std::cerr << "probe[3/6] sink create FAILED: " << err << "\n";
+        return 1;
+    }
+    std::cout << "probe[3/6] platform audio sink created\n";
+
+    // 4-5. Build a minimal project: one audio track + one media clip,
+    //      then run the real PreviewEngine (compositor + mixer +
+    //      worker) with a counting sink wrapper for ~3 s.
+    struct CountSink : VE::IAudioSink {
+        VE::IAudioSink* inner;
+        std::atomic<int> writes{0}, fails{0}, nonzero{0};
+        std::string last_err;
+        bool Write(const std::int16_t* p, int n, int rate) override {
+            ++writes;
+            for (int i = 0; i < n * 2; ++i) {
+                if (p[i] != 0) { ++nonzero; break; }
+            }
+            if (!inner->Write(p, n, rate)) {
+                ++fails;
+                last_err = inner->LastError();
+                return false;
+            }
+            return true;
+        }
+        std::string LastError() const override { return last_err; }
+    };
+    struct NullSink : VE::PreviewEngine::Sink {
+        void OnVideoFrame(const video::Frame&) override {}
+        void OnAudioPeakLevels(float, float) override {}
+        void OnPlayhead(double) override {}
+    };
+
+    VE::Project project;
+    project.width = 64;
+    project.height = 64;
+    project.fps_num = 30;
+    project.fps_den = 1;
+    VE::Track track{VE::TrackKind::Audio, "A1"};
+    project.tracks.push_back(track);
+    VE::Clip clip;
+    clip.id = "probe";
+    clip.source_path = path;
+    clip.track = 0;
+    clip.timeline_start = 0.0;
+    clip.in_point = 0.0;
+    clip.duration = info.duration_seconds > 0.0
+                        ? std::min(info.duration_seconds, 90.0)
+                        : 90.0;
+    project.clips.push_back(clip);
+
+    CountSink counter;
+    counter.inner = sink.get();
+    NullSink null_sink;
+    VE::PreviewOptions opts;
+    opts.audio_sink = &counter;
+    VE::PreviewEngine engine;
+    if (!engine.Init(project, opts, &null_sink, &err)) {
+        std::cerr << "probe[4/6] engine Init FAILED: " << err << "\n";
+        return 1;
+    }
+    std::cout << "probe[4/6] preview engine up (dur="
+              << engine.DurationSeconds() << "s)\n";
+
+    engine.SetPlaying(true);
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(
+                              static_cast<long long>(
+                                  clip.duration * 1000.0) + 1500);
+    while (std::chrono::steady_clock::now() < deadline &&
+           engine.Playing()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    engine.Shutdown();
+    const auto warnings = engine.Warnings();
+    std::cout << "probe[5/6] writes=" << counter.writes.load()
+              << " fails=" << counter.fails.load()
+              << " non-silent=" << counter.nonzero.load()
+              << (counter.last_err.empty()
+                      ? ""
+                      : " last='" + counter.last_err + "'")
+              << "\n";
+    for (const auto& w : warnings) {
+        std::cout << "  warn: " << w << "\n";
+    }
+
+    if (counter.fails.load() > 0) {
+        std::cerr << "probe[6/6] FAIL: device writes rejected\n";
+        return 1;
+    }
+    if (counter.writes.load() == 0) {
+        std::cerr << "probe[6/6] FAIL: pump never wrote (mixer/pump "
+                     "link dead)\n";
+        return 1;
+    }
+    if (counter.nonzero.load() == 0) {
+        std::cerr << "probe[6/6] FAIL: all chunks silent (mixer "
+                     "decoded to zeros)\n";
+        return 1;
+    }
+    std::cout << "probe[6/6] OK — audible 440Hz should have played; "
+                 "if you heard nothing, check endpoint/volume\n";
+    return 0;
+}
+#endif
+
+#if defined(_WIN32)
+// Process-wide last-chance reporter: prints module/RVA + a symbolized
+// backtrace for SEH faults on ANY thread (the mixer/decoder worker
+// crashes otherwise surface only as an abrupt exit / silent audio).
+static LONG WINAPI VeCrashTrace(EXCEPTION_POINTERS* e) {
+    void* addr = e->ExceptionRecord->ExceptionAddress;
+    HMODULE mod = nullptr;
+    std::fprintf(stderr, "\n[CRASH] code=0x%08lx addr=%p\n",
+                 e->ExceptionRecord->ExceptionCode, addr);
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(addr), &mod)) {
+        char name[MAX_PATH]{};
+        GetModuleFileNameA(mod, name, MAX_PATH);
+        std::fprintf(stderr, "[CRASH] module=%s rva=%p\n", name,
+                     reinterpret_cast<char*>(addr) -
+                         reinterpret_cast<char*>(mod));
+    }
+    HANDLE proc = GetCurrentProcess();
+    SymInitialize(proc, nullptr, TRUE);
+    void* stack[64];
+    USHORT frames = CaptureStackBackTrace(0, 64, stack, nullptr);
+    for (USHORT i = 0; i < frames; ++i) {
+        char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME]{};
+        auto* sym = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = MAX_SYM_NAME;
+        DWORD64 disp = 0;
+        if (SymFromAddr(proc, reinterpret_cast<DWORD64>(stack[i]), &disp,
+                        sym)) {
+            HMODULE smod = nullptr;
+            char mname[MAX_PATH]{};
+            if (GetModuleHandleExA(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    reinterpret_cast<LPCSTR>(stack[i]), &smod)) {
+                GetModuleFileNameA(smod, mname, MAX_PATH);
+            }
+            std::fprintf(stderr, "  #%u %s!%s+0x%llx\n", i, mname,
+                         sym->Name, disp);
+        }
+    }
+    std::fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 int main(int argc, char** argv) {
 #if defined(_WIN32)
+    SetUnhandledExceptionFilter(VeCrashTrace);
     // CEF child processes (renderer/GPU via bootstrap.exe) never return
     // from this — must run before any other initialization.
     const int cef_exit =
@@ -454,6 +693,11 @@ int main(int argc, char** argv) {
         PrintUsage();
         return 0;
     }
+#if defined(_WIN32)
+    if (arg == "--audio-probe") {
+        return RunAudioProbe(args.size() >= 3 ? args[2] : "");
+    }
+#endif
     if (arg == "--open" || arg == "--gui") {
         if (args.size() < 3) {
             std::cerr << "Error: " << arg << " requires a project path\n";

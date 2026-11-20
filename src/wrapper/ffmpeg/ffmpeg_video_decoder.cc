@@ -134,6 +134,19 @@ struct VideoDecoder::Impl {
     // ~2048 AAC frames ≈ 40+ s of audio — bounds queue memory if the audio
     // consumer stalls; oldest packets are dropped first.
     static constexpr size_t kMaxQueuedAudioPackets = 2048;
+    // Soft cap for the demux pump: the audio-only NextFrame path batches
+    // 256 packets per call while ReadAudioFrames drains <=64 — uncapped
+    // the queue hits the hard limit in a few calls and PushAudioPacket
+    // drops the OLDEST (next-needed) packets, punching permanent silence
+    // holes into the decoded stream (~30 s into mp3 playback). The pump
+    // pauses at this mark instead; the demux position persists in fmt
+    // and resumes on the next call.
+    static constexpr size_t kQueuedAudioHighWater = 1024;
+
+    size_t QueuedAudioPackets() {
+        std::lock_guard<std::mutex> lock(audio_mutex);
+        return audio_queue.size();
+    }
 
     void PushAudioPacket(const AVPacket* src) {
         std::lock_guard<std::mutex> lock(audio_mutex);
@@ -308,6 +321,28 @@ bool VideoDecoder::Open(const std::string& path, std::string* error_out) {
         return false;
     }
     p.video_stream_index = av_find_best_stream(p.fmt, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    // Cover art rides mp3/m4a/flac containers as an attached_pic
+    // "video" stream. ProbeVideo filters it out at classification, but
+    // av_find_best_stream happily returns it — the decode side must
+    // agree or an audio file arrives as A/V and pumps its mjpeg cover
+    // through the sws path (heap corruption observed on an mp3 whose
+    // attached_pic stream carried stray packets; the mixer worker died
+    // and preview went silent). Fall back to a real video stream if
+    // one exists alongside the picture.
+    if (p.video_stream_index >= 0 &&
+        (p.fmt->streams[p.video_stream_index]->disposition &
+         AV_DISPOSITION_ATTACHED_PIC) != 0) {
+        int real_video = -1;
+        for (unsigned i = 0; i < p.fmt->nb_streams; ++i) {
+            const AVStream* s = p.fmt->streams[i];
+            if (s->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                (s->disposition & AV_DISPOSITION_ATTACHED_PIC) == 0) {
+                real_video = static_cast<int>(i);
+                break;
+            }
+        }
+        p.video_stream_index = real_video;
+    }
     p.audio_stream_index =
         av_find_best_stream(p.fmt, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
     p.has_audio = p.audio_stream_index >= 0;
@@ -405,6 +440,13 @@ bool VideoDecoder::NextFrame(std::vector<uint8_t>& bgra, int& width, int& height
         // until AudioDrained().
         constexpr int kPumpBudget = 256;
         for (int i = 0; i < kPumpBudget; ++i) {
+            if (p.audio_tap && p.audio_codec != nullptr &&
+                p.QueuedAudioPackets() >= Impl::kQueuedAudioHighWater) {
+                // Consumer-bound: stop before the drop-cap can fire.
+                // The unread demux position survives — the next
+                // NextFrame() resumes right here.
+                break;
+            }
             const int read_ret = av_read_frame(p.fmt, p.packet);
             if (read_ret == AVERROR_EOF) {
                 av_packet_unref(p.packet);
