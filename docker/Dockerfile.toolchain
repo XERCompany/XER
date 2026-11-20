@@ -1,0 +1,44 @@
+# Dockerfile.toolchain — XER build toolchain in a Windows container.
+#
+# Same toolchain InstallTools.ps1 installs on the host: MSYS2 clang64
+# (clang + libc++) plus the full mingw-w64-clang-x86_64-* package set
+# from docker/msys2-packages.txt. MSYS2 lands at C:\tools\msys64 — the
+# path Build.ps1 probes — so repo build scripts run unchanged inside.
+#
+# Build (host, Windows containers enabled):
+#   .\InstallToolsWithDocker.ps1
+# or:
+#   docker build -f docker/Dockerfile.toolchain -t xer/toolchain:latest .
+#
+# Requires: Docker Desktop / Docker Engine on Windows in WINDOWS
+# container mode (right-click whale tray icon -> "Switch to Windows
+# containers..."). Linux containers cannot run MSYS2.
+
+# escape=`
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop';"]
+
+ARG MSYS2_URL=https://repo.msys2.org/distrib/x86_64/msys2-x86_64-latest.tar.xz
+
+RUN New-Item -ItemType Directory -Force C:\tools | Out-Null; `
+    Invoke-WebRequest -UseBasicParsing -Uri $env:MSYS2_URL -OutFile C:\msys2.tar.xz; `
+    tar -xf C:\msys2.tar.xz -C C:\tools; `
+    Remove-Item C:\msys2.tar.xz; `
+    if (-not (Test-Path C:\tools\msys64\usr\bin\pacman.exe)) { `
+        throw 'MSYS2 extraction failed - pacman.exe not found' }
+
+COPY docker/bootstrap-msys2.sh C:/tools/msys64/tmp/bootstrap-msys2.sh
+COPY docker/msys2-packages.txt C:/tools/msys64/tmp/msys2-packages.txt
+
+RUN C:\tools\msys64\usr\bin\bash.exe -l /tmp/bootstrap-msys2.sh
+
+# clang64/bin first: cmake/ninja/clang must resolve to the MSYS2 clang64
+# toolchain, not anything the base image might add later.
+ENV PATH="C:\tools\msys64\clang64\bin;C:\tools\msys64\usr\bin;${PATH}"
+
+WORKDIR C:\src
+
+# Default entry: PowerShell so `docker run <img> <args>` reaches
+# Build.ps1-style invocations; BuildWithDocker.ps1 passes the script.
+ENTRYPOINT ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass"]
