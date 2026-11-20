@@ -19,6 +19,7 @@
 #include <vector>
 
 #include "app_runtime/app_runtime.h"
+#include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
 #include "compositor.h"
 #include "export_engine.h"
