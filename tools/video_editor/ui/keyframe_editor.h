@@ -50,6 +50,12 @@ inline const char* KeyEaseName(KeyEase ease) {
         case KeyEase::EaseOut:   return "EaseOut";
         case KeyEase::EaseInOut: return "EaseInOut";
         case KeyEase::Hold:      return "Hold";
+        case KeyEase::EaseInCubic:  return "CubicIn";
+        case KeyEase::EaseOutCubic: return "CubicOut";
+        case KeyEase::ExpoOut:      return "ExpoOut";
+        case KeyEase::Back:         return "Back";
+        case KeyEase::Elastic:      return "Elastic";
+        case KeyEase::Bounce:       return "Bounce";
     }
     return "?";
 }
@@ -142,6 +148,9 @@ private:
     // one; an index == index is invalidated. Without this a selected
     // key past the erased one would point at the wrong keyframe.
     void ShiftKeyIndices(int erased);
+    // Ctrl+S: offset every other animated property's keys by a step so
+    // curves interleave (checkerboard stagger).
+    void StaggerProperties();
     void SetStatus(const std::string& text, bool is_error = false);
 
     Hooks hooks_;

@@ -56,6 +56,12 @@ Goal started: 2026-11-15. Design doc:
 - [static-link-state.md](architecture/static-link-state.md) —
   what's static vs delay-loaded vs dynamic in the MSYS2 preset,
   skia delay-load impossibility, CopyDLL removal (2026-11-20).
+- [video-editor-js-fx.md](architecture/video-editor-js-fx.md) —
+  JS effects/transitions (`assets/scripts/fx`, `script:` types) and
+  the `--media-worker` decode subprocess (2026-11-20).
+- [video-editor-lens-sync-curves.md](architecture/video-editor-lens-sync-curves.md) —
+  glass/lens refraction effects + bokeh DOF, one-click waveform
+  audio sync, keyframe curve editor easings/stagger
 - [builder-check-2026-11-15.md](reviews/builder-check-2026-11-15.md) —
   independent design-doc review findings and how each was resolved.
 

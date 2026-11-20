@@ -108,6 +108,16 @@ EffectsPanelWidget::Catalog() {
         {"color_balance", {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
          "lift+gain grade · lift r,g,b -1..1, gain r,g,b 0..4"},
         {"posterize", {4.0f}, "band colors · levels per channel 2-256"},
+        {"lens_sphere", {0.45f, 1.4f, 3.0f, 0.35f, 0.6f},
+         "crystal ball · radius, bend, chroma, edge, glint"},
+        {"magnifier", {0.3f, 1.8f, 2.0f},
+         "lens bulge · radius frac, zoom, chroma"},
+        {"ribbed_glass", {24.0f, 6.0f, 0.0f, 0.5f},
+         "fluted pane · period px, amp px, axis, softness"},
+        {"bokeh_dof", {1.0f, 0.5f, 0.5f, 0.12f, 0.3f, 18.0f, 3.0f},
+         "depth of field · mode, cx, cy, band, falloff, radius, gain"},
+        {"bokeh_blur", {10.0f, 2.5f},
+         "aperture discs · radius px, highlight boost"},
         };
         if (!JsFxRuntime::FxDir().empty() ||
             JsFxRuntime::LoadCatalog(

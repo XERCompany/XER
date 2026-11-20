@@ -9,6 +9,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -25,8 +26,10 @@
 #include "compositor.h"
 #include "export_engine.h"
 #include "export_preset.h"
+#include "frame.h"
 #include "generated_source.h"
 #include "helper/path_utils.h"
+#include "js_fx.h"
 #include "keyboard_map.h"
 #include "media_catalog.h"
 #include "project_autosave.h"
@@ -434,6 +437,145 @@ std::string CheckCompositorRender() {
     return {};
 }
 
+
+// Curve easings + glass/lens kernels: new KeyEase curves must land on
+// their endpoints (Bounce/Elastic/Back overshoot mid-span only); the
+// refraction/DOF kernels must visibly move pixels on a bars frame.
+std::string CheckCurvesAndLens() {
+    Clip clip;
+    clip.id = "curve";
+    clip.duration = 4.0;
+    clip.keyframes[KeyProp::Scale] = {
+        {0.0, 1.0f, KeyEase::Bounce},
+        {2.0, 2.0f, KeyEase::Linear},
+        {4.0, 1.0f, KeyEase::Linear},
+    };
+    // Endpoints are exact regardless of the curve shape.
+    if (std::fabs(EvaluateClipProperty(clip, KeyProp::Scale, 0.0, 1.0f) -
+                  1.0f) > 1e-5f ||
+        std::fabs(EvaluateClipProperty(clip, KeyProp::Scale, 2.0, 1.0f) -
+                  2.0f) > 1e-5f) {
+        return "eased curve missed its endpoints";
+    }
+    // Bounce mid-segment must sit between the key values.
+    const float mid =
+        EvaluateClipProperty(clip, KeyProp::Scale, 1.0, 1.0f);
+    if (mid < 1.0f || mid > 2.0f) {
+        return "bounce curve left the key range mid-segment";
+    }
+    for (KeyEase e : {KeyEase::Back, KeyEase::Elastic, KeyEase::ExpoOut,
+                      KeyEase::EaseInCubic, KeyEase::EaseOutCubic}) {
+        clip.keyframes[KeyProp::Scale].front().easing = e;
+        const float end =
+            EvaluateClipProperty(clip, KeyProp::Scale, 2.0 - 1e-9, 1.0f);
+        if (std::fabs(end - 2.0f) > 0.05f) {
+            return "easing does not settle on the segment end";
+        }
+    }
+
+    Project project = MakeRenderProject(160, 90, 15);
+    Clip* bars = &project.clips[0];
+    bars->effects = {
+        {"lens_sphere", {0.8f, 1.5f, 2.0f, 0.3f, 0.5f}},
+        {"ribbed_glass", {16.0f, 3.0f, 0.0f, 0.3f}},
+        {"bokeh_dof", {1.0f, 0.5f, 0.5f, 0.1f, 0.4f, 8.0f, 2.0f}},
+    };
+    Compositor compositor;
+    std::string err;
+    if (!compositor.Init(project, {}, &err)) {
+        return "lens compositor init failed: " + err;
+    }
+    std::vector<std::uint8_t> fx_bgra;
+    const bool rendered = compositor.RenderFrameAt(0.5, &fx_bgra, &err);
+    compositor.Shutdown();
+    if (!rendered) {
+        return "lens frame render failed: " + err;
+    }
+
+    project.clips[0].effects.clear();
+    Compositor plain;
+    if (!plain.Init(project, {}, &err)) {
+        return "plain compositor init failed: " + err;
+    }
+    std::vector<std::uint8_t> plain_bgra;
+    const bool plain_ok = plain.RenderFrameAt(0.5, &plain_bgra, &err);
+    plain.Shutdown();
+    if (!plain_ok || plain_bgra.size() != fx_bgra.size()) {
+        return "reference frame failed";
+    }
+    std::size_t moved = 0;
+    for (std::size_t i = 0; i < fx_bgra.size(); i += 4) {
+        if (fx_bgra[i] != plain_bgra[i] ||
+            fx_bgra[i + 1] != plain_bgra[i + 1] ||
+            fx_bgra[i + 2] != plain_bgra[i + 2]) {
+            ++moved;
+        }
+    }
+    if (moved < fx_bgra.size() / 4 / 10) {
+        return "lens effects moved too few pixels";
+    }
+    return {};
+}
+
+// JS fx: the catalog must list our stock scripts, and — when V8 is
+// compiled in — a runtime must register + execute them. invert on a
+// black pixel yields 255; bitcrush quantizes; smoothstep(0.5) = 0.5.
+std::string CheckJsFx() {
+    std::string status;
+    AppRuntime::Boot(&status);   // fills SharedAssetsConfig
+    const std::string fx_dir =
+        (AppRuntime::SharedAssetsConfig().assets_dir /
+         "scripts" / "fx").string();
+    std::string err;
+    if (!JsFxRuntime::LoadCatalog(fx_dir, &err)) {
+        return "fx catalog load failed: " + err;
+    }
+    if (JsFxRuntime::VideoEffects().size() < 5 ||
+        JsFxRuntime::AudioEffects().size() < 4 ||
+        JsFxRuntime::ScriptTransitions().size() < 5) {
+        return "fx catalog lists too few entries";
+    }
+    JsFxRuntime fx;
+    if (!fx.EnsureLoaded(&err)) {
+#if defined(XER_VE_HAS_V8)
+        return "js fx runtime failed: " + err;
+#else
+        return {};   // no-V8 build — catalog-only check passes
+#endif
+    }
+    if (!fx.HasVideoEffect("invert") ||
+        !fx.HasAudioEffect("bitcrush") ||
+        !fx.HasTransition("smoothstep")) {
+        return "registered ids missing from the runtime";
+    }
+    video::Frame frame;
+    if (!frame.Allocate(4, 4, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    if (!fx.ApplyVideo("invert", &frame, {}, 0.0, &err)) {
+        return "invert apply failed: " + err;
+    }
+    if (frame.Data()[0] != 255 || frame.Data()[1] != 255 ||
+        frame.Data()[2] != 255) {
+        return "invert produced wrong pixels";
+    }
+    float pcm[4] = {0.1f, -0.1f, 0.9f, -0.9f};
+    if (!fx.ProcessAudio("bitcrush", pcm, 2, 48000, {{0, 4.0f}}, 0.0,
+                         &err)) {
+        return "bitcrush process failed: " + err;
+    }
+    // 4-bit → 16 levels; 0.9 quantizes to a multiple of 1/16.
+    const float q = pcm[2] * 16.0f;
+    if (std::fabs(q - std::round(q)) > 0.01f) {
+        return "bitcrush output not quantized";
+    }
+    const double w = fx.TransitionWeight("smoothstep", 0.5);
+    if (std::fabs(w - 0.5) > 0.01) {
+        return "smoothstep(0.5) != 0.5";
+    }
+    return {};
+}
+
 std::string CheckAudioMixer() {
     // The bars clip owns no audio stream, so the correct output is
     // well-defined silence — the check exercises chunk production,
@@ -650,6 +792,8 @@ constexpr CheckEntry kChecks[] = {
     {"export_presets", &CheckExportPresets},
     {"generated_source", &CheckGeneratedSource},
     {"compositor_render", &CheckCompositorRender},
+    {"curves_lens", &CheckCurvesAndLens},
+    {"js_fx", &CheckJsFx},
     {"audio_mixer", &CheckAudioMixer},
     {"project_store", &CheckProjectStore},
     {"project_autosave", &CheckProjectAutosave},

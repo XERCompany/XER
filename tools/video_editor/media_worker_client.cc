@@ -276,8 +276,8 @@ bool MediaWorkerClient::PosterAt(const std::string& path,
            MediaWorker::DecodePosterReply(reply, &id, out);
 }
 
-bool MediaWorkerClient::AudioPeaks(const std::string& path,
-                                   AudioPeaks* out) {
+bool MediaWorkerClient::Peaks(const std::string& path,
+                              AudioPeaks* out) {
     if (!Available()) return false;
     MediaWorker::Request req;
     req.kind = MediaWorker::Kind::kPeaks;
@@ -306,7 +306,7 @@ bool MediaWorkerClient::PosterAt(const std::string&, double,
                                  video::Frame*) {
     return false;
 }
-bool MediaWorkerClient::AudioPeaks(const std::string&, AudioPeaks*) {
+bool MediaWorkerClient::Peaks(const std::string&, AudioPeaks*) {
     return false;
 }
 

@@ -207,6 +207,12 @@ bool KeyEaseFromString(const std::string& text, KeyEase* out) {
         {"ease_out", KeyEase::EaseOut},
         {"ease_in_out", KeyEase::EaseInOut},
         {"hold", KeyEase::Hold},
+        {"ease_in_cubic", KeyEase::EaseInCubic},
+        {"ease_out_cubic", KeyEase::EaseOutCubic},
+        {"expo_out", KeyEase::ExpoOut},
+        {"back", KeyEase::Back},
+        {"elastic", KeyEase::Elastic},
+        {"bounce", KeyEase::Bounce},
     };
     for (const auto& entry : kEases) {
         if (text == entry.name) {
@@ -253,6 +259,12 @@ const char* KeyEaseToString(KeyEase ease) {
         case KeyEase::EaseOut: return "ease_out";
         case KeyEase::EaseInOut: return "ease_in_out";
         case KeyEase::Hold: return "hold";
+        case KeyEase::EaseInCubic: return "ease_in_cubic";
+        case KeyEase::EaseOutCubic: return "ease_out_cubic";
+        case KeyEase::ExpoOut: return "expo_out";
+        case KeyEase::Back: return "back";
+        case KeyEase::Elastic: return "elastic";
+        case KeyEase::Bounce: return "bounce";
     }
     return "linear";  // unreachable
 }

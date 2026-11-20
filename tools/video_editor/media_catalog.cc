@@ -584,55 +584,6 @@ bool FinalizePeaks(const PeakBuilder& b, AudioPeaks* out) {
     return true;
 }
 
-// Full-stream decode -> AudioPeaks. Synchronous; the caller owns the
-// "10-minute cap" documentation.
-bool DecodeAudioPeaks(const std::string& canon_path, AudioPeaks* out,
-                      std::string* error_out) {
-    FFmpeg::VideoDecoder decoder;
-    decoder.EnableAudioTap(true);   // BEFORE Open — hard contract
-    if (!decoder.Open(canon_path, error_out)) {
-        return false;
-    }
-    if (!decoder.HasAudio()) {
-        return Fail(error_out, "no audio stream: " + canon_path);
-    }
-    PeakBuilder b;
-    b.audio_tb = decoder.GetAudioTimeBase();
-    b.audio_origin = decoder.GetAudioStartSeconds();
-
-    // Same pump pattern as the mixer's EnsureCoverage: NextFrame feeds
-    // the tap queue (audio-only files return false but MUST still be
-    // called), ReadAudioFrames drains decoded blocks. Completion is
-    // governed by AudioDrained() / the decode cap, not NextFrame.
-    std::vector<std::uint8_t> bgra;
-    int width = 0;
-    int height = 0;
-    std::vector<FFmpeg::AudioFrameInfo> frames;
-    int guard = 0;
-    while (!decoder.AudioDrained() && !b.capped) {
-        if (guard++ >= kMaxPumpIterations) {
-            return Fail(error_out,
-                        "audio decode starvation: " + canon_path);
-        }
-        decoder.NextFrame(bgra, width, height);
-        frames.clear();
-        decoder.ReadAudioFrames(&frames, kReadBatch);
-        for (const FFmpeg::AudioFrameInfo& frame : frames) {
-            if (!ConsumeAudioBlock(b, frame, error_out)) {
-                return false;
-            }
-            if (b.capped) {
-                break;
-            }
-        }
-    }
-    if (!FinalizePeaks(b, out)) {
-        return Fail(error_out,
-                    "audio stream yielded no samples: " + canon_path);
-    }
-    return true;
-}
-
 // AudioPeaks::data <-> raw little-endian float32 blob (explicit LE —
 // the cache must read back identically on any host).
 Blob SerializePeaks(const AudioPeaks& peaks) {
@@ -700,6 +651,56 @@ bool DeserializePeaks(std::int64_t channels, std::int64_t spp,
 }
 
 }  // namespace
+
+// Full-stream decode -> AudioPeaks. Synchronous; the caller owns the
+// "10-minute cap" documentation. Exported for the --media-worker
+// subprocess (media_worker_server.cc) — helpers above stay file-local.
+bool DecodeAudioPeaks(const std::string& canon_path, AudioPeaks* out,
+                      std::string* error_out) {
+    FFmpeg::VideoDecoder decoder;
+    decoder.EnableAudioTap(true);   // BEFORE Open — hard contract
+    if (!decoder.Open(canon_path, error_out)) {
+        return false;
+    }
+    if (!decoder.HasAudio()) {
+        return Fail(error_out, "no audio stream: " + canon_path);
+    }
+    PeakBuilder b;
+    b.audio_tb = decoder.GetAudioTimeBase();
+    b.audio_origin = decoder.GetAudioStartSeconds();
+
+    // Same pump pattern as the mixer's EnsureCoverage: NextFrame feeds
+    // the tap queue (audio-only files return false but MUST still be
+    // called), ReadAudioFrames drains decoded blocks. Completion is
+    // governed by AudioDrained() / the decode cap, not NextFrame.
+    std::vector<std::uint8_t> bgra;
+    int width = 0;
+    int height = 0;
+    std::vector<FFmpeg::AudioFrameInfo> frames;
+    int guard = 0;
+    while (!decoder.AudioDrained() && !b.capped) {
+        if (guard++ >= kMaxPumpIterations) {
+            return Fail(error_out,
+                        "audio decode starvation: " + canon_path);
+        }
+        decoder.NextFrame(bgra, width, height);
+        frames.clear();
+        decoder.ReadAudioFrames(&frames, kReadBatch);
+        for (const FFmpeg::AudioFrameInfo& frame : frames) {
+            if (!ConsumeAudioBlock(b, frame, error_out)) {
+                return false;
+            }
+            if (b.capped) {
+                break;
+            }
+        }
+    }
+    if (!FinalizePeaks(b, out)) {
+        return Fail(error_out,
+                    "audio stream yielded no samples: " + canon_path);
+    }
+    return true;
+}
 
 MediaCatalog::MediaCatalog(std::string utf8_db_path)
     : db_path_(utf8_db_path.empty() ? DefaultDbPath()

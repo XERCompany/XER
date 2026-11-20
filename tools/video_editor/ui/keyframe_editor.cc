@@ -64,9 +64,23 @@ KeyEase NextEase(KeyEase ease) {
         case KeyEase::EaseIn:    return KeyEase::EaseOut;
         case KeyEase::EaseOut:   return KeyEase::EaseInOut;
         case KeyEase::EaseInOut: return KeyEase::Hold;
-        case KeyEase::Hold:      return KeyEase::Linear;
+        case KeyEase::Hold:      return KeyEase::EaseInCubic;
+        case KeyEase::EaseInCubic:  return KeyEase::EaseOutCubic;
+        case KeyEase::EaseOutCubic: return KeyEase::ExpoOut;
+        case KeyEase::ExpoOut:      return KeyEase::Back;
+        case KeyEase::Back:         return KeyEase::Elastic;
+        case KeyEase::Elastic:      return KeyEase::Bounce;
+        case KeyEase::Bounce:       return KeyEase::Linear;
     }
     return KeyEase::Linear;
+}
+
+// Ctrl+C/Ctrl+V curve clipboard — shared across ALL widget instances so
+// a curve copied off Opacity can paste onto PosX/Scale/etc. Static and
+// process-local; the editor runs on a single UI thread.
+std::vector<Keyframe>& CurveClipboard() {
+    static std::vector<Keyframe> keys;
+    return keys;
 }
 
 }  // namespace
@@ -528,6 +542,27 @@ bool KeyframeEditorWidget::HandleEvent(
             return true;
         }
         case XER::UI::Widgets::Event::Type::KeyDown: {
+            // Letter codes arrive only with Ctrl held.
+            if (event.key == XER::UI::Widgets::KeyCode::C) {
+                CurveClipboard() = Keys();
+                SetStatus("curve copied");
+                return true;
+            }
+            if (event.key == XER::UI::Widgets::KeyCode::V &&
+                !CurveClipboard().empty()) {
+                const double dur = std::max(clip_.duration, 1e-6);
+                auto& keys = Keys();
+                keys = CurveClipboard();
+                for (auto& k : keys) k.time = std::clamp(k.time, 0.0, dur);
+                SortDedupeKeys();
+                CommitKeys("curve pasted");
+                Invalidate();
+                return true;
+            }
+            if (event.key == XER::UI::Widgets::KeyCode::S) {
+                StaggerProperties();
+                return true;
+            }
             if ((event.key == XER::UI::Widgets::KeyCode::Delete ||
                  event.key == XER::UI::Widgets::KeyCode::Backspace) &&
                 selected_key_ >= 0) {
@@ -546,6 +581,39 @@ bool KeyframeEditorWidget::HandleEvent(
         default:
             return false;
     }
+}
+
+// Shift every OTHER animatable property's keys by a per-property step so
+// curves land on different frames ("checkerboard" stagger). The current
+// property stays as the reference grid; each subsequent property moves
+// one step later. Keys shifted past the clip tail are merged away by
+// SortDedupe, so only an in-range tail survives the move.
+void KeyframeEditorWidget::StaggerProperties() {
+    if (!has_clip_ || !hooks_.on_set_keyframes) return;
+    const double step = std::clamp(clip_.duration / 20.0, 0.05, 0.5);
+    int index = 0;
+    int touched = 0;
+    for (const KeyProp prop : AllKeyProps()) {
+        if (prop == prop_) {
+            ++index;
+            continue;
+        }
+        auto keys = clip_.keyframes[prop];
+        if (keys.empty()) {
+            ++index;
+            continue;
+        }
+        const double shift = step * index;
+        for (auto& k : keys) {
+            k.time = std::clamp(k.time + shift, 0.0, clip_.duration);
+        }
+        clip_.keyframes[prop] = keys;
+        hooks_.on_set_keyframes(clip_.id, prop, keys);
+        ++index;
+        ++touched;
+    }
+    SetStatus(touched ? "keys staggered by " + std::to_string(step).substr(0, 4) + "s"
+                      : "no other keyframed properties");
 }
 
 void KeyframeEditorWidget::Tick(double dt_seconds) { (void)dt_seconds; }

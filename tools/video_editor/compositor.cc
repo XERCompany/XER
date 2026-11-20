@@ -402,6 +402,191 @@ void ApplyPosterizePixels(video::Frame* frame, int levels) {
 }
 
 // ------------------------------------------------------------------
+// Glass / lens kernels. Spatial remaps need a pristine SOURCE copy —
+// sampling the frame being written would smear — so every kernel
+// snapshots `frame->Data()` first (one memcpy) and writes back.
+// `scratch` is a reusable worker buffer owned by the caller.
+//
+// CPU path is bilinear-sampled and branch-light; a GPU backend can
+// swap the inner loops 1:1 (each is a pure gather) — tracked as a
+// follow-up against src/video/clip_gpu_accel.
+// ------------------------------------------------------------------
+
+// Thin-lens sphere map shared by crystal-ball and magnifier.
+// For normalized radius r in [0,1], nz = sqrt(1-r^2) is the sphere
+// height; refracting through it pulls the sample inward by
+// (1-nz). bend>1 overshoots past the center and the image INVERTS —
+// which is what a real ball lens does (scene appears flipped).
+void ApplySphereRefraction(video::Frame* frame, double cx, double cy,
+                           double radius, double bend, double chroma_px,
+                           double edge_darken, double specular,
+                           std::vector<std::uint8_t>* scratch) {
+    const int w = frame->Width();
+    const int h = frame->Height();
+    scratch->assign(frame->Data(), frame->Data() +
+                                  static_cast<std::size_t>(w) * h * 4);
+    const std::uint8_t* src = scratch->data();
+    std::uint8_t* dst = frame->Data();
+    const double inv_r = radius > 0.0 ? 1.0 / radius : 0.0;
+    // Fixed top-left key light for the specular dot.
+    const double lx = cx - radius * 0.38;
+    const double ly = cy - radius * 0.38;
+    const double spec_r = radius * 0.16;
+    for (int y = 0; y < h; ++y) {
+        std::uint8_t* row = dst + static_cast<std::size_t>(y) * w * 4;
+        for (int x = 0; x < w; ++x) {
+            std::uint8_t* p = row + x * 4;
+            const double dx = (x + 0.5) - cx;
+            const double dy = (y + 0.5) - cy;
+            const double r = std::sqrt(dx * dx + dy * dy) * inv_r;
+            if (r >= 1.0) {
+                continue;   // outside the glass — untouched
+            }
+            const double nz = std::sqrt(std::max(0.0, 1.0 - r * r));
+            // Per-channel bend gives the chromatic split; order R>B
+            // matches a positive (convex) element.
+            std::uint8_t out[4];
+            for (int c = 0; c < 4; ++c) {
+                const double cb =
+                    c == 3 ? 0.0 : chroma_px * (c == 2 ? -0.5 : 0.5);
+                const double src_r =
+                    r * (1.0 - (bend + cb * inv_r) * (1.0 - nz));
+                double sx = cx + dx / r * src_r;   // r>0 here (r>=1
+                double sy = cy + dy / r * src_r;   //  caught above)
+                if (r < 1e-6) { sx = cx; sy = cy; }
+                std::uint8_t t[4];
+                SampleBilinearBGRA(src, w, h, sx, sy, true, t);
+                out[c] = t[c];
+            }
+            // Fresnel-ish rim darkening + top-left specular spot sell
+            // the glass surface.
+            const double rim = std::clamp((r - 0.82) / 0.18, 0.0, 1.0);
+            const double shade =
+                1.0 - edge_darken * rim * rim * (3.0 - 2.0 * rim);
+            double glint = 0.0;
+            const double gx = (x + 0.5) - lx;
+            const double gy = (y + 0.5) - ly;
+            const double gd = std::sqrt(gx * gx + gy * gy) / spec_r;
+            if (gd < 1.0) {
+                glint = specular * 220.0 * (1.0 - gd) * (1.0 - gd);
+            }
+            for (int c = 0; c < 3; ++c) {
+                p[c] = Clamp8(out[c] * shade + glint);
+            }
+            p[3] = out[3];
+        }
+    }
+}
+
+// Fluted / reeded glass — a row of cylindrical ribs. Each rib's local
+// phase gives a surface normal that displaces the sample sideways;
+// `softness` extra taps cheaply defocus it (real fluted glass is
+// always a little hazy).
+void ApplyRibbedGlassPixels(video::Frame* frame, double period_px,
+                            double amplitude_px, bool horizontal,
+                            double softness,
+                            std::vector<std::uint8_t>* scratch) {
+    const int w = frame->Width();
+    const int h = frame->Height();
+    scratch->assign(frame->Data(), frame->Data() +
+                                  static_cast<std::size_t>(w) * h * 4);
+    const std::uint8_t* src = scratch->data();
+    std::uint8_t* dst = frame->Data();
+    const double two_pi = 6.283185307179586;
+    const int extra = static_cast<int>(std::round(softness * 4.0));
+    const double spread = period_px * 0.12;
+    for (int y = 0; y < h; ++y) {
+        std::uint8_t* row = dst + static_cast<std::size_t>(y) * w * 4;
+        for (int x = 0; x < w; ++x) {
+            const double axis_pos = horizontal ? y + 0.5 : x + 0.5;
+            const double phase = axis_pos / period_px;
+            const double nx = -std::sin(phase * two_pi);  // rib normal
+            const double off = nx * amplitude_px;
+            double acc[4] = {};
+            const int taps = 1 + extra * 2;
+            for (int k = -extra; k <= extra; ++k) {
+                const double jx = k * spread / std::max(1, extra);
+                std::uint8_t t[4];
+                if (horizontal) {
+                    SampleBilinearBGRA(src, w, h, x + 0.5,
+                                       y + 0.5 + off + jx, true, t);
+                } else {
+                    SampleBilinearBGRA(src, w, h, x + 0.5 + off + jx,
+                                       y + 0.5, true, t);
+                }
+                for (int c = 0; c < 4; ++c) acc[c] += t[c];
+            }
+            std::uint8_t* p = row + x * 4;
+            for (int c = 0; c < 4; ++c) {
+                p[c] = Clamp8(acc[c] / taps);
+            }
+        }
+    }
+}
+
+// Bokeh DOF — circle-of-confusion grows away from a focus region and
+// each pixel resolves through a disk of K taps on a Vogel (golden
+// angle) spiral, which reads as round/hex-ish aperture balls instead
+// of a gaussian haze. Luma-weighted accumulation keeps speculars as
+// distinct discs — the signature "real lens" look.
+//
+// `radial` chooses the focus geometry: linear band (tilt-shift style,
+// band edges parallel to X) vs point + radius (vignette-style DOF).
+void ApplyBokehDOFPixels(video::Frame* frame, bool radial, double cx,
+                         double cy, double band, double falloff,
+                         double max_radius, double highlight_boost,
+                         std::vector<std::uint8_t>* scratch) {
+    const int w = frame->Width();
+    const int h = frame->Height();
+    scratch->assign(frame->Data(), frame->Data() +
+                                  static_cast<std::size_t>(w) * h * 4);
+    const std::uint8_t* src = scratch->data();
+    std::uint8_t* dst = frame->Data();
+    constexpr int kTaps = 24;
+    constexpr double kGolden = 2.399963229728653;
+    const double diag = std::sqrt(static_cast<double>(w) * w +
+                                  static_cast<double>(h) * h);
+    const double band_px = band * diag;
+    const double fall_px = std::max(falloff * diag, 1.0);
+    for (int y = 0; y < h; ++y) {
+        std::uint8_t* row = dst + static_cast<std::size_t>(y) * w * 4;
+        for (int x = 0; x < w; ++x) {
+            const double dist =
+                radial
+                    ? std::sqrt((x + 0.5 - cx) * (x + 0.5 - cx) +
+                                (y + 0.5 - cy) * (y + 0.5 - cy))
+                    : std::abs(y + 0.5 - cy);
+            const double coc =
+                std::clamp((dist - band_px) / fall_px, 0.0, 1.0) *
+                max_radius;
+            if (coc < 0.75) {
+                continue;   // in focus — untouched
+            }
+            double acc[4] = {};
+            double wsum = 0.0;
+            for (int k = 0; k < kTaps; ++k) {
+                const double rr = coc * std::sqrt((k + 0.5) / kTaps);
+                const double a = k * kGolden;
+                std::uint8_t t[4];
+                SampleBilinearBGRA(src, w, h, x + 0.5 + rr * std::cos(a),
+                                   y + 0.5 + rr * std::sin(a), true, t);
+                const double luma =
+                    (0.2126 * t[2] + 0.7152 * t[1] + 0.0722 * t[0]) /
+                    255.0;
+                const double wt =
+                    1.0 + highlight_boost * luma * luma;
+                for (int c = 0; c < 4; ++c) acc[c] += t[c] * wt;
+                wsum += wt;
+            }
+            std::uint8_t* p = row + x * 4;
+            for (int c = 0; c < 4; ++c) {
+                p[c] = Clamp8(acc[c] / wsum);
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------
 // Decode session state
 // ------------------------------------------------------------------
 
@@ -456,6 +641,8 @@ const std::set<std::string>& KnownEffectTypes() {
         "vignette",           "chromatic_aberration",
         "pixelate",           "oil_paint",   "motion_blur",
         "chroma_key",         "color_balance", "posterize",
+        "lens_sphere",        "magnifier",     "ribbed_glass",
+        "bokeh_dof",          "bokeh_blur",
     };
     return types;
 }
@@ -960,6 +1147,9 @@ struct Compositor::Impl {
                 Warn("effect '" + type + "' requires Skia; skipped");
                 continue;
             }
+            // Shared snapshot buffer for the spatial-remap kernels
+            // (glass/lens) — one per render thread, grows once.
+            static thread_local std::vector<std::uint8_t> fx_scratch;
             if (type == "brightness_contrast") {
                 const int brightness = std::clamp(
                     EffectParamInt(effect, 0, 0), -255, 255);
@@ -1040,6 +1230,67 @@ struct Compositor::Impl {
                 ApplyPosterizePixels(
                     &frame,
                     std::clamp(EffectParamInt(effect, 0, 4), 2, 256));
+            } else if (type == "lens_sphere") {
+                // {radius frac of min dim, bend 0..2, chroma px,
+                //  edge darken 0..1, specular 0..1} — crystal ball:
+                // bend past ~1.2 flips the scene like a real ball.
+                const double radius = std::clamp(
+                    EffectParamDouble(effect, 0, 0.45), 0.05, 1.0) *
+                    std::min(frame.Width(), frame.Height()) * 0.5;
+                ApplySphereRefraction(
+                    &frame, frame.Width() * 0.5, frame.Height() * 0.5,
+                    radius,
+                    std::clamp(EffectParamDouble(effect, 1, 1.4), 0.0, 2.5),
+                    std::clamp(EffectParamDouble(effect, 2, 3.0), 0.0, 24.0),
+                    std::clamp(EffectParamDouble(effect, 3, 0.35), 0.0, 1.0),
+                    std::clamp(EffectParamDouble(effect, 4, 0.6), 0.0, 1.0),
+                    &fx_scratch);
+            } else if (type == "magnifier") {
+                // {radius frac, zoom 1..4, chroma px} — thin-lens
+                // bulge: bend = 1 - 1/zoom keeps center undistorted.
+                const double zoom = std::clamp(
+                    EffectParamDouble(effect, 1, 1.8), 1.0, 4.0);
+                const double radius = std::clamp(
+                    EffectParamDouble(effect, 0, 0.3), 0.05, 1.0) *
+                    std::min(frame.Width(), frame.Height()) * 0.5;
+                ApplySphereRefraction(
+                    &frame, frame.Width() * 0.5, frame.Height() * 0.5,
+                    radius, 1.0 - 1.0 / zoom,
+                    std::clamp(EffectParamDouble(effect, 2, 2.0), 0.0, 24.0),
+                    0.15, 0.4, &fx_scratch);
+            } else if (type == "ribbed_glass") {
+                // {period px, amplitude px, axis 0=vert|1=horiz,
+                //  softness 0..1} — fluted/reeded pane.
+                ApplyRibbedGlassPixels(
+                    &frame,
+                    std::clamp(EffectParamDouble(effect, 0, 24.0), 2.0, 400.0),
+                    std::clamp(EffectParamDouble(effect, 1, 6.0), 0.0, 80.0),
+                    EffectParamInt(effect, 2, 0) != 0,
+                    std::clamp(EffectParamDouble(effect, 3, 0.5), 0.0, 1.0),
+                    &fx_scratch);
+            } else if (type == "bokeh_dof") {
+                // {mode 0=band|1=radial, cx, cy, band, falloff,
+                //  max radius px, highlight boost} — depth-of-field:
+                // CoC grows with distance from the focus zone.
+                ApplyBokehDOFPixels(
+                    &frame, EffectParamInt(effect, 0, 1) != 0,
+                    EffectParamDouble(effect, 1, 0.5) * frame.Width(),
+                    EffectParamDouble(effect, 2, 0.5) * frame.Height(),
+                    std::clamp(EffectParamDouble(effect, 3, 0.12), 0.0, 1.0),
+                    std::clamp(EffectParamDouble(effect, 4, 0.3), 0.01, 1.0),
+                    std::clamp(EffectParamDouble(effect, 5, 18.0), 1.0, 64.0),
+                    std::clamp(EffectParamDouble(effect, 6, 3.0), 0.0, 16.0),
+                    &fx_scratch);
+            } else if (type == "bokeh_blur") {
+                // {radius px, highlight boost} — uniform aperture
+                // discs everywhere (dreamy defocus).
+                // band=-1 forces (dist-band)/falloff >= 1 everywhere
+                // → constant CoC = radius, i.e. uniform aperture blur.
+                ApplyBokehDOFPixels(
+                    &frame, true, 0.0, 0.0, -1.0, 1.0,
+                    std::clamp(EffectParamDouble(effect, 0, 10.0), 1.0, 64.0),
+                    std::clamp(EffectParamDouble(effect, 1, 2.5), 0.0, 16.0),
+                    &fx_scratch);
             }
         }
     }

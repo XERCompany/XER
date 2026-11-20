@@ -153,6 +153,10 @@ private:
     void BounceAudioFx(const std::string& path,
                        const std::string& plugin_id);
     void MoveClip(const std::string& clip_id, double start);
+    // One-click waveform sync (audio_sync.h): correlate every
+    // audio-bearing clip's envelope against the selected/first clip
+    // and apply matches as history-wrapped moves.
+    void SyncAudioClips();
     void TrimClip(const std::string& clip_id, TrimEdge edge,
                   double point);
     void SplitClip(const std::string& clip_id, double at_seconds);

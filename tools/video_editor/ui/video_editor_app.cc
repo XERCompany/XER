@@ -29,6 +29,7 @@
 
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/ui_manifest.h"
+#include "audio_sync.h"
 #include "content/video/video_info.h"
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
@@ -1262,6 +1263,8 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
         item("Split at Playhead", "C",
              [this] { SplitClip(selected_clip_id_, playhead_); }, true,
              false, false, true),
+        item("Sync Audio by Waveform", "",
+             [this] { SyncAudioClips(); }),
         item("Toggle Snapping", "S", [this] {
             snap_enabled_ = !snap_enabled_;
             timeline_->SetSnapEnabled(snap_enabled_);
@@ -1881,6 +1884,33 @@ void VideoEditorAppWidget::MoveClip(const std::string& clip_id,
         SetStatus("Moved clip");
     }
     NotifyProjectChanged();
+}
+
+void VideoEditorAppWidget::SyncAudioClips() {
+    AudioSyncReport report;
+    std::string error;
+    // Selected clip is the reference when one is picked; otherwise the
+    // earliest clip on the lowest track anchors the sync.
+    if (!ComputeAudioSyncPlan(project_, selected_clip_id_, &report,
+                              &error)) {
+        SetStatus("Audio sync: " + error, true);
+        return;
+    }
+    int applied = 0;
+    for (const auto& e : report.entries) {
+        if (!e.matched) continue;
+        const Clip* clip = FindClip(project_, e.clip_id);
+        if (clip == nullptr) continue;
+        std::string move_err;
+        if (history_.MoveClip(e.clip_id, e.new_timeline_start,
+                              BoundsForPath(clip->source_path),
+                              &move_err)) {
+            ++applied;
+        }
+    }
+    SetStatus(report.status + " · " + std::to_string(applied) +
+              " moved");
+    if (applied > 0) NotifyProjectChanged();
 }
 
 void VideoEditorAppWidget::TrimClip(const std::string& clip_id,

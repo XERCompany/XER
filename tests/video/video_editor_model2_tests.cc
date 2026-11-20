@@ -419,7 +419,7 @@ int XER_VideoEditor_RunModel2Tests() {
         }
         {
             Json::Value v = base;
-            v["clips"][0]["keyframes"]["pos_x"][0]["ease"] = "bounce";
+            v["clips"][0]["keyframes"]["pos_x"][0]["ease"] = "wobble";
             expect_fail(v, "err_key_ease.xerproj");
         }
         {

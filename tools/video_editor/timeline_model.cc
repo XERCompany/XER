@@ -1211,8 +1211,53 @@ float EvaluateClipProperty(const Clip& clip, KeyProp prop, double u,
         case KeyEase::EaseInOut:
             w = w * w * (3.0 - 2.0 * w);
             break;
+        case KeyEase::EaseInCubic:
+            w = w * w * w;
+            break;
+        case KeyEase::EaseOutCubic:
+            w = 1.0 - (1.0 - w) * (1.0 - w) * (1.0 - w);
+            break;
+        case KeyEase::ExpoOut:
+            w = w >= 1.0 ? 1.0 : 1.0 - std::pow(2.0, -10.0 * w);
+            break;
+        case KeyEase::Back: {
+            // easeOutBack c1=1.70158 — passes through the target and
+            // settles back (the overshoot look for motion/scale keys).
+            constexpr double c = 1.70158;
+            const double t = w - 1.0;
+            w = 1.0 + (c + 1.0) * t * t * t + c * t * t;
+            break;
+        }
+        case KeyEase::Elastic: {
+            // easeOutElastic — rings around the target with decaying
+            // amplitude; endpoints stay exact.
+            if (w <= 0.0 || w >= 1.0) break;
+            w = std::pow(2.0, -10.0 * w) *
+                    std::sin((w * 10.0 - 0.75) *
+                             (2.0 * 3.14159265358979323846) / 3.0) +
+                1.0;
+            break;
+        }
+        case KeyEase::Bounce: {
+            // easeOutBounce — the standard four-hop landing curve.
+            constexpr double n1 = 7.5625, d1 = 2.75;
+            double p = w;
+            if (p < 1.0 / d1) {
+                w = n1 * p * p;
+            } else if (p < 2.0 / d1) {
+                p -= 1.5 / d1;
+                w = n1 * p * p + 0.75;
+            } else if (p < 2.5 / d1) {
+                p -= 2.25 / d1;
+                w = n1 * p * p + 0.9375;
+            } else {
+                p -= 2.625 / d1;
+                w = n1 * p * p + 0.984375;
+            }
+            break;
+        }
         default:
-            break;  // Linear
+            break;  // Linear / Hold handled above
     }
     return a.value + static_cast<float>(w) * (b.value - a.value);
 }

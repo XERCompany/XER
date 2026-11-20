@@ -52,7 +52,16 @@ struct ClipMask {
 // Animated clip property (After-Effects-style keyframes). Time is
 // clip-local seconds [0, duration] — playback_rate does not stretch it.
 enum class KeyProp { PosX, PosY, Scale, Rotation, Opacity, GainDb };
-enum class KeyEase { Linear, EaseIn, EaseOut, EaseInOut, Hold };
+// Easing of the segment STARTING at a keyframe. Linear..Hold mirror
+// classic bezier-style curves; Bounce/Elastic/Back are the curve
+// editor's overshoot family (see tools/video_editor/ui/curve_presets).
+enum class KeyEase {
+    Linear, EaseIn, EaseOut, EaseInOut, Hold,
+    EaseInCubic, EaseOutCubic, ExpoOut,
+    Back,      // overshoot: dips below 0 then settles at 1
+    Elastic,   // damped oscillation settling at 1
+    Bounce,    // gravity bounce landing on 1
+};
 struct Keyframe {
     double time = 0.0;
     float value = 0.0f;

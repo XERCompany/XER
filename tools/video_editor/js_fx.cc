@@ -235,21 +235,32 @@ v8::Local<v8::Object> ParamsObject(
     return ParamsObject(iso, ctx, desc, positional);
 }
 
-// Zero-copy typed array over native memory (script mutates in place).
-v8::Local<v8::Value> BufferView(v8::Isolate* iso, void* data,
-                                std::size_t bytes, bool is_float) {
-    auto store = v8::ArrayBuffer::NewBackingStore(
-        data, bytes,
-        [](void*, std::size_t, void*) {},   // non-owning
-        nullptr);
-    const auto buffer =
-        v8::ArrayBuffer::New(iso, std::move(store));
+// Typed array the script mutates. V8_ENABLE_SANDBOX forbids
+// non-owning backing stores, so the buffer is V8-allocated and the
+// native data round-trips: memcpy in before the call, memcpy out
+// after (one copy per invocation — bounded by the frame size).
+struct SandboxView {
+    v8::Local<v8::Value> view;
+    void* store = nullptr;   // backing bytes — stable until view dies
+    std::size_t bytes = 0;
+};
+
+SandboxView BufferView(v8::Isolate* iso, const void* data,
+                       std::size_t bytes, bool is_float) {
+    SandboxView out;
+    const auto buffer = v8::ArrayBuffer::New(iso, bytes);
+    out.store = buffer->GetBackingStore()->Data();
+    out.bytes = bytes;
+    std::memcpy(out.store, data, bytes);
     if (is_float) {
-        return v8::Float32Array::New(buffer, 0, bytes / sizeof(float))
-            .As<v8::Value>();
+        out.view = v8::Float32Array::New(buffer, 0,
+                                         bytes / sizeof(float))
+                       .As<v8::Value>();
+    } else {
+        out.view = v8::Uint8ClampedArray::New(buffer, 0, bytes)
+                       .As<v8::Value>();
     }
-    return v8::Uint8ClampedArray::New(buffer, 0, bytes)
-        .As<v8::Value>();
+    return out;
 }
 
 }  // namespace
@@ -373,10 +384,12 @@ bool JsFxRuntime::ApplyVideo(const std::string& id, video::Frame* frame,
             v8::TryCatch try_catch(iso);
             const v8::Local<v8::Object> frame_obj =
                 v8::Object::New(iso);
+            SandboxView frame_view =
+                BufferView(iso, frame->Data(), frame->DataSize(),
+                           false);
             frame_obj
                 ->Set(ctx, v8::String::NewFromUtf8Literal(iso, "data"),
-                      BufferView(iso, frame->Data(), frame->DataSize(),
-                                 false))
+                      frame_view.view)
                 .Check();
             frame_obj
                 ->Set(ctx, v8::String::NewFromUtf8Literal(iso, "width"),
@@ -408,6 +421,9 @@ bool JsFxRuntime::ApplyVideo(const std::string& id, video::Frame* frame,
                 }
                 return false;
             }
+            // Write the script-mutated pixels back into the frame.
+            std::memcpy(frame->Data(), frame_view.store,
+                        frame_view.bytes);
             ok = true;
             return true;
         });
@@ -440,11 +456,13 @@ bool JsFxRuntime::ProcessAudio(const std::string& id, float* interleaved,
                 .Check();
             const auto fn_local =
                 v8::Local<v8::Function>::New(iso, *fn);
-            v8::Local<v8::Value> argv[] = {
+            SandboxView pcm_view =
                 BufferView(iso, interleaved,
                            static_cast<std::size_t>(frames) * 2u *
                                sizeof(float),
-                           true),
+                           true);
+            v8::Local<v8::Value> argv[] = {
+                pcm_view.view,
                 ParamsObject(iso, ctx, desc, params), ctx_obj};
             v8::MaybeLocal<v8::Value> result =
                 fn_local->Call(ctx, ctx->Global(), 3, argv);
@@ -454,6 +472,7 @@ bool JsFxRuntime::ProcessAudio(const std::string& id, float* interleaved,
                 }
                 return false;
             }
+            std::memcpy(interleaved, pcm_view.store, pcm_view.bytes);
             ok = true;
             return true;
         });

@@ -190,3 +190,34 @@ commit boundary per task.
   (mp3 misclassified before the cover fix → re-import → audio-only).
 - Final: `check_all` 6/6 PASS; probe cover mp3 = 141 writes,
   0 fails, all non-silent.
+
+## JS effects & transitions + media-worker + infinite audio probe (this block)
+
+- **`assets/scripts/fx/`**: `fx.json` catalog + 14 stock scripts —
+  5 video (sepia, invert, rgb_shift, film_grain, scanlines),
+  4 audio (tremolo, bitcrush, delay, lowpass — stateful via closures),
+  5 transition easings (ease_in_out, ease_out, smoothstep, expo_out,
+  bounce_out). Registration API: `xerFxVideo/xerFxAudio/xerFxTransition`.
+- **`js_fx.{h,cc}`**: per-thread `JsFxRuntime` (V8 isolates are
+  thread-confined — compositor/each mixer owns its own); process-global
+  JSON catalog loads once. `JsEngine::WithContext` added for typed
+  V8 access. Sandbox-safe: V8-allocated buffers + copy-in/copy-out
+  (non-owning backing stores are forbidden under V8_ENABLE_SANDBOX).
+- **Wiring**: `ClipEffect.type="script:<id>"` in the compositor chain;
+  `ClipAudioFx.plugin_path="script:<id>"` splits out of the VST3 chain
+  and runs after it; `Transition::Type::Script + .script` supplies the
+  easing curve (renders through crossfade). Serialize/history covered.
+- **UI**: effects panel merges JS video fx; inspector combo + timeline
+  junction menu list `JS:` transitions; Edit menu gains `Add JS FX:*`
+  for clip audio_fx.
+- **`--media-worker`**: same exe re-spawned headless; JSON-lines
+  stdin/stdout (base64 payloads). MediaPrep routes kPosterAt/kPeaks
+  through it first — decoder crashes kill the worker; suspect paths
+  fall back in-process; `XER_VE_MEDIA_WORKER=0` disables.
+  kImportPoster stays in-process (parent owns the catalog DB row).
+- **`--audio-probe [file] [--seconds N]`**: N<=0 (default) loops the
+  clip forever — Ctrl+C stops + prints stats; N>0 keeps the bounded
+  run. Verified: 3 s clip played 8 s+ before manual kill.
+- **Smoke**: new `js_fx` check (catalog load, runtime register,
+  invert pixels, bitcrush quantization, smoothstep weight) — 16/16 OK;
+  `XER_VideoEditor_Tests` all pass.

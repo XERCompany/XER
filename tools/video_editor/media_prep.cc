@@ -276,8 +276,8 @@ bool MediaPrep::RunJob(const Key& key, JobOut* out) {
                 out->frame, nullptr);
         case Kind::kPeaks:
 #if defined(_WIN32)
-            if (MediaWorkerClient::Shared().AudioPeaks(key.path,
-                                                     out->peaks)) {
+            if (MediaWorkerClient::Shared().Peaks(key.path,
+                                                out->peaks)) {
                 return true;
             }
 #endif

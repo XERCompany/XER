@@ -32,7 +32,7 @@ public:
     // fallback (timeout, worker death, malformed reply).
     bool PosterAt(const std::string& path, double seconds,
                   video::Frame* out);
-    bool AudioPeaks(const std::string& path, AudioPeaks* out);
+    bool Peaks(const std::string& path, AudioPeaks* out);
 
 private:
     MediaWorkerClient() = default;
