@@ -79,8 +79,13 @@ option(XER_YA_DLLS "Pack static .a deps into shared YA.*.dll" ${MINGW})
 
 # Vendored static assimp (built from source into third_party/assimp —
 # MSYS2 ships only libassimp.dll.a). Prepend so CONFIG-mode
-# find_package(assimp) picks it over the MSYS2 shared build.
-if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/assimp/lib/cmake")
+# find_package(assimp) picks it over the MSYS2 shared build — but only
+# when the vendored archive is actually present: lib/cmake can be
+# committed without lib/libassimp.a, and prepending then makes
+# assimpTargets.cmake fail on the missing file instead of falling
+# through to the system package.
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/assimp/lib/cmake"
+        AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/third_party/assimp/lib/libassimp.a")
     list(PREPEND CMAKE_PREFIX_PATH
          "${CMAKE_CURRENT_SOURCE_DIR}/third_party/assimp")
 endif()
