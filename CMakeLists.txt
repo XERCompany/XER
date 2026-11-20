@@ -5,15 +5,26 @@ project(Editor LANGUAGES C CXX RC)
 # App icon shared by every shipped exe — generated from icon.jpg at
 # repo root (ffmpeg -i icon.jpg icon.ico). app.rc is compiled by
 # windres/llvm-windres into a version+icon resource.
-set(XER_APP_RC "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
+set(XER_APP_RC_IN "${CMAKE_CURRENT_SOURCE_DIR}/app.rc.in")
 
-# xer_app_win32(target): icon resource + GUI subsystem on non-Debug
-# builds ("убрать Terminal — только при Debug"). GUI-subsystem exes
-# keep stdout working through inherited pipes/handles; interactive
-# consoles are re-attached in code (see video_editor main.cc).
+# xer_app_win32(target): icon+version resource (Author: Matvey
+# Vladimirovich (Yoshi Arasaka & LXXV), Company: XERLab — app.rc.in,
+# configured per target so InternalName/OriginalFilename match the
+# exe) + GUI subsystem on non-Debug builds ("Terminal только при
+# Debug"). GUI-subsystem exes keep stdout working through inherited
+# pipes/handles; interactive consoles are re-attached in code.
 function(xer_app_win32 target)
     if(WIN32)
-        target_sources(${target} PRIVATE ${XER_APP_RC})
+        set(TARGET_NAME "$<TARGET_PROPERTY:${target},OUTPUT_NAME>")
+        get_target_property(_out ${target} OUTPUT_NAME)
+        if(NOT _out)
+            set(_out ${target})
+        endif()
+        set(TARGET_NAME ${_out})
+        set(XER_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
+        set(_rc "${CMAKE_CURRENT_BINARY_DIR}/app_${_out}.rc")
+        configure_file(${XER_APP_RC_IN} ${_rc} @ONLY)
+        target_sources(${target} PRIVATE ${_rc})
         if(MSVC)
             target_link_options(${target} PRIVATE
                 "$<$<NOT:$<CONFIG:Debug>>:/SUBSYSTEM:WINDOWS>"
