@@ -53,6 +53,11 @@ public:
     // rects are client-area pixels of that window.
     bool HasEditorView() const;
     bool CreateEditorView(std::string* error_out = nullptr);
+    // Preferred size reported by the view (IPlugView::getSize), in
+    // pixels. Valid only between CreateEditorView and RemoveEditorView;
+    // returns false when no view exists or the plugin reports nothing
+    // usable.
+    bool GetEditorViewSize(int* width, int* height) const;
     bool AttachEditorView(void* parent_hwnd, int left, int top, int right, int bottom,
                           std::string* error_out = nullptr);
     void SetEditorFrame(int left, int top, int right, int bottom);

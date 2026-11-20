@@ -35,7 +35,11 @@
 
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
+#include "cef/cef_host.h"           // --cef-check browser bring-up
 #include "cef/cef_runtime.h"        // CEF subprocess early-out
+
+#include <atomic>
+#include <thread>
 #endif
 
 namespace {
@@ -93,6 +97,8 @@ void PrintUsage() {
                  "Print project/media summary\n"
               << "  video_editor --smoke                          "
                  "Run headless self-checks (SMOKE <name> OK/FAIL)\n"
+              << "  video_editor --cef-check                      "
+                 "Headless CEF bring-up (runtime init + browser)\n"
               << "  video_editor --smoke-list                     "
                  "List the smoke check names\n"
               << "  video_editor --help                           "
@@ -177,6 +183,70 @@ int RunGui(const std::string& project_path) {
     // after the message loop lets it tear subprocesses down cleanly.
     XER::Cef::Shutdown();
     return result;
+}
+
+// `video_editor --cef-check` — headless verification of the whole CEF
+// path the Browser tab uses: runtime init (libcef.dll + subprocess
+// resolution) plus a real browser created on an invisible parent HWND.
+// CefHost::Create blocks until Chromium has materialized the browser,
+// so a true return already proves end-to-end creation; the short wait
+// afterwards lets any crash in the fresh renderer/GPU subprocesses
+// surface instead of exiting instantly. Exit 0 on success.
+int RunCefCheck() {
+    if (!XER::Cef::Available()) {
+        std::cerr << "cef-check: CEF support not compiled in\n";
+        return 1;
+    }
+    std::string error;
+    if (!XER::Cef::Initialize({}, &error)) {
+        std::cerr << "cef-check: init failed: " << error << "\n";
+        return 1;
+    }
+    WNDCLASSW wc {};
+    wc.lpfnWndProc = DefWindowProcW;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = L"XerCefCheckParent";
+    RegisterClassW(&wc);
+    // Real (non message-only) window — Chromium children cannot
+    // parent under HWND_MESSAGE windows.
+    HWND parent = CreateWindowExW(0, wc.lpszClassName, L"", WS_POPUP,
+                                  0, 0, 8, 8, nullptr, nullptr,
+                                  wc.hInstance, nullptr);
+    if (parent == nullptr) {
+        std::cerr << "cef-check: parent window create failed\n";
+        XER::Cef::Shutdown();
+        return 1;
+    }
+    auto loaded = std::make_shared<std::atomic<bool>>(false);
+    const std::weak_ptr<std::atomic<bool>> weak = loaded;
+    XER::Cef::HostEvents events;
+    events.on_loading = [weak](bool is_loading) {
+        if (const auto s = weak.lock(); !is_loading) {
+            s->store(true);
+        }
+    };
+    XER::Cef::CefHost host;
+    const bool created = host.Create(
+        parent, 0, 0, 8, 8, "about:blank", std::move(events));
+    if (!created) {
+        std::cerr << "cef-check: browser create failed\n";
+        DestroyWindow(parent);
+        XER::Cef::Shutdown();
+        return 1;
+    }
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::seconds(3);
+    while (!loaded->load() &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    std::cout << "cef-check: browser created"
+              << (loaded->load() ? ", load event observed\n"
+                                 : " (no load event — still OK)\n");
+    host.Close();
+    DestroyWindow(parent);
+    XER::Cef::Shutdown();
+    return 0;
 }
 #endif
 
@@ -394,6 +464,14 @@ int main(int argc, char** argv) {
             return 1;
         }
         return RunExport(args[2], args[3]);
+    }
+    if (arg == "--cef-check") {
+#if defined(_WIN32)
+        return RunCefCheck();
+#else
+        std::cerr << "Error: --cef-check is Windows-only\n";
+        return 1;
+#endif
     }
     if (arg == "--smoke") {
         // Headless, bounded self-check — see smoke_checks.h.

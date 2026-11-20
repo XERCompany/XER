@@ -4,6 +4,7 @@
 #include "../widgets/widget_tree.h"
 #include "ui_events.h"
 #include "../rendering/windows/direct2d_renderer.h"
+#include "../rendering/renderer_provider.h"
 #include "../platform/windows/input_translator.h"
 #include "application.h"
 #include "helper/string_utils.h"
@@ -838,6 +839,12 @@ private:
                 // No widget tree: present a solid clear through the swapchain
                 // (GDI cannot draw on a flip-model swapchain surface).
                 if (renderer_ == nullptr) {
+                    // XER_UI_RENDERER picks the backend; the provider
+                    // chain always lands on a working renderer.
+                    renderer_ =
+                        Rendering::CreateRendererFromEnv(hwnd);
+                }
+                if (renderer_ == nullptr) {
                     renderer_ = std::make_unique<Rendering::Windows::Direct2DRenderer>(hwnd);
                 }
                 renderer_->SetDpi(dpi_);
@@ -852,6 +859,10 @@ private:
                     renderer_->EndFrame();
                 }
             } else {
+                if (renderer_ == nullptr) {
+                    renderer_ =
+                        Rendering::CreateRendererFromEnv(hwnd);
+                }
                 if (renderer_ == nullptr) {
                     renderer_ = std::make_unique<Rendering::Windows::Direct2DRenderer>(hwnd);
                 }

@@ -414,6 +414,7 @@ double InspectorWidget::ClipLocalU() const {
 void InspectorWidget::RebuildDynamicRows() {
     RebuildMaskRows();
     RebuildFxRows();
+    RebuildAudioFxRows();
 }
 
 void InspectorWidget::RebuildMaskRows() {
@@ -555,6 +556,39 @@ void InspectorWidget::RebuildFxRows() {
         }
     }
     RequestLayout();
+}
+
+void InspectorWidget::RebuildAudioFxRows() {
+    namespace Widgets = XER::UI::Widgets;
+    // Same deferred destruction as RebuildFxRows — the click handler
+    // can reenter a rebuild through SetClip mid-dispatch.
+    retired_afx_children_.clear();
+    for (const auto& btn : afx_edit_btns_) {
+        btn->SetEnabled(false);
+        RemoveChild(btn);
+        retired_afx_children_.push_back(btn);
+    }
+    afx_edit_btns_.clear();
+
+    if (has_clip_) {
+        afx_edit_btns_.reserve(clip_.audio_fx.size());
+        for (std::size_t i = 0; i < clip_.audio_fx.size(); ++i) {
+            const std::size_t index = i;
+            auto btn = std::make_shared<Widgets::Button>(
+                "Editor", Widgets::ButtonStyle::Ghost);
+            btn->SetTooltip(
+                "Open the plugin's native editor view");
+            btn->SetOnClick([this, index] {
+                if (!has_clip_ || index >= clip_.audio_fx.size() ||
+                    !hooks_.on_open_audio_fx_editor) {
+                    return;
+                }
+                hooks_.on_open_audio_fx_editor(clip_.id, index);
+            });
+            AddChild(btn);
+            afx_edit_btns_.push_back(std::move(btn));
+        }
+    }
 }
 
 void InspectorWidget::SyncMaskRows() {
@@ -1291,14 +1325,27 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     }
     gap(4.0f);
 
-    // ---- hosted audio fx (read-only — plugin editors live elsewhere)
+    // ---- hosted audio fx (name + per-row Editor button) ----
     if (!clip_.audio_fx.empty()) {
         label("AUDIO FX (VST3)", 18.0f, 0.0f, true);
-        for (const ClipAudioFx& fx : clip_.audio_fx) {
+        constexpr float kEditorBtnW = 58.0f;
+        for (std::size_t i = 0; i < clip_.audio_fx.size(); ++i) {
+            const ClipAudioFx& fx = clip_.audio_fx[i];
             const std::string text =
                 (fx.name.empty() ? Basename(fx.plugin_path) : fx.name) +
                 (fx.enabled ? " — on" : " — bypassed");
-            label(text, 18.0f, 4.0f, false);
+            drawn_.push_back({{inner_x, y + 2.0f,
+                               inner_w - kEditorBtnW - 6.0f, 18.0f},
+                              text, false});
+            if (i < afx_edit_btns_.size()) {
+                const auto& btn = afx_edit_btns_[i];
+                btn->Layout({inner_x + inner_w - kEditorBtnW, y,
+                             kEditorBtnW, 22.0f},
+                            tokens);
+                btn->SetEnabled(hooks_.on_open_audio_fx_editor !=
+                                nullptr);
+            }
+            y += 24.0f;
         }
         gap(4.0f);
     }

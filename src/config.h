@@ -96,6 +96,12 @@
 #define XER_HAVE_COREVIDEO_COREVIDEO_H 0
 #define XER_HAVE_MACH_MACH_TIME_H 0
 
+// --- Optional SDKs --------------------------------------------------------
+// Vulkan SDK headers. XER_UI's Vulkan backend does NOT require this — it
+// falls back to vendored headers and loads vulkan-1.dll dynamically —
+// the probe only records SDK presence.
+#define XER_HAVE_VULKAN_VULKAN_H 0
+
 // --- C++ standard library -------------------------------------------------
 #define XER_HAVE_VERSION 1
 #define XER_HAVE_SOURCE_LOCATION 1

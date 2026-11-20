@@ -2,9 +2,11 @@
 //
 // A UI application renders through Rendering::StreamRenderer, which
 // serializes every draw call onto a Cache::SharedMemoryChannel. This
-// process replays the stream onto a real Direct2DRenderer backed by its
-// own render-surface window, so UI event handling / widget logic and GPU
-// presentation run in separate processes.
+// process replays the stream onto a real Renderer (selected through the
+// Rendering::CreateRenderer provider chain — XER_UI_RENDERER honored,
+// Direct2D by default) backed by its own render-surface window, so UI
+// event handling / widget logic and GPU presentation run in separate
+// processes.
 //
 //   xer_engine_ui_render.exe --channel <name> [--create]
 //                            [--hwnd <hex>] [--width N] [--height N]
@@ -35,7 +37,7 @@
 #include "cache/shared_memory_channel.h"
 #include "rendering/render_store.h"
 #include "rendering/render_stream.h"
-#include "rendering/windows/direct2d_renderer.h"
+#include "rendering/renderer_provider.h"
 
 namespace {
 
@@ -43,7 +45,6 @@ using XER::Cache::SharedMemoryChannel;
 using XER::UI::Rendering::Renderer;
 using XER::UI::Rendering::RenderStore;
 using XER::UI::Rendering::TextStyle;
-using XER::UI::Rendering::Windows::Direct2DRenderer;
 namespace Stream = XER::UI::Rendering::Stream;
 
 constexpr wchar_t kClassName[] = L"XER_UI_RENDER_SURFACE";
@@ -127,7 +128,10 @@ int main(int argc, char** argv) {
     // an own hidden surface when the foreign handle is rejected. The
     // same path runs on kSetTargetHwnd retargets (pool workers adopt a
     // window when the UI app checks them out).
-    std::unique_ptr<Direct2DRenderer> renderer;
+    // The provider honors XER_UI_RENDERER (inherited from the UI
+    // process) and walks the fallback chain to a working backend —
+    // Direct2D by default, Vulkan when requested, software last.
+    std::unique_ptr<Renderer> renderer;
     HWND own_surface = nullptr;
     auto retarget = [&](HWND foreign, int w, int h, bool show) -> bool {
         HWND target = foreign;
@@ -136,12 +140,15 @@ int main(int argc, char** argv) {
         }
         if (target != nullptr) {
             try {
-                renderer = std::make_unique<Direct2DRenderer>(target);
-                return true;
+                renderer =
+                    XER::UI::Rendering::CreateRendererFromEnv(target);
             } catch (...) {
                 renderer.reset();
-                target = nullptr;
             }
+            if (renderer != nullptr) {
+                return true;
+            }
+            target = nullptr;
         }
         // No usable foreign HWND: own surface, hidden unless shown.
         if (own_surface == nullptr) {
@@ -152,13 +159,14 @@ int main(int argc, char** argv) {
             }
         }
         try {
-            renderer = std::make_unique<Direct2DRenderer>(own_surface);
+            renderer = XER::UI::Rendering::CreateRendererFromEnv(
+                own_surface);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "renderer init failed: %s\n",
                          e.what());
             return false;
         }
-        return true;
+        return renderer != nullptr;
     };
     if (!retarget(foreign_hwnd, width, height, surface)) {
         return 1;

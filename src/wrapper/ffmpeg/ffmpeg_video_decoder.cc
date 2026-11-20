@@ -39,8 +39,18 @@ bool CollectTapAudioFrame(const AVFrame* frame,
     const bool planar = av_sample_fmt_is_planar(sample_format) != 0;
 #if LIBAVUTIL_VERSION_MAJOR >= 57
     const int channels = frame->ch_layout.nb_channels;
+    // AV_CHANNEL_LAYOUT_NATIVE mask — a native bitmask exposes the
+    // speaker position of each channel index (channel i is the i-th
+    // lowest set bit). CUSTOM orders have no usable u.mask; UNSPEC
+    // layouts surface as 0 — consumers fall back to count heuristics.
+    const std::int64_t layout_mask =
+        frame->ch_layout.order == AV_CHANNEL_ORDER_NATIVE
+            ? static_cast<std::int64_t>(frame->ch_layout.u.mask)
+            : 0;
 #else
     const int channels = frame->channels;
+    const std::int64_t layout_mask =
+        static_cast<std::int64_t>(frame->channel_layout);
 #endif
     const int plane_count = planar ? std::max(channels, 0) : 1;
     const int plane_size =
@@ -50,6 +60,7 @@ bool CollectTapAudioFrame(const AVFrame* frame,
     info.stream_index = stream_index;
     info.sample_rate = frame->sample_rate;
     info.channels = channels;
+    info.channel_layout = layout_mask;
     info.sample_count = frame->nb_samples;
     info.planar = planar;
     const char* fmt_name = av_get_sample_fmt_name(sample_format);

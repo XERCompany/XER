@@ -14,7 +14,8 @@
 //
 // Sections: source header · timing/transform/audio fields · blend-mode
 // combobox · link group · keyframe rows + embedded KeyframeEditorWidget
-// · mask list · video-effect list · read-only audio_fx chain · actions.
+// · mask list · video-effect list · audio_fx chain (name + Editor
+//   button) · actions.
 // Content is taller than the panel — the widget scrolls internally via
 // MouseWheel + child clipping, so the app can lay it out in a fixed rect.
 #pragma once
@@ -58,6 +59,10 @@ public:
             on_set_rate;
         // Move the playhead (keyframe prev/next navigation).
         std::function<void(double)> on_seek;
+        // "Editor" button on an AUDIO FX (VST3) row: open the plugin's
+        // native editor for clip.audio_fx[fx_index].
+        std::function<void(const std::string& clip_id,
+                           std::size_t fx_index)> on_open_audio_fx_editor;
     };
 
     explicit InspectorWidget(Hooks hooks = {});
@@ -129,9 +134,10 @@ private:
     };
 
     void EnsureChildren();
-    void RebuildDynamicRows();   // masks + effects per clip_
+    void RebuildDynamicRows();   // masks + effects + audio fx per clip_
     void RebuildMaskRows();
     void RebuildFxRows();
+    void RebuildAudioFxRows();
     void SyncMaskRows();
     void SyncFxRows();
     void SyncKeyframeRows();
@@ -193,10 +199,17 @@ private:
         retired_mask_children_;
     std::vector<std::shared_ptr<XER::UI::Widgets::Widget>>
         retired_fx_children_;
+    std::vector<std::shared_ptr<XER::UI::Widgets::Widget>>
+        retired_afx_children_;
     std::shared_ptr<XER::UI::Widgets::Button> add_rect_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> add_ellipse_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> effects_input_;
     std::vector<FxRow> fx_rows_;
+    // One "Editor" button per clip_.audio_fx entry — opens the
+    // plugin's native view via on_open_audio_fx_editor. Row names
+    // stay drawn labels (scrollable, click-transparent).
+    std::vector<std::shared_ptr<XER::UI::Widgets::Button>>
+        afx_edit_btns_;
     std::shared_ptr<XER::UI::Widgets::Checkbox> muted_;
     std::shared_ptr<XER::UI::Widgets::Button> apply_btn_;
     std::shared_ptr<XER::UI::Widgets::Combobox> transition_combo_;

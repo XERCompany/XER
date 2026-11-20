@@ -24,6 +24,11 @@ struct VideoInfo {
 // and fills error_out on failure; on success `info->valid` is true.
 // An audio-only file probes successfully but reports width/height = 0 —
 // callers that need pictures should check those fields.
+// Classification notes: streams flagged as embedded cover art (id3v2
+// APIC / FLAC picture block / mp4 covr — a "cover" metadata marker or a
+// single-frame image-codec stream next to an audio stream) never count
+// as the primary video stream, so a tagged mp3/m4a reports
+// width/height = 0 + has_audio = true — i.e. audio, not video.
 bool ProbeVideo(const std::string& path, VideoInfo* info,
                 std::string* error_out = nullptr);
 

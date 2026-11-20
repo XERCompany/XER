@@ -142,6 +142,96 @@ bool MakeAudioFile(const std::string& utf8_path, std::string* err,
         params, MakeSineFrames(kAudioTotalSamples, amplitude), err);
 }
 
+// Video + audio in one mp4 (AAC is a native encoder — always present;
+// the sine chunks double as the frame providers like the decoder
+// suite's MakeAvClip).
+bool MakeAvFile(const std::string& utf8_path, std::string* err) {
+    XER::Bridge::FFmpeg::EncodeAudioVideoParams params;
+    params.video.output_path = utf8_path;
+    params.video.width = kVideoW;
+    params.video.height = kVideoH;
+    params.video.pixel_format = "bgra";
+    params.video.fps_num = kVideoFps;
+    params.video.fps_den = 1;
+    params.video.bit_rate = 200000;
+    params.audio.codec_name = "aac";
+    params.audio.sample_rate = kAudioRate;
+    params.audio.channels = kAudioChannels;
+    params.audio.sample_format = "s16";
+    params.audio.bit_rate = 128000;
+
+    const auto chunks = MakeSineFrames(kAudioTotalSamples);
+    auto video_provider = [](std::size_t index,
+                             XER::Bridge::FFmpeg::VideoFrameInfo* out,
+                             std::string*) {
+        FillVideoFrame(out, index);
+        return true;
+    };
+    auto audio_provider = [&chunks](std::size_t index,
+                                    XER::Bridge::FFmpeg::AudioFrameInfo*
+                                        out,
+                                    std::string*) {
+        if (index >= chunks.size()) {
+            return false;
+        }
+        *out = chunks[index];
+        return true;
+    };
+    for (const char* codec : {"libx264", "mpeg4"}) {
+        params.video.codec_name = codec;
+        err->clear();
+        if (XER::Bridge::FFmpeg::EncodeAudioVideoStream(
+                params, kVideoFrameCount, video_provider, chunks.size(),
+                audio_provider, err)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// A still image FFmpeg can probe: prefers a real PNG via the video
+// encoder (image2 muxer + png codec, one frame); falls back to a
+// hand-written binary PPM (P6 needs no codec at all — image2 demuxes
+// it the same way). Returns the path written, or {} on total failure.
+std::filesystem::path MakeStillFile(const std::filesystem::path& dir) {
+    const auto png_path = dir / "still.png";
+    XER::Bridge::FFmpeg::EncodeVideoParams params;
+    params.output_path = Utf8Path(png_path);
+    params.codec_name = "png";
+    params.width = kVideoW;
+    params.height = kVideoH;
+    params.pixel_format = "bgra";
+    params.fps_num = 25;
+    params.fps_den = 1;
+    std::string err;
+    if (XER::Bridge::FFmpeg::EncodeVideoFrameStream(
+            params, 1,
+            [](std::size_t index,
+               XER::Bridge::FFmpeg::VideoFrameInfo* out, std::string*) {
+                FillVideoFrame(out, index);
+                return true;
+            },
+            &err)) {
+        return png_path;
+    }
+
+    const auto ppm_path = dir / "still.ppm";
+    std::ofstream out(ppm_path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        return {};
+    }
+    out << "P6\n" << kVideoW << " " << kVideoH << "\n255\n";
+    for (int y = 0; y < kVideoH; ++y) {
+        for (int x = 0; x < kVideoW; ++x) {
+            const char px[3] = {static_cast<char>(x * 4 % 256),
+                                static_cast<char>(y * 5 % 256),
+                                static_cast<char>(128)};
+            out.write(px, 3);
+        }
+    }
+    return out.good() ? ppm_path : std::filesystem::path{};
+}
+
 // ---- small helpers ------------------------------------------------------
 
 bool HasPngMagic(const std::filesystem::path& path) {
@@ -459,6 +549,70 @@ int XER_VideoEditor_RunCatalogTests() {
             Utf8Path(dir / "does_not_exist.mp4"), 0.5, &none, &perr));
     }
 
+    // -- 5d. Classification coverage: A/V mux + FFmpeg-probed still ----
+    // The timeline placement rule ("any imported file is audio or
+    // video") is driven entirely off these stored fields.
+    {
+        // Video+audio mp4: HasVideo() && HasAudio() -> video track,
+        // and the clip still feeds the mixer.
+        const auto av_path = dir / "av_mux.mp4";
+        if (MakeAvFile(Utf8Path(av_path), &err)) {
+            std::int64_t av_id = 0;
+            perr.clear();
+            XER_VE_CHECK(cat.Import(Utf8Path(av_path), &av_id, false,
+                                    &perr));
+            CatalogEntry av;
+            XER_VE_CHECK(cat.FindById(av_id, &av, &perr));
+            XER_VE_CHECK(av.HasVideo());
+            XER_VE_CHECK(av.HasAudio());
+            XER_VE_CHECK(av.has_audio);
+            XER_VE_CHECK(!av.video_codec.empty());
+            XER_VE_CHECK(!av.audio_codec.empty());
+        } else {
+            std::fprintf(stderr,
+                         "note: av-mux fixture encode failed: %s\n",
+                         err.c_str());
+        }
+
+        // A still image probed through FFmpeg's image2 demuxer
+        // (PNG, or PPM when the png encoder is absent): arrives as a
+        // one-frame video with a nominal 1-frame duration — import
+        // must normalize it to still semantics (video track, 5 s
+        // editor default) instead of a ~40 ms sliver, and must NOT
+        // classify it as audio.
+        const auto still_path = MakeStillFile(dir);
+        if (!still_path.empty()) {
+            const std::string still_utf8 = Utf8Path(still_path);
+            std::int64_t still_id = 0;
+            perr.clear();
+            XER_VE_CHECK(cat.Import(still_utf8, &still_id, false,
+                                    &perr));
+            XER_VE_CHECK(still_id > 0);
+            CatalogEntry still;
+            XER_VE_CHECK(cat.FindById(still_id, &still, &perr));
+            XER_VE_CHECK(still.HasVideo());
+            XER_VE_CHECK(!still.HasAudio());
+            XER_VE_CHECK(still.width == kVideoW);
+            XER_VE_CHECK(still.height == kVideoH);
+            // Still semantics: either a normalized 5 s editor default
+            // or "unknown" (0 — placement falls back to the same 5 s);
+            // never a sub-frame sliver like the nominal 1-frame
+            // duration image2 could report.
+            XER_VE_CHECK(
+                still.duration_seconds <= 0.0 ||
+                still.duration_seconds >=
+                    XER::VideoEditor::kStillDefaultSeconds);
+        } else {
+            std::fprintf(stderr,
+                         "note: still fixture could not be created\n");
+        }
+    }
+
+    // wav + av + still rows imported above all survive the video
+    // row's removal — measure the count rather than hard-coding a
+    // number so skipped fixtures can't break the arithmetic.
+    const std::size_t rows_before_remove = cat.List(&perr).size();
+
     // -- 6. Remove: row gone, poster file deleted -------------------------
     {
         const std::string poster_utf8 = video_entry.poster_path;
@@ -470,7 +624,7 @@ int XER_VideoEditor_RunCatalogTests() {
                 !std::filesystem::exists(Path::FromUtf8(poster_utf8)));
         }
         const auto remaining = cat.List(&perr);
-        XER_VE_CHECK(remaining.size() == (wav_ok ? 1u : 0u));
+        XER_VE_CHECK(remaining.size() + 1u == rows_before_remove);
     }
 
     // -- 7. Failure paths ---------------------------------------------------
@@ -495,8 +649,10 @@ int XER_VideoEditor_RunCatalogTests() {
         XER_VE_CHECK(!perr.empty());
         XER_VE_CHECK(text_id == -1);
 
-        // Failed imports must not leave rows behind.
-        XER_VE_CHECK(CountRows(cat.List(&perr)) == (wav_ok ? 1u : 0u));
+        // Failed imports must not leave rows behind — everything
+        // imported above (wav + av + still) is still there.
+        XER_VE_CHECK(CountRows(cat.List(&perr)) + 1u ==
+                     rows_before_remove);
     }
 
     // -- 8. UTF-8 (Cyrillic + emoji) media path ----------------------------

@@ -195,10 +195,8 @@ float ReadPcmSample(PcmKind kind, const std::uint8_t* p) {
     return 0.0f;
 }
 
-// Downmix channel `c` of frame `i` to [-1,1] float. channels==1
-// duplicates ch0 to both outputs; >=2 uses ch0= L, ch1=R (first two —
-// for 5.1 layouts FFmpeg orders FL,FR first, acceptable for v1).
-// Returns false when the channel index is unavailable.
+// Reads channel `c` of frame `i` as a [-1,1]-ish float. Returns false
+// when the channel index is unavailable.
 inline bool ChannelValue(const FFmpeg::AudioFrameInfo& frame,
                          const PcmLayout& layout, int frame_index,
                          int channel, float* out) {
@@ -232,6 +230,209 @@ inline bool ChannelValue(const FFmpeg::AudioFrameInfo& frame,
 }
 
 // ------------------------------------------------------------------
+// Multichannel -> stereo downmix (layout-aware).
+// ------------------------------------------------------------------
+// AudioFrameInfo::channel_layout carries the FFmpeg AV_CHANNEL_LAYOUT
+// native bitmask (the bridge fills it from ch_layout.u.mask; bit i
+// set means channel index j is the j-th lowest set bit). The
+// AV_CHAN_* bit positions below mirror libavutil/channel_layout.h so
+// this TU stays libav-free.
+//
+// Downmix coefficients — ITU-R BS.775-style, same family as
+// libswresample's default rematrix (center_mix_level = surround at
+// -3 dB nominal, here dialed per the project brief):
+//   FC   0.7071 into both L/R       (-3 dB center fold)
+//   BL/BR/SL/SR 0.5 into their side (-6 dB surround; -3 dB = 0.7071
+//         for center-less quad family so the rears stay audible)
+//   BC   0.35 into both L/R         (rear-center split)
+//   FLC/FRC 0.7071 into their side  (7.1-wide front stage)
+//   LFE  dropped (0.0)              — the .1 effects channel is not
+//         program bass; folding it risks clipping for no benefit.
+// Channels whose position is not listed (top/ambisonic/etc.) are
+// dropped. Layouts wider than 8 channels warn once per clip and fall
+// back to first-two = L/R (previous behavior).
+namespace ChannelBit {
+constexpr std::int64_t kFL = 1ll << 0;    // AV_CHAN_FRONT_LEFT
+constexpr std::int64_t kFR = 1ll << 1;    // AV_CHAN_FRONT_RIGHT
+constexpr std::int64_t kFC = 1ll << 2;    // AV_CHAN_FRONT_CENTER
+constexpr std::int64_t kLFE = 1ll << 3;   // AV_CHAN_LOW_FREQUENCY
+constexpr std::int64_t kBL = 1ll << 4;    // AV_CHAN_BACK_LEFT
+constexpr std::int64_t kBR = 1ll << 5;    // AV_CHAN_BACK_RIGHT
+constexpr std::int64_t kFLC = 1ll << 6;   // AV_CHAN_FRONT_LEFT_OF_CENTER
+constexpr std::int64_t kFRC = 1ll << 7;   // AV_CHAN_FRONT_RIGHT_OF_CENTER
+constexpr std::int64_t kBC = 1ll << 8;    // AV_CHAN_BACK_CENTER
+constexpr std::int64_t kSL = 1ll << 9;    // AV_CHAN_SIDE_LEFT
+constexpr std::int64_t kSR = 1ll << 10;   // AV_CHAN_SIDE_RIGHT
+// Channels that promote a layout out of the plain "quad" family —
+// quad has no center stage and no side surrounds, so its rears get
+// the stronger -3 dB fold instead of -6 dB.
+constexpr std::int64_t kNonQuad =
+    kFC | kFLC | kFRC | kSL | kSR;
+}  // namespace ChannelBit
+
+constexpr int kMaxDownmixChannels = 8;
+constexpr float kCenterGain = 0.7071f;      // -3 dB
+constexpr float kSurroundGain = 0.5f;       // -6 dB (N.1 families)
+constexpr float kQuadRearGain = 0.7071f;    // -3 dB (quad/4.1 rears)
+constexpr float kBackCenterGain = 0.35f;    // rear-center split
+constexpr float kFrontWidenGain = 0.7071f;  // FLC/FRC fold
+
+// Per-source-channel stereo gains — entries are only kept for
+// channels with nonzero contribution (LFE/unmapped -> skipped).
+struct DownmixMap {
+    int used = 0;
+    bool clipped_to_stereo = false;   // channels>8 -> first two only
+    int idx[kMaxDownmixChannels]{};
+    float gain_l[kMaxDownmixChannels]{};
+    float gain_r[kMaxDownmixChannels]{};
+};
+
+void PushGain(DownmixMap* map, int channel, float gl, float gr) {
+    if (gl == 0.0f && gr == 0.0f) {
+        return;   // LFE / unmapped positions contribute nothing
+    }
+    map->idx[map->used] = channel;
+    map->gain_l[map->used] = gl;
+    map->gain_r[map->used] = gr;
+    ++map->used;
+}
+
+// Gains for one layout bit; `sur` is the surround/rear gain for the
+// layout family (0.5 vs 0.7071 quad).
+void BitGain(int bit, float sur, float* gl, float* gr) {
+    switch (bit) {
+        case 0: *gl = 1.0f; *gr = 0.0f; break;             // FL
+        case 1: *gl = 0.0f; *gr = 1.0f; break;             // FR
+        case 2: *gl = kCenterGain; *gr = kCenterGain; break;  // FC
+        case 3: *gl = 0.0f; *gr = 0.0f; break;             // LFE dropped
+        case 4: *gl = sur; *gr = 0.0f; break;              // BL
+        case 5: *gl = 0.0f; *gr = sur; break;              // BR
+        case 6: *gl = kFrontWidenGain; *gr = 0.0f; break;  // FLC
+        case 7: *gl = 0.0f; *gr = kFrontWidenGain; break;  // FRC
+        case 8: *gl = kBackCenterGain; *gr = kBackCenterGain; break;  // BC
+        case 9: *gl = sur; *gr = 0.0f; break;              // SL
+        case 10: *gl = 0.0f; *gr = sur; break;             // SR
+        default: *gl = 0.0f; *gr = 0.0f; break;            // top/other
+    }
+}
+
+int MaskPopCount(std::int64_t mask) {
+    int n = 0;
+    for (std::uint64_t u = static_cast<std::uint64_t>(mask); u != 0;
+         u >>= 1u) {
+        n += static_cast<int>(u & 1u);
+    }
+    return n;
+}
+
+// Fills `map` from the channel-layout mask. Native-order frames store
+// channels in ascending bit order — the i-th set bit is channel i.
+// Returns false when the mask is unusable (zero, or its bit count
+// disagrees with `channels`).
+bool BuildMaskMap(int channels, std::int64_t mask, DownmixMap* map) {
+    if (mask == 0 || MaskPopCount(mask) != channels) {
+        return false;
+    }
+    // Center-less quad-family layouts (quad, 4.1) give rears the -3 dB
+    // fold; anything with a center or side stage uses -6 dB.
+    const float sur =
+        (mask & ChannelBit::kNonQuad) == 0 ? kQuadRearGain
+                                           : kSurroundGain;
+    int channel = 0;
+    for (int bit = 0; bit < 63 && channel < channels; ++bit) {
+        if ((mask & (1ll << bit)) == 0) {
+            continue;
+        }
+        float gl = 0.0f;
+        float gr = 0.0f;
+        BitGain(bit, sur, &gl, &gr);
+        PushGain(map, channel, gl, gr);
+        ++channel;
+    }
+    return true;
+}
+
+// Count-based layout guess for streams with no usable mask:
+//   3 -> 3.0 (FL FR FC), 4 -> quad, 5 -> 4.1 (quad+LFE),
+//   6 -> 5.1 rear, 7 -> 6.1 (side+BC), 8 -> 7.1.
+// >8 channels: clipped_to_stereo (caller warns once) — only the first
+// two channels are read, the documented previous fallback.
+void BuildCountMap(int channels, DownmixMap* map) {
+    switch (channels) {
+        case 1:
+            PushGain(map, 0, 1.0f, 1.0f);   // mono -> duplicate
+            break;
+        case 2:
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            break;
+        case 3:   // 3.0: FL FR FC
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            PushGain(map, 2, kCenterGain, kCenterGain);
+            break;
+        case 4:   // quad: FL FR BL BR
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            PushGain(map, 2, kQuadRearGain, 0.0f);
+            PushGain(map, 3, 0.0f, kQuadRearGain);
+            break;
+        case 5:   // 4.1: quad + LFE (dropped)
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            PushGain(map, 2, kQuadRearGain, 0.0f);
+            PushGain(map, 3, 0.0f, kQuadRearGain);
+            break;
+        case 6:   // 5.1 rear: FL FR FC LFE BL BR
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            PushGain(map, 2, kCenterGain, kCenterGain);
+            PushGain(map, 4, kSurroundGain, 0.0f);
+            PushGain(map, 5, 0.0f, kSurroundGain);
+            break;
+        case 7:   // 6.1, FFmpeg native order: FL FR FC LFE BC SL SR
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            PushGain(map, 2, kCenterGain, kCenterGain);
+            PushGain(map, 4, kBackCenterGain, kBackCenterGain);
+            PushGain(map, 5, kSurroundGain, 0.0f);
+            PushGain(map, 6, 0.0f, kSurroundGain);
+            break;
+        case 8:   // 7.1: FL FR FC LFE BL BR SL SR
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            PushGain(map, 2, kCenterGain, kCenterGain);
+            PushGain(map, 4, kSurroundGain, 0.0f);
+            PushGain(map, 5, 0.0f, kSurroundGain);
+            PushGain(map, 6, kSurroundGain, 0.0f);
+            PushGain(map, 7, 0.0f, kSurroundGain);
+            break;
+        default:
+            // >8 channels or <=0: keep the previous first-two
+            // behavior; the caller surfaces a once-per-clip warning.
+            PushGain(map, 0, 1.0f, 0.0f);
+            PushGain(map, 1, 0.0f, 1.0f);
+            map->clipped_to_stereo = true;
+            break;
+    }
+}
+
+// Resolves the downmix for one incoming frame: native layout mask
+// when usable, otherwise the count heuristic. Streams wider than 8
+// channels always take the clipped-to-stereo path — the gain table is
+// sized for 8.
+void BuildDownmixMap(const FFmpeg::AudioFrameInfo& frame,
+                     DownmixMap* map) {
+    *map = DownmixMap{};
+    if (frame.channels > 0 &&
+        frame.channels <= kMaxDownmixChannels &&
+        BuildMaskMap(frame.channels, frame.channel_layout, map)) {
+        return;
+    }
+    BuildCountMap(frame.channels, map);
+}
+
+// ------------------------------------------------------------------
 // Window append — media-time gap/overlap handling (sparse-PTS rule:
 // gaps become zeros, never shifted audio; priming/overlap rule:
 // overlapping prefixes are dropped).
@@ -240,10 +441,13 @@ inline bool ChannelValue(const FFmpeg::AudioFrameInfo& frame,
 // Merges `frames` stereo-float samples (interleaved L,R, `count`
 // frames) into the session window so frame j of the block lands at
 // media time block_start + j/src_rate. Returns false on malformed
-// input (caller marks the session dead).
+// input (caller marks the session dead). `warn_out` (optional)
+// receives a non-fatal note when the stream's channel layout exceeds
+// the downmix table (>8 channels -> first-two fallback).
 bool AppendBlock(AudioClipSession& session,
                  const FFmpeg::AudioFrameInfo& frame, double block_start,
-                 std::string* error_out) {
+                 std::string* error_out,
+                 std::string* warn_out = nullptr) {
     const int count = frame.sample_count;
     const int channels = frame.channels;
     if (count <= 0 || channels <= 0 || frame.sample_rate <= 0 ||
@@ -319,25 +523,30 @@ bool AppendBlock(AudioClipSession& session,
         }
     }
 
-    // Convert to stereo float. Mono duplicates ch0; >=2 takes ch0/ch1.
+    // Convert to stereo float through the layout-aware downmix map.
+    // Mono lands as a {1,1} entry (duplicate); unmapped/dropped
+    // positions (LFE, top channels) simply never contribute.
+    DownmixMap downmix;
+    BuildDownmixMap(frame, &downmix);
+    if (downmix.clipped_to_stereo && warn_out != nullptr) {
+        *warn_out = "audio stream has " + std::to_string(channels) +
+                    " channels; only the first two are mixed";
+    }
     std::vector<float> stereo(
         static_cast<std::size_t>(count) * 2u);
     for (int i = 0; i < count; ++i) {
         float l = 0.0f;
         float r = 0.0f;
-        if (!ChannelValue(frame, layout, i, 0, &l)) {
-            if (error_out != nullptr) {
-                *error_out = "audio channel read out of bounds";
+        for (int e = 0; e < downmix.used; ++e) {
+            float v = 0.0f;
+            if (!ChannelValue(frame, layout, i, downmix.idx[e], &v)) {
+                if (error_out != nullptr) {
+                    *error_out = "audio channel read out of bounds";
+                }
+                return false;
             }
-            return false;
-        }
-        if (channels == 1) {
-            r = l;
-        } else if (!ChannelValue(frame, layout, i, 1, &r)) {
-            if (error_out != nullptr) {
-                *error_out = "audio channel read out of bounds";
-            }
-            return false;
+            l += v * downmix.gain_l[e];
+            r += v * downmix.gain_r[e];
         }
         stereo[static_cast<std::size_t>(i) * 2u] = l;
         stereo[static_cast<std::size_t>(i) * 2u + 1u] = r;
@@ -580,6 +789,35 @@ struct AudioMixer::Impl {
             }
             if (track->kind == TrackKind::Video && track->hidden) {
                 continue;
+            }
+            // Linked-pair audio suppression: an A/V source placed on
+            // the timeline lands as a VIDEO clip + a linked AUDIO
+            // clip sharing a link_group (Premiere semantics — the
+            // audio lives in the audio-track clip). A video-track
+            // clip whose link_group is shared with a clip on an
+            // audio track contributes NO embedded audio, otherwise
+            // the same source stream would be decoded and mixed
+            // twice. Deleting/unlinking the audio partner restores
+            // the video clip's embedded audio automatically.
+            if (track->kind == TrackKind::Video &&
+                !clip.link_group.empty()) {
+                bool linked_audio_partner = false;
+                for (const Clip& other : project_.clips) {
+                    if (other.id == clip.id ||
+                        other.link_group != clip.link_group) {
+                        continue;
+                    }
+                    const Track* other_track =
+                        FindTrack(project_, other.track);
+                    if (other_track != nullptr &&
+                        other_track->kind == TrackKind::Audio) {
+                        linked_audio_partner = true;
+                        break;
+                    }
+                }
+                if (linked_audio_partner) {
+                    continue;
+                }
             }
 
             AudioClipSession session;
@@ -864,12 +1102,19 @@ struct AudioMixer::Impl {
                                       : session.audio_origin;
                 }
                 std::string convert_error;
+                std::string downmix_warn;
                 if (!AppendBlock(session, frame, block_start,
-                                 &convert_error)) {
+                                 &convert_error, &downmix_warn)) {
                     Warn("clip '" + session.clip->id +
                          "': " + convert_error + "; skipped");
                     session.dead = true;
                     return true;
+                }
+                if (!downmix_warn.empty()) {
+                    // Dedup'd inside Warn() — a >8ch stream reports
+                    // the stereo fallback once per clip, not per block.
+                    Warn("clip '" + session.clip->id +
+                         "': " + downmix_warn);
                 }
             }
             if (session.dead) {

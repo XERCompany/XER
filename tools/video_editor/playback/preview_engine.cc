@@ -480,7 +480,14 @@ struct PreviewEngine::Impl {
                         chunk.data.data());
                 if (!options_.audio_sink->Write(pcm, chunk.sample_count,
                                                 chunk.sample_rate)) {
-                    WarnOnce("audio sink rejected a chunk; dropping");
+                    // Include the sink's own reason when it has one —
+                    // a bare "dropping" hides device-level causes.
+                    const std::string sink_err =
+                        options_.audio_sink->LastError();
+                    WarnOnce("audio sink rejected a chunk; dropping" +
+                             (sink_err.empty()
+                                  ? std::string()
+                                  : " (" + sink_err + ")"));
                     // Non-fatal — keep pumping; video unaffected.
                 }
             }

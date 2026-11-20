@@ -52,6 +52,10 @@ public:
 	// Native editor view (IPlugView). Only external plugins can provide one.
 	bool HasPluginEditor() const;
 	bool CreatePluginEditor(std::string* error_out = nullptr);
+	// Preferred pixel size of the created editor view — call after
+	// CreatePluginEditor, before AttachPluginEditor. False when the
+	// view does not exist or reports no usable size.
+	bool GetPluginEditorSize(int* width, int* height) const;
 	bool AttachPluginEditor(void* parent_hwnd, int left, int top, int right, int bottom,
 	                        std::string* error_out = nullptr);
 	void SetPluginEditorFrame(int left, int top, int right, int bottom);

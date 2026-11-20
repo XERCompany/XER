@@ -103,12 +103,15 @@ foreach(_xer_v XER_HAVE_COCOA_COCOA_H XER_HAVE_AVFOUNDATION_AVFOUNDATION_H)
 endforeach()
 
 # --- C++-only headers -------------------------------------------------------
-# wrl/client.h is Microsoft's COM WRL (C++ templates); the rest are C++
-# standard library headers. check_include_file_cxx() honors
-# CMAKE_CXX_STANDARD (23), so <expected>/<format> report their real
-# availability for this toolchain's STL.
+# wrl/client.h is Microsoft's COM WRL (C++ templates); vulkan/vulkan.h is
+# the optional Vulkan SDK header — the UI Vulkan backend also compiles
+# without it (vendored-header fallback + runtime dll loading), this probe
+# only documents SDK availability; the rest are C++ standard library
+# headers. check_include_file_cxx() honors CMAKE_CXX_STANDARD (23), so
+# <expected>/<format> report their real availability for this toolchain's
+# STL.
 foreach(_xer_h IN ITEMS
-        wrl/client.h
+        wrl/client.h vulkan/vulkan.h
         version source_location format jthread execution filesystem span
         expected)
     xer_probe_header("${_xer_h}" CXX)

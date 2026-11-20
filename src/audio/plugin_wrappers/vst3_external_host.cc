@@ -859,6 +859,24 @@ std::vector<HWND> ChildWindowsOf(HWND parent) {
 }  // namespace
 #endif
 
+bool Vst3ExternalHost::GetEditorViewSize(int* width, int* height) const {
+    if (impl_->plug_view == nullptr) {
+        return false;
+    }
+    ViewRect rect {};
+    if (impl_->plug_view->getSize(&rect) != kResultOk) {
+        return false;
+    }
+    const int w = static_cast<int>(rect.right - rect.left);
+    const int h = static_cast<int>(rect.bottom - rect.top);
+    if (w <= 0 || h <= 0) {
+        return false;
+    }
+    if (width != nullptr) *width = w;
+    if (height != nullptr) *height = h;
+    return true;
+}
+
 bool Vst3ExternalHost::AttachEditorView(void* parent_hwnd, int left, int top,
                                         int right, int bottom, std::string* error_out) {
     if (impl_->plug_view == nullptr && !CreateEditorView(error_out)) {

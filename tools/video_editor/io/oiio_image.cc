@@ -111,6 +111,11 @@ Image ReadImage(const std::filesystem::path& path) {
     const std::string filename = Helper::Path::ToUtf8(path);
     auto in = OIIO::ImageInput::open(filename);
     if (!in) {
+        // A failed open leaves the reason in OIIO's global error
+        // state — drain it. Callers probe arbitrary files through this
+        // path (the catalog's still-image import fallback), and an
+        // undrained error trips OIIO's atexit pending-error report.
+        (void)OIIO::geterror();
         return {};
     }
     const OIIO::ImageSpec& spec = in->spec();

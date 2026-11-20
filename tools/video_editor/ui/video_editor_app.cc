@@ -33,6 +33,7 @@
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
 #include "generated_source.h"
+#include "io/oiio_image.h"
 #include "lab/async_op.h"
 #include "lab/object_ops.h"
 #include "ai/audio_pcm.h"
@@ -656,6 +657,10 @@ void VideoEditorAppWidget::EnsureChildren() {
     inspector_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
     };
+    inspector_hooks.on_open_audio_fx_editor =
+        [this](const std::string& id, std::size_t index) {
+            OpenVst3FxEditor(id, static_cast<int>(index));
+        };
     inspector_ = std::make_shared<InspectorWidget>(inspector_hooks);
 
     EffectsPanelWidget::Hooks effects_hooks;
@@ -897,6 +902,11 @@ void VideoEditorAppWidget::EnsureChildren() {
     // Embedded Chromium tab (src/cef): graceful placeholder when the
     // CEF binary distribution is not installed next to the exe.
     browser_panel_ = std::make_shared<BrowserPanelWidget>(parent_hwnd_);
+
+    // VST3 editor popup (ui/vst3_editor.h): when its session ends,
+    // commit the edited parameters back into the bound clip's fx
+    // node — the mixer chain re-syncs and the project file keeps them.
+    vst3_editor_.SetOnClosed([this] { CommitVst3EditorParams(); });
 
     // .xexrj extension host: verified TZ archives under
     // assets/extensions/ whose main.js runs in the shared V8 engine;
@@ -1214,7 +1224,7 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
              [this] { AddVst3FxToSelectedClip(); }, true, false, false,
              true),
         item("Open Plugin Editor", "",
-             [this] { OpenVst3FxEditor(); }),
+             [this] { OpenVst3FxEditor(selected_clip_id_, -1); }),
     };
     Menu timeline;
     timeline.label = "Timeline";
@@ -1389,9 +1399,29 @@ bool VideoEditorAppWidget::SaveProject(bool choose_path) {
 
 void VideoEditorAppWidget::ImportMedia() {
 #ifdef _WIN32
+    // The curated list covers the common FFmpeg demuxers + OIIO
+    // stills, but classification comes from the probe (video_info.cc /
+    // MediaCatalog::Import), never the extension — FilterSpec appends
+    // an "All files (*.*)" second choice so any file can be picked and
+    // still lands on the right track kind.
     const auto picked = PickOpenFileW(
         static_cast<HWND>(parent_hwnd_),
-        FilterSpec(L"Media", L"*.mp4;*.mkv;*.avi;*.mov;*.wmv;*.webm;*.m4v;*.ts;*.wav;*.mp3;*.aac;*.flac;*.ogg;*.png;*.jpg;*.jpeg"),
+        FilterSpec(
+            L"Media",
+            // video containers FFmpeg demuxes
+            L"*.mp4;*.m4v;*.mkv;*.mov;*.qt;*.avi;*.divx;*.wmv;*.asf;"
+            L"*.webm;*.mpg;*.mpeg;*.mpe;*.m1v;*.m2v;*.mpv;*.ts;*.mts;"
+            L"*.m2ts;*.vob;*.3gp;*.3g2;*.flv;*.f4v;*.mxf;*.dv;*.dif;"
+            L"*.ogv;*.rm;*.rmvb;*.y4m;*.nut;*.bik;*.amv;"
+            // audio-only containers
+            L"*.wav;*.mp3;*.m4a;*.m4b;*.aac;*.flac;*.ogg;*.oga;*.opus;"
+            L"*.wma;*.aif;*.aiff;*.aifc;*.mka;*.ac3;*.eac3;*.dts;*.amr;"
+            L"*.au;*.caf;*.wv;*.ape;*.tta;*.spx;*.voc;*.gsm;*.oma;"
+            // still images (FFmpeg image2 + OIIO set)
+            L"*.png;*.jpg;*.jpeg;*.jpe;*.bmp;*.dib;*.gif;*.tif;*.tiff;"
+            L"*.webp;*.tga;*.ppm;*.pgm;*.pbm;*.pam;*.xpm;*.avif;*.heic;"
+            L"*.exr;*.dpx;*.hdr;*.psd;*.pfm;*.raw;*.cr2;*.nef;*.arw;"
+            L"*.dng;*.ora"),
         L"Import media");
     if (picked.empty()) return;
     const std::string path =
@@ -1433,46 +1463,119 @@ void VideoEditorAppWidget::AddMediaToTimeline(const std::string& path) {
         SetStatus("Select media in the bin first", true);
         return;
     }
+    // Classification (documented on CatalogEntry::HasVideo): any
+    // imported file is exactly one of picture-bearing -> Video track
+    // or audio-only -> Audio track. Import guarantees has_audio on
+    // non-video rows, so there is no third state to handle. When no
+    // track of the wanted kind exists yet, one is created below —
+    // audio lands on Audio even on a video-only timeline and vice
+    // versa.
     const TrackKind wanted =
         entry->HasVideo() ? TrackKind::Video : TrackKind::Audio;
-    int track_index = -1;
-    for (std::size_t i = 0; i < project_.tracks.size(); ++i) {
-        if (project_.tracks[i].kind == wanted) {
-            track_index = static_cast<int>(i);
-            break;
+    // Premiere-style A/V placement: a video file that ALSO carries an
+    // audio stream lands as a linked pair — a video clip on a video
+    // track plus an audio clip (same source, same range) on an audio
+    // track, bound by a shared link_group. The mixer suppresses the
+    // video clip's embedded audio in favor of the linked clip
+    // (audio_mixer.cc), so the stream is decoded exactly once.
+    const bool linked_av = entry->HasVideo() && entry->HasAudio();
+    auto first_unlocked = [this](TrackKind kind) {
+        for (std::size_t i = 0; i < project_.tracks.size(); ++i) {
+            // Skip locked tracks — same placement rule the source
+            // monitor's three-point edits use.
+            if (project_.tracks[i].kind == kind &&
+                !project_.tracks[i].locked) {
+                return static_cast<int>(i);
+            }
         }
-    }
+        return -1;
+    };
+
+    history_.BeginMacro("Add clip");
+    bool applied_any = false;
+    bool ok = true;
+    std::string error;
+    std::string clip_id;
+    std::string link_group;
+
+    int track_index = first_unlocked(wanted);
     if (track_index < 0) {
         track_index = history_.AddTrack(
             wanted, wanted == TrackKind::Video ? "Video" : "Audio");
+        applied_any |= track_index >= 0;
         if (track_index < 0) {
-            SetStatus("Unable to add track", true);
-            return;
+            ok = false;
+            error = "unable to add track";
         }
     }
-
-    Clip clip;
-    clip.id = NewClipId();
-    clip.source_path = entry->path;
-    clip.track = track_index;
-    clip.timeline_start = snap_enabled_
-        ? SnapTime(project_, track_index, playhead_, 0.1, playhead_)
-        : playhead_;
-    clip.in_point = 0.0;
-    clip.duration = entry->duration_seconds > 0.0
-        ? entry->duration_seconds
-        : 5.0;
-    if (entry->HasVideo()) {
-        clip.transform = FitTransformToCanvas(entry->width, entry->height,
-                                              project_.width,
-                                              project_.height);
+    int audio_track = -1;
+    if (ok && linked_av) {
+        audio_track = first_unlocked(TrackKind::Audio);
+        if (audio_track < 0) {
+            audio_track = history_.AddTrack(TrackKind::Audio, "Audio");
+            applied_any |= audio_track >= 0;
+            if (audio_track < 0) {
+                ok = false;
+                error = "unable to add audio track";
+            }
+        }
     }
-    MediaBounds bounds;
-    bounds.duration_seconds = entry->duration_seconds;
-    bounds.has_video = entry->HasVideo();
-    std::string error;
-    std::string clip_id;
-    if (!history_.AddClip(std::move(clip), bounds, &clip_id, &error)) {
+    double clip_start = playhead_;
+    double clip_duration = 0.0;
+    if (ok) {
+        clip_start = snap_enabled_
+            ? SnapTime(project_, track_index, playhead_, 0.1, playhead_)
+            : playhead_;
+        clip_duration = entry->duration_seconds > 0.0
+            ? entry->duration_seconds
+            : 5.0;
+        Clip clip;
+        clip.id = NewClipId();
+        clip.source_path = entry->path;
+        clip.track = track_index;
+        clip.timeline_start = clip_start;
+        clip.in_point = 0.0;
+        clip.duration = clip_duration;
+        if (entry->HasVideo()) {
+            clip.transform = FitTransformToCanvas(
+                entry->width, entry->height,
+                project_.width, project_.height);
+        }
+        if (linked_av) {
+            link_group = NewClipId();
+            clip.link_group = link_group;
+        }
+        MediaBounds bounds;
+        bounds.duration_seconds = entry->duration_seconds;
+        bounds.has_video = entry->HasVideo();
+        ok = history_.AddClip(std::move(clip), bounds, &clip_id,
+                              &error);
+        applied_any |= ok;
+    }
+    if (ok && linked_av) {
+        Clip audio_clip;
+        audio_clip.id = NewClipId();
+        audio_clip.source_path = entry->path;
+        audio_clip.track = audio_track;
+        audio_clip.timeline_start = clip_start;
+        audio_clip.in_point = 0.0;
+        audio_clip.duration = clip_duration;
+        audio_clip.link_group = link_group;
+        // bounds.has_video stays false — this clip is the audio leg
+        // of the pair; validation accepts non-video media on audio
+        // tracks.
+        MediaBounds audio_bounds;
+        audio_bounds.duration_seconds = entry->duration_seconds;
+        std::string audio_id;
+        ok = history_.AddClip(std::move(audio_clip), audio_bounds,
+                              &audio_id, &error);
+        applied_any |= ok;
+    }
+    history_.EndMacro();
+    if (!ok) {
+        if (applied_any) {
+            history_.Undo();   // rolls the whole macro back
+        }
         SetStatus("Add clip failed: " + error, true);
         return;
     }
@@ -1671,6 +1774,26 @@ void VideoEditorAppWidget::TogglePlay() {
     play_btn_->SetText(next ? "Pause" : "Play");
 }
 
+void VideoEditorAppWidget::EnsurePlatformAudioSink(
+    std::unique_ptr<IAudioSink>* which) {
+    if (*which) return;
+    // A failed init previously latched the null sink for the whole
+    // session — devices that appear later (headphones, USB DAC,
+    // endpoint renegotiation after WASAPI shared-mode fixes) could
+    // never recover. Retry throttled; the first failure reports once.
+    const auto now = std::chrono::steady_clock::now();
+    if (audio_sink_tried_ && now < audio_sink_retry_at_) {
+        return;
+    }
+    audio_sink_tried_ = true;
+    audio_sink_retry_at_ = now + std::chrono::seconds(3);
+    std::string sink_error;
+    *which = MakePlatformAudioSink(&sink_error);
+    if (!*which && !sink_error.empty()) {
+        SetStatus("Audio preview unavailable: " + sink_error);
+    }
+}
+
 void VideoEditorAppWidget::EnsurePreviewEngine() {
     if (preview_ready_ && !preview_dirty_) return;
     preview_engine_.Shutdown();
@@ -1678,16 +1801,9 @@ void VideoEditorAppWidget::EnsurePreviewEngine() {
     if (!engine_sink_) {
         engine_sink_ = std::make_unique<EngineSink>(this);
     }
-    if (!platform_audio_tried_) {
-        platform_audio_tried_ = true;
-        std::string sink_error;
-        platform_audio_sink_ = MakePlatformAudioSink(&sink_error);
-        if (!platform_audio_sink_ && !sink_error.empty()) {
-            SetStatus("Audio preview disabled: " + sink_error);
-        }
-    }
+    EnsurePlatformAudioSink(&program_audio_sink_);
     PreviewOptions options;
-    options.audio_sink = platform_audio_sink_.get();
+    options.audio_sink = program_audio_sink_.get();
     std::string error;
     preview_ready_ = preview_engine_.Init(project_, options,
                                         engine_sink_.get(), &error);
@@ -1796,6 +1912,11 @@ void VideoEditorAppWidget::DeleteClip(const std::string& clip_id) {
     if (!history_.RemoveClip(clip_id)) {
         SetStatus("Delete failed", true);
         return;
+    }
+    // A plugin editor bound to the doomed clip closes with it — the
+    // commit-back inside Hide() no-ops once the clip is gone.
+    if (vst3_editor_clip_ == clip_id) {
+        vst3_editor_.Hide();
     }
     if (!source.empty()) media_prep_.CancelQueued(source);
     selected_clip_id_.clear();
@@ -2008,16 +2129,12 @@ void VideoEditorAppWidget::OnSourceEnginePlayhead(double t) {
 
 void VideoEditorAppWidget::EnsureSourceEngine() {
     if (source_ready_ || source_path_.empty()) return;
-    if (!platform_audio_tried_) {
-        platform_audio_tried_ = true;
-        std::string sink_error;
-        platform_audio_sink_ = MakePlatformAudioSink(&sink_error);
-    }
+    EnsurePlatformAudioSink(&source_audio_sink_);
     if (!source_sink_) {
         source_sink_ = std::make_unique<SourceEngineSink>(this);
     }
     PreviewOptions options;
-    options.audio_sink = platform_audio_sink_.get();
+    options.audio_sink = source_audio_sink_.get();
     std::string error;
     source_ready_ =
         source_engine_.Init(source_project_, options,
@@ -2047,22 +2164,43 @@ void VideoEditorAppWidget::OpenInSourceMonitor(
     } else {
         XER::Content::Video::VideoInfo info;
         std::string error;
-        if (!XER::Content::Video::ProbeVideo(path, &info, &error)) {
-            SetStatus("Source open failed: " + error, true);
-            return;
+        if (XER::Content::Video::ProbeVideo(path, &info, &error)) {
+            duration = info.duration_seconds;
+            w = info.width;
+            h = info.height;
+            fps = info.fps;
+            // ProbeVideo reports stream presence — audio-only
+            // containers come back w/h = 0 + has_audio = true; video
+            // files with no audio stream report has_audio = false.
+            has_audio = info.has_audio;
+        } else {
+            // Not an FFmpeg container — try the still-image path
+            // (EXR/DPX/TIFF/RAW/PSD/HDR via OIIO); the decoder replays
+            // a still as a constant frame on the video track.
+            const Io::Image still =
+                Io::ReadImage(Path::FromUtf8(path));
+            if (!still.ok || still.width <= 0 || still.height <= 0) {
+                SetStatus("Source open failed: " + error, true);
+                return;
+            }
+            w = still.width;
+            h = still.height;
+            // duration stays 0 -> kSourceFallbackSeconds below.
         }
-        duration = info.duration_seconds;
-        w = info.width;
-        h = info.height;
-        fps = info.fps;
-        has_audio = true;  // probe doesn't report streams; mixer
-                           // silence is harmless if there is none
     }
     const bool has_video = w > 0 && h > 0;
     if (!has_video && !has_audio) {
         SetStatus("Media has no decodable streams: " + Basename(path),
                   true);
         return;
+    }
+    // Same still normalization the catalog applies on import
+    // (media_catalog.h): a probed one-frame audio-free stream — a PNG
+    // /JPEG/... via FFmpeg's image2 demuxer — gets the editor still
+    // default instead of its nominal 1-frame duration.
+    if (has_video && !has_audio && duration > 0.0 &&
+        duration <= kProbedStillMaxSeconds) {
+        duration = kStillDefaultSeconds;
     }
     if (duration <= 0.0) duration = kSourceFallbackSeconds;
 
@@ -2075,6 +2213,7 @@ void VideoEditorAppWidget::OpenInSourceMonitor(
     source_media_w_ = w;
     source_media_h_ = h;
     source_has_video_ = has_video;
+    source_has_audio_ = has_audio;
     source_fps_num_ =
         fps > 0.0 ? std::max(1, static_cast<int>(std::lround(fps)))
                   : (project_.fps_num > 0 ? project_.fps_num : 30);
@@ -2276,6 +2415,11 @@ void VideoEditorAppWidget::EditSourceToTimeline(bool insert) {
     // the first unlocked track of the media kind, else a new one.
     const TrackKind wanted =
         source_has_video_ ? TrackKind::Video : TrackKind::Audio;
+    // Premiere-style A/V edit: a source carrying both streams edits as
+    // a linked pair — video clip on the video track, audio clip on an
+    // audio track, shared link_group (the mixer suppresses the video
+    // clip's embedded audio so the stream decodes once).
+    const bool linked_av = source_has_video_ && source_has_audio_;
     int track_index = -1;
     if (const Clip* sel = FindClip(project_, selected_clip_id_);
         sel != nullptr && sel->track >= 0 &&
@@ -2304,44 +2448,86 @@ void VideoEditorAppWidget::EditSourceToTimeline(bool insert) {
             return;
         }
     }
+    // Audio leg of the linked pair: first unlocked audio track, else
+    // a new one (the selected-clip preference only governs the
+    // primary/video leg).
+    int audio_track = -1;
+    if (linked_av) {
+        for (int i = 0; i < static_cast<int>(project_.tracks.size());
+             ++i) {
+            const Track& t = project_.tracks[i];
+            if (t.kind == TrackKind::Audio && !t.locked) {
+                audio_track = i;
+                break;
+            }
+        }
+        if (audio_track < 0) {
+            audio_track = history_.AddTrack(TrackKind::Audio, "Audio");
+            if (audio_track < 0) {
+                SetStatus("Source edit failed: cannot add an audio "
+                          "track",
+                          true);
+                return;
+            }
+        }
+    }
 
     // Premiere drops an insert at the playhead even when it lands
     // inside a clip — split the straddler first so InsertClipAt's
-    // non-overlap validation passes.
+    // non-overlap validation passes. A linked pair needs the split on
+    // BOTH target tracks.
     double at = snap_enabled_
                     ? SnapTime(project_, track_index, playhead_, 0.1,
                                playhead_)
                     : playhead_;
     at = std::max(0.0, at);
-    const Clip* straddler = nullptr;
-    if (insert) {
+    auto straddler_on = [this, at](int track) -> const Clip* {
         for (const Clip& c : project_.clips) {
-            if (c.track == track_index &&
+            if (c.track == track &&
                 c.timeline_start < at - 1e-9 &&
                 ClipEndSeconds(c) > at + 1e-9) {
-                straddler = &c;
-                break;
+                return &c;
             }
         }
-    }
+        return nullptr;
+    };
+    const Clip* straddler =
+        insert ? straddler_on(track_index) : nullptr;
+    const Clip* audio_straddler =
+        insert && linked_av ? straddler_on(audio_track) : nullptr;
 
     Clip clip = MakeSourceClip(source_path_, track_index, at, src_in,
                                src_out, source_media_w_,
                                source_media_h_, project_.width,
                                project_.height);
     clip.id = NewClipId();
+    Clip audio_clip;
+    if (linked_av) {
+        // 0,0 src dims -> identity transform: audio-only leg.
+        audio_clip = MakeSourceClip(source_path_, audio_track, at,
+                                    src_in, src_out, 0, 0, 0, 0);
+        audio_clip.id = NewClipId();
+        audio_clip.link_group = NewClipId();
+        clip.link_group = audio_clip.link_group;
+    }
     const MediaBounds bounds{source_duration_, source_has_video_};
+    // Audio-leg bounds: has_video=false marks this clip as audio-only
+    // media — accepted on audio tracks, duration-clamped like the
+    // primary leg.
+    const MediaBounds audio_bounds{source_duration_, false};
     std::string error;
 
     history_.BeginMacro(insert ? "Insert edit" : "Overwrite edit");
     bool applied_any = false;
     bool ok = true;
-    if (straddler != nullptr) {
+    for (const Clip* s : {straddler, audio_straddler}) {
+        if (s == nullptr) continue;
         std::string ignored;
-        ok = history_.SplitClip(straddler->id, at, &ignored);
+        ok = history_.SplitClip(s->id, at, &ignored);
         applied_any |= ok;
         if (!ok) {
             error = "straddling split failed";
+            break;
         }
     }
     if (ok) {
@@ -2354,6 +2540,17 @@ void VideoEditorAppWidget::EditSourceToTimeline(bool insert) {
         }
         applied_any |= ok;
         if (ok) clip.id = new_id;
+    }
+    if (ok && linked_av) {
+        std::string new_id;
+        if (insert) {
+            ok = history_.InsertClipAt(audio_clip, audio_bounds,
+                                       &new_id, &error);
+        } else {
+            ok = history_.OverwriteClipAt(audio_clip, audio_bounds,
+                                          &new_id, &error);
+        }
+        applied_any |= ok;
     }
     history_.EndMacro();
     if (!ok) {
@@ -3296,39 +3493,84 @@ void VideoEditorAppWidget::AddVst3FxToSelectedClip() {
 #endif
 }
 
-void VideoEditorAppWidget::OpenVst3FxEditor() {
+void VideoEditorAppWidget::OpenVst3FxEditor(const std::string& clip_id,
+                                            int fx_index) {
 #ifdef _WIN32
-    const Clip* clip = FindClip(project_, selected_clip_id_);
+    const Clip* clip = FindClip(project_, clip_id);
     if (clip == nullptr) {
         SetStatus("Select a clip first", true);
         return;
     }
-    const ClipAudioFx* fx = nullptr;
-    for (const ClipAudioFx& candidate : clip->audio_fx) {
-        if (candidate.enabled) {
-            fx = &candidate;
-            break;
+    int index = fx_index;
+    if (index < 0) {
+        // Menu path: the first enabled node is the sensible default.
+        for (std::size_t i = 0; i < clip->audio_fx.size(); ++i) {
+            if (clip->audio_fx[i].enabled) {
+                index = static_cast<int>(i);
+                break;
+            }
         }
     }
-    if (fx == nullptr) {
+    if (index < 0 ||
+        index >= static_cast<int>(clip->audio_fx.size())) {
         SetStatus("Selected clip has no enabled VST3 effect", true);
         return;
     }
-    const auto bounds = GetBounds();
-    Vst3EditorRect rect;
-    rect.left = static_cast<int>(bounds.x + bounds.width * 0.2f);
-    rect.top = static_cast<int>(bounds.y + 60.0f);
-    rect.right = static_cast<int>(bounds.x + bounds.width * 0.8f);
-    rect.bottom = static_cast<int>(bounds.y + bounds.height * 0.7f);
+    const ClipAudioFx& fx =
+        clip->audio_fx[static_cast<std::size_t>(index)];
     std::string error;
-    if (!vst3_editor_.Show(*fx, parent_hwnd_, rect, &error)) {
+    if (!vst3_editor_.Show(fx, parent_hwnd_, &error)) {
         SetStatus("Plugin editor failed: " + error, true);
         return;
     }
-    SetStatus("Opened " + fx->name);
+    // Bind the session to its fx node — CommitVst3EditorParams writes
+    // the edited parameter set back through history on close.
+    vst3_editor_clip_ = clip->id;
+    vst3_editor_fx_ = index;
+    SetStatus("Opened " + fx.name +
+              " — parameter edits save on close");
 #else
     SetStatus("VST3 is Windows-only", true);
 #endif
+}
+
+void VideoEditorAppWidget::CommitVst3EditorParams() {
+    // Runs inside Vst3PluginEditor::Hide() — the plugin is still
+    // alive so CurrentParams() reads the edited values. Bound clip
+    // gone (deleted/undone mid-session) -> drop the edits silently.
+    if (vst3_editor_clip_.empty()) {
+        return;
+    }
+    const std::string clip_id = vst3_editor_clip_;
+    const int fx_index = vst3_editor_fx_;
+    vst3_editor_clip_.clear();
+    vst3_editor_fx_ = -1;
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr || fx_index < 0 ||
+        fx_index >= static_cast<int>(clip->audio_fx.size())) {
+        return;
+    }
+    const auto edits = vst3_editor_.CurrentParams();
+    const ClipAudioFx& target =
+        clip->audio_fx[static_cast<std::size_t>(fx_index)];
+    const std::string name =
+        target.name.empty() ? Basename(target.plugin_path)
+                            : target.name;
+    if (target.params == edits) {
+        return;   // nothing changed — avoid a no-op undo step
+    }
+    Clip updated = *clip;
+    updated.audio_fx[static_cast<std::size_t>(fx_index)].params =
+        edits;
+    std::string error;
+    if (!history_.ReplaceClip(clip_id, updated,
+                              BoundsForPath(clip->source_path),
+                              &error)) {
+        SetStatus("Param save failed: " + error, true);
+        return;
+    }
+    NotifyProjectChanged();
+    SetStatus("Saved " + name + " parameters to clip");
 }
 
 bool VideoEditorAppWidget::RunLabOperation(

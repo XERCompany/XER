@@ -50,6 +50,11 @@ private:
     void EnsureBrowser();
     void Navigate(const std::string& input);
     void SyncBrowserRect();
+    // Physical-pixel rect for the Chromium child HWND (view_rect_ is
+    // DIPs): clipped to the widget's visible rect and scaled by the
+    // host window's DPI.
+    struct PxRect { int x, y, w, h; };
+    PxRect BrowserRectPx() const;
 
     // CEF-thread event sink: HostEvents callbacks hold a weak_ptr to
     // this block and drop events once it expires (widget teardown), so

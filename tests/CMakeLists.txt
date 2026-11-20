@@ -13,6 +13,7 @@ add_executable(XER_UI_Tests
     ui/ffmpeg_av_mux_tests.cc
     ui/style_host_tests.cc
     ui/render_store_tests.cc
+    ui/renderer_provider_tests.cc
 )
 
 target_link_libraries(XER_UI_Tests

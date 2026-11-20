@@ -59,3 +59,22 @@ evaluated inside the worker.
   `DrawVideoFrame` for live sources.
 - Tests: `tests/ui/render_store_tests.cc` (5 tests, store
   round-trip + op dispatch).
+
+## Renderer provider model (2026-11-20, agent e0aa8a8f)
+
+- `src/ui/rendering/renderer_provider.h`: `RendererBackend`
+  {kAuto,kSoftware,kD2D,kD3D11,kVulkan} + `CreateRenderer` /
+  `CreateRendererFromEnv` (`XER_UI_RENDERER=...`, fallback chain
+  D2D→Vulkan→Software). `kD3D11` aliases the D2D renderer (it owns
+  the D3D11 device already).
+- `rendering/vulkan/vulkan_renderer.{h,cc}` — real immediate-mode
+  backend: no SDK needed (skia-vendored headers + vulkan-1.dll
+  dynamically loaded), 3 pipelines (color/texture/text-mask),
+  staging-buffer BGRA uploads, deferred post-fence destruction.
+  Deferred: rounded corners, blend modes, real frosted blur.
+  Verified live on NVIDIA RTX 3070 ICD (acquire→submit→present).
+- `rendering/windows/software_renderer.{h,cc}` + `raster_util` —
+  retained CPU buffer, SDF AA rects, GDI text masks, WIC decode.
+- `window.cc` renderer sites → `CreateRendererFromEnv`; UI-render
+  worker replays onto provider-chosen backend.
+- Full op coverage matrix in `src/ui/ARCHITECTURE.md`.

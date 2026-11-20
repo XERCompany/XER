@@ -19,7 +19,11 @@
 // EnableAudioTap(true) called BEFORE Open() — distinct from the
 // compositor's video decoder (two demux sessions per A/V file;
 // spec-mandated pump cost). Audio is decoded at the source rate into
-// a bounded media-time-indexed stereo-float window, then mixed on
+// a bounded media-time-indexed stereo-float window — multichannel
+// sources are folded down via the file's channel-layout mask (or a
+// count-based layout guess when the mask is unknown): FL/FR pass
+// through, FC at -3 dB, surrounds at -6 dB (quad rears -3 dB), LFE
+// dropped — then mixed on
 // demand: per output sample, each contributing clip maps timeline
 // time -> source media time (in_point + (tau - timeline_start)*rate),
 // linear-interpolates in media time, and applies clip/track gain_db
@@ -87,8 +91,11 @@ struct AudioMixerOptions {
 // A clip contributes audio iff: !clip.muted, its track exists,
 // !(track.muted on an AUDIO-kind track — video-track `muted` is
 // ignored per the model contract), NOT (video-kind track AND
-// track.hidden — hidden removes video AND embedded audio), and the
-// lazily-opened decoder reports HasAudio(). Phase-2 clip fields apply:
+// track.hidden — hidden removes video AND embedded audio), NOT
+// (video-track clip sharing a non-empty link_group with a clip on an
+// AUDIO track — linked-pair placement puts the A/V source's audio in
+// the audio-track clip; without this the stream would be decoded
+// twice), and the lazily-opened decoder reports HasAudio(). Phase-2 clip fields apply:
 // playback_rate scales the timeline->source map (handles are timeline
 // time, so they map rate-scaled too), clip.gain_db + GainDb keyframes +
 // track.gain_db set the per-chunk gain, and clip.pan + track.pan

@@ -339,3 +339,65 @@ unconditionally — FFmpeg deps degrade to stubs off-Windows).
   not rely on perfect accuracy there.
 - Compositor treats `GetFps()`/`GetDurationSeconds()` as unreliable
   (encoder-mp4 quirks) — duration comes from project/MediaBounds.
+
+## Media classification rule (2026-11-20, agent 46304831)
+
+Any imported file resolves to exactly one of:
+- **Video stream w/h>0** → `has_audio` per stream presence → **Video track**
+- **No video stream, audio present** → **Audio track**
+- **Neither** → import rejected ("no decodable audio/video streams")
+
+Supporting rules (media_catalog.h holds the authoritative doc):
+- Stills = video: OIIO fallback for ANY probe-failed file (decode is
+  the accept test, not an extension whitelist); probed ≤0.25 s
+  no-audio files normalize to 5 s still duration.
+- Cover art is NOT video: `ProbeVideo` skips attached-picture streams
+  (AV_DISPOSITION_ATTACHED_PIC / single-frame image codec next to
+  audio) so tagged mp3/flac/m4a classify as audio.
+- `MediaBounds.has_audio` does not exist — placement only gates on
+  `has_video`; the mixer taps audio from the source file regardless
+  of track kind.
+- Import dialog: ~80 curated extensions + `*.*` second filter.
+
+## Audio from video clips — silence root cause + multichannel (2026-11-20, agent 0664d783)
+
+- **Root cause of "no sound from video files"**: `WasapiSink::Initialize`
+  only accepted s16/f32 stereo AT the requested rate; shared-mode
+  endpoints with a different mix rate (44.1 kHz onboard, BT headsets,
+  multichannel endpoints, pre-1709 Windows) returned
+  FORMAT_NOT_SUPPORTED → null sink → silent preview while the mixer
+  produced PCM the whole time. Fixed: three-tier negotiation —
+  direct format, `AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM` engine SRC, or
+  adopt `IsFormatSupported` closest-match + client-side convert
+  (linear resample + channel remap + s16/s24/s32/f32).
+- `AudioFrameInfo` gained `channel_layout` (AV_CHANNEL_LAYOUT mask,
+  0 = unknown); populated in both `CollectAudioFrame` and
+  `CollectTapAudioFrame`.
+- Mixer downmix is layout-aware (ITU-R BS.775-style: FC −3 dB,
+  surrounds −6 dB, LFE dropped); count heuristic only when mask is
+  zero/mismatched; >8ch warns once and uses first-two fallback.
+  Supports 1/2/3.0/quad/4.1/5.1(side+rear)/6.1/7.0/7.1/7.1-wide,
+  interleaved + planar.
+- `IAudioSink::LastError()` added; sink rejection warnings carry it.
+- `platform_audio_sink_` no longer latches null forever —
+  `EnsurePlatformAudioSink()` retries throttled (3 s) so late
+  devices recover; first failure reports once.
+
+## Montage silence — actual root cause (2026-11-20, agent 8be92390)
+
+- `WasapiSink::Open` called `CoInitializeEx(COINIT_MULTITHREADED)` and
+  treated failure as fatal; the UI thread is already STA (D2D/canvas)
+  → `RPC_E_CHANGED_MODE` → `MakePlatformAudioSink` null → audio_sink
+  nullptr forever. Headless tests used fake sinks so never caught it.
+  Fixed: `RPC_E_CHANGED_MODE` normalized to success (WASAPI render
+  objects are free-threaded; `com_init_` stays false so `Close()`
+  doesn't pop an init it doesn't own).
+- Shared `platform_audio_sink_` between preview + source engines was
+  also racy (two worker threads → one IAudioRenderClient). Now
+  `program_audio_sink_` + `source_audio_sink_` — one stream each.
+- **Linked pair**: A/V import → video clip + audio clip sharing
+  `link_group` (model already had it). Mixer suppresses embedded
+  audio of a video clip whose link_group partner sits on an audio
+  track (no double-decode); deleting the audio leg restores it.
+- Earlier WASAPI negotiation fix (AUTOCONVERTPCM/closest-match) and
+  layout downmix remain valid — this was a second, earlier blocker.

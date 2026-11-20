@@ -29,6 +29,17 @@ class SQLiteDatabase;
 
 namespace XER::VideoEditor {
 
+// Still-image duration conventions, shared by the catalog import path
+// and the UI's probe fallback: FFmpeg's image2 demuxer reports an
+// imported still (PNG/JPEG/WebP/...) as a "video" holding one frame at
+// a nominal ~40 ms duration, and the OIIO still fallback has no
+// intrinsic duration at all. Either way a still gets the
+// Premiere-style 5 s editor default; any probed audio-free "video"
+// at or under kProbedStillMaxSeconds is treated as a still — a real
+// clip always reports a longer duration.
+inline constexpr double kStillDefaultSeconds = 5.0;
+inline constexpr double kProbedStillMaxSeconds = 0.25;
+
 struct CatalogEntry {
     std::int64_t id = 0;
     std::string path;                 // canonical UTF-8 absolute
@@ -42,7 +53,20 @@ struct CatalogEntry {
     std::string probe_json;           // serialized VideoInfo fields
     std::string poster_path;          // UTF-8, empty when none
     std::int64_t added_at_unix = 0;
+    // Timeline classification rule — any imported file lands on
+    // exactly one track kind:
+    //   HasVideo() == true   -> TrackKind::Video. Includes stills:
+    //                          OIIO-decoded rasters and FFmpeg's
+    //                          single-frame image containers both
+    //                          store w/h > 0.
+    //   HasVideo() == false  -> TrackKind::Audio. Import guarantees
+    //                          has_audio on such rows (zero-stream
+    //                          probes are rejected), and cover art
+    //                          never reaches this field — ProbeVideo
+    //                          skips attached-picture streams, so a
+    //                          tagged mp3 stays audio.
     bool HasVideo() const { return width > 0 && height > 0; }
+    bool HasAudio() const { return has_audio; }
 };
 
 // Decoded waveform summary for one media file (Phase 2 spec §5):

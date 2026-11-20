@@ -8,6 +8,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 
 namespace XER::VideoEditor {
 
@@ -31,6 +32,10 @@ public:
     virtual ~IAudioSink() = default;
     virtual bool Write(const std::int16_t* interleaved_samples,
                        int frame_count, int sample_rate) = 0;
+    // Optional diagnostic: the reason the last Write() failed (or the
+    // sink failed to open). Default empty — real sinks override so a
+    // rejected chunk isn't an unexplained "dropping" warning.
+    virtual std::string LastError() const { return {}; }
 };
 
 }  // namespace XER::VideoEditor

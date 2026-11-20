@@ -201,7 +201,16 @@ private:
     void ApplyProjectSettings(const ProjectSettings& settings);
     void AddGeneratedClip(SourceKind kind);
     void AddVst3FxToSelectedClip();
-    void OpenVst3FxEditor();
+    // Open clip.audio_fx[fx_index]'s native editor; fx_index < 0
+    // picks the first enabled fx (menu path). The popup session is
+    // tracked in vst3_editor_clip_/vst3_editor_fx_ so edits commit
+    // back on close.
+    void OpenVst3FxEditor(const std::string& clip_id, int fx_index);
+    // on_closed handler for the editor popup: harvest the session's
+    // edited parameters and ReplaceClip them into the model (chain
+    // re-syncs + project file persists them). No-op when the bound
+    // clip/fx is gone or nothing changed.
+    void CommitVst3EditorParams();
     bool RunLabOperation(const LabPanel::RunParams& params,
                          const Lab::JobControl& job);
     void Undo();
@@ -376,10 +385,20 @@ private:
     // mutex and the app Tick marshals them onto widgets.
     class EngineSink;
     std::unique_ptr<EngineSink> engine_sink_;
-    // Platform audio output (WASAPI on Windows). Declared before the
-    // engine so it outlives it — the engine only borrows the pointer.
-    std::unique_ptr<IAudioSink> platform_audio_sink_;
-    bool platform_audio_tried_ = false;
+    // Platform audio output (WASAPI on Windows) — ONE instance per
+    // engine. A shared single sink let both engine workers call
+    // IAudioSink::Write concurrently (exclusive transport only pauses
+    // the other engine's flag; its worker can still be inside a
+    // blocking Write during the switch), and IAudioRenderClient's
+    // GetBuffer/ReleaseBuffer is not thread-safe — concurrent calls
+    // corrupt the padding accounting and silence the session for
+    // good. Two independent shared-mode streams on the same endpoint
+    // have no shared state; Windows mixes them. Declared before the
+    // engines so they outlive them — engines only borrow the pointer.
+    std::unique_ptr<IAudioSink> program_audio_sink_;
+    std::unique_ptr<IAudioSink> source_audio_sink_;
+    std::chrono::steady_clock::time_point audio_sink_retry_at_{};
+    bool audio_sink_tried_ = false;
     PreviewEngine preview_engine_;
     bool preview_ready_ = false;
     bool preview_dirty_ = true;   // project changed since last Init
@@ -402,6 +421,10 @@ private:
     bool has_pending_peaks_ = false;
     double pending_playhead_ = -1.0;
 
+    // Lazily creates the per-engine platform audio sink into `which`
+    // (program or source). Failed opens no longer latch — retry is
+    // throttled to once per few seconds across both sinks.
+    void EnsurePlatformAudioSink(std::unique_ptr<IAudioSink>* which);
     void EnsurePreviewEngine();
     void OnEngineFrame(const video::Frame& frame);
     void OnEnginePeaks(float l, float r);
@@ -426,6 +449,7 @@ private:
     int source_media_w_ = 0, source_media_h_ = 0;
     int source_fps_num_ = 30, source_fps_den_ = 1;
     bool source_has_video_ = true;
+    bool source_has_audio_ = false;   // probe/catalog audio-stream flag
     double source_playhead_ = 0.0;
     bool source_playing_ = false;
     bool source_visible_ = false;
@@ -442,8 +466,11 @@ private:
     void OnSourceEngineFrame(const video::Frame& frame);
     void OnSourceEnginePlayhead(double t);
 
-    // HWND-embedded VST3 plugin editor session (ui/vst3_editor.h).
+    // Popup-window VST3 plugin editor session (ui/vst3_editor.h) +
+    // the clip/fx it is bound to for param commit-back on close.
     Vst3PluginEditor vst3_editor_;
+    std::string vst3_editor_clip_;
+    int vst3_editor_fx_ = -1;
 
     // Lab ops run on the panel's worker; the produced PNG is stashed
     // here and imported+added to the timeline by the next Tick.

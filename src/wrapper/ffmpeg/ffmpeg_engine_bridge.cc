@@ -446,6 +446,8 @@ StreamInfo MakeStreamInfo(const AVStream* stream) {
     info.start_time = stream->start_time;
     info.bit_rate = codecpar->bit_rate;
     info.frame_count = stream->nb_frames;
+    info.attached_pic =
+        (stream->disposition & AV_DISPOSITION_ATTACHED_PIC) != 0;
     info.metadata = ReadMetadata(stream->metadata);
     for (const auto& entry : info.metadata) {
         if (entry.key == "language") {
@@ -620,8 +622,17 @@ bool CollectAudioFrame(const AVFrame* frame,
     const bool planar = av_sample_fmt_is_planar(sample_format) != 0;
 #if LIBAVUTIL_VERSION_MAJOR >= 57
     const int channels = frame->ch_layout.nb_channels;
+    // Native-order layouts expose the speaker-position bitmask via
+    // u.mask (channel i = i-th lowest set bit); CUSTOM orders carry no
+    // usable mask, UNSPEC surfaces as 0.
+    const std::int64_t layout_mask =
+        frame->ch_layout.order == AV_CHANNEL_ORDER_NATIVE
+            ? static_cast<std::int64_t>(frame->ch_layout.u.mask)
+            : 0;
 #else
     const int channels = frame->channels;
+    const std::int64_t layout_mask =
+        static_cast<std::int64_t>(frame->channel_layout);
 #endif
     const int plane_count = planar ? std::max(channels, 0) : 1;
     const int plane_size = frame->nb_samples * bytes_per_sample * (planar ? 1 : std::max(channels, 0));
@@ -630,6 +641,7 @@ bool CollectAudioFrame(const AVFrame* frame,
     info.stream_index = stream_index;
     info.sample_rate = frame->sample_rate;
     info.channels = channels;
+    info.channel_layout = layout_mask;
     info.sample_count = frame->nb_samples;
     info.planar = planar;
     info.sample_format = SampleFormatName(frame->format);

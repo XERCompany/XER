@@ -108,3 +108,23 @@ Commits to this working tree happen from an external process —
 agents observed their changes swept into `93273a7`/`cf7bb61`
 mid-flight. Treat `git log` as shared history, don't expect a clean
 commit boundary per task.
+
+## Completed 2026-11-20 (waves 6-7)
+
+- **Audio silence — true root cause** (agent 8be92390):
+  `CoInitializeEx(MT)` on the STA UI thread → RPC_E_CHANGED_MODE →
+  sink null since launch. Fixed + per-engine WASAPI sinks (shared
+  sink was thread-unsafe). Linked audio clips: A/V → video+audio
+  pair in link_group; mixer suppresses embedded audio of linked
+  video clips (no double decode).
+- **Render providers** (agent e0aa8a8f): `renderer_provider.h`
+  backends kAuto/kSoftware/kD2D/kD3D11/kVulkan,
+  `XER_UI_RENDERER` env, fallback chain. Real Vulkan backend
+  (no SDK — dynamic vulkan-1.dll load, 3 pipelines) verified on
+  RTX 3070; software renderer retained-buffer. 106/106 UI tests.
+- **CEF + VST3 view** (agent 50a6e277): BrowserPanelWidget DPI fix
+  (DIP→px + clip); VST3 editor rewritten as owned resizable popup
+  (title bar, WM_CLOSE→Hide, IPlugView::getSize, param commit-back
+  to clip.audio_fx via history on close); per-row Editor buttons
+  in Inspector; `video_editor.exe --cef-check` — real browser +
+  load event. Gaps: no IPlugFrame; editor instance ≠ live mixer node.

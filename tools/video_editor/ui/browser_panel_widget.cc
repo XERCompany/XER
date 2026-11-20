@@ -5,6 +5,16 @@
 // thread (the same pattern the preview engine's pending-playhead uses).
 #include "browser_panel_widget.h"
 
+#ifdef _WIN32
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>   // GetDpiForWindow
+#endif
+
 #include <mutex>
 
 #include "cef/cef_runtime.h"
@@ -88,6 +98,9 @@ void BrowserPanelWidget::EnsureBrowser() {
         return;
     }
     cef_ = std::make_unique<XER::Cef::CefHost>();
+    // DPI: widget bounds are DIPs, the browser child HWND wants client
+    // pixels — the same conversion SyncBrowserRect applies.
+    const auto rect = BrowserRectPx();
     // Callbacks capture a weak_ptr to the sink — never `this`: the CEF
     // thread may invoke them after the widget is gone.
     cef_events_ = std::make_shared<CefEvents>();
@@ -113,10 +126,7 @@ void BrowserPanelWidget::EnsureBrowser() {
         }
     };
     cef_ok_ = cef_->Create(static_cast<CefHostNativeHandle>(parent_hwnd_),
-                           static_cast<int>(view_rect_.x),
-                           static_cast<int>(view_rect_.y),
-                           static_cast<int>(view_rect_.width),
-                           static_cast<int>(view_rect_.height),
+                           rect.x, rect.y, rect.w, rect.h,
                            "about:blank", std::move(events));
     if (!cef_ok_) {
         status_ = "Failed to create browser window";
@@ -143,12 +153,39 @@ void BrowserPanelWidget::Navigate(const std::string& input) {
     cef_->LoadUrl(url);
 }
 
+// view_rect_ in DIPs -> the browser child HWND's rect in parent client
+// pixels. Two corrections on the way: clip to the widget's visible
+// rect (a native HWND is not clipped by the renderer, so a partially
+// covered panel would otherwise leak the browser over neighbors), and
+// scale by the window DPI (the app is per-monitor DPI aware; layout
+// runs in DIPs while SetWindowPos wants pixels — mirrors
+// FxRackWidget::SyncEditorFrame in demo/vst3_cef.cc).
+BrowserPanelWidget::PxRect BrowserPanelWidget::BrowserRectPx() const {
+    // GetVisibleRect() defaults to bounds_ when unset — intersecting
+    // is always safe (view_rect_ lies inside bounds anyway).
+    XER::UI::Layout::Rect clip = view_rect_.Intersect(GetVisibleRect());
+    const bool has = clip.width > 1.0f && clip.height > 1.0f;
+    if (!has) {
+        // Nowhere to show: park the child on a 1x1 corner instead of
+        // destroying it — it comes right back on the next layout.
+        clip = {view_rect_.x, view_rect_.y, 1.0f, 1.0f};
+    }
+    float scale = 1.0f;
+    if (parent_hwnd_ != nullptr) {
+        const UINT dpi =
+            GetDpiForWindow(static_cast<HWND>(parent_hwnd_));
+        scale = dpi != 0 ? static_cast<float>(dpi) / 96.0f : 1.0f;
+    }
+    return {static_cast<int>(clip.x * scale),
+            static_cast<int>(clip.y * scale),
+            static_cast<int>(clip.width * scale),
+            static_cast<int>(clip.height * scale)};
+}
+
 void BrowserPanelWidget::SyncBrowserRect() {
     if (cef_ && cef_ok_) {
-        cef_->Resize(static_cast<int>(view_rect_.x),
-                     static_cast<int>(view_rect_.y),
-                     static_cast<int>(view_rect_.width),
-                     static_cast<int>(view_rect_.height));
+        const auto rect = BrowserRectPx();
+        cef_->Resize(rect.x, rect.y, rect.w, rect.h);
     }
 }
 

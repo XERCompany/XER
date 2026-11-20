@@ -6,10 +6,8 @@
 // pass-through with/without plugins. A compact fake IMediaDecoder
 // bank serves constant-DC s16 blocks for the mixer-level checks.
 //
-// NOTE: this file is intentionally NOT registered in
-// tests/CMakeLists.txt yet (parallel-workstream file ownership) —
-// it follows the XER_VideoEditor_Run<Suite>Tests() convention so it
-// can be wired into video_editor_test_main.cc later.
+// Also covers the editor-session helpers in vst/fx_editor_utils.h —
+// the pure placement/param-persistence math behind ui/vst3_editor.cc.
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -26,6 +24,7 @@
 #include "audio_mixer.h"
 #include "media_decoder.h"
 #include "timeline_model.h"
+#include "vst/fx_editor_utils.h"
 #include "vst/plugin_instance.h"
 #include "vst/vst3_chain.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
@@ -657,6 +656,67 @@ void TestMixerTwoClipsOneFx() {
     XER_VE_CHECK(peak > 11000.0 && peak < 15000.0);
 }
 
+// ------------------------------------------------------------------
+// Editor-session helpers (vst/fx_editor_utils.h): the pure math the
+// popup window and the param commit-back path rely on.
+// ------------------------------------------------------------------
+
+// Only params that deviate from their default get persisted — a
+// reverted tweak drops out instead of being frozen at the default.
+void TestPersistableParamEdits() {
+    using Vst::EditorParamSnapshot;
+    const auto edits = Vst::PersistableParamEdits({
+        {1, 0.5f, 0.5f},          // untouched default -> dropped
+        {2, 0.8f, 0.5f},          // edited -> kept
+        {3, 0.0f, 1.0f},          // edited to 0 -> kept (differs)
+        {4, 0.5000004f, 0.5f},    // within eps -> dropped
+    });
+    XER_VE_CHECK(edits.size() == 2);
+    XER_VE_CHECK(edits.count(2) == 1 &&
+                 std::fabs(edits.at(2) - 0.8f) < 1e-7f);
+    XER_VE_CHECK(edits.count(3) == 1 &&
+                 std::fabs(edits.at(3)) < 1e-7f);
+    XER_VE_CHECK(Vst::PersistableParamEdits({}).empty());
+}
+
+// Preferred plugin size wins when sane; broken reports fall back;
+// both paths clamp into the safe range.
+void TestPickEditorClientSize() {
+    auto s = Vst::PickEditorClientSize(640, 400, 720, 480);
+    XER_VE_CHECK(s.width == 640 && s.height == 400);
+    // Plugin reports nothing usable -> fallback.
+    s = Vst::PickEditorClientSize(0, 0, 720, 480);
+    XER_VE_CHECK(s.width == 720 && s.height == 480);
+    s = Vst::PickEditorClientSize(-50, 20, 800, 600);
+    XER_VE_CHECK(s.width == 800 && s.height == 600);
+    // One axis insane -> whole report distrusted (not per-axis mixed).
+    s = Vst::PickEditorClientSize(640, 99999, 700, 500);
+    XER_VE_CHECK(s.width == 700 && s.height == 500);
+    // Fallback itself is clamped.
+    s = Vst::PickEditorClientSize(0, 0, 1, 99999);
+    XER_VE_CHECK(s.width == 64 && s.height == 8192);
+}
+
+// Popup centers on the parent but stays inside the work area.
+void TestCenterPopupOnParent() {
+    // Room to spare: centered exactly.
+    auto p = Vst::CenterPopupOnParent(100, 100, 1100, 700, 400, 300,
+                                      0, 0, 1920, 1080);
+    XER_VE_CHECK(p.left == 400 && p.top == 250);
+    // Parent near the right edge: nudged back inside.
+    p = Vst::CenterPopupOnParent(1700, 850, 1900, 950, 400, 300,
+                                 0, 0, 1920, 1080);
+    XER_VE_CHECK(p.left == 1520 && p.top == 750);
+    // Window larger than the work area pins to the top-left.
+    p = Vst::CenterPopupOnParent(0, 0, 500, 400, 4000, 3000,
+                                 0, 0, 1920, 1080);
+    XER_VE_CHECK(p.left == 0 && p.top == 0);
+    // Nonzero work-area origin (taskbar left/top).
+    p = Vst::CenterPopupOnParent(60, 60, 260, 160, 400, 300,
+                                 100, 40, 2020, 1120);
+    XER_VE_CHECK(p.left == 100 && p.top == 40);
+}
+
 }  // namespace
 
 int XER_VideoEditor_RunVst3Tests() {
@@ -671,5 +731,8 @@ int XER_VideoEditor_RunVst3Tests() {
     TestMixerMissingPlugin();
     TestMixerDisabledFx();
     TestMixerTwoClipsOneFx();
+    TestPersistableParamEdits();
+    TestPickEditorClientSize();
+    TestCenterPopupOnParent();
     return XER::VideoEditor::Test::Failures();
 }

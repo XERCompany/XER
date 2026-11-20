@@ -804,30 +804,51 @@ bool MediaCatalog::Import(const std::string& utf8_path,
     Video::VideoInfo info;
     bool is_still = false;
     if (!Video::ProbeVideo(canon, &info, nullptr)) {
-        // Still images (EXR/DPX/TIFF/RAW/PSD/HDR) aren't FFmpeg
+        // Still images (EXR/DPX/TIFF/RAW/PSD/HDR/...) aren't FFmpeg
         // containers — fall back to OIIO and synthesize the probe.
-        const std::filesystem::path fs_path = Path::FromUtf8(canon);
-        std::string ext = fs_path.extension().string();
-        ext = XER::Helper::String::ToLowerAscii(ext);
-        if (!Io::OiioHandlesExtension(ext)) {
-            if (error_out != nullptr && error_out->empty()) {
-                *error_out = "probe failed: " + canon;
-            }
-            return false;
-        }
-        const Io::Image still = Io::ReadImage(fs_path);
+        // The decode itself is the accept test, not an extension
+        // list: any file OIIO can rasterize is a valid still, and
+        // anything it can't was never media (the *.* dialog filter
+        // must be able to pick everything).
+        const Io::Image still = Io::ReadImage(Path::FromUtf8(canon));
         if (!still.ok || still.width <= 0 || still.height <= 0) {
-            return Fail(error_out,
-                        "still image decode failed: " + canon);
+            return Fail(error_out, "probe failed: " + canon);
         }
         info.valid = true;
         info.width = still.width;
         info.height = still.height;
-        info.duration_seconds = 5.0;   // Premiere-style still default
+        info.duration_seconds = kStillDefaultSeconds;
         info.video_codec = "image";
         info.has_audio = false;
         is_still = true;
-        if (error_out != nullptr) error_out->clear();
+    }
+    // Classification rule (documented on CatalogEntry::HasVideo):
+    //   w/h > 0          -> video-track media, stills included
+    //   else has_audio   -> audio-track media (ProbeVideo reports
+    //                       audio-only containers as w/h = 0; it also
+    //                       reports a file whose video stream failed
+    //                       to describe dimensions — w/h = 0 — the
+    //                       same way, so a broken picture never
+    //                       shadows usable audio)
+    //   else             -> not media at all: reject now rather than
+    //                       store a zero-stream row the bin/timeline
+    //                       would draw as a broken audio entry.
+    if (!is_still && !info.has_audio &&
+        (info.width <= 0 || info.height <= 0)) {
+        return Fail(error_out,
+                    "no decodable audio/video streams: " + canon);
+    }
+    // FFmpeg-demuxed stills (PNG/JPEG/WebP/BMP/TGA/...) arrive as a
+    // one-frame "video" whose whole length is a single frame — the
+    // file IS the picture. Normalize to the same still default the
+    // OIIO path uses so they place as a 5 s clip instead of a ~40 ms
+    // sliver. Audio-bearing files keep their real duration (and a
+    // cover-art stream never reaches this branch — ProbeVideo already
+    // classified the file as audio).
+    if (!is_still && !info.has_audio && info.width > 0 &&
+        info.height > 0 && info.duration_seconds > 0.0 &&
+        info.duration_seconds <= kProbedStillMaxSeconds) {
+        info.duration_seconds = kStillDefaultSeconds;
     }
     const std::filesystem::path canon_fs = Path::FromUtf8(canon);
 

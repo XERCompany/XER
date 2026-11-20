@@ -204,6 +204,11 @@ bool Vst3HostInterface::CreatePluginEditor(std::string* error_out) {
     return external_host_->CreateEditorView(error_out);
 }
 
+bool Vst3HostInterface::GetPluginEditorSize(int* width, int* height) const {
+    return backend_mode_ == BackendMode::kExternal && external_host_ &&
+           external_host_->GetEditorViewSize(width, height);
+}
+
 bool Vst3HostInterface::AttachPluginEditor(void* parent_hwnd, int left, int top,
                                            int right, int bottom, std::string* error_out) {
     if (backend_mode_ != BackendMode::kExternal || !external_host_) {

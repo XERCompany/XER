@@ -1501,10 +1501,560 @@ void TestTrackPanMasterGain() {
     }
 }
 
+// ------------------------------------------------------------------
+// Case 11 — multichannel -> stereo downmix (layout-aware).
+//
+// Every fake case scripts a stream whose channel N carries a distinct
+// DC level, then checks the mixed stereo output against the
+// documented matrix (ITU-style: FC at -3 dB = 0.7071, surrounds at
+// -6 dB = 0.5, quad rears at -3 dB, BC split 0.35, LFE dropped). The
+// channel_layout field mirrors AV_CHANNEL_LAYOUT native masks the
+// bridge stamps on real frames; mask==0 exercises the count-based
+// fallback. Expected s16 values are computed from the spec, not
+// observed.
+// ------------------------------------------------------------------
+
+// AV_CHANNEL_* bit values (libavutil/channel_layout.h) — duplicated
+// here so the test stays libav-free like the mixer itself.
+constexpr std::int64_t kBitFL = 1ll << 0;
+constexpr std::int64_t kBitFR = 1ll << 1;
+constexpr std::int64_t kBitFC = 1ll << 2;
+constexpr std::int64_t kBitLFE = 1ll << 3;
+constexpr std::int64_t kBitBL = 1ll << 4;
+constexpr std::int64_t kBitBR = 1ll << 5;
+constexpr std::int64_t kBitFLC = 1ll << 6;
+constexpr std::int64_t kBitFRC = 1ll << 7;
+constexpr std::int64_t kBitBC = 1ll << 8;
+constexpr std::int64_t kBitSL = 1ll << 9;
+constexpr std::int64_t kBitSR = 1ll << 10;
+constexpr std::int64_t kMaskQuad = kBitFL | kBitFR | kBitBL | kBitBR;
+constexpr std::int64_t kMask41 = kMaskQuad | kBitLFE;
+constexpr std::int64_t kMask51Rear =
+    kBitFL | kBitFR | kBitFC | kBitLFE | kBitBL | kBitBR;
+constexpr std::int64_t kMask51Side =
+    kBitFL | kBitFR | kBitFC | kBitLFE | kBitSL | kBitSR;
+constexpr std::int64_t kMask61 =
+    kMask51Side | kBitBC;
+constexpr std::int64_t kMask70 =
+    kBitFL | kBitFR | kBitFC | kBitBL | kBitBR | kBitSL | kBitSR;
+constexpr std::int64_t kMask71 = kMask70 | kBitLFE;
+constexpr std::int64_t kMask71Wide =
+    kBitFL | kBitFR | kBitFC | kBitLFE | kBitBL | kBitBR | kBitFLC |
+    kBitFRC;
+
+// Downmix gains restated for expected-value math (mirrors
+// audio_mixer.cc docs — the constants there are what we verify).
+constexpr float kG_C = 0.7071f;    // center fold
+constexpr float kG_S = 0.5f;       // surround (N.1 family)
+constexpr float kG_Q = 0.7071f;    // quad-family rear
+constexpr float kG_BC = 0.35f;     // back-center split
+constexpr float kG_FW = 0.7071f;   // FLC/FRC front-stage fold
+
+// Interleaved s16 with a distinct DC level per channel.
+void FillChannelDC(FFmpeg::AudioFrameInfo* frame, int rate,
+                   int channels, int frames, const float* levels) {
+    frame->sample_rate = rate;
+    frame->channels = channels;
+    frame->planar = false;
+    frame->sample_format = "s16";
+    frame->sample_count = frames;
+    frame->data.assign(
+        static_cast<std::size_t>(frames) * channels * 2u, 0);
+    auto* pcm = reinterpret_cast<std::int16_t*>(frame->data.data());
+    for (int i = 0; i < frames; ++i) {
+        for (int c = 0; c < channels; ++c) {
+            pcm[static_cast<std::size_t>(i) * channels + c] =
+                static_cast<std::int16_t>(
+                    std::clamp(levels[c], -1.0f, 1.0f) * 32767.0f);
+        }
+    }
+}
+
+// Planar float ("fltp") — the AAC decode format; one plane per
+// channel, distinct DC per channel.
+void FillChannelFltPlanar(FFmpeg::AudioFrameInfo* frame, int rate,
+                          int channels, int frames,
+                          const float* levels) {
+    frame->sample_rate = rate;
+    frame->channels = channels;
+    frame->planar = true;
+    frame->sample_format = "fltp";
+    frame->sample_count = frames;
+    const std::size_t plane_bytes =
+        static_cast<std::size_t>(frames) * 4u;
+    frame->plane_sizes.assign(static_cast<std::size_t>(channels),
+                              static_cast<int>(plane_bytes));
+    frame->data.assign(plane_bytes * channels, 0);
+    for (int c = 0; c < channels; ++c) {
+        auto* pcm = reinterpret_cast<float*>(
+            frame->data.data() +
+            static_cast<std::size_t>(c) * plane_bytes);
+        std::fill(pcm, pcm + frames, levels[c]);
+    }
+}
+
+// Full-range per-channel-DC spec; `layout` is stamped onto every
+// produced frame (0 = layout unknown -> count heuristic).
+FakeSpec MakeChannelSpec(double seconds, int channels, int rate,
+                         const float* levels, bool planar_flt,
+                         std::int64_t layout) {
+    FakeSpec spec;
+    spec.sample_rate = rate;
+    spec.channels = channels;
+    spec.time_base = 1.0 / rate;
+    spec.duration = seconds;
+    FillSpecRange(&spec, seconds, 2048,
+                  [&](FFmpeg::AudioFrameInfo* f, int frames,
+                      std::int64_t /*first*/) {
+                      if (planar_flt) {
+                          FillChannelFltPlanar(f, rate, channels,
+                                               frames, levels);
+                      } else {
+                          FillChannelDC(f, rate, channels, frames,
+                                        levels);
+                      }
+                      f->channel_layout = layout;
+                  });
+    return spec;
+}
+
+// Runs one clip of `spec` through the mixer and checks the DC means.
+// exp_l/exp_r are float sample magnitudes ([-1,1] domain).
+void CheckDownmix(const char* key, const FakeSpec& spec, double exp_l,
+                  double exp_r) {
+    auto bank = std::make_shared<FakeBank>();
+    bank->specs[key] = spec;
+    Project p = MakeProject();
+    p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, key));
+    AudioMixer mixer;
+    XER_VE_CHECK(InitMixer(&mixer, p, bank));
+    FFmpeg::AudioFrameInfo chunk;
+    std::string err;
+    XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+    const double l = ChunkMeanChannel(chunk, 0);
+    const double r = ChunkMeanChannel(chunk, 1);
+    // +-400 s16 counts: source DC truncates at 32767 scale and the
+    // s16<->float round trips wiggle a few counts.
+    if (std::abs(l - exp_l * 32767.0) >= 400.0 ||
+        std::abs(r - exp_r * 32767.0) >= 400.0) {
+        std::fprintf(stderr,
+                     "downmix case '%s': got L=%.0f R=%.0f, want %.0f/"
+                     "%.0f\n",
+                     key, l, r, exp_l * 32767.0, exp_r * 32767.0);
+    }
+    XER_VE_CHECK(std::abs(l - exp_l * 32767.0) < 400.0);
+    XER_VE_CHECK(std::abs(r - exp_r * 32767.0) < 400.0);
+}
+
+void TestMultichannelDownmix() {
+    // 2ch passthrough + mono duplicate (sanity on unchanged paths).
+    {
+        const float lv[] = {0.5f, 0.4f};
+        CheckDownmix("st.wav",
+                     MakeChannelSpec(1.0, 2, 48000, lv, false, 0),
+                     0.5, 0.4);
+    }
+    {
+        const float lv[] = {0.4f};
+        CheckDownmix("mono.wav",
+                     MakeChannelSpec(1.0, 1, 48000, lv, false, 0),
+                     0.4, 0.4);
+    }
+    // 3ch, no mask -> 3.0 guess (FL FR FC): center folds at 0.7071.
+    {
+        const float lv[] = {0.5f, 0.4f, 0.3f};
+        CheckDownmix("tri.wav",
+                     MakeChannelSpec(1.0, 3, 48000, lv, false, 0),
+                     0.5 + kG_C * 0.3, 0.4 + kG_C * 0.3);
+    }
+    // 4ch quad — mask and mask-less paths both give rears 0.7071.
+    {
+        const float lv[] = {0.5f, 0.4f, 0.2f, 0.1f};
+        const double el = 0.5 + kG_Q * 0.2, er = 0.4 + kG_Q * 0.1;
+        CheckDownmix("q_mask.wav",
+                     MakeChannelSpec(1.0, 4, 48000, lv, false,
+                                     kMaskQuad),
+                     el, er);
+        CheckDownmix("q_guess.wav",
+                     MakeChannelSpec(1.0, 4, 48000, lv, false, 0),
+                     el, er);
+    }
+    // 4.1 (5ch): quad + LFE dropped — hot LFE must not leak.
+    {
+        const float lv[] = {0.5f, 0.4f, 0.9f, 0.2f, 0.1f};
+        CheckDownmix("fourone.wav",
+                     MakeChannelSpec(1.0, 5, 48000, lv, false,
+                                     kMask41),
+                     0.5 + kG_Q * 0.2, 0.4 + kG_Q * 0.1);
+        // count heuristic: LFE last in the guessed order.
+        const float lv2[] = {0.5f, 0.4f, 0.2f, 0.1f, 0.9f};
+        CheckDownmix("fourone_g.wav",
+                     MakeChannelSpec(1.0, 5, 48000, lv2, false, 0),
+                     0.5 + kG_Q * 0.2, 0.4 + kG_Q * 0.1);
+    }
+    // 5.1 rear mask (0x3F) — interleaved AND planar fltp (the real
+    // AAC decode path; planar multichannel must not be rejected).
+    {
+        const float lv[] = {0.5f, 0.4f, 0.3f, 0.9f, 0.2f, 0.1f};
+        const double el = 0.5 + kG_C * 0.3 + kG_S * 0.2;
+        const double er = 0.4 + kG_C * 0.3 + kG_S * 0.1;
+        CheckDownmix("s51_i.wav",
+                     MakeChannelSpec(1.0, 6, 48000, lv, false,
+                                     kMask51Rear),
+                     el, er);
+        CheckDownmix("s51_p.wav",
+                     MakeChannelSpec(1.0, 6, 48000, lv, true,
+                                     kMask51Rear),
+                     el, er);
+        // 5.1 side mask: SL/SR get the same 0.5 surround gain.
+        CheckDownmix("s51_side.wav",
+                     MakeChannelSpec(1.0, 6, 48000, lv, false,
+                                     kMask51Side),
+                     el, er);
+        // No mask -> count heuristic guesses 5.1-rear ordering.
+        CheckDownmix("s51_g.wav",
+                     MakeChannelSpec(1.0, 6, 48000, lv, false, 0),
+                     el, er);
+    }
+    // Mask over count: same 6 channels, positions [FL FR FC LFE BC
+    // SL] — BC folds 0.35 to BOTH sides, SL goes left only.
+    {
+        const float lv[] = {0.5f, 0.4f, 0.3f, 0.9f, 0.2f, 0.1f};
+        CheckDownmix(
+            "six_custom.wav",
+            MakeChannelSpec(1.0, 6, 48000, lv, false,
+                            kBitFL | kBitFR | kBitFC | kBitLFE |
+                                kBitBC | kBitSL),
+            0.5 + kG_C * 0.3 + kG_BC * 0.2 + kG_S * 0.1,
+            0.4 + kG_C * 0.3 + kG_BC * 0.2);
+    }
+    // 6.1 (7ch) — native order [FL FR FC LFE BC SL SR] (ascending bit
+    // index — BC precedes the side pair); BC splits 0.35 each side.
+    {
+        //                     FL    FR    FC    LFE   BC    SL    SR
+        const float lv[] = {0.3f, 0.2f, 0.2f, 0.9f, 0.15f, 0.1f, 0.4f};
+        const double el =
+            0.3 + kG_C * 0.2 + kG_BC * 0.15 + kG_S * 0.1;
+        const double er =
+            0.2 + kG_C * 0.2 + kG_BC * 0.15 + kG_S * 0.4;
+        CheckDownmix("s61.wav",
+                     MakeChannelSpec(1.0, 7, 48000, lv, false, kMask61),
+                     el, er);
+        CheckDownmix("s61_g.wav",
+                     MakeChannelSpec(1.0, 7, 48000, lv, false, 0),
+                     el, er);
+    }
+    // 7.0 (no LFE) — [FL FR FC BL BR SL SR].
+    {
+        const float lv[] = {0.3f, 0.2f, 0.2f, 0.15f, 0.1f, 0.1f, 0.05f};
+        CheckDownmix("s70.wav",
+                     MakeChannelSpec(1.0, 7, 48000, lv, false, kMask70),
+                     0.3 + kG_C * 0.2 + kG_S * 0.15 + kG_S * 0.1,
+                     0.2 + kG_C * 0.2 + kG_S * 0.1 + kG_S * 0.05);
+    }
+    // 7.1 (8ch) — [FL FR FC LFE BL BR SL SR], mask and heuristic.
+    {
+        const float lv[] =
+            {0.3f, 0.2f, 0.2f, 0.9f, 0.15f, 0.1f, 0.1f, 0.05f};
+        const double el =
+            0.3 + kG_C * 0.2 + kG_S * 0.15 + kG_S * 0.1;
+        const double er =
+            0.2 + kG_C * 0.2 + kG_S * 0.1 + kG_S * 0.05;
+        CheckDownmix("s71.wav",
+                     MakeChannelSpec(1.0, 8, 48000, lv, false, kMask71),
+                     el, er);
+        CheckDownmix("s71_g.wav",
+                     MakeChannelSpec(1.0, 8, 48000, lv, false, 0),
+                     el, er);
+    }
+    // 7.1-wide (FLC/FRC instead of SL/SR) — front stage folds at
+    // 0.7071 into its own side.
+    {
+        const float lv[] =
+            {0.3f, 0.2f, 0.2f, 0.9f, 0.15f, 0.1f, 0.1f, 0.05f};
+        CheckDownmix("s71w.wav",
+                     MakeChannelSpec(1.0, 8, 48000, lv, false,
+                                     kMask71Wide),
+                     0.3 + kG_C * 0.2 + kG_S * 0.15 + kG_FW * 0.1,
+                     0.2 + kG_C * 0.2 + kG_S * 0.1 + kG_FW * 0.05);
+    }
+    // Mask/count disagreement -> mask ignored, count heuristic wins
+    // (4ch data with a 6-bit mask must still downmix, as quad).
+    {
+        const float lv[] = {0.5f, 0.4f, 0.2f, 0.1f};
+        CheckDownmix("mismatch.wav",
+                     MakeChannelSpec(1.0, 4, 48000, lv, false,
+                                     kMask51Rear),
+                     0.5 + kG_Q * 0.2, 0.4 + kG_Q * 0.1);
+    }
+    // >8 channels: warn once, first two = L/R (documented fallback).
+    {
+        const float lv[] = {0.3f, 0.2f, 0.9f, 0.9f, 0.9f, 0.9f,
+                            0.9f, 0.9f, 0.9f, 0.9f};
+        auto bank = std::make_shared<FakeBank>();
+        bank->specs["wide.wav"] =
+            MakeChannelSpec(1.0, 10, 48000, lv, false, 0);
+        Project p = MakeProject();
+        p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, "wide.wav"));
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(std::abs(ChunkMeanChannel(chunk, 0) - 0.3 * 32767.0) <
+                     400.0);
+        XER_VE_CHECK(std::abs(ChunkMeanChannel(chunk, 1) - 0.2 * 32767.0) <
+                     400.0);
+        bool warned = false;
+        for (const std::string& w : mixer.Warnings()) {
+            if (w.find("channels") != std::string::npos) {
+                warned = true;
+            }
+        }
+        XER_VE_CHECK(warned);
+    }
+}
+
+// ------------------------------------------------------------------
+// Case 12 — FFmpeg-gated: real A/V file (video + audio track) through
+// the bridge decoder -> AudioMixer. Regression for "no sound when a
+// video file has audio": encodes a stereo-AAC + h264/mpeg4 MP4 and a
+// 6ch WAV with distinct channel levels, then verifies non-silent,
+// correctly-downmixed output through the REAL decode path (the fake
+// cases above bypass the tap entirely).
+// ------------------------------------------------------------------
+
+void FillAvVideoFrame(FFmpeg::VideoFrameInfo* frame, int width,
+                      int height) {
+    frame->width = width;
+    frame->height = height;
+    frame->pixel_format = "bgra";
+    // SetupVideoEncoder requires a non-empty line_sizes — the fixture
+    // silently skipped ("fixture encode failed") until it was set.
+    frame->line_sizes = {width * 4};
+    frame->data.assign(static_cast<std::size_t>(width) * height * 4u,
+                       0);
+    for (std::size_t o = 0; o + 3 < frame->data.size(); o += 4) {
+        frame->data[o + 0] = 40;
+        frame->data[o + 1] = 80;
+        frame->data[o + 2] = 160;
+        frame->data[o + 3] = 255;
+    }
+}
+
+void TestRealAvFileAudio() {
+    if (!FFmpeg::IsAvailable()) {
+        return;   // self-skip like the other suites
+    }
+    const auto dir = XER::VideoEditor::Test::TempDir() / "mixer_av";
+    std::filesystem::create_directories(dir);
+
+    // (a) Stereo AAC + video MP4 — THE reported scenario: a video file
+    // whose audio track must reach the mixer.
+    {
+        const auto mp4 = dir / "av.mp4";
+        const std::string mp4_utf8 = Path::ToUtf8(mp4);
+        FFmpeg::EncodeAudioVideoParams params;
+        params.video.output_path = mp4_utf8;
+        params.video.width = 64;
+        params.video.height = 64;
+        params.video.pixel_format = "bgra";
+        params.video.fps_num = 15;
+        params.video.fps_den = 1;
+        params.video.bit_rate = 120000;
+        params.audio.codec_name = "aac";
+        params.audio.sample_rate = 48000;
+        params.audio.channels = 2;
+        params.audio.sample_format = "s16";
+        params.audio.bit_rate = 96000;
+
+        constexpr std::size_t kFrames = 30;   // 2 s @ 15 fps
+        // 1 s of 440 Hz stereo s16 chunks (this file's FillSineFrame:
+        // amplitude 12000 ~ -8.7 dBFS).
+        std::vector<FFmpeg::AudioFrameInfo> chunks;
+        for (std::int64_t done = 0; done < 48000;) {
+            const int n =
+                static_cast<int>(std::min<std::int64_t>(1024,
+                                                        48000 - done));
+            FFmpeg::AudioFrameInfo f;
+            FillSineFrame(&f, n, 48000, 2, done);
+            chunks.push_back(std::move(f));
+            done += n;
+        }
+        auto video_provider = [](std::size_t,
+                                 FFmpeg::VideoFrameInfo* out,
+                                 std::string*) {
+            FillAvVideoFrame(out, 64, 64);
+            return true;
+        };
+        auto audio_provider = [&chunks](std::size_t index,
+                                        FFmpeg::AudioFrameInfo* out,
+                                        std::string*) {
+            if (index >= chunks.size()) return false;
+            *out = chunks[index];
+            return true;
+        };
+        bool encoded = false;
+        for (const char* codec : {"libx264", "mpeg4"}) {
+            params.video.codec_name = codec;
+            std::string err;
+            if (FFmpeg::EncodeAudioVideoStream(params, kFrames,
+                                               video_provider,
+                                               chunks.size(),
+                                               audio_provider, &err)) {
+                encoded = true;
+                break;
+            }
+        }
+        if (!encoded) {
+            std::fprintf(stderr,
+                         "note: A/V fixture encode failed; skipping\n");
+        } else {
+            Project p = MakeProject();
+            p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, mp4_utf8));
+            AudioMixer mixer;
+            std::string err;
+            XER_VE_CHECK(mixer.Init(p, AudioMixerOptions{}, &err));
+            // Mid-clip chunk must carry decoded audio, not silence.
+            FFmpeg::AudioFrameInfo chunk;
+            XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+            XER_VE_CHECK(ChunkPeak(chunk) > 3000.0);
+        }
+    }
+
+    // (b) 6-channel WAV through the real decode path — the layout mask
+    // (or 5.1 fallback) must produce a weighted stereo fold: FL is
+    // deliberately hot (0.6) so L >> R proves channel mapping, not a
+    // flat average.
+    {
+        const auto wav = dir / "sixch.wav";
+        const std::string wav_utf8 = Path::ToUtf8(wav);
+        const float levels[] = {0.6f, 0.1f, 0.1f, 0.9f, 0.1f, 0.1f};
+        std::vector<FFmpeg::AudioFrameInfo> frames;
+        for (int done = 0; done < 48000;) {
+            const int n = std::min(1024, 48000 - done);
+            FFmpeg::AudioFrameInfo f;
+            FillChannelDC(&f, 48000, 6, n, levels);
+            frames.push_back(std::move(f));
+            done += n;
+        }
+        FFmpeg::EncodeAudioParams params;
+        params.output_path = wav_utf8;
+        params.codec_name = "pcm_s16le";
+        params.sample_rate = 48000;
+        params.channels = 6;
+        params.sample_format = "s16";
+        std::string err;
+        if (!FFmpeg::EncodeAudioFrames(params, frames, &err)) {
+            std::fprintf(stderr,
+                         "note: 6ch WAV fixture encode failed: %s\n",
+                         err.c_str());
+        } else {
+            Project p = MakeProject();
+            p.clips.push_back(MakeClip("c1", 1, 0.0, 1.0, wav_utf8));
+            AudioMixer mixer;
+            XER_VE_CHECK(mixer.Init(p, AudioMixerOptions{}, &err));
+            FFmpeg::AudioFrameInfo chunk;
+            XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+            const double l = ChunkMeanChannel(chunk, 0);
+            const double r = ChunkMeanChannel(chunk, 1);
+            XER_VE_CHECK(l > 14000.0);          // FL-driven left
+            XER_VE_CHECK(r > 1000.0);           // FR+center+rear fold
+            XER_VE_CHECK(l > r * 1.5);          // not a flat mix
+        }
+    }
+}
+
+// ------------------------------------------------------------------
+// Case — linked A/V pair: the video clip's embedded audio is
+// suppressed in favor of its linked audio-track partner (Premiere
+// semantics; placement creates the pair in AddMediaToTimeline /
+// EditSourceToTimeline).
+// ------------------------------------------------------------------
+void TestLinkedPairSuppression() {
+    auto bank = std::make_shared<FakeBank>();
+    bank->specs["av.mp4"] = MakeSineSpec(1.0);   // amp 0.8 -> ~26k peak
+
+    // Linked pair (same source, shared link_group): only ONE decoder
+    // session opens and the chunk carries a single sine — no double
+    // decode/mix of the same stream.
+    {
+        Project p = MakeProject();
+        Clip v = MakeClip("v1", 0, 0.0, 1.0, "av.mp4");
+        Clip a = MakeClip("a1", 1, 0.0, 1.0, "av.mp4");
+        v.link_group = a.link_group = "lg1";
+        p.clips.push_back(v);
+        p.clips.push_back(a);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        const double peak = ChunkPeak(chunk);
+        XER_VE_CHECK(peak > 20000.0);
+        // Two identical sines would sum to 1.6 and clamp at 32767.
+        XER_VE_CHECK(peak < 30000.0);
+        XER_VE_CHECK(bank->open_counts["av.mp4"] == 1);
+    }
+
+    // Same two clips UNLINKED: both sessions decode, the summed sines
+    // clamp to full scale — proves suppression is link_group-driven,
+    // not something the track layout alone causes.
+    {
+        bank->open_counts.clear();
+        Project p = MakeProject();
+        p.clips.push_back(MakeClip("v1", 0, 0.0, 1.0, "av.mp4"));
+        p.clips.push_back(MakeClip("a1", 1, 0.0, 1.0, "av.mp4"));
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(ChunkPeak(chunk) > 31000.0);
+        XER_VE_CHECK(bank->open_counts["av.mp4"] == 2);
+    }
+
+    // A linked video clip WITHOUT an audio-track partner keeps its
+    // embedded audio — deleting/unlinking the audio leg restores it.
+    {
+        bank->open_counts.clear();
+        Project p = MakeProject();
+        Clip v = MakeClip("v1", 0, 0.0, 1.0, "av.mp4");
+        v.link_group = "lg-orphan";
+        p.clips.push_back(v);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(ChunkPeak(chunk) > 20000.0);
+        XER_VE_CHECK(bank->open_counts["av.mp4"] == 1);
+    }
+
+    // Link partner on a VIDEO track does NOT suppress (the group only
+    // hands audio off to an audio-track clip).
+    {
+        bank->open_counts.clear();
+        Project p = MakeProject();
+        Clip v = MakeClip("v1", 0, 0.0, 1.0, "av.mp4");
+        Clip v2 = MakeClip("v2", 0, 1.0, 1.0, "av.mp4");
+        v.link_group = v2.link_group = "lg2";
+        p.clips.push_back(v);
+        p.clips.push_back(v2);
+        AudioMixer mixer;
+        XER_VE_CHECK(InitMixer(&mixer, p, bank));
+        FFmpeg::AudioFrameInfo chunk;
+        std::string err;
+        XER_VE_CHECK(mixer.GetChunk(23, &chunk, &err));
+        XER_VE_CHECK(ChunkPeak(chunk) > 20000.0);
+    }
+}
+
 }  // namespace
 
 int XER_VideoEditor_RunMixerTests() {
     TestGainMuteFades();
+    TestLinkedPairSuppression();
     TestOverlapSumClamp();
     TestTransitions();
     TestChunking();
@@ -1514,5 +2064,7 @@ int XER_VideoEditor_RunMixerTests() {
     TestFfmpegWavIntegration();
     TestPanTrackGainRateMeters();
     TestTrackPanMasterGain();
+    TestMultichannelDownmix();
+    TestRealAvFileAudio();
     return 0;
 }

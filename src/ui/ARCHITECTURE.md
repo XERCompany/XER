@@ -356,6 +356,51 @@ private:
 } // namespace XER::UI::Rendering
 ```
 
+### Renderer Providers (backends)
+
+`rendering/renderer_provider.h` defines `RendererBackend`
+(`kAuto | kSoftware | kD2D | kD3D11 | kVulkan`), a `RendererProvider`
+contract, and the factory:
+
+```cpp
+std::unique_ptr<Renderer> CreateRenderer(RendererBackend, void* hwnd);
+std::unique_ptr<Renderer> CreateRendererFromEnv(void* hwnd);
+```
+
+Selection precedence: `XER_UI_RENDERER=vulkan|d2d|d3d11|software|auto`
+(case-insensitive) > the automatic chain. The factory always walks the
+fallback chain (`kD2D`/`kD3D11` -> `kVulkan` -> `kSoftware`) so a request
+for a missing backend (e.g. no Vulkan ICD) degrades instead of failing.
+`kD3D11` is a documented alias: the Direct2D renderer already owns the
+D3D11 device + swapchain, so it *is* the D3D11-device provider rather
+than a second GPU pipeline.
+
+Backend implementation matrix:
+
+| Op                    | kD2D / kD3D11        | kVulkan (WSI)           | kSoftware (GDI/DIB)      |
+|-----------------------|----------------------|-------------------------|--------------------------|
+| FillRect (rounded)    | full                 | sharp corners only      | full + AA                |
+| StrokeRect / DrawLine | full                 | quad emission           | quad scanline            |
+| DrawText / Measure    | DirectWrite          | GDI mask -> texture     | GDI mask -> blend        |
+| DrawImage (file)      | WIC -> D2D bitmap    | WIC -> VkImage          | WIC -> blend             |
+| BGRA frames/resources | D2D staging bitmaps  | staging -> VkImage      | sampled blend            |
+| PushClip / PopClip    | axis-aligned clip    | dynamic scissor (AABB)  | clip-rect stack          |
+| PushLayer / blend     | D2D layer (opacity)  | opacity multiplier      | opacity multiplier       |
+| SetTransform (2x3)    | DC transform         | folded into NDC quads   | folded into px quads     |
+| BackdropBlur          | scrim/shadow approx  | scrim approx            | real box blur            |
+
+Deferred on Vulkan: rounded `FillRect` corners, `corner_radius` image
+clipping, blend modes/layer blur beyond opacity (same approximation as
+D2D), real frosted-glass blur. The Vulkan renderer is immediate-mode
+(`TakeTargetsRecreated()` is always true) so `WidgetTree` repaints the
+full frame; the retained D2D canvas keeps partial-damage rendering.
+
+Vulkan needs no SDK to build: headers resolve from the Vulkan SDK,
+or the copy vendored in skia's `third_party/vulkan`, and `vulkan-1.dll`
+is loaded dynamically. No loader/ICD -> `Create()` returns nullptr ->
+factory falls back. `src/config.h`'s `XER_HAVE_VULKAN_VULKAN_H` only
+records SDK presence; it does not gate the backend.
+
 ## Usage Example
 
 ```cpp

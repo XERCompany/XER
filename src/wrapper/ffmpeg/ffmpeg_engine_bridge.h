@@ -84,6 +84,12 @@ struct StreamInfo {
 	std::int64_t frame_count = 0;
 	std::string language;
 	std::vector<MetadataEntry> metadata;
+	// AVStream::disposition & AV_DISPOSITION_ATTACHED_PIC — embedded
+	// cover art (id3v2 APIC / FLAC picture block / mp4 covr). A
+	// "video" stream with this flag is a picture belonging to the
+	// audio, never movie frames — classification must not treat it
+	// as the primary video stream.
+	bool attached_pic = false;
 };
 
 struct MediaInfo {
@@ -167,6 +173,10 @@ struct AudioFrameInfo {
 	int stream_index = -1;
 	int sample_rate = 0;
 	int channels = 0;
+	// FFmpeg channel-layout bitmask (AV_CHANNEL_LAYOUT_*): which
+	// speaker position each channel index carries. 0 = unknown —
+	// consumers fall back to channel-count heuristics.
+	std::int64_t channel_layout = 0;
 	int sample_count = 0;
 	bool planar = false;
 	std::string sample_format;
