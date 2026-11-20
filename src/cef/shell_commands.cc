@@ -3,6 +3,8 @@
 // the process-message plumbing at the bottom needs CEF.
 #include "shell_commands.h"
 
+#include "config.h"
+
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -310,7 +312,7 @@ std::string CmdXerVersion(const std::string&) {
     Json::Value v(Json::objectValue);
     v["ok"] = true;
     v["product"] = "XERBrowserShell";
-    v["version"] = "1.0";
+    v["version"] = XER_VERSION_STRING;
     return WriteJson(v);
 }
 

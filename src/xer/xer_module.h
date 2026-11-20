@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.h"
 #include "async_io/log_and_debug/io_perf_counter.h"
 #include "xer/xer_value.h"
 

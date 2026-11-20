@@ -1,6 +1,7 @@
 #ifndef XER_JSON_CONFIG_HELPER_H
 #define XER_JSON_CONFIG_HELPER_H
 
+#include "config.h"
 #include <filesystem>
 #include <string>
 #include <vector>

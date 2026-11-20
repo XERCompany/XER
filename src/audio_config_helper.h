@@ -1,6 +1,7 @@
 #ifndef XER_AUDIO_CONFIG_HELPER_H
 #define XER_AUDIO_CONFIG_HELPER_H
 
+#include "config.h"
 #include "app_command.h"
 #include "json_config_helper.h"
 #include <string>

@@ -1,5 +1,7 @@
 #include "audio/demo/audio_analysis_smoke.h"
 
+#include "config.h"
+
 #include <cstdlib>
 #include <filesystem>
 #include <iostream>
@@ -60,7 +62,7 @@ int main(int argc, char** argv) {
 			return 0;
 		}
 		if (arg == "version" || arg == "--version" || arg == "-v") {
-			std::cout << "XERAudioAnalysisSmoke 1.0\n";
+			std::cout << "XERAudioAnalysisSmoke " XER_VERSION_STRING "\n";
 			return 0;
 		}
 		if ((arg == "--audio_input" || arg == "--input") && index + 1 < argc) {

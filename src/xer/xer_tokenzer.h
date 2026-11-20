@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.h"
 #include "xer/xer_string.h"
 
 #include <cstddef>

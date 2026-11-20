@@ -1,5 +1,7 @@
 #include "clap_external_plugin_host.h"
 
+#include "config.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -70,7 +72,7 @@ ClapExternalPluginHost::ClapExternalPluginHost() {
 	host_.name = "XER";
 	host_.vendor = "XER";
 	host_.url = "https://xer.local";
-	host_.version = "1.0";
+	host_.version = XER_VERSION_STRING;
 	host_.get_extension = &ClapExternalPluginHost::HostGetExtension;
 	host_.request_restart = &ClapExternalPluginHost::HostRequestRestart;
 	host_.request_process = &ClapExternalPluginHost::HostRequestProcess;

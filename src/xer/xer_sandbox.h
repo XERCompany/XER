@@ -1,5 +1,6 @@
 #pragma once
 
+#include "config.h"
 #include "engine_params.h"
 
 #include <filesystem>
