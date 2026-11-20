@@ -1,0 +1,62 @@
+# Dockerfile.cef — Chromium/CEF source-build environment (Windows).
+#
+# What InstallCef.ps1 avoids by downloading a prebuilt cef_binary_*
+# archive, this image builds from source: VS Build Tools 2022 (VCTools
+# workload + Windows SDK) + MinGit + Chromium depot_tools.
+#
+# A source build is heavy: ~30 GB image, ~100 GB checkout+build in the
+# cache volume, several hours on a workstation. The named volume
+# xer-cef-cache (mounted at C:\cef by BuildChromiumCEFWithDocker.ps1)
+# keeps depot_tools and the chromium_git checkout across runs so only
+# the first build pays full cost.
+#
+# Build:
+#   docker build -f docker/Dockerfile.cef -t xer/cef-builder:latest .
+#
+# Requires Windows container mode (see Dockerfile.toolchain).
+
+# escape=`
+FROM mcr.microsoft.com/windows/servercore:ltsc2022
+
+SHELL ["powershell", "-NoProfile", "-Command", "$ErrorActionPreference='Stop';"]
+
+ARG VS_BUILDTOOLS_URL=https://aka.ms/vs/17/release/vs_buildtools.exe
+ARG MINGIT_URL=https://github.com/git-for-windows/git/releases/download/v2.51.2.windows.1/MinGit-2.51.2-64-bit.zip
+ARG DEPOT_TOOLS_URL=https://chromium.googlesource.com/chromium/tools/depot_tools.git
+
+# --- Visual Studio Build Tools 2022: C++ workload + Windows 11 SDK ---
+# --wait makes the bootstrapper stay until setup finishes (container
+# builds have no console for it to detach into); --norestart so a
+# pending reboot does not abort the layer.
+RUN Invoke-WebRequest -UseBasicParsing -Uri $env:VS_BUILDTOOLS_URL -OutFile C:\vs_buildtools.exe; `
+    C:\vs_buildtools.exe --quiet --wait --norestart --nocache `
+        --installPath C:\BuildTools `
+        --add Microsoft.VisualStudio.Workload.VCTools `
+        --add Microsoft.VisualStudio.Component.Windows11SDK.22621 `
+        --includeRecommended | Out-Default; `
+    if ($LASTEXITCODE -and $LASTEXITCODE -ne 3010) { `
+        throw "VS Build Tools install failed ($LASTEXITCODE)" }; `
+    Remove-Item C:\vs_buildtools.exe
+
+# --- MinGit (depot_tools fetch + gclient need git.exe) ---
+RUN Invoke-WebRequest -UseBasicParsing -Uri $env:MINGIT_URL -OutFile C:\mingit.zip; `
+    Expand-Archive C:\mingit.zip -DestinationPath C:\git; `
+    Remove-Item C:\mingit.zip
+
+ENV PATH="C:\git\cmd;${PATH}"
+
+# --- depot_tools (persistent copy lives on the cache volume at C:\cef;
+#     this in-image copy is only the bootstrap for the first clone) ---
+RUN git clone --depth 1 $env:DEPOT_TOOLS_URL C:\depot_tools
+
+# depot_tools must NOT fetch its own VS — point it at the installed
+# Build Tools (standard CEF-on-Windows-container wiring).
+ENV DEPOT_TOOLS_WIN_TOOLCHAIN=0 `
+    DEPOT_TOOLS_UPDATE=0 `
+    GYP_MSVS_VERSION=2022 `
+    GYP_MSVS_OVERRIDE_PATH=C:\BuildTools `
+    vs2022_install=C:\BuildTools `
+    PATH="C:\depot_tools;C:\git\cmd;${PATH}"
+
+WORKDIR C:\cef
+ENTRYPOINT ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass"]
