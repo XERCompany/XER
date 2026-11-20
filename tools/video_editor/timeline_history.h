@@ -86,7 +86,8 @@ public:
                      const MediaBounds& bounds, std::string* error_out = nullptr);
     bool AddTransition(const std::string& from_clip,
                        const std::string& to_clip, Transition::Type type,
-                       double duration, std::string* error_out = nullptr);
+                       double duration, std::string* error_out = nullptr,
+                       const std::string& script = "");
     bool RemoveTransition(const std::string& from_clip,
                           const std::string& to_clip);
     int  AddTrack(TrackKind kind, const std::string& name);

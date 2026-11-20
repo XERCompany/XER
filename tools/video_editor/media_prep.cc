@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "frame.h"   // src/video — video::Frame
+#include "media_worker_client.h"
 
 namespace XER::VideoEditor {
 namespace {
@@ -258,13 +259,33 @@ bool MediaPrep::RunJob(const Key& key, JobOut* out) {
     }
     switch (key.kind) {
         case Kind::kPosterAt:
+            // Out-of-process decode first: a decoder crash kills the
+            // --media-worker subprocess, not the editor. The client
+            // returns false on spawn fail/timeout/death/suspect-path —
+            // the in-process decode below is the seamless fallback.
+#if defined(_WIN32)
+            if (MediaWorkerClient::Shared().PosterAt(
+                    key.path,
+                    static_cast<double>(key.aux) / 1000.0,
+                    out->frame)) {
+                return true;
+            }
+#endif
             return MediaCatalog::GetPosterAt(
                 key.path, static_cast<double>(key.aux) / 1000.0,
                 out->frame, nullptr);
         case Kind::kPeaks:
+#if defined(_WIN32)
+            if (MediaWorkerClient::Shared().AudioPeaks(key.path,
+                                                     out->peaks)) {
+                return true;
+            }
+#endif
             return catalog_ != nullptr &&
                    catalog_->GetAudioPeaks(key.path, out->peaks);
         case Kind::kImportPoster:
+            // Stays in-process: the catalog row update lives here —
+            // the worker cannot write the parent's SQLite.
             return catalog_ != nullptr &&
                    catalog_->ExtractPoster(key.path);
     }

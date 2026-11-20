@@ -641,6 +641,18 @@ bool JsEngine::CallHandler(const std::string& key,
 
 v8::Isolate* JsEngine::isolate() const { return impl_->isolate; }
 
+bool JsEngine::WithContext(const std::function<bool(
+                               v8::Isolate*, v8::Local<v8::Context>)>& fn) {
+    if (impl_->isolate == nullptr || fn == nullptr) {
+        return false;
+    }
+    v8::Isolate::Scope isolate_scope(impl_->isolate);
+    v8::HandleScope handle_scope(impl_->isolate);
+    const v8::Local<v8::Context> ctx = impl_->context.Get(impl_->isolate);
+    const v8::Context::Scope context_scope(ctx);
+    return fn(impl_->isolate, ctx);
+}
+
 #else   // !XER_VE_HAS_V8 — no system V8: inert stubs, Boot() keeps
         // compiled-in defaults (the js engine error is non-fatal).
 
@@ -702,6 +714,11 @@ bool JsEngine::CallHandler(const std::string& key,
 }
 
 v8::Isolate* JsEngine::isolate() const { return nullptr; }
+
+bool JsEngine::WithContext(const std::function<bool(
+                               v8::Isolate*, v8::Local<v8::Context>)>&) {
+    return false;
+}
 
 #endif  // XER_VE_HAS_V8
 

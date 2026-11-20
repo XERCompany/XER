@@ -40,6 +40,7 @@
 #include "ai/beat_markers.h"
 #include "ai/whisper_transcribe.h"
 #include "playback/audio_sink_factory.h"
+#include "js_fx.h"
 #include "plugin_host.h"
 #include "project_store.h"
 #include "extensions/ext_host.h"
@@ -641,8 +642,8 @@ void VideoEditorAppWidget::EnsureChildren() {
     };
     inspector_hooks.on_add_transition =
         [this](const std::string& id, Transition::Type type,
-               double duration) {
-            AddTransitionAfter(id, type, duration);
+               double duration, const std::string& script) {
+            AddTransitionAfter(id, type, duration, script);
         };
     inspector_hooks.on_set_keyframes =
         [this](const std::string& id, KeyProp prop,
@@ -999,8 +1000,8 @@ void VideoEditorAppWidget::EnsureChildren() {
         };
     timeline_hooks.on_add_transition =
         [this](const std::string& id, Transition::Type type,
-               double duration) {
-            AddTransitionAfter(id, type, duration);
+               double duration, const std::string& script) {
+            AddTransitionAfter(id, type, duration, script);
         };
     timeline_hooks.on_add_marker =
         [this](double t, const std::string& name) {
@@ -1226,6 +1227,15 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
         item("Open Plugin Editor", "",
              [this] { OpenVst3FxEditor(selected_clip_id_, -1); }),
     };
+    // JS audio effects (assets/scripts/fx): one menu item each —
+    // they append to the same clip.audio_fx list as VST3 entries and
+    // route to the JsFxRuntime at mix time.
+    for (const auto& d : JsFxRuntime::AudioEffects()) {
+        const std::string id = d.id;
+        edit.items.push_back(
+            item("Add JS FX: " + d.title, "",
+                 [this, id] { AddScriptAudioFxToSelectedClip(id); }));
+    }
     Menu timeline;
     timeline.label = "Timeline";
     const Clip* menu_sel_clip = FindClip(project_, selected_clip_id_);
@@ -1932,7 +1942,7 @@ void VideoEditorAppWidget::DeleteClip(const std::string& clip_id) {
 
 void VideoEditorAppWidget::AddTransitionAfter(
     const std::string& clip_id, Transition::Type type,
-    double duration) {
+    double duration, const std::string& script) {
     const Clip* clip = FindClip(project_, clip_id);
     if (clip == nullptr) return;
     const Clip* next = nullptr;
@@ -1950,17 +1960,18 @@ void VideoEditorAppWidget::AddTransitionAfter(
         SetStatus("No adjacent clip for transition", true);
         return;
     }
-    AddTransitionPair(clip->id, next->id, type, duration);
+    AddTransitionPair(clip->id, next->id, type, duration, script);
 }
 
 void VideoEditorAppWidget::AddTransitionPair(
     const std::string& from_id, const std::string& to_id,
-    Transition::Type type, double duration) {
+    Transition::Type type, double duration,
+    const std::string& script) {
     const double applied =
         duration > 0.0 ? duration : transition_duration_;
     std::string error;
     if (!history_.AddTransition(from_id, to_id, type, applied,
-                                &error)) {
+                                &error, script)) {
         SetStatus("Transition failed: " + error, true);
         return;
     }
@@ -1968,6 +1979,7 @@ void VideoEditorAppWidget::AddTransitionPair(
     // menu's <= 0 duration requests follow the last-used pair.
     transition_type_ = type;
     transition_duration_ = applied;
+    transition_script_ = script;
     NotifyProjectChanged();
     SetStatus(std::string("Added ") + TransitionTypeLabel(type));
 }
@@ -2003,13 +2015,14 @@ void VideoEditorAppWidget::ApplyDefaultTransition() {
     }
     if (from != nullptr && to != nullptr) {
         AddTransitionPair(from->id, to->id, transition_type_,
-                          transition_duration_);
+                          transition_duration_, transition_script_);
         return;
     }
     // No junction at all — fall back to the selected clip's out-edge
     // (same adjacency resolution as the pickers).
     if (!selected_clip_id_.empty()) {
-        AddTransitionAfter(selected_clip_id_, transition_type_, -1.0);
+        AddTransitionAfter(selected_clip_id_, transition_type_, -1.0,
+                           transition_script_);
     } else {
         SetStatus("No junction for a transition", true);
     }
@@ -3497,6 +3510,28 @@ void VideoEditorAppWidget::AddVst3FxToSelectedClip() {
 #else
     SetStatus("VST3 is Windows-only", true);
 #endif
+}
+
+void VideoEditorAppWidget::AddScriptAudioFxToSelectedClip(
+    const std::string& script_id) {
+    const Clip* clip = FindClip(project_, selected_clip_id_);
+    if (clip == nullptr) {
+        SetStatus("Select a clip first", true);
+        return;
+    }
+    Clip updated = *clip;
+    ClipAudioFx fx;
+    fx.plugin_path = "script:" + script_id;
+    fx.name = script_id;
+    updated.audio_fx.push_back(std::move(fx));
+    std::string error;
+    if (!history_.ReplaceClip(clip->id, updated,
+                              BoundsForPath(clip->source_path), &error)) {
+        SetStatus("Add JS FX failed: " + error, true);
+        return;
+    }
+    NotifyProjectChanged();
+    SetStatus("Added JS audio effect: " + script_id);
 }
 
 void VideoEditorAppWidget::OpenVst3FxEditor(const std::string& clip_id,

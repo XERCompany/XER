@@ -62,9 +62,9 @@ public:
 
 private:
     struct EffectInfo {
-        const char* type;
+        std::string type;               // ClipEffect.type ("script:id" for JS)
         std::vector<float> default_params;
-        const char* description;
+        std::string description;
     };
 
     static const std::vector<EffectInfo>& Catalog();

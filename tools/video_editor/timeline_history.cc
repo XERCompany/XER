@@ -90,7 +90,8 @@ bool TransitionsEqual(const std::vector<Transition>& a,
         const Transition& x = a[i];
         const Transition& y = b[i];
         if (x.from_clip != y.from_clip || x.to_clip != y.to_clip ||
-            x.type != y.type || x.duration != y.duration) {
+            x.type != y.type || x.duration != y.duration ||
+            x.script != y.script) {
             return false;
         }
     }
@@ -927,15 +928,17 @@ private:
 class AddTransitionCommand : public Command {
 public:
     AddTransitionCommand(std::string from, std::string to,
-                         Transition::Type type, double duration)
+                         Transition::Type type, double duration,
+                         std::string script)
         : from_(std::move(from)),
           to_(std::move(to)),
           type_(type),
-          duration_(duration) {}
+          duration_(duration),
+          script_(std::move(script)) {}
     bool Apply(Project& project) override {
         last_error_.clear();
         return AddTransition(project, from_, to_, type_, duration_,
-                             &last_error_);
+                             &last_error_, script_);
     }
     bool Revert(Project& project) override {
         return RemoveTransition(project, from_, to_);
@@ -948,6 +951,7 @@ private:
     std::string to_;
     Transition::Type type_;
     double duration_;
+    std::string script_;
     std::string last_error_;
 };
 
@@ -1244,9 +1248,11 @@ bool TimelineHistory::ReplaceClip(const std::string& clip_id,
 bool TimelineHistory::AddTransition(const std::string& from_clip,
                                     const std::string& to_clip,
                                     Transition::Type type, double duration,
-                                    std::string* error_out) {
+                                    std::string* error_out,
+                                    const std::string& script) {
     auto cmd = std::make_unique<AddTransitionCommand>(from_clip, to_clip,
-                                                    type, duration);
+                                                    type, duration,
+                                                    script);
     auto* raw = cmd.get();
     if (!cmd->Apply(project_)) {
         if (error_out) {

@@ -19,6 +19,7 @@
 #include "app_runtime/app_runtime.h"
 #include "color/ocio_transform.h"
 #include "generated_source.h"
+#include "js_fx.h"
 #include "plugin_host.h"
 #include "video_effects.h"
 #include "wrapper/skia/skia_engine_bridge.h"
@@ -467,6 +468,13 @@ bool EffectRequiresSkia(const std::string& type) {
     return skia_only.count(type) != 0;
 }
 
+// "script:<id>" effect types resolve through the JS fx registry
+// (assets/scripts/fx/fx.json) — loaded once per process.
+constexpr const char* kScriptFxPrefix = "script:";
+bool g_jsfx_catalog_tried = false;
+JsFxRuntime* g_jsfx_catalog_engine = nullptr;   // borrowed, UI-thread
+std::string g_jsfx_catalog_error;
+
 float EffectParam(const ClipEffect& effect, std::size_t index,
                   float fallback) {
     return index < effect.params.size() ? effect.params[index] : fallback;
@@ -503,6 +511,33 @@ struct Compositor::Impl {
     std::set<std::string> warned_once;
     video::Frame canvas;
     video::Frame transition_scratch;   // canvas-size transition output
+    // JS fx runtime owned by THIS compositor's worker thread — created
+    // lazily on the first scripted effect/transition. V8 isolates are
+    // thread-confined, so each Compositor (preview engine, export
+    // engine) gets its own. nullptr return = scripts unavailable or
+    // failed to load (already Warn'ed once).
+    std::unique_ptr<JsFxRuntime> js_fx;
+    bool js_fx_tried = false;
+    JsFxRuntime* JsFx() {
+        if (!js_fx_tried) {
+            js_fx_tried = true;
+            if (!g_jsfx_catalog_tried) {
+                g_jsfx_catalog_tried = true;
+                const std::filesystem::path dir =
+                    AppRuntime::SharedAssetsConfig().assets_dir /
+                    "scripts" / "fx";
+                JsFxRuntime::LoadCatalog(dir.string(),
+                                         &g_jsfx_catalog_error);
+            }
+            js_fx = std::make_unique<JsFxRuntime>();
+            std::string fx_error;
+            if (!js_fx->EnsureLoaded(&fx_error)) {
+                Warn("js fx unavailable: " + fx_error);
+                js_fx.reset();
+            }
+        }
+        return js_fx.get();
+    }
     std::map<std::string, ClipSession> sessions;
     std::vector<int> video_track_indices;
     std::vector<const Transition*> valid_transitions;
@@ -562,6 +597,20 @@ struct Compositor::Impl {
                         nullptr) {
                         Warn("ocio profile '" + effect.type.substr(5) +
                              "' not found");
+                    }
+                } else if (effect.type.rfind(kScriptFxPrefix, 0) == 0) {
+                    const std::string fx_id =
+                        effect.type.substr(std::strlen(kScriptFxPrefix));
+                    bool found = false;
+                    for (const auto& d : JsFxRuntime::VideoEffects()) {
+                        if (d.id == fx_id) {
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        Warn("script effect '" + fx_id +
+                             "' not registered");
                     }
                 } else if (KnownEffectTypes().count(effect.type) == 0) {
                     Warn("unknown clip effect type '" + effect.type + "'");
@@ -833,7 +882,8 @@ struct Compositor::Impl {
     // ---- effects ---------------------------------------------------
 
     void ApplyClipEffects(ClipSession& s,
-                          const std::vector<ClipEffect>& effects) {
+                          const std::vector<ClipEffect>& effects,
+                          double clip_time_s) {
         video::Frame& frame = s.frame;
         for (const auto& effect : effects) {
             if (!frame.IsValid()) {
@@ -882,6 +932,24 @@ struct Compositor::Impl {
                         frame.Data(), frame.Width(), frame.Height(),
                         frame.Stride(), *profile, ocio_cfg,
                         ocio_assets_dir);
+                }
+                continue;
+            }
+            if (type.rfind(kScriptFxPrefix, 0) == 0) {
+                // JS-backed effect: zero-copy BGRA view handed to the
+                // script's apply(). Runtime lives on this thread;
+                // failures warn once and leave the frame untouched.
+                const std::string fx_id =
+                    type.substr(std::strlen(kScriptFxPrefix));
+                JsFxRuntime* fx = JsFx();
+                if (fx != nullptr) {
+                    std::string fx_error;
+                    if (!fx->ApplyVideo(fx_id, &frame, effect.params,
+                                        clip_time_s, &fx_error)) {
+                        Warn("js effect '" + fx_id + "': " +
+                             (fx_error.empty() ? "not found"
+                                               : fx_error));
+                    }
                 }
                 continue;
             }
@@ -1009,7 +1077,8 @@ struct Compositor::Impl {
             return true;
         }
         if (clip.is_adjustment) {
-            return RenderAdjustmentLayer(s, clip, effective, error_out);
+            return RenderAdjustmentLayer(s, clip, effective, u,
+                                         error_out);
         }
         if (IsGeneratedSource(clip.source)) {
             // Generated clips (matte/bars/text) never open a decoder:
@@ -1070,7 +1139,7 @@ struct Compositor::Impl {
             std::memcpy(s.frame.Data(), slot->pixels.data(),
                         slot->pixels.size());
         }
-        ApplyClipEffects(s, clip.effects);
+        ApplyClipEffects(s, clip.effects, u);
         // Masks multiply the clip frame's alpha AFTER the effect
         // chain and BEFORE the warp — they are defined in clip-frame
         // fractions, so warping first would smear the coordinates.
@@ -1098,6 +1167,7 @@ struct Compositor::Impl {
     // other clip layer.
     bool RenderAdjustmentLayer(ClipSession& s, const Clip& clip,
                                const Transform& effective,
+                               double clip_time_s,
                                std::string* error_out) {
         // Snapshot the current canvas into the per-session scratch —
         // ApplyClipEffects destroys s.frame in place, so this copy
@@ -1112,7 +1182,7 @@ struct Compositor::Impl {
             }
         }
         std::memcpy(s.frame.Data(), canvas.Data(), canvas.DataSize());
-        ApplyClipEffects(s, clip.effects);
+        ApplyClipEffects(s, clip.effects, clip_time_s);
         // Masks behave exactly as on normal clips: clip-frame
         // fractions — and the adjustment "clip frame" IS the canvas,
         // so fractions map 1:1 onto canvas space.
@@ -1353,10 +1423,27 @@ struct Compositor::Impl {
                     const Clip* to_clip =
                         FindClip(project_, transition->to_clip);
                     const double cut = ClipEndSeconds(*from_clip);
-                    const double weight =
+                    double weight =
                         TransitionWeightAt(tc, *transition, cut);
+                    if (transition->type == Transition::Type::Script) {
+                        // Script transitions supply the easing curve;
+                        // rendering stays the crossfade path. The
+                        // linear weight is the progress input; a
+                        // missing/failed script keeps it linear.
+                        JsFxRuntime* fx = JsFx();
+                        if (fx != nullptr) {
+                            weight = fx->TransitionWeight(
+                                transition->script, weight);
+                        }
+                    }
+                    // Script transitions render through the crossfade
+                    // pixel path — the script supplies the curve only.
+                    const Transition::Type pixel_type =
+                        transition->type == Transition::Type::Script
+                            ? Transition::Type::Crossfade
+                            : transition->type;
                     if (!ApplyTransitionPixels(
-                            transition->type, weight,
+                            pixel_type, weight,
                             from_session->layer, to_session->layer,
                             &transition_scratch)) {
                         return Fail(error_out,

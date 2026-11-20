@@ -83,6 +83,12 @@ struct AudioPeaks {
     std::size_t buckets = 0;
 };
 
+// Whole-file audio decode → peaks, no catalog needed (the
+// --media-worker subprocess path; GetAudioPeaks wraps it with the
+// on-disk cache).
+bool DecodeAudioPeaks(const std::string& canon_path, AudioPeaks* out,
+                      std::string* error_out = nullptr);
+
 class MediaCatalog {
 public:
     // utf8_db_path empty → DefaultDbPath(). Single connection —

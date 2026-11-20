@@ -1,0 +1,114 @@
+{
+  "video": [
+    {
+      "id": "sepia",
+      "title": "Sepia",
+      "file": "sepia.js",
+      "params": [
+        { "id": "amount", "label": "Amount", "def": 1.0, "min": 0.0, "max": 1.0 }
+      ]
+    },
+    {
+      "id": "invert",
+      "title": "Invert Colors",
+      "file": "invert.js",
+      "params": [
+        { "id": "amount", "label": "Amount", "def": 1.0, "min": 0.0, "max": 1.0 }
+      ]
+    },
+    {
+      "id": "rgb_shift",
+      "title": "RGB Shift",
+      "file": "rgb_shift.js",
+      "params": [
+        { "id": "offset", "label": "Offset px", "def": 4.0, "min": 0.0, "max": 64.0 }
+      ]
+    },
+    {
+      "id": "film_grain",
+      "title": "Film Grain",
+      "file": "film_grain.js",
+      "params": [
+        { "id": "amount", "label": "Amount", "def": 0.15, "min": 0.0, "max": 1.0 }
+      ]
+    },
+    {
+      "id": "scanlines",
+      "title": "Scanlines",
+      "file": "scanlines.js",
+      "params": [
+        { "id": "strength", "label": "Strength", "def": 0.5, "min": 0.0, "max": 1.0 },
+        { "id": "period", "label": "Period px", "def": 3.0, "min": 2.0, "max": 16.0 }
+      ]
+    }
+  ],
+  "audio": [
+    {
+      "id": "tremolo",
+      "title": "Tremolo",
+      "file": "tremolo.js",
+      "params": [
+        { "id": "rate", "label": "Rate Hz", "def": 5.0, "min": 0.1, "max": 20.0 },
+        { "id": "depth", "label": "Depth", "def": 0.8, "min": 0.0, "max": 1.0 }
+      ]
+    },
+    {
+      "id": "bitcrush",
+      "title": "Bitcrusher",
+      "file": "bitcrush.js",
+      "params": [
+        { "id": "bits", "label": "Bits", "def": 8.0, "min": 1.0, "max": 16.0 }
+      ]
+    },
+    {
+      "id": "delay",
+      "title": "Delay",
+      "file": "delay.js",
+      "params": [
+        { "id": "time_ms", "label": "Time ms", "def": 250.0, "min": 20.0, "max": 2000.0 },
+        { "id": "feedback", "label": "Feedback", "def": 0.35, "min": 0.0, "max": 0.9 },
+        { "id": "mix", "label": "Mix", "def": 0.4, "min": 0.0, "max": 1.0 }
+      ]
+    },
+    {
+      "id": "lowpass",
+      "title": "Lowpass",
+      "file": "lowpass.js",
+      "params": [
+        { "id": "cutoff", "label": "Cutoff Hz", "def": 1200.0, "min": 50.0, "max": 20000.0 }
+      ]
+    }
+  ],
+  "transitions": [
+    {
+      "id": "ease_in_out",
+      "title": "Ease In-Out",
+      "file": "ease_in_out.js",
+      "params": []
+    },
+    {
+      "id": "ease_out",
+      "title": "Ease Out",
+      "file": "ease_out.js",
+      "params": []
+    },
+    {
+      "id": "smoothstep",
+      "title": "Smoothstep",
+      "file": "smoothstep.js",
+      "params": []
+    },
+    {
+      "id": "expo_out",
+      "title": "Expo Out",
+      "file": "expo_out.js",
+      "params": []
+    },
+    {
+      "id": "bounce_out",
+      "title": "Bounce Out",
+      "file": "bounce_out.js",
+      "params": []
+    }
+  ]
+}

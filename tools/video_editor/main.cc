@@ -8,8 +8,10 @@
 //   video_editor --help
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
 #include <set>
@@ -18,6 +20,7 @@
 
 #include "content/video/video_info.h"
 #include "export_engine.h"
+#include "media_worker_server.h"
 #include "helper/path_utils.h"
 #include "playback/audio_output.h"
 #include "playback/audio_sink_factory.h"
@@ -432,13 +435,27 @@ int RunExport(const std::string& input_path,
 }  // namespace
 
 #if defined(_WIN32)
-// `video_editor --audio-probe [file]` — end-to-end audio diagnostic:
-// encodes a 3 s sine (or uses the given media file), plays it through
-// the REAL PreviewEngine -> AudioMixer -> WasapiSink chain for ~3 s
-// and prints a verdict per link. You should HEAR the tone; silence
-// with all checks green points at the endpoint/volume, a red link
-// names the broken stage.
-int RunAudioProbe(const std::string& media_path) {
+// `video_editor --audio-probe [file] [--seconds N]` — end-to-end audio
+// diagnostic: encodes a 3 s sine (or uses the given media file), plays
+// it through the REAL PreviewEngine -> AudioMixer -> WasapiSink chain
+// and prints a verdict per link. `--seconds` <= 0 (the default) plays
+// the clip on a loop FOREVER — Ctrl+C stops it and prints the stats;
+// a positive N keeps the old bounded run. You should HEAR the tone;
+// silence with all checks green points at the endpoint/volume, a red
+// link names the broken stage.
+namespace {
+std::atomic<bool> g_probe_stop{false};
+BOOL WINAPI ProbeCtrlHandler(DWORD event) {
+    if (event == CTRL_C_EVENT || event == CTRL_BREAK_EVENT ||
+        event == CTRL_CLOSE_EVENT) {
+        g_probe_stop.store(true, std::memory_order_relaxed);
+        return TRUE;
+    }
+    return FALSE;
+}
+}  // namespace
+
+int RunAudioProbe(const std::string& media_path, double seconds) {
     namespace FFmpeg = XER::Bridge::FFmpeg;
     namespace VE = XER::VideoEditor;
     std::cout << std::unitbuf;   // unbuffered — survive a hard crash
@@ -573,16 +590,30 @@ int RunAudioProbe(const std::string& media_path) {
     std::cout << "probe[4/6] preview engine up (dur="
               << engine.DurationSeconds() << "s)\n";
 
+    // seconds <= 0: loop the clip and run until Ctrl+C. SetConsoleCtrl-
+    // Handler intercepts the event so we stop gracefully and still
+    // print the per-link stats.
+    const bool infinite = seconds <= 0.0;
+    if (infinite) {
+        engine.SetLoop(0.0, clip.duration);
+        SetConsoleCtrlHandler(ProbeCtrlHandler, TRUE);
+        std::cout << "probe[5/6] looping " << clip.duration
+                  << "s clip — press Ctrl+C to stop\n";
+    }
     engine.SetPlaying(true);
     const auto deadline = std::chrono::steady_clock::now() +
                           std::chrono::milliseconds(
                               static_cast<long long>(
                                   clip.duration * 1000.0) + 1500);
-    while (std::chrono::steady_clock::now() < deadline &&
+    while (!g_probe_stop.load(std::memory_order_relaxed) &&
+           (infinite || std::chrono::steady_clock::now() < deadline) &&
            engine.Playing()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     engine.Shutdown();
+    if (infinite) {
+        SetConsoleCtrlHandler(ProbeCtrlHandler, FALSE);
+    }
     const auto warnings = engine.Warnings();
     std::cout << "probe[5/6] writes=" << counter.writes.load()
               << " fails=" << counter.fails.load()
@@ -694,8 +725,23 @@ int main(int argc, char** argv) {
         return 0;
     }
 #if defined(_WIN32)
+    if (arg == "--media-worker") {
+        // Headless JSON-lines decode worker — the parent spawns this
+        // same exe to isolate poster/peaks decode crashes.
+        return XER::VideoEditor::RunMediaWorker();
+    }
     if (arg == "--audio-probe") {
-        return RunAudioProbe(args.size() >= 3 ? args[2] : "");
+        // --audio-probe [file] [--seconds N] — N <= 0 runs forever.
+        std::string media;
+        double seconds = -1.0;
+        for (std::size_t i = 2; i < args.size(); ++i) {
+            if (args[i] == "--seconds" && i + 1 < args.size()) {
+                seconds = std::strtod(args[++i].c_str(), nullptr);
+            } else if (media.empty()) {
+                media = args[i];
+            }
+        }
+        return RunAudioProbe(media, seconds);
     }
 #endif
     if (arg == "--open" || arg == "--gui") {

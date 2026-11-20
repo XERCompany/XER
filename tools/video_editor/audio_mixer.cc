@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "generated_source.h"                  // IsGeneratedSource
+#include "js_fx.h"                             // JsFxRuntime
 #include "string_utils.h"                      // ToLowerAscii
 #include "vst/vst3_chain.h"                    // Vst3Chain
 #include "vst/vst3_factory.h"                  // InstantiateVst3Plugin
@@ -695,6 +696,15 @@ struct AudioMixer::Impl {
     std::vector<std::string> warnings;
     std::set<std::string> warned_once;
     std::map<std::string, AudioClipSession> sessions;
+    // JS audio fx runtime — thread-confined like Vst3Chain: created
+    // lazily on the mix thread the first time a "script:" entry is
+    // seen. Each AudioMixer owns its own isolate.
+    std::unique_ptr<JsFxRuntime> js_fx;
+    bool js_fx_tried = false;
+    // Per-chunk split buffers for the VST/script partition of
+    // clip.audio_fx — reused to avoid per-chunk allocs.
+    std::vector<ClipAudioFx> scratch_vst_fx_;
+    std::vector<const ClipAudioFx*> scratch_script_fx_;
     // Sequential-production bookkeeping: index == last returns the
     // cached chunk; index < last is an error (sessions have moved on).
     bool has_last_ = false;
@@ -722,6 +732,21 @@ struct AudioMixer::Impl {
         if (warned_once.insert(message).second) {
             warnings.push_back(message);
         }
+    }
+
+    // Lazy JS fx runtime — same one-time pattern as the compositor:
+    // nullptr return means scripts are unavailable (Warn'ed once).
+    JsFxRuntime* JsFx() {
+        if (!js_fx_tried) {
+            js_fx_tried = true;
+            js_fx = std::make_unique<JsFxRuntime>();
+            std::string fx_error;
+            if (!js_fx->EnsureLoaded(&fx_error)) {
+                Warn("js audio fx unavailable: " + fx_error);
+                js_fx.reset();
+            }
+        }
+        return js_fx.get();
     }
 
     // ---- Init ---------------------------------------------------------
@@ -1329,12 +1354,51 @@ struct AudioMixer::Impl {
                 }
                 // Sync() is a cheap no-op unless clip.audio_fx changed
                 // (signature compare); ProcessInterleaved leaves
-                // silence untouched through bypassed nodes.
-                if (session.fx_chain != nullptr) {
-                    session.fx_chain->Sync(session.clip->audio_fx);
-                    session.fx_chain->ProcessInterleaved(
-                        contrib.data(),
-                        static_cast<std::uint32_t>(n));
+                // silence untouched through bypassed nodes. "script:"
+                // entries are filtered OUT of the VST chain and run
+                // through the JS runtime right after it — VST-then-JS
+                // order (declared interleave is not preserved across
+                // the two engines).
+                if (session.fx_chain != nullptr ||
+                    !session.clip->audio_fx.empty()) {
+                    scratch_vst_fx_.clear();
+                    scratch_script_fx_.clear();
+                    for (const ClipAudioFx& fx :
+                         session.clip->audio_fx) {
+                        if (fx.plugin_path.rfind("script:", 0) == 0) {
+                            scratch_script_fx_.push_back(&fx);
+                        } else {
+                            scratch_vst_fx_.push_back(fx);
+                        }
+                    }
+                    if (session.fx_chain != nullptr) {
+                        session.fx_chain->Sync(scratch_vst_fx_);
+                        session.fx_chain->ProcessInterleaved(
+                            contrib.data(),
+                            static_cast<std::uint32_t>(n));
+                    }
+                    if (!scratch_script_fx_.empty()) {
+                        JsFxRuntime* jfx = JsFx();
+                        for (const ClipAudioFx* sfx :
+                             scratch_script_fx_) {
+                            if (jfx == nullptr || !sfx->enabled) {
+                                continue;
+                            }
+                            std::string fx_error;
+                            const double clip_t =
+                                t0 - session.clip_start;
+                            if (!jfx->ProcessAudio(
+                                    sfx->plugin_path.substr(7),
+                                    contrib.data(), n, out_rate,
+                                    sfx->params, clip_t, &fx_error)) {
+                                Warn("js audio fx '" +
+                                     sfx->plugin_path + "': " +
+                                     (fx_error.empty()
+                                          ? "not registered"
+                                          : fx_error));
+                            }
+                        }
+                    }
                 }
                 for (std::size_t i = 0; i < mix.size(); ++i) {
                     mix[i] += contrib[i];

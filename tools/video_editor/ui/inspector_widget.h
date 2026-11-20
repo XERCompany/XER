@@ -46,10 +46,12 @@ public:
     struct Hooks {
         std::function<void(const Clip&)> on_apply_clip;
         std::function<void(const std::string&)> on_delete_clip;
-        // Transition picker: (clip_id, type, duration_seconds). The
-        // panel passes the combo pick + parsed duration field.
+        // Transition picker: (clip_id, type, duration_seconds,
+        // script_id — "" unless type == Script). The panel passes the
+        // combo pick + parsed duration field.
         std::function<void(const std::string&, Transition::Type,
-                           double)> on_add_transition;
+                           double, const std::string&)>
+            on_add_transition;
         std::function<void(const std::string&, bool)> on_status;
         // Full replacement key list for one property (SetClipKeyframes).
         std::function<void(const std::string& clip_id, KeyProp,

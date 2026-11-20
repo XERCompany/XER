@@ -106,6 +106,14 @@ public:
     OutValue MakeObjectArg(
         const std::vector<std::pair<std::string, std::string>>& fields);
 
+    // Single access point for consumers that need the raw V8 API
+    // (typed arrays, function handles — things OutValue cannot carry).
+    // Runs `fn` inside Isolate::Scope + HandleScope + Context::Scope;
+    // the callback receives (isolate, context). Must still be called
+    // only from the thread that owns this engine.
+    bool WithContext(const std::function<bool(
+                         v8::Isolate*, v8::Local<v8::Context>)>& fn);
+
     v8::Isolate* isolate() const;  // for module factories
 
 private:

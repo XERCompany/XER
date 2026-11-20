@@ -7,7 +7,9 @@
 #include <cstdint>
 #include <utility>
 
+#include "app_runtime/app_runtime.h"
 #include "app_runtime/icon_pack.h"
+#include "js_fx.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widgets/button.h"
@@ -81,8 +83,11 @@ const std::vector<EffectsPanelWidget::EffectInfo>&
 EffectsPanelWidget::Catalog() {
     // type names + default params mirror the dispatch table and its
     // documented fallbacks in compositor.cc ApplyClipEffects; keep in
-    // sync when new effects land there.
-    static const std::vector<EffectInfo> catalog = {
+    // sync when new effects land there. The JS fx catalog
+    // (assets/scripts/fx/fx.json) is merged in once — LoadCatalog is
+    // idempotent and this runs on the UI thread.
+    static const std::vector<EffectInfo> catalog = [] {
+        std::vector<EffectInfo> list = {
         {"brightness_contrast", {0.0f, 1.0f},
          "brightness -255..255 · contrast 0..4"},
         {"grayscale", {}, "remove color"},
@@ -103,7 +108,25 @@ EffectsPanelWidget::Catalog() {
         {"color_balance", {0.0f, 0.0f, 0.0f, 1.0f, 1.0f, 1.0f},
          "lift+gain grade · lift r,g,b -1..1, gain r,g,b 0..4"},
         {"posterize", {4.0f}, "band colors · levels per channel 2-256"},
-    };
+        };
+        if (!JsFxRuntime::FxDir().empty() ||
+            JsFxRuntime::LoadCatalog(
+                (AppRuntime::SharedAssetsConfig().assets_dir /
+                 "scripts" / "fx").string(),
+                nullptr)) {
+            for (const auto& d : JsFxRuntime::VideoEffects()) {
+                EffectInfo info;
+                info.type = "script:" + d.id;
+                for (const auto& pd : d.params) {
+                    info.default_params.push_back(pd.def);
+                }
+                info.description =
+                    d.title + " · script (JS)";
+                list.push_back(std::move(info));
+            }
+        }
+        return list;
+    }();
     return catalog;
 }
 

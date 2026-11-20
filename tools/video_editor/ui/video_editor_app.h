@@ -161,10 +161,12 @@ private:
     // duration <= 0 falls back to transition_duration_. Every applied
     // pair also becomes the default for Ctrl+D / the junction menu.
     void AddTransitionAfter(const std::string& clip_id,
-                            Transition::Type type, double duration);
+                            Transition::Type type, double duration,
+                            const std::string& script = "");
     void AddTransitionPair(const std::string& from_id,
                            const std::string& to_id,
-                           Transition::Type type, double duration);
+                           Transition::Type type, double duration,
+                           const std::string& script = "");
     // Ctrl+D: the stored default transition lands on the junction
     // nearest the playhead (falls back to the selected clip's
     // out-edge junction when the playhead sits nowhere near a cut).
@@ -206,6 +208,7 @@ private:
     // picks the first enabled fx (menu path). The popup session is
     // tracked in vst3_editor_clip_/vst3_editor_fx_ so edits commit
     // back on close.
+    void AddScriptAudioFxToSelectedClip(const std::string& script_id);
     void OpenVst3FxEditor(const std::string& clip_id, int fx_index);
     // on_closed handler for the editor popup: harvest the session's
     // edited parameters and ReplaceClip them into the model (chain
@@ -443,6 +446,7 @@ private:
     // and re-armed by every applied transition pick.
     Transition::Type transition_type_ = Transition::Type::Crossfade;
     double transition_duration_ = 1.0;
+    std::string transition_script_;   // last-used Script id (Ctrl+D)
     std::mutex preview_mutex_;
     std::vector<std::uint8_t> pending_frame_;
     int pending_frame_w_ = 0, pending_frame_h_ = 0;

@@ -92,9 +92,11 @@ public:
         // Clip junction context menu (right-click on a clip's
         // out-edge): add a transition of `type` to the next clip on
         // the track. duration_seconds <= 0 asks the shell for its
-        // default transition duration.
+        // default transition duration. script_id is "" unless
+        // type == Script.
         std::function<void(const std::string&, Transition::Type,
-                           double)> on_add_transition;
+                           double, const std::string&)>
+            on_add_transition;
         // Marker lane: (time_seconds, name — "" lets the shell pick a
         // default label) / remove the marker at `time`.
         std::function<void(double, const std::string&)> on_add_marker;

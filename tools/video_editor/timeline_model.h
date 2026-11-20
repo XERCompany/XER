@@ -122,9 +122,14 @@ struct Transition {
     enum class Type {
         Crossfade, WipeLeft, WipeRight, WipeUp, WipeDown,
         SlideLeft, SlideRight, SlideUp, SlideDown,
-        DipToBlack, DipToWhite, AdditiveDissolve
+        DipToBlack, DipToWhite, AdditiveDissolve,
+        Script              // blend weight comes from a JS fx script
     } type = Type::Crossfade;
     double duration = 1.0;              // seconds, centered on the cut
+    // type == Script: transition id from scripts/fx/fx.json —
+    // weight(progress) is called per frame; renders as a crossfade
+    // with the script-supplied easing curve.
+    std::string script;
 };
 struct Track {
     TrackKind kind = TrackKind::Video;
@@ -288,7 +293,8 @@ bool ReplaceClip(Project&, const std::string& clip_id, const Clip& replacement,
                  const MediaBounds&, std::string* error_out);
 bool AddTransition(Project&, const std::string& from_clip,
                    const std::string& to_clip, Transition::Type type,
-                   double duration, std::string* error_out);
+                   double duration, std::string* error_out,
+                   const std::string& script = "");
 bool RemoveTransition(Project&, const std::string& from_clip,
                       const std::string& to_clip);
 // All supported transition types in stable menu order — UI pickers

@@ -1,0 +1,99 @@
+// js_fx.h — JavaScript-backed effects & transitions for the editor.
+//
+// Scripts live in <assets>/scripts/fx/ next to a fx.json manifest:
+//   fx.json     — UI catalog (id/title/param defs per kind); pure
+//                 data, loaded without V8 so menus and smoke can read
+//                 it anywhere.
+//   *.js        — each file registers ONE descriptor via a global:
+//                   xerFxVideo({ id, title, params, apply(frame, p, ctx) })
+//                   xerFxAudio({ id, title, params, process(pcm, p, ctx) })
+//                   xerFxTransition({ id, title, weight(progress, ctx) })
+//   frame = { data: Uint8ClampedArray(BGRA), width, height, stride }
+//   pcm   = Float32Array, interleaved stereo [-1, 1]
+//   ctx   = { time, rate | sample_rate, fps }
+// All buffer args are ZERO-COPY views over native memory — scripts
+// mutate them in place.
+//
+// THREADING: a JsFxRuntime owns a private JsEngine whose isolate is
+// strictly single-threaded — create, use and destroy the runtime on
+// ONE thread (compositor/mixer worker, export worker). The process-
+// wide catalog (VideoEffects()/AudioEffects()/ScriptTransitions())
+// is JSON-only and safe to read from anywhere after LoadCatalog.
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace video { class Frame; }   // ::video::Frame — src/video/frame.h
+
+namespace XER::VideoEditor {
+
+class JsFxRuntime {
+public:
+    struct ParamDef {
+        std::string id;
+        std::string label;
+        float def = 0.0f;
+        float min = 0.0f;
+        float max = 1.0f;
+    };
+    struct FxDesc {
+        std::string id;
+        std::string title;
+        std::string file;                 // relative to FxDir()
+        std::vector<ParamDef> params;
+    };
+
+    // Parses <fx_dir>/fx.json. Soft-fail: returns false + error text,
+    // lists stay empty. Safe to call repeatedly.
+    static bool LoadCatalog(const std::string& fx_dir,
+                            std::string* error);
+    static const std::vector<FxDesc>& VideoEffects();
+    static const std::vector<FxDesc>& AudioEffects();
+    static const std::vector<FxDesc>& ScriptTransitions();
+    static const std::string& FxDir();
+
+    JsFxRuntime();
+    ~JsFxRuntime();
+    JsFxRuntime(const JsFxRuntime&) = delete;
+    JsFxRuntime& operator=(const JsFxRuntime&) = delete;
+
+    // Lazily creates the private JsEngine on first call and evaluates
+    // every file listed in the catalog. Idempotent; repeated calls are
+    // cheap. Without V8 or a catalog returns false + error text — the
+    // caller degrades to identity/warns once.
+    bool EnsureLoaded(std::string* error);
+
+    bool HasVideoEffect(const std::string& id) const;
+    bool HasAudioEffect(const std::string& id) const;
+    bool HasTransition(const std::string& id) const;
+
+    // Runs apply() in place on a BGRA8 frame. `params` is positional —
+    // index i maps to the manifest's params[i].id (defaults fill the
+    // tail). Returns false (frame untouched) on missing effect or a JS
+    // exception — callers warn-once.
+    bool ApplyVideo(const std::string& id, video::Frame* frame,
+                    const std::vector<float>& params, double time_s,
+                    std::string* error);
+
+    // Runs process() in place on interleaved stereo float samples.
+    // `params` maps manifest-param ORDINAL -> value (ClipAudioFx
+    // positional convention).
+    bool ProcessAudio(const std::string& id, float* interleaved,
+                      int frames, int sample_rate,
+                      const std::map<std::uint32_t, float>& params,
+                      double time_s, std::string* error);
+
+    // weight(progress) -> clamped [0,1]. Missing/failed script falls
+    // back to linear progress — the transition still renders.
+    double TransitionWeight(const std::string& id, double progress);
+
+private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+}  // namespace XER::VideoEditor

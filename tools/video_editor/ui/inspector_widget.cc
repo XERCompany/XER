@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "keyframe_editor.h"
+#include "js_fx.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widgets/button.h"
@@ -233,7 +234,14 @@ void InspectorWidget::EnsureChildren() {
     std::vector<Widgets::Combobox::Option> transition_options;
     for (const Transition::Type type : AllTransitionTypes()) {
         const char* name = TransitionTypeLabel(type);
+        if (type == Transition::Type::Script) {
+            continue;   // individual JS entries fill this slot below
+        }
         transition_options.push_back({name, name});
+    }
+    for (const auto& desc : JsFxRuntime::ScriptTransitions()) {
+        const std::string label = "JS: " + desc.title;
+        transition_options.push_back({label, label});
     }
     transition_combo_->SetOptions(std::move(transition_options));
     transition_combo_->SetPlaceholder("Transition type");
@@ -1082,10 +1090,22 @@ void InspectorWidget::CommitTransition() {
                                   ? transition_combo_->GetText()
                                   : transition_combo_->GetValue();
     Transition::Type type = Transition::Type::Crossfade;
+    std::string script_id;
     for (const Transition::Type candidate : AllTransitionTypes()) {
         if (label == TransitionTypeLabel(candidate)) {
             type = candidate;
             break;
+        }
+    }
+    // "JS: <title>" labels map onto Script + the registered id.
+    if (label.rfind("JS: ", 0) == 0) {
+        const std::string title = label.substr(4);
+        for (const auto& desc : JsFxRuntime::ScriptTransitions()) {
+            if (desc.title == title) {
+                type = Transition::Type::Script;
+                script_id = desc.id;
+                break;
+            }
         }
     }
     const std::string text =
@@ -1098,7 +1118,7 @@ void InspectorWidget::CommitTransition() {
         SetStatus("Transition duration must be a positive number", true);
         return;
     }
-    hooks_.on_add_transition(clip_.id, type, duration);
+    hooks_.on_add_transition(clip_.id, type, duration, script_id);
 }
 
 void InspectorWidget::SetStatus(const std::string& text, bool is_error) {

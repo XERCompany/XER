@@ -84,6 +84,8 @@ const char* TransitionTypeToString(Transition::Type type) {
             return "dip_to_white";
         case Transition::Type::AdditiveDissolve:
             return "additive_dissolve";
+        case Transition::Type::Script:
+            return "script";
     }
     return "crossfade";  // unreachable
 }
@@ -106,6 +108,7 @@ bool TransitionTypeFromString(const std::string& text,
         {"dip_to_black", Transition::Type::DipToBlack},
         {"dip_to_white", Transition::Type::DipToWhite},
         {"additive_dissolve", Transition::Type::AdditiveDissolve},
+        {"script", Transition::Type::Script},
     };
     for (const auto& entry : kTypes) {
         if (text == entry.name) {
@@ -862,6 +865,10 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                          &transition.duration)) {
                 return false;
             }
+            // Script id for Type::Script — optional, lenient like the
+            // endpoints; a missing/unknown id falls back to a linear
+            // crossfade at render time.
+            r.GetStr("script", "", &transition.script);
             // Non-positive/non-finite duration → invalid transition:
             // drop it (self-heal, same class as missing endpoints —
             // AddTransition requires duration > 0). Unknown `type`
@@ -1102,6 +1109,9 @@ Json::Value TransitionToJson(const Transition& transition) {
     out["to"] = transition.to_clip;
     out["type"] = TransitionTypeToString(transition.type);
     out["duration"] = transition.duration;
+    if (transition.type == Transition::Type::Script) {
+        out["script"] = transition.script;
+    }
     return out;
 }
 

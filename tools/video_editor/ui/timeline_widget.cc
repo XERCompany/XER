@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "frame.h"
+#include "js_fx.h"
 #include "media_catalog.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
@@ -1670,17 +1671,35 @@ bool TimelineWidget::ShowContextMenu(
                 bool first = true;
                 for (const Transition::Type type :
                      AllTransitionTypes()) {
+                    if (type == Transition::Type::Script) {
+                        continue;   // JS entries fill this slot below
+                    }
                     Widgets::ContextMenu::Item trans;
                     trans.label = std::string("Transition: ") +
                                   TransitionTypeLabel(type);
                     trans.separator_before = first;
                     trans.action = [this, id, type] {
                         if (hooks_.on_add_transition) {
-                            hooks_.on_add_transition(id, type, -1.0);
+                            hooks_.on_add_transition(id, type, -1.0,
+                                                     "");
                         }
                     };
                     items.push_back(std::move(trans));
                     first = false;
+                }
+                for (const auto& desc :
+                     JsFxRuntime::ScriptTransitions()) {
+                    Widgets::ContextMenu::Item trans;
+                    trans.label = "Transition: JS " + desc.title;
+                    const std::string script_id = desc.id;
+                    trans.action = [this, id, script_id] {
+                        if (hooks_.on_add_transition) {
+                            hooks_.on_add_transition(
+                                id, Transition::Type::Script, -1.0,
+                                script_id);
+                        }
+                    };
+                    items.push_back(std::move(trans));
                 }
             }
 
