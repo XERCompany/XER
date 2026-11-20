@@ -153,9 +153,11 @@ if(MINGW AND CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
         string(APPEND _xer_rt_static ",-lxml2")
     endif()
     string(APPEND _xer_rt_static ",-Bdynamic")
-    # Static archives (OpenSSL/curl/…) need these system import libs —
-    # they are always dynamic, so listing them for every target is safe.
-    string(APPEND _xer_rt_static " -lws2_32 -lcrypt32 -lsecur32 -lncrypt -lwldap32")
+    # Static archives (OpenSSL/curl/absl symbolize/…) need these system
+    # import libs — they are always dynamic, so listing them for every
+    # target is safe. dbghelp provides DbgHelp Sym* APIs that
+    # libabsl_symbolize.a calls on Windows.
+    string(APPEND _xer_rt_static " -lws2_32 -lcrypt32 -lsecur32 -lncrypt -lwldap32 -ldbghelp")
     string(APPEND CMAKE_EXE_LINKER_FLAGS " ${_xer_rt_static}")
     # YA.* modules get the same static runtime — an exe only stays
     # MSYS2-DLL-free when its YA dependencies are too. Third-party .a
