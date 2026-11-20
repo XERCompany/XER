@@ -184,6 +184,138 @@ function(xer_ya_bundle xtarget)
 endfunction()
 
 
+# xer_collect_delayload_dlls(<out-var> <item>...)
+# Resolves imported targets / implib paths in ARGN into actual runtime
+# DLL filenames (for -Wl,--delayload). Handles:
+#   - imported CMake targets (scans IMPORTED_IMPLIB*/LOCATION* and
+#     recurses into INTERFACE_LINK_LIBRARIES),
+#   - literal implib paths ending in .dll.a (name → name.dll).
+function(xer_collect_delayload_dlls out_var)
+    set(_dlls)
+    foreach(_item IN LISTS ARGN)
+        set(_implib "")
+        if(TARGET ${_item})
+            foreach(_p IMPORTED_IMPLIB IMPORTED_IMPLIB_RELEASE
+                        IMPORTED_IMPLIB_NOCONFIG IMPORTED_LOCATION
+                        IMPORTED_LOCATION_RELEASE
+                        IMPORTED_LOCATION_NOCONFIG)
+                get_target_property(_v ${_item} ${_p})
+                if(_v)
+                    set(_implib "${_v}")
+                    break()
+                endif()
+            endforeach()
+            if(NOT _implib)
+                get_target_property(_iface ${_item}
+                                    INTERFACE_LINK_LIBRARIES)
+                if(_iface)
+                    xer_collect_delayload_dlls(_sub ${_iface})
+                    list(APPEND _dlls ${_sub})
+                endif()
+                continue()
+            endif()
+        else()
+            set(_implib "${_item}")
+        endif()
+        if(_implib MATCHES "\\.dll\\.a$")
+            get_filename_component(_f "${_implib}" NAME)
+            get_filename_component(_dir "${_implib}" DIRECTORY)
+            string(REGEX REPLACE "\\.dll\\.a$" "" _stem "${_f}")
+            get_filename_component(_bindir "${_dir}/../bin" ABSOLUTE)
+            # Runtime DLL name may differ from the implib name
+            # (libfoo.dll.a → libfoo-N.dll, versioned). Prefer the
+            # versioned match in the sibling bin dir.
+            set(_matched FALSE)
+            foreach(_cand "${_bindir}/${_stem}.dll" "${_dir}/${_stem}.dll")
+                if(EXISTS "${_cand}")
+                    get_filename_component(_nm "${_cand}" NAME)
+                    list(APPEND _dlls "${_nm}")
+                    set(_matched TRUE)
+                    break()
+                endif()
+            endforeach()
+            if(NOT _matched)
+                # Versioned runtime names: libfoo-N.dll AND
+                # libfoo_M_N.dll (OCIO-style underscore suffix).
+                file(GLOB _vg "${_bindir}/${_stem}-*.dll"
+                              "${_bindir}/${_stem}_*.dll")
+                if(_vg)
+                    foreach(_v IN LISTS _vg)
+                        get_filename_component(_v "${_v}" NAME)
+                        list(APPEND _dlls "${_v}")
+                    endforeach()
+                    set(_matched TRUE)
+                endif()
+            endif()
+            if(NOT _matched)
+                list(APPEND _dlls "${_stem}.dll")
+            endif()
+        elseif(_implib MATCHES "^-l(.+)$" OR
+               (NOT _implib MATCHES "[/\\\\.]" AND
+                NOT _implib MATCHES "\\.a$"))
+            # -lfoo / bare name: resolve against toolchain import libs
+            # (libfoo.dll.a → libfoo.dll; also libfoo-N.dll versioned).
+            string(REGEX REPLACE "^-l" "" _n "${_implib}")
+            set(_found FALSE)
+            foreach(_libdir ${CMAKE_PREFIX_PATH}
+                            ${CMAKE_LIBRARY_PATH}
+                            "${CMAKE_SYSROOT}/clang64/lib"
+                            "C:/tools/msys64/clang64/lib")
+                if(EXISTS "${_libdir}/lib${_n}.dll.a")
+                    list(APPEND _dlls "lib${_n}.dll")
+                    set(_found TRUE)
+                    break()
+                elseif(EXISTS "${_libdir}/${_n}.dll.a")
+                    list(APPEND _dlls "${_n}.dll")
+                    set(_found TRUE)
+                    break()
+                endif()
+            endforeach()
+            # Versioned runtime names (libfoo-500.dll): glob bin dirs
+            # next to the candidate libdirs.
+            if(NOT _found)
+                foreach(_libdir ${CMAKE_PREFIX_PATH}
+                                ${CMAKE_LIBRARY_PATH}
+                                "${CMAKE_SYSROOT}/clang64/lib"
+                                "C:/tools/msys64/clang64/lib")
+                    get_filename_component(_bindir
+                        "${_libdir}/../bin" ABSOLUTE)
+                    file(GLOB _vg "${_bindir}/lib${_n}-*.dll"
+                                  "${_bindir}/${_n}-*.dll")
+                    foreach(_v IN LISTS _vg)
+                        get_filename_component(_v "${_v}" NAME)
+                        list(APPEND _dlls "${_v}")
+                        set(_found TRUE)
+                    endforeach()
+                    if(_found)
+                        break()
+                    endif()
+                endforeach()
+            endif()
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES _dlls)
+    set(${out_var} "${_dlls}" PARENT_SCOPE)
+endfunction()
+
+# xer_delayload(<target> <dll>...)
+# Adds --delayload link options: the binary starts without those DLLs
+# on PATH; they load lazily on first call into them.
+function(xer_delayload target)
+    set(_opts)
+    foreach(_d IN LISTS ARGN)
+        list(APPEND _opts "-Wl,--delayload,${_d}")
+    endforeach()
+    if(_opts)
+        get_target_property(_ttype ${target} TYPE)
+        if(_ttype STREQUAL "INTERFACE_LIBRARY")
+            target_link_options(${target} INTERFACE ${_opts})
+        else()
+            target_link_options(${target} PRIVATE ${_opts})
+        endif()
+    endif()
+endfunction()
+
 # Split a file list into named groups by regex, first match wins.
 #   xer_ya_partition(<srcs-var>
 #       "YA.AudioCore|audio_core/" "YA.AudioMix|mixer" ...)

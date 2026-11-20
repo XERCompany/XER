@@ -9,6 +9,10 @@
 #include "layout/geometry.h"
 #include "theme/tokens.h"
 
+namespace XER::Content::CSS {
+class ComputedStyle;
+}
+
 namespace XER::UI {
 
 namespace Rendering {
@@ -132,6 +136,50 @@ public:
     void SetHovered(bool hovered);
     bool IsHovered() const;
 
+    // Pressed/active state (:active CSS pseudo-class). Interactive
+    // widgets set this while the primary button is held on them.
+    void SetActive(bool active);
+    bool IsActive() const { return active_; }
+
+    // ── CSS style identity (XER::Content::CSS bridge) ───────────
+    // Tag name for element selectors; the default "" lets the style
+    // host derive a name from RTTI (e.g. "button" for Button).
+    virtual std::string_view GetStyleTag() const { return {}; }
+    // Element id for #id selectors.
+    void SetStyleId(std::string id);
+    std::string_view StyleId() const { return style_id_; }
+    // Class list for .class selectors.
+    void AddStyleClass(std::string cls);
+    void RemoveStyleClass(std::string_view cls);
+    bool HasStyleClass(std::string_view cls) const;
+    const std::vector<std::string>& StyleClasses() const {
+        return style_classes_;
+    }
+    // Attributes for [attr] / [attr=value] selectors. "disabled" is
+    // mirrored automatically from IsEnabled().
+    void SetStyleAttribute(std::string name, std::string value);
+    const std::vector<std::pair<std::string, std::string>>&
+    StyleAttributes() const {
+        return style_attributes_;
+    }
+    // Inline declarations (style="..." equivalent): applied after all
+    // matched rules in the cascade.
+    void SetInlineStyle(std::string property, std::string value);
+    const std::vector<std::pair<std::string, std::string>>&
+    InlineStyle() const {
+        return inline_style_;
+    }
+    // Resolved style, written by CSS::WidgetStyleHost::Update(). Widgets
+    // may consult it in Render/Layout for CSS-driven visuals.
+    void SetComputedStyle(
+        std::shared_ptr<const Content::CSS::ComputedStyle> style);
+    std::shared_ptr<const Content::CSS::ComputedStyle>
+    GetComputedStyle() const {
+        return computed_style_;
+    }
+    // Typed read of one computed property (nullptr when unset).
+    const std::string* StyleValue(std::string_view property) const;
+
     // shadcn-style tooltip: text shown in a floating bubble after a short
     // hover delay (timing + positioning managed by WidgetTree). Empty
     // string disables the tooltip for this widget.
@@ -237,7 +285,14 @@ private:
     bool focusable_ = false;
     bool focused_ = false;
     bool hovered_ = false;
+    bool active_ = false;
     std::string tooltip_text_;
+    // CSS identity/state consumed by CSS::WidgetStyleHost.
+    std::string style_id_;
+    std::vector<std::string> style_classes_;
+    std::vector<std::pair<std::string, std::string>> style_attributes_;
+    std::vector<std::pair<std::string, std::string>> inline_style_;
+    std::shared_ptr<const Content::CSS::ComputedStyle> computed_style_;
     // Set on this widget and propagated to every ancestor by Invalidate()/
     // RequestLayout(). Consumed by WidgetTree to decide whether a repaint or
     // relayout is actually needed.

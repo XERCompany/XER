@@ -333,6 +333,8 @@ void Direct2DRenderer::EndFrame() {
         image_cache_.clear();
         frame_bitmap_.Reset();
         frame_bitmap_size_ = {0, 0};
+        resource_cache_.clear();
+        video_stages_.clear();
         blur_bitmap_.Reset();
         blur_bitmap_size_ = {0, 0};
         ReleaseTargets();
@@ -769,6 +771,153 @@ bool Direct2DRenderer::DrawFrameBgra(const void* bgra, int width, int height,
         std::clamp(opacity, 0.0f, 1.0f),
         D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &src);
     return true;
+}
+
+void Direct2DRenderer::PushLayer(float opacity,
+                                 std::uint32_t blend_mode, float blur) {
+    RequireFrame();
+    // Blend modes beyond source-over need composition effects; blur
+    // inside a layer needs an ID2D1Effect chain — both are accepted
+    // and currently fall back to a plain opacity layer.
+    (void)blend_mode;
+    (void)blur;
+    const D2D1_LAYER_PARAMETERS params = D2D1::LayerParameters(
+        D2D1::InfiniteRect(), nullptr,
+        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        D2D1::IdentityMatrix(),
+        std::clamp(opacity, 0.0f, 1.0f), nullptr,
+        D2D1_LAYER_OPTIONS_NONE);
+    dc_->PushLayer(params, nullptr);
+    ++layer_depth_;
+}
+
+void Direct2DRenderer::PopLayer() {
+    RequireFrame();
+    if (layer_depth_ == 0) {
+        return;
+    }
+    dc_->PopLayer();
+    --layer_depth_;
+}
+
+void Direct2DRenderer::SetTransform(float a, float b, float c, float d,
+                                    float tx, float ty) {
+    RequireFrame();
+    dc_->SetTransform(D2D1::Matrix3x2F(a, b, c, d, tx, ty));
+}
+
+void Direct2DRenderer::ResetTransform() {
+    RequireFrame();
+    dc_->SetTransform(D2D1::IdentityMatrix());
+}
+
+void Direct2DRenderer::DrawBitmapRounded(ID2D1Bitmap* bitmap,
+                                       Layout::Rect dst, float opacity,
+                                       float corner_radius) {
+    const auto bounds = ToRect(dst);
+    const D2D1_RECT_F src = D2D1::RectF(
+        0.0f, 0.0f,
+        static_cast<float>(bitmap->GetPixelSize().width),
+        static_cast<float>(bitmap->GetPixelSize().height));
+    const float radius = std::clamp(
+        corner_radius, 0.0f, std::min(dst.width, dst.height) / 2.0f);
+    if (radius <= 0.0f) {
+        dc_->DrawBitmap(
+            bitmap, &bounds, std::clamp(opacity, 0.0f, 1.0f),
+            D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &src);
+        return;
+    }
+    Microsoft::WRL::ComPtr<ID2D1RoundedRectangleGeometry> mask;
+    const auto rounded = D2D1::RoundedRect(bounds, radius, radius);
+    if (FAILED(d2d_factory_->CreateRoundedRectangleGeometry(
+            rounded, mask.GetAddressOf()))) {
+        return;
+    }
+    const D2D1_LAYER_PARAMETERS params = D2D1::LayerParameters(
+        D2D1::InfiniteRect(), mask.Get(),
+        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+        D2D1::IdentityMatrix(), 1.0f, nullptr,
+        D2D1_LAYER_OPTIONS_NONE);
+    dc_->PushLayer(params, nullptr);
+    dc_->DrawBitmap(
+        bitmap, &bounds, std::clamp(opacity, 0.0f, 1.0f),
+        D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &src);
+    dc_->PopLayer();
+}
+
+bool Direct2DRenderer::DrawResourcePixels(
+    const void* bgra, std::uint32_t id, int width, int height,
+    Layout::Rect dst, float opacity, float corner_radius) {
+    RequireFrame();
+    dst = NormalizeRect(dst);
+    if (bgra == nullptr || width <= 0 || height <= 0 ||
+        dst.width <= 0.0f || dst.height <= 0.0f ||
+        !(opacity > 0.0f)) {
+        return false;
+    }
+    auto& bitmap = resource_cache_[id];
+    if (bitmap == nullptr) {
+        if (resource_cache_.size() >= 256) {
+            resource_cache_.clear();  // crude bound; host frees via ids
+        }
+        const HRESULT hr = dc_->CreateBitmap(
+            D2D1::SizeU(static_cast<UINT32>(width),
+                        static_cast<UINT32>(height)),
+            bgra, static_cast<UINT32>(width) * 4u,
+            D2D1::BitmapProperties(
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
+                                  D2D1_ALPHA_MODE_PREMULTIPLIED),
+                static_cast<float>(dpi_), static_cast<float>(dpi_)),
+            bitmap.GetAddressOf());
+        if (FAILED(hr) || bitmap == nullptr) {
+            return false;
+        }
+    }
+    DrawBitmapRounded(bitmap.Get(), dst, opacity, corner_radius);
+    return true;
+}
+
+bool Direct2DRenderer::DrawVideoPixels(
+    const void* bgra, std::uint32_t id, int width, int height,
+    Layout::Rect dst, float opacity, float corner_radius) {
+    RequireFrame();
+    dst = NormalizeRect(dst);
+    if (bgra == nullptr || width <= 0 || height <= 0 ||
+        dst.width <= 0.0f || dst.height <= 0.0f ||
+        !(opacity > 0.0f)) {
+        return false;
+    }
+    auto& stage = video_stages_[id];
+    if (stage.bitmap == nullptr ||
+        stage.size.width != static_cast<UINT32>(width) ||
+        stage.size.height != static_cast<UINT32>(height)) {
+        stage.bitmap.Reset();
+        const HRESULT hr = dc_->CreateBitmap(
+            D2D1::SizeU(static_cast<UINT32>(width),
+                        static_cast<UINT32>(height)),
+            nullptr, 0,
+            D2D1::BitmapProperties(
+                D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM,
+                                  D2D1_ALPHA_MODE_PREMULTIPLIED),
+                static_cast<float>(dpi_), static_cast<float>(dpi_)),
+            stage.bitmap.GetAddressOf());
+        if (FAILED(hr) || stage.bitmap == nullptr) {
+            return false;
+        }
+        stage.size = D2D1::SizeU(static_cast<UINT32>(width),
+                                 static_cast<uint32_t>(height));
+    }
+    if (FAILED(stage.bitmap->CopyFromMemory(
+            nullptr, bgra, static_cast<UINT32>(width) * 4u))) {
+        return false;
+    }
+    DrawBitmapRounded(stage.bitmap.Get(), dst, opacity, corner_radius);
+    return true;
+}
+
+void Direct2DRenderer::FreeResource(std::uint32_t id) {
+    resource_cache_.erase(id);
+    video_stages_.erase(id);
 }
 
 } // namespace XER::UI::Rendering::Windows

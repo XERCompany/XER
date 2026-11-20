@@ -120,6 +120,22 @@ if(TARGET OpenImageIO::OpenImageIO)
         target_link_libraries(YA_VideoEditor_Core_objs PRIVATE OpenImageIO::OpenImageIO)
         target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE XER_VE_HAS_OIIO=1)
     endif()
+    # OCIO/OIIO ship .dll.a only — delay-load them inside the module
+    # so video_editor starts without the MSYS2 bin dir on PATH and
+    # pulls them lazily on first color/image call.
+    if(MINGW)
+        set(_ve_dl)
+        foreach(_t OpenColorIO::OpenColorIO OpenImageIO::OpenImageIO)
+            if(TARGET ${_t})
+                xer_collect_delayload_dlls(_d ${_t})
+                list(APPEND _ve_dl ${_d})
+            endif()
+        endforeach()
+        if(_ve_dl)
+            xer_delayload(YA_VideoEditor_Core ${_ve_dl})
+            xer_delayload(XER_VideoEditor_Core ${_ve_dl})
+        endif()
+    endif()
 endif()
 if(TARGET V8::V8)
     target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope} V8::V8)
@@ -185,119 +201,69 @@ if(WIN32)
         target_link_libraries(video_editor PRIVATE XER_Cef)
     endif()
 
-    # Runtime-DLL deployment (CopyDLL.ps1 discovers imports with
-    # llvm-objdump and recurses transitively — FFmpeg alone pulls ~80
-    # DLLs). POST_BUILD keeps the exe runnable without clang64 on PATH;
-    # `video_editor_dist` produces a self-contained package on demand.
-    find_program(XER_POWERSHELL NAMES powershell pwsh
-                 DOC "PowerShell host for CopyDLL.ps1")
-    if(XER_POWERSHELL)
-        # MSYS2 packaging quirk: libdovi/librav1e import short names.
-        set(XER_DEPLOY_DLL_ALIASES
-            "dovi.dll=libdovi.dll,rav1e.dll=librav1e.dll")
+    # No runtime-DLL deployment: all MSYS2 deps link statically, and
+    # the remaining dll-only components (libskia, delay-loaded
+    # ggml/whisper/opencv) are optional — the exe starts without them
+    # and LoadLibrary-probes at first use. Assets and the CEF runtime
+    # are still staged next to the exe.
 
-        option(XER_VIDEO_EDITOR_DEPLOY_DLLS
-               "Copy runtime DLLs next to video_editor.exe after build" ON)
-        if(XER_VIDEO_EDITOR_DEPLOY_DLLS)
-            add_custom_command(TARGET video_editor POST_BUILD
-                COMMAND "${XER_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-                        -File "${CMAKE_SOURCE_DIR}/CopyDLL.ps1"
-                        -ExePath "$<TARGET_FILE:video_editor>"
-                        -Alias "${XER_DEPLOY_DLL_ALIASES}"
-                COMMENT "Deploying runtime DLLs next to video_editor.exe"
-                VERBATIM)
-        endif()
+    # App assets: app.yaml + runtime.js + window/window.yaml — the
+    # declarative bootstrap the app_runtime layer executes via V8.
+    add_custom_command(TARGET video_editor POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+                "$<TARGET_FILE_DIR:video_editor>/assets"
+        COMMENT "Deploying app assets (runtime.js, yaml configs)"
+        VERBATIM)
+    # Always-run sibling of the POST_BUILD copy above: the hook
+    # only fires on relink, so asset-only edits (icons, yaml,
+    # runtime.js) would otherwise never reach the output dir. A
+    # custom target builds on every build, deploying fresh assets
+    # without a relink.
+    add_custom_target(video_editor_assets
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+                "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+                "$<TARGET_FILE_DIR:video_editor>/assets"
+        COMMENT "Deploying app assets (icons, yaml, runtime.js)"
+        VERBATIM)
+    # .xexrj extensions: every dir under assets/extensions_src/ is
+    # packed by ztzmake into <exe>/assets/extensions/<name>.xexrj
+    # — the same artifact a user gets from running ztzmake.exe.
+    if(TARGET ztzmake)
+        file(GLOB XER_EXT_SRC_DIRS CONFIGURE_DEPENDS
+             LIST_DIRECTORIES true
+             "${CMAKE_CURRENT_SOURCE_DIR}/assets/extensions_src/*")
+        foreach(ext_src IN LISTS XER_EXT_SRC_DIRS)
+            if(IS_DIRECTORY "${ext_src}")
+                get_filename_component(ext_name "${ext_src}" NAME)
+                add_custom_command(TARGET video_editor_assets
+                    POST_BUILD
+                    COMMAND $<TARGET_FILE:ztzmake>
+                            "${ext_src}"
+                            -o "$<TARGET_FILE_DIR:video_editor>/assets/extensions/${ext_name}.xexrj"
+                    COMMENT "Packing ${ext_name}.xexrj"
+                    VERBATIM)
+            endif()
+        endforeach()
+        add_dependencies(video_editor_assets ztzmake)
+    endif()
+    add_dependencies(video_editor video_editor_assets)
 
-        # Optional runtime-probed DLLs: the AI features (whisper
-        # transcription, ggml backends) LoadLibrary these at run time,
-        # so CopyDLL.ps1 never sees them — ship them when the toolchain
-        # provides them (MSYS2 clang64 ships whisper.cpp + ggml).
-        get_filename_component(_compiler_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
-        file(GLOB XER_OPT_RT_DLLS
-             "${_compiler_bin}/libwhisper*.dll"
-             "${_compiler_bin}/whisper.dll"
-             "${_compiler_bin}/ggml-*.dll"
-             "${_compiler_bin}/libv8*.dll")
-
-        # App assets: app.yaml + runtime.js + window/window.yaml — the
-        # declarative bootstrap the app_runtime layer executes via V8.
-        add_custom_command(TARGET video_editor POST_BUILD
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-                    "$<TARGET_FILE_DIR:video_editor>/assets"
-            COMMENT "Deploying app assets (runtime.js, yaml configs)"
+    # CEF runtime: libcef.dll + resources beside the exe — the
+    # CefRuntime opens them from the executable directory. Manual
+    # install via InstallCef.ps1 -> third_party/cef/cef_windows64.
+    find_package(CEF QUIET)
+    if(TARGET CEF::libcef)
+        add_custom_target(video_editor_cef_deploy
+            COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RELEASE_DIR} -DDST=$<TARGET_FILE_DIR:video_editor>
+                       -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
+            COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RESOURCES_DIR} -DDST=$<TARGET_FILE_DIR:video_editor>
+                       -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
+            COMMENT "Deploying CEF runtime (libcef.dll, *.pak, locales)"
             VERBATIM)
-        # Always-run sibling of the POST_BUILD copy above: the hook
-        # only fires on relink, so asset-only edits (icons, yaml,
-        # runtime.js) would otherwise never reach the output dir. A
-        # custom target builds on every build, deploying fresh assets
-        # without a relink.
-        add_custom_target(video_editor_assets
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    "${CMAKE_CURRENT_SOURCE_DIR}/assets"
-                    "$<TARGET_FILE_DIR:video_editor>/assets"
-            COMMENT "Deploying app assets (icons, yaml, runtime.js)"
-            VERBATIM)
-        # .xexrj extensions: every dir under assets/extensions_src/ is
-        # packed by ztzmake into <exe>/assets/extensions/<name>.xexrj
-        # — the same artifact a user gets from running ztzmake.exe.
-        if(TARGET ztzmake)
-            file(GLOB XER_EXT_SRC_DIRS CONFIGURE_DEPENDS
-                 LIST_DIRECTORIES true
-                 "${CMAKE_CURRENT_SOURCE_DIR}/assets/extensions_src/*")
-            foreach(ext_src IN LISTS XER_EXT_SRC_DIRS)
-                if(IS_DIRECTORY "${ext_src}")
-                    get_filename_component(ext_name "${ext_src}" NAME)
-                    add_custom_command(TARGET video_editor_assets
-                        POST_BUILD
-                        COMMAND $<TARGET_FILE:ztzmake>
-                                "${ext_src}"
-                                -o "$<TARGET_FILE_DIR:video_editor>/assets/extensions/${ext_name}.xexrj"
-                        COMMENT "Packing ${ext_name}.xexrj"
-                        VERBATIM)
-                endif()
-            endforeach()
-            add_dependencies(video_editor_assets ztzmake)
-        endif()
-        add_dependencies(video_editor video_editor_assets)
-
-        # CEF runtime: libcef.dll + resources beside the exe — the
-        # CefRuntime opens them from the executable directory. Manual
-        # install via InstallCef.ps1 -> third_party/cef/cef_windows64.
-        find_package(CEF QUIET)
-        if(TARGET CEF::libcef)
-            add_custom_target(video_editor_cef_deploy
-                COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RELEASE_DIR} -DDST=$<TARGET_FILE_DIR:video_editor>
-                           -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
-                COMMAND ${CMAKE_COMMAND} -DSRC=${CEF_RESOURCES_DIR} -DDST=$<TARGET_FILE_DIR:video_editor>
-                           -P ${PROJECT_SOURCE_DIR}/cmake/CopyDirRetry.cmake
-                COMMENT "Deploying CEF runtime (libcef.dll, *.pak, locales)"
-                VERBATIM)
-    set_property(TARGET video_editor_cef_deploy PROPERTY JOB_POOL xer_cef_deploy)
-            add_dependencies(video_editor video_editor_cef_deploy)
-            message(STATUS "CEF deploy target enabled (${CEF_ROOT})")
-        endif()
-        if(XER_OPT_RT_DLLS)
-            add_custom_command(TARGET video_editor POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                        ${XER_OPT_RT_DLLS}
-                        "$<TARGET_FILE_DIR:video_editor>"
-                COMMENT "Deploying optional AI runtime DLLs (whisper/ggml)"
-                VERBATIM)
-        endif()
-
-        add_custom_target(video_editor_dist
-            COMMAND "${XER_POWERSHELL}" -NoProfile -ExecutionPolicy Bypass
-                    -File "${CMAKE_SOURCE_DIR}/CopyDLL.ps1"
-                    -ExePath "$<TARGET_FILE:video_editor>"
-                    -DestDir "${CMAKE_BINARY_DIR}/dist/video_editor"
-                    -CopyExe
-                    -Alias "${XER_DEPLOY_DLL_ALIASES}"
-            DEPENDS video_editor
-            COMMENT "Packaging video_editor + DLLs into dist/video_editor"
-            VERBATIM)
-    else()
-        message(STATUS "PowerShell not found — DLL deploy targets skipped")
+        set_property(TARGET video_editor_cef_deploy PROPERTY JOB_POOL xer_cef_deploy)
+        add_dependencies(video_editor video_editor_cef_deploy)
+        message(STATUS "CEF deploy target enabled (${CEF_ROOT})")
     endif()
 endif()
 target_compile_features(video_editor PRIVATE cxx_std_23)

@@ -54,6 +54,21 @@ public:
                    float opacity, float corner_radius) override;
     bool DrawFrameBgra(const void* bgra, int width, int height,
                        Layout::Rect dst_rect, float opacity) override;
+    void PushLayer(float opacity, std::uint32_t blend_mode,
+                   float blur) override;
+    void PopLayer() override;
+    void SetTransform(float a, float b, float c, float d, float tx,
+                      float ty) override;
+    void ResetTransform() override;
+    bool DrawResourcePixels(const void* bgra, std::uint32_t id,
+                            int width, int height, Layout::Rect dst,
+                            float opacity,
+                            float corner_radius) override;
+    bool DrawVideoPixels(const void* bgra, std::uint32_t id,
+                         int width, int height, Layout::Rect dst,
+                         float opacity,
+                         float corner_radius) override;
+    void FreeResource(std::uint32_t id) override;
 
 private:
     void EnsureDevice();
@@ -109,6 +124,20 @@ private:
     // incoming frame dimensions change; pixels are copied in per frame.
     Microsoft::WRL::ComPtr<ID2D1Bitmap> frame_bitmap_;
     D2D1_SIZE_U frame_bitmap_size_{0, 0};
+    // Store-backed resources (RenderStore ids). kImageBgra entries
+    // are cached once; kVideoFrame entries keep a per-id staging
+    // bitmap that is rewritten every frame.
+    std::unordered_map<std::uint32_t,
+                       Microsoft::WRL::ComPtr<ID2D1Bitmap>>
+        resource_cache_;
+    struct VideoStage {
+        Microsoft::WRL::ComPtr<ID2D1Bitmap> bitmap;
+        D2D1_SIZE_U size{0, 0};
+    };
+    std::unordered_map<std::uint32_t, VideoStage> video_stages_;
+    std::uint32_t layer_depth_ = 0;
+    void DrawBitmapRounded(ID2D1Bitmap* bitmap, Layout::Rect dst,
+                           float opacity, float corner_radius);
 };
 
 } // namespace XER::UI::Rendering::Windows

@@ -2,7 +2,13 @@
 #include <windows.h>
 #include <commctrl.h>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <stdexcept>
+#include <string>
+#include <thread>
+
+#include "render_host.h"
 
 namespace XER::UI::Core {
 
@@ -50,6 +56,33 @@ public:
                     static_cast<unsigned long>(error)); 
         }
 
+        // Pre-spawn the remote render worker pool: several hidden
+        // xer_engine_ui_render.exe processes wait on their channels so
+        // the first window checkouts instantly. Worker count:
+        // SetRenderWorkerCount(n) before Initialize, or
+        // XER_UI_RENDER_WORKERS env ("0" disables process rendering,
+        // "auto" → one per 4 logical cores, capped at 8).
+        int workers = render_worker_count_;
+        if (const char* env = std::getenv("XER_UI_RENDER_WORKERS")) {
+            if (_stricmp(env, "auto") == 0) {
+                workers = static_cast<int>(
+                    std::thread::hardware_concurrency() / 4);
+                if (workers < 1) workers = 1;
+                if (workers > 8) workers = 8;
+            } else {
+                workers = std::atoi(env);
+            }
+        }
+        if (workers > 0) {
+            std::string err;
+            if (!UiRenderHost::Instance().EnsureWorkers(workers, &err)) {
+                fprintf(stderr,
+                        "[XER UI] render workers not spawned: %s\n",
+                        err.c_str());
+                // Not fatal: CreateRemoteRenderer retries on demand.
+            }
+        }
+
         initialized_ = true;
         return true;
     }
@@ -87,7 +120,19 @@ public:
         running_ = false;
         PostQuitMessage(0);
 
+        // Tear down render workers cleanly (sends kShutdown on every
+        // channel, then terminates stragglers).
+        UiRenderHost::Instance().ShutdownAll();
+
         initialized_ = false;
+    }
+
+    void SetRenderWorkerCount(int count) { render_worker_count_ = count; }
+    int RenderWorkerCount() const {
+        return UiRenderHost::Instance().WorkerCount();
+    }
+    int WarmRenderWorkerCount() const {
+        return UiRenderHost::Instance().WarmWorkerCount();
     }
 
     void SetAppName(const std::string& name) {
@@ -110,6 +155,7 @@ private:
     bool initialized_;
     bool running_;
     std::string app_name_;
+    int render_worker_count_ = 2;  // pre-spawned render processes
 };
 
 // Application implementation
@@ -140,6 +186,18 @@ void Application::SetAppName(const std::string& name) {
 
 std::string Application::GetAppName() const {
     return impl_->GetAppName();
+}
+
+void Application::SetRenderWorkerCount(int count) {
+    impl_->SetRenderWorkerCount(count);
+}
+
+int Application::RenderWorkerCount() const {
+    return impl_->RenderWorkerCount();
+}
+
+int Application::WarmRenderWorkerCount() const {
+    return impl_->WarmRenderWorkerCount();
 }
 
 bool Application::IsInitialized() const {

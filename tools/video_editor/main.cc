@@ -3,6 +3,8 @@
 //   video_editor --open <in.xerproj>                open project in GUI
 //   video_editor --export <in.xerproj> <out.mp4>   headless render+encode
 //   video_editor --info <in.xerproj>               project summary
+//   video_editor --smoke                           headless self-checks
+//   video_editor --smoke-list                      list check names
 //   video_editor --help
 
 #include <algorithm>
@@ -18,6 +20,7 @@
 #include "export_engine.h"
 #include "helper/path_utils.h"
 #include "project_store.h"
+#include "smoke_checks.h"
 #include "timeline_model.h"
 
 #if defined(_WIN32)
@@ -88,6 +91,10 @@ void PrintUsage() {
                  "Render and encode a project\n"
               << "  video_editor --info <in.xerproj>              "
                  "Print project/media summary\n"
+              << "  video_editor --smoke                          "
+                 "Run headless self-checks (SMOKE <name> OK/FAIL)\n"
+              << "  video_editor --smoke-list                     "
+                 "List the smoke check names\n"
               << "  video_editor --help                           "
                  "Show this help\n";
 }
@@ -387,6 +394,17 @@ int main(int argc, char** argv) {
             return 1;
         }
         return RunExport(args[2], args[3]);
+    }
+    if (arg == "--smoke") {
+        // Headless, bounded self-check — see smoke_checks.h.
+        return XER::VideoEditor::Smoke::RunAll();
+    }
+    if (arg == "--smoke-list") {
+        for (const std::string& name :
+             XER::VideoEditor::Smoke::CheckNames()) {
+            std::cout << name << '\n';
+        }
+        return 0;
     }
 
     if (!arg.empty() && arg.front() != '-') {

@@ -7,6 +7,19 @@
 
 find_package(LibArchive REQUIRED)
 
+# Static libarchive.a carries no transitive dep info: declare the
+# archives it actually needs so every .exe that links it stays fully
+# static (no MSYS2 DLLs). xmllite is a Windows import lib (CreateXml*
+# for XAR TOC support) — still a system DLL, not an MSYS2 runtime dep.
+if(MINGW)
+    foreach(_dep lz4 b2 zstd)
+        find_library(_ARCHIVE_DEP_${_dep} NAMES lib${_dep}.a REQUIRED)
+        target_link_libraries(LibArchive::LibArchive
+            INTERFACE "${_ARCHIVE_DEP_${_dep}}")
+    endforeach()
+    target_link_libraries(LibArchive::LibArchive INTERFACE xmllite)
+endif()
+
 add_library(XER_Archive STATIC
     archive_manager.cc
     archive_manager.h

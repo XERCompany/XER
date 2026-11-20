@@ -23,6 +23,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <cstdlib>
 #include <stdexcept>
 #include <memory>
@@ -32,6 +33,7 @@
 #include <windows.h>
 
 #include "cache/shared_memory_channel.h"
+#include "rendering/render_store.h"
 #include "rendering/render_stream.h"
 #include "rendering/windows/direct2d_renderer.h"
 
@@ -39,6 +41,7 @@ namespace {
 
 using XER::Cache::SharedMemoryChannel;
 using XER::UI::Rendering::Renderer;
+using XER::UI::Rendering::RenderStore;
 using XER::UI::Rendering::TextStyle;
 using XER::UI::Rendering::Windows::Direct2DRenderer;
 namespace Stream = XER::UI::Rendering::Stream;
@@ -121,34 +124,44 @@ int main(int argc, char** argv) {
     }
 
     // Prefer drawing straight into the UI window's HWND; fall back to
-    // an own hidden surface when the foreign handle is rejected.
-    HWND target = foreign_hwnd;
-    if (target == nullptr || !IsWindow(target)) {
-        target = nullptr;
-    }
+    // an own hidden surface when the foreign handle is rejected. The
+    // same path runs on kSetTargetHwnd retargets (pool workers adopt a
+    // window when the UI app checks them out).
     std::unique_ptr<Direct2DRenderer> renderer;
-    if (target != nullptr) {
-        try {
-            renderer = std::make_unique<Direct2DRenderer>(target);
-        } catch (...) {
-            renderer.reset();
+    HWND own_surface = nullptr;
+    auto retarget = [&](HWND foreign, int w, int h, bool show) -> bool {
+        HWND target = foreign;
+        if (target == nullptr || !IsWindow(target)) {
             target = nullptr;
         }
-    }
-    if (target == nullptr) {
-        // No usable foreign HWND: own surface, hidden unless --surface.
-        target = CreateSurfaceWindow(width, height, !surface);
-        if (target == nullptr) {
-            std::fprintf(stderr, "render surface window failed\n");
-            return 1;
+        if (target != nullptr) {
+            try {
+                renderer = std::make_unique<Direct2DRenderer>(target);
+                return true;
+            } catch (...) {
+                renderer.reset();
+                target = nullptr;
+            }
+        }
+        // No usable foreign HWND: own surface, hidden unless shown.
+        if (own_surface == nullptr) {
+            own_surface = CreateSurfaceWindow(w, h, !show);
+            if (own_surface == nullptr) {
+                std::fprintf(stderr, "render surface window failed\n");
+                return false;
+            }
         }
         try {
-            renderer = std::make_unique<Direct2DRenderer>(target);
+            renderer = std::make_unique<Direct2DRenderer>(own_surface);
         } catch (const std::exception& e) {
             std::fprintf(stderr, "renderer init failed: %s\n",
                          e.what());
-            return 1;
+            return false;
         }
+        return true;
+    };
+    if (!retarget(foreign_hwnd, width, height, surface)) {
+        return 1;
     }
 
     std::string err;
@@ -161,6 +174,11 @@ int main(int argc, char** argv) {
     }
     std::fprintf(stderr, "xer_engine_ui_render: channel '%s' %s\n",
                  channel_name.c_str(), create ? "created" : "opened");
+
+    // Shared pixel store — attached by the UI process via
+    // kAttachStore; DrawResource/DrawVideoFrame/DrawSpectrum resolve
+    // resource ids here instead of pushing pixels through the channel.
+    std::unique_ptr<RenderStore> store;
 
     bool running = true;
     std::vector<uint8_t> message;
@@ -178,6 +196,24 @@ int main(int argc, char** argv) {
                                               message.size()),
                                           &op)) {
             continue;
+        }
+        if (op == Stream::Op::kSetTargetHwnd) {
+            // [u32 op][u32 lo][u32 hi] — retarget onto a foreign HWND
+            // (0 → own hidden surface).
+            if (message.size() >= 12) {
+                std::uint32_t lo = 0, hi = 0;
+                std::memcpy(&lo, message.data() + 4, 4);
+                std::memcpy(&hi, message.data() + 8, 4);
+                const auto v = static_cast<std::uint64_t>(lo) |
+                               (static_cast<std::uint64_t>(hi) << 32);
+                retarget(reinterpret_cast<HWND>(
+                             static_cast<uintptr_t>(v)),
+                         width, height, surface);
+            }
+            continue;
+        }
+        if (!renderer) {
+            continue;  // retarget failed; wait for the next command
         }
         if (op == Stream::Op::kMeasureRequest) {
             std::uint32_t req_id = 0;
@@ -198,6 +234,39 @@ int main(int argc, char** argv) {
         }
         Stream::StreamReader::Handlers handlers;
         handlers.on_shutdown = [&running] { running = false; };
+        handlers.on_retarget = [&](std::uint64_t hwnd) {
+            retarget(reinterpret_cast<HWND>(
+                         static_cast<uintptr_t>(hwnd)),
+                     width, height, surface);
+        };
+        handlers.on_attach_store = [&](std::string_view name) {
+            std::string err;
+            store = RenderStore::Open(std::string(name), &err);
+            if (!store) {
+                std::fprintf(stderr,
+                             "xer_engine_ui_render: store '%.*s': "
+                             "%s\n",
+                             static_cast<int>(name.size()),
+                             name.data(), err.c_str());
+            }
+        };
+        handlers.on_resource =
+            [&store](std::uint32_t id,
+                     Stream::StreamReader::Handlers::ResourceMeta*
+                         meta) -> const void* {
+            if (!store || meta == nullptr) {
+                return nullptr;
+            }
+            const auto v = store->Read(id);
+            if (v.data == nullptr) {
+                return nullptr;
+            }
+            meta->width = v.info.width;
+            meta->height = v.info.height;
+            meta->payload = v.info.payload;
+            meta->kind = static_cast<std::uint32_t>(v.info.kind);
+            return v.data;
+        };
         Stream::StreamReader::Dispatch(*renderer, handlers,
                                        message.data(),
                                        static_cast<uint32_t>(

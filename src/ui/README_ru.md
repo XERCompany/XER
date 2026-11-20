@@ -34,10 +34,79 @@ src/ui/
 ├── theme/                 # Токены темы и провайдер светлой/тёмной
 ├── rendering/             # Абстракция рендерера и бэкенд Direct2D/DirectWrite
 ├── css/                   # CSS-движок: селекторы, каскад, инвалидация стилей
+├── style/                 # Мост XER::Content::CSS: WidgetStyleHost отражает
+│                          # дерево виджетов в style-движок, style_values маппит
+│                          # CSS-значения на токены темы
 ├── debug/                 # DevTools: инспектор Elements/Render/Stats, XML-дамп
 ├── xml/                   # Декларативные деревья виджетов из XML-разметки
 └── platform/              # Трансляция ввода Win32
 ```
+
+### Пул процессов удалённого рендеринга
+
+`Application::Initialize` заранее запускает пул скрытых процессов
+`xer_engine_ui_render.exe` (по умолчанию 2; переопределяется
+`Application::SetRenderWorkerCount(n)` до init или переменной
+`XER_UI_RENDER_WORKERS` — `auto` масштабируется по ядрам, `0` отключает
+разнесение рендеринга по процессам). Каждый воркер ждёт на своём
+`Cache::SharedMemoryChannel`; `UiRenderHost::CreateRemoteRenderer`
+мгновенно забирает воркер из пула (сверх пула — спавн по требованию) и
+перенацеливает его на HWND вызывающего через потоковую операцию
+`kSetTargetHwnd`. `Application::Shutdown` сигналит всем каналам, ждёт
+воркеров и добивает зависших.
+
+#### Общее хранилище ресурсов + поэлементная обработка
+
+Пиксельные данные, которые переполняют канал команд, живут в
+именованном общем сегменте — `Rendering::RenderStore`
+(`xer.ui.res.<pid>`), принадлежит `UiRenderHost` и подключается к
+каждому воркеру через `kAttachStore` при checkout. Воркеры читают
+ресурсы напрямую из shared memory: кадр 4K стоит один memcpy с
+seqlock, а не сообщение в 8 МБ:
+
+- `UiRenderHost::UploadImage(id, bgra, w, h)` → статичный битмап;
+  воркеры рисуют через `DrawResource(id, dst, opacity, radius)` и
+  держат per-id кэш `ID2D1Bitmap`.
+- `UiRenderHost::WriteVideoFrame(id, bgra, w, h)` → живой кадр
+  видео/захвата; `DrawVideoFrame(id, ...)` перезаписывает per-id
+  staging-битмап каждый кадр.
+- `UiRenderHost::WriteSpectrum(id, levels, count)` → float-уровни
+  аудио; `DrawSpectrum(id, dst, color, mode)` рисует VU/спектр
+  на стороне воркера.
+- `UiRenderHost::FreeResource(id)` освобождает слот и рассылает
+  `kFreeResource` всем воркерам (сброс GPU-битмапа).
+- Размер хранилища — 64 МБ по умолчанию (`XER_UI_STORE_MB`).
+
+Поэлементные операции покрывают композитинг: `kPushLayer`/`kPopLayer`
+(оффскрин-слой с прозрачностью), `kSetTransform`/`kResetTransform`
+(аффинное 2x3). `WidgetTree::RenderSubtree` эмитит их автоматически
+из computed style — `opacity`, `filter: blur()`, `transform:
+translate()/scale()` — то есть эффекты каждого виджета вычисляются
+внутри процесса-рендерера.
+
+### CSS в XER::UI (мост XER::Content::CSS)
+
+`CSS::WidgetStyleHost` (`style/widget_style_host.h`) гоняет каноничный
+движок `XER::Content::CSS` (`src/content/css`, в `YA.DesginCSS.dll`)
+по живому дереву виджетов:
+
+- Виджеты несут CSS-идентичность: `GetStyleTag()` (имя элемента;
+  fallback — lowercase-имя из RTTI), `SetStyleId`, `AddStyleClass`,
+  `SetStyleAttribute`, `SetInlineStyle`; `disabled` синтезируется из
+  `IsEnabled()`.
+- `Update(root)` отражает поддерево виджетов в теневое дерево
+  `CSSNode`, превращает диффы в вызовы `FooChangedForElement` +
+  pending-инвалидации, проталкивает их и пересчитывает — записывая
+  `GetComputedStyle()`/`StyleValue(prop)` на каждый виджет.
+- Селекторы: tag, `.class`, `#id`, `[attr]`, `[attr=v]`,
+  `:hover`/`:active`/`:focus`, `:first-child`/`:last-child`/
+  `:nth-child(an+b)`, descendant и `>`, списки через запятую, `*`.
+  Conditional-pseudo выставляет флаги `AffectedBy*`, поэтому первое же
+  `:hover`-изменение пересчитывает только нужный виджет.
+- `style/style_values.h` парсит цвета (`#rgb[a]`, `rgb()`, имена) и
+  длины (`px`/`pt`/`em`/`rem`); `ApplyComputedToTokens` маппит
+  токен-свойства (`accent-color`, `border-radius`, `font-size`,
+  `spacing-*`...) на `Theme::Tokens`.
 
 `Window::SetContent` размещает дерево виджетов, пересчитывает раскладку
 при изменении клиентской области и инвалидирует окно для перерисовки.

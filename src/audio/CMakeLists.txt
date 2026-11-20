@@ -98,11 +98,29 @@ if(XER_YA_DLLS)
     if(WIN32)
         target_link_libraries(XER_AudioCore INTERFACE ksguid)
     endif()
+    # Prefer the static archive on MinGW so YA.AudioChannels carries
+    # no libmp3lame-0.dll runtime dependency.
+    # Prefer the static archive on MinGW so YA.AudioChannels carries
+    # no libmp3lame-0.dll runtime dependency. Static lame calls into
+    # mpg123 internally, so libmpg123.a comes along too.
+    unset(XER_LAME_LIBRARY CACHE)
+    unset(XER_MPG123_LIBRARY CACHE)
+    if(MINGW)
+        set(_save_sfx ${CMAKE_FIND_LIBRARY_SUFFIXES})
+        set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+    endif()
     find_library(XER_LAME_LIBRARY NAMES mp3lame lame)
+    find_library(XER_MPG123_LIBRARY NAMES mpg123)
+    if(MINGW)
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ${_save_sfx})
+    endif()
     if(XER_LAME_LIBRARY)
+        # Static mpg123 calls shlwapi path helpers internally.
+        set(_mp3_libs ${XER_LAME_LIBRARY} ${XER_MPG123_LIBRARY}
+                      shlwapi)
         # mp3 encoder lives in file_io_codecs -> YA.AudioChannels.
-        target_link_libraries(YA_AudioChannels PRIVATE ${XER_LAME_LIBRARY})
-        target_link_libraries(XER_AudioCore INTERFACE ${XER_LAME_LIBRARY})
+        target_link_libraries(YA_AudioChannels PRIVATE ${_mp3_libs})
+        target_link_libraries(XER_AudioCore INTERFACE ${_mp3_libs})
     endif()
 else()
     # WASAPI helpers (virtual audio cable, render sink, capture source)
@@ -111,9 +129,20 @@ else()
         target_link_libraries(XER_AudioCore PUBLIC ksguid)
     endif()
 
+    unset(XER_LAME_LIBRARY CACHE)
+    unset(XER_MPG123_LIBRARY CACHE)
+    if(MINGW)
+        set(_save_sfx ${CMAKE_FIND_LIBRARY_SUFFIXES})
+        set(CMAKE_FIND_LIBRARY_SUFFIXES .a)
+    endif()
     find_library(XER_LAME_LIBRARY NAMES mp3lame lame)
+    find_library(XER_MPG123_LIBRARY NAMES mpg123)
+    if(MINGW)
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ${_save_sfx})
+    endif()
     if(XER_LAME_LIBRARY)
-        target_link_libraries(XER_AudioCore PUBLIC ${XER_LAME_LIBRARY})
+        target_link_libraries(XER_AudioCore PUBLIC
+            ${XER_LAME_LIBRARY} ${XER_MPG123_LIBRARY} shlwapi)
     endif()
 
     target_compile_features(XER_AudioCore PUBLIC cxx_std_23)

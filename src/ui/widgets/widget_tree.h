@@ -21,6 +21,10 @@ namespace XER::UI::Core {
 class UiEventBus;
 }
 
+namespace XER::UI::CSS {
+class WidgetStyleHost;
+}
+
 namespace XER::UI::Widgets {
 
 class WidgetTree {
@@ -84,6 +88,17 @@ public:
     // damage recording because a layout request already forces a full
     // repaint.
     bool LayoutInProgress() const { return layout_in_progress_; }
+
+    // --- CSS styling (XER::Content::CSS bridge) ----------------------
+    // Attaches a WidgetStyleHost mirroring this tree; Update runs
+    // automatically at the top of Layout() and Render(), so widget
+    // computed styles are always current when they paint or size.
+    void SetStyleHost(std::shared_ptr<CSS::WidgetStyleHost> host);
+    CSS::WidgetStyleHost* GetStyleHost() const { return style_host_.get(); }
+    // Convenience: creates the host on first call and sets/appends a
+    // stylesheet parsed from CSS text.
+    void SetStyleSheet(std::string_view css_text);
+    void AddStyleSheet(std::string_view css_text);
     // Clears the hovered widget (e.g. on WM_MOUSELEAVE).
     void ClearHover();
     // Drops left-button mouse capture without a MouseUp (e.g. the OS
@@ -156,6 +171,9 @@ private:
     std::function<bool(const Event&)> context_menu_handler_;
     std::function<bool(const Event&)> key_handler_;
     Core::UiEventBus* event_bus_ = nullptr;
+    // mutable: Render() is const but style resolution is internal
+    // bookkeeping — it writes ComputedStyle onto widgets.
+    mutable std::shared_ptr<CSS::WidgetStyleHost> style_host_;
 };
 
 } // namespace XER::UI::Widgets

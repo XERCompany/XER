@@ -1,0 +1,99 @@
+/**
+ * CSSNode — concrete CSSElement implementation for the engine's own
+ * invalidation/recalc traversal (design doc: DOM nodes carry
+ * NeedsStyleInvalidation / ChildNeedsStyleInvalidation /
+ * NeedsStyleRecalc / ChildNeedsStyleRecalc bits).
+ */
+#pragma once
+
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include "content/css/css_element.h"
+#include "content/css/style_rule_fwd.h"
+
+namespace XER::Content::CSS {
+
+class CSSNode final : public CSSElement {
+public:
+    std::string tag, id;
+    std::vector<std::string> classes;
+    std::vector<std::string> attributes;
+    std::map<std::string, std::string, std::less<>> attr_values;
+    // Design doc: inline declarations — applied after all matched
+    // rules in the cascade (style="..." equivalent).
+    std::vector<StyleDeclaration> inline_declarations;
+    CSSNode* parent = nullptr;
+    std::vector<std::unique_ptr<CSSNode>> children;
+    bool focused = false;
+    bool hovered = false;
+    bool active = false;
+
+    // Style state bits (design doc).
+    bool needs_invalidation = false;
+    bool child_needs_invalidation = false;
+    bool needs_recalc = false;
+    bool child_needs_recalc = false;
+    // StyleChange requested for this node (kLocalStyleChange /
+    // kSubtreeStyleChange / kReattach — see style_engine.h).
+    std::uint8_t style_change = 0;
+
+    // Design doc accessors: Node::NeedsStyleInvalidation /
+    // ChildNeedsStyleInvalidation / NeedsStyleRecalc /
+    // ChildNeedsStyleRecalc.
+    bool NeedsStyleInvalidation() const { return needs_invalidation; }
+    bool ChildNeedsStyleInvalidation() const {
+        return child_needs_invalidation;
+    }
+    bool NeedsStyleRecalc() const { return needs_recalc; }
+    bool ChildNeedsStyleRecalc() const { return child_needs_recalc; }
+    void SetNeedsStyleInvalidation() { needs_invalidation = true; }
+    void SetChildNeedsStyleInvalidation() {
+        child_needs_invalidation = true;
+    }
+    void SetNeedsStyleRecalc(std::uint8_t change) {
+        needs_recalc = true;
+        if (change > style_change) style_change = change;
+    }
+    void SetChildNeedsStyleRecalc() { child_needs_recalc = true; }
+
+    std::string_view TagName() const override { return tag; }
+    std::string_view Id() const override { return id; }
+    bool HasClass(std::string_view n) const override {
+        for (const auto& c : classes) if (c == n) return true;
+        return false;
+    }
+    bool HasAttribute(std::string_view n) const override {
+        for (const auto& a : attributes) if (a == n) return true;
+        return attr_values.find(n) != attr_values.end();
+    }
+    std::string_view AttributeValue(std::string_view n) const override {
+        const auto it = attr_values.find(n);
+        return it == attr_values.end() ? std::string_view{}
+                                      : it->second;
+    }
+    bool IsFocused() const override { return focused; }
+    bool IsHovered() const override { return hovered; }
+    bool IsActive() const override { return active; }
+    int NthChildIndex() const override {
+        if (!parent) return -1;
+        for (int i = 0; i < static_cast<int>(parent->children.size()); ++i)
+            if (parent->children[i].get() == this) return i;
+        return -1;
+    }
+    int SiblingCount() const override {
+        return parent ? static_cast<int>(parent->children.size()) : -1;
+    }
+    const CSSElement* Parent() const override { return parent; }
+
+    CSSNode* AddChild(std::unique_ptr<CSSNode> child) {
+        child->parent = this;
+        children.push_back(std::move(child));
+        return children.back().get();
+    }
+};
+
+}  // namespace XER::Content::CSS

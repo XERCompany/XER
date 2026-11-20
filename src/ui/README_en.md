@@ -32,9 +32,85 @@ src/ui/
 ├── theme/                 # Theme tokens and light/dark provider
 ├── rendering/             # Renderer abstraction and Direct2D/DirectWrite backend
 ├── css/                   # CSS engine: selectors, cascade, style invalidation
+├── style/                 # XER::Content::CSS bridge: WidgetStyleHost mirrors the
+│                          # widget tree into the style engine, style_values maps
+│                          # CSS values onto theme tokens
 ├── debug/                 # DevTools: Elements/Render/Stats inspector, XML dump
 ├── xml/                   # Declarative widget trees from XML markup
 └── platform/              # Win32 input translation
+```
+
+### Remote rendering worker pool
+
+`Application::Initialize` pre-spawns a pool of hidden
+`xer_engine_ui_render.exe` processes (default 2; override with
+`Application::SetRenderWorkerCount(n)` before init or the
+`XER_UI_RENDER_WORKERS` env var — `auto` scales with cores, `0` disables
+process-separated rendering). Each worker waits on its own
+`Cache::SharedMemoryChannel`; `UiRenderHost::CreateRemoteRenderer`
+checks a worker out of the pool instantly (extra renderers still spawn
+on demand) and retargets it to the caller's HWND through the
+`kSetTargetHwnd` stream op. `Application::Shutdown` signals every
+channel, waits for workers and terminates stragglers.
+
+#### Shared resource store + per-element processing
+
+Pixel payloads that would flood the command channel live in a named
+shared segment — `Rendering::RenderStore` (`xer.ui.res.<pid>`), owned
+by `UiRenderHost` and attached to each worker via `kAttachStore`
+on checkout. Workers resolve resource ids straight out of shared
+memory, so a 4K frame costs one seqlocked memcpy, not an 8 MB channel
+message:
+
+- `UiRenderHost::UploadImage(id, bgra, w, h)` → static bitmap; workers
+  draw it via `DrawResource(id, dst, opacity, corner_radius)` and keep
+  a per-id `ID2D1Bitmap` cache.
+- `UiRenderHost::WriteVideoFrame(id, bgra, w, h)` → live video/capture
+  frame; `DrawVideoFrame(id, ...)` repaints a per-id staging bitmap
+  every frame (seqlock reads — no locks on the render path).
+- `UiRenderHost::WriteSpectrum(id, levels, count)` → float audio
+  levels; `DrawSpectrum(id, dst, color, mode)` renders VU/spectrum
+  bars worker-side.
+- `UiRenderHost::FreeResource(id)` frees the slot and broadcasts
+  `kFreeResource` so every worker drops its GPU bitmap.
+- Store capacity defaults to 64 MB (`XER_UI_STORE_MB`).
+
+Element-level ops cover compositing: `kPushLayer`/`kPopLayer`
+(offscreen layer with opacity), `kSetTransform`/`kResetTransform`
+(2x3 affine). `WidgetTree::RenderSubtree` emits them automatically
+from computed style — `opacity`, `filter: blur()`, `transform:
+translate()/scale()` — so every widget's effects are evaluated inside
+the render worker, per element.
+
+### CSS in XER::UI (XER::Content::CSS bridge)
+
+`CSS::WidgetStyleHost` (`style/widget_style_host.h`) drives the
+canonical `XER::Content::CSS` engine (`src/content/css`, shipped in
+`YA.DesginCSS.dll`) against a live widget tree:
+
+- Widgets carry a CSS identity: `GetStyleTag()` (element name; falls
+  back to a lowercased RTTI name), `SetStyleId`, `AddStyleClass`,
+  `SetStyleAttribute`, `SetInlineStyle`; `disabled` is synthesized from
+  `IsEnabled()`.
+- `Update(root)` mirrors the widget subtree into a `CSSNode` shadow
+  tree, turns diffs into the engine's `FooChangedForElement` entry
+  points + pending invalidation sets, pushes invalidations and
+  recalculates — writing `GetComputedStyle()`/`StyleValue(prop)` onto
+  each widget.
+- Selectors supported: tag, `.class`, `#id`, `[attr]`, `[attr=v]`,
+  `:hover`/`:active`/`:focus`, `:first-child`/`:last-child`/
+  `:nth-child(an+b)`, descendant and `>` combinators, comma lists,
+  `*`. Conditional-pseudo evaluation marks `AffectedBy*` flags, so the
+  first `:hover` change already recalculates only the flagged widget.
+- `style/style_values.h` parses CSS colors (`#rgb[a]`, `rgb()`,
+  names) and lengths (`px`/`pt`/`em`/`rem`); `ApplyComputedToTokens`
+  maps token properties (`accent-color`, `border-radius`,
+  `font-size`, `spacing-*`...) onto `Theme::Tokens`.
+
+```cpp
+CSS::WidgetStyleHost host;
+host.SetStyleSheet("button { color: #ddd } button:hover { color: #fff }");
+host.Update(root_widget);   // call before painting
 ```
 
 `Window::SetContent` hosts a widget tree, relayouts it on client-area resizes, and

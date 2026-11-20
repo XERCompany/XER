@@ -102,6 +102,88 @@ public:
         (void)opacity;
         return false;
     }
+
+    // ---- Element compositing & store-backed resources ------------
+    // Offscreen layer for per-element compositing (CSS opacity,
+    // blend modes, filters). Calls nest like a stack.
+    virtual void PushLayer(float opacity, std::uint32_t blend_mode,
+                           float blur) {
+        (void)opacity;
+        (void)blend_mode;
+        (void)blur;
+    }
+    virtual void PopLayer() {}
+
+    // 2x3 affine transform applied to subsequent draws; ResetTransform
+    // restores identity.
+    virtual void SetTransform(float a, float b, float c, float d,
+                              float tx, float ty) {
+        (void)a; (void)b; (void)c; (void)d; (void)tx; (void)ty;
+    }
+    virtual void ResetTransform() {}
+
+    // Store-backed draws (RenderStore shared memory — remote renderers
+    // resolve the id; local renderers receive the pixels directly via
+    // the pixel-pointer overloads below).
+    virtual bool DrawResource(std::uint32_t id, Layout::Rect dst,
+                              float opacity, float corner_radius) {
+        (void)id; (void)dst; (void)opacity; (void)corner_radius;
+        return false;
+    }
+    virtual bool DrawVideoFrame(std::uint32_t id, Layout::Rect dst,
+                                float opacity, float corner_radius) {
+        (void)id; (void)dst; (void)opacity; (void)corner_radius;
+        return false;
+    }
+    virtual bool DrawSpectrum(std::uint32_t id, Layout::Rect dst,
+                              Theme::Color color, std::uint32_t mode) {
+        (void)id; (void)dst; (void)color; (void)mode;
+        return false;
+    }
+    virtual void FreeResource(std::uint32_t id) { (void)id; }
+
+    // Pixel-resolved variants — the render worker's store resolver
+    // calls these once it has the shared-memory pointer. Local
+    // implementations can forward to DrawFrameBgra / per-bar rects.
+    virtual bool DrawResourcePixels(const void* bgra, std::uint32_t id,
+                                    int width, int height,
+                                    Layout::Rect dst, float opacity,
+                                    float corner_radius) {
+        (void)id; (void)corner_radius;
+        return DrawFrameBgra(bgra, width, height, dst, opacity);
+    }
+    virtual bool DrawVideoPixels(const void* bgra, std::uint32_t id,
+                                 int width, int height, Layout::Rect dst,
+                                 float opacity, float corner_radius) {
+        (void)id; (void)corner_radius;
+        return DrawFrameBgra(bgra, width, height, dst, opacity);
+    }
+    virtual bool DrawSpectrumPixels(const float* levels,
+                                    std::uint32_t count,
+                                    Layout::Rect dst, Theme::Color color,
+                                    std::uint32_t mode) {
+        if (levels == nullptr || count == 0) {
+            return false;
+        }
+        const float bar_w = dst.width / count;
+        const float half = static_cast<float>(dst.y + dst.height / 2.0f);
+        for (std::uint32_t i = 0; i < count; ++i) {
+            const float v = levels[i] < 0.f ? 0.f
+                          : (levels[i] > 1.f ? 1.f : levels[i]);
+            const float h = v * dst.height;
+            Layout::Rect bar{
+                static_cast<float>(dst.x + i * bar_w),
+                mode == 2 ? half - h / 2.0f
+                          : static_cast<float>(dst.y + dst.height - h),
+                bar_w > 1.f ? bar_w - 1.f : bar_w,
+                mode == 2 ? h : h};
+            if (mode == 1) {  // line mode: thin column
+                bar.height = bar.height > 2.f ? 2.f : bar.height;
+            }
+            FillRect(bar, color, 0.f);
+        }
+        return true;
+    }
 };
 
 } // namespace XER::UI::Rendering

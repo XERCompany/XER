@@ -3,16 +3,84 @@
 #include <algorithm>
 #include <format>
 #include <iterator>
+#include <ranges>
 #include <stdexcept>
 #include <utility>
+#include <vector>
 
 #include "../debug/debug_internal.h"
 #include "core/ui_events.h"
 #include "rendering/renderer.h"
+#include "style/widget_style_host.h"
 #include "theme/tokens.h"
 #include "widgets/tooltip.h"
 
 namespace XER::UI::Widgets {
+namespace {
+
+// Reads a computed-style float (opacity etc.); returns fallback when
+// the property is absent or unparsable.
+float StyleFloat(const Widget& w, std::string_view prop,
+                 float fallback) {
+    const std::string* v = w.StyleValue(prop);
+    if (v == nullptr) {
+        return fallback;
+    }
+    try {
+        return std::stof(*v);
+    } catch (...) {
+        return fallback;
+    }
+}
+
+// Parses `translate(x,y)` / `scale(x[,y])` fragments from the CSS
+// `transform` value — enough for element offsets/zooms carried into
+// the render worker. Returns true when a transform was applied.
+bool ApplyStyleTransform(const Widget& w,
+                         Rendering::Renderer& renderer) {
+    const std::string* v = w.StyleValue("transform");
+    if (v == nullptr || v->empty() || *v == "none") {
+        return false;
+    }
+    float a = 1.0f, d = 1.0f, tx = 0.0f, ty = 0.0f;
+    bool any = false;
+    auto args = [&](std::string_view fn, std::vector<float>* out) {
+        const auto open = v->find(std::string(fn) + "(");
+        if (open == std::string::npos) {
+            return;
+        }
+        const auto close = v->find(')', open);
+        const std::string body =
+            v->substr(open + fn.size() + 1, close - open - fn.size() - 1);
+        for (const auto& part : std::views::split(body, ',')) {
+            try {
+                out->push_back(
+                    std::stof(std::string(part.begin(), part.end())));
+            } catch (...) {
+            }
+        }
+    };
+    std::vector<float> t, s;
+    args("translate", &t);
+    args("scale", &s);
+    if (t.size() >= 2) {
+        tx = t[0];
+        ty = t[1];
+        any = true;
+    }
+    if (!s.empty()) {
+        a = s[0];
+        d = s.size() > 1 ? s[1] : s[0];
+        any = true;
+    }
+    if (!any) {
+        return false;
+    }
+    renderer.SetTransform(a, 0.0f, 0.0f, d, tx, ty);
+    return true;
+}
+
+}  // namespace
 
 void WidgetTree::SetRoot(std::shared_ptr<Widget> root) {
     ClearFocus(root_);
@@ -69,7 +137,32 @@ void WidgetTree::Layout(const Layout::Rect& bounds) {
     Layout(bounds, last_tokens_);
 }
 
+void WidgetTree::SetStyleHost(
+    std::shared_ptr<CSS::WidgetStyleHost> host) {
+    style_host_ = std::move(host);
+    // Styles can change sizes — relayout + repaint.
+    if (root_) root_->RequestLayout();
+    RequestFullDamage();
+}
+
+void WidgetTree::SetStyleSheet(std::string_view css_text) {
+    if (!style_host_)
+        style_host_ = std::make_shared<CSS::WidgetStyleHost>();
+    style_host_->SetStyleSheet(css_text);
+    if (root_) root_->RequestLayout();
+    RequestFullDamage();
+}
+
+void WidgetTree::AddStyleSheet(std::string_view css_text) {
+    if (!style_host_)
+        style_host_ = std::make_shared<CSS::WidgetStyleHost>();
+    style_host_->AddStyleSheet(css_text);
+    if (root_) root_->RequestLayout();
+    RequestFullDamage();
+}
+
 void WidgetTree::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
+    if (style_host_) style_host_->Update(root_);
     last_bounds_ = bounds;
     last_tokens_ = tokens;
     layout_in_progress_ = true;
@@ -90,6 +183,7 @@ void WidgetTree::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
 
 void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
                         const Layout::Rect* damage) const {
+    if (style_host_) style_host_->Update(root_);
     if (root_ == nullptr || !root_->IsVisible()) {
         return;
     }
@@ -327,6 +421,32 @@ void WidgetTree::RenderSubtree(
         }
     }
 
+    // Per-element compositing: the computed style may ask for an
+    // offscreen layer (opacity / filter) or an affine transform —
+    // remote render workers receive them as stream ops, so every
+    // element's effects are evaluated process-side.
+    const float opacity = StyleFloat(*widget, "opacity", 1.0f);
+    const float blur = [&] {
+        const std::string* f = widget->StyleValue("filter");
+        if (f == nullptr) {
+            return 0.0f;
+        }
+        const auto open = f->find("blur(");
+        if (open == std::string::npos) {
+            return 0.0f;
+        }
+        try {
+            return std::stof(f->substr(open + 5));
+        } catch (...) {
+            return 0.0f;
+        }
+    }();
+    const bool layered = opacity < 1.0f || blur > 0.0f;
+    const bool transformed = ApplyStyleTransform(*widget, renderer);
+    if (layered) {
+        renderer.PushLayer(opacity, 0u, blur);
+    }
+
     try {
         widget->Render(renderer, tokens);
     } catch (const std::exception& error) {
@@ -348,6 +468,12 @@ void WidgetTree::RenderSubtree(
     }
     if (clips) {
         renderer.PopClip();
+    }
+    if (transformed) {
+        renderer.ResetTransform();
+    }
+    if (layered) {
+        renderer.PopLayer();
     }
 }
 

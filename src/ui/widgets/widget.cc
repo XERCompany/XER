@@ -2,6 +2,7 @@
 
 #include <algorithm>
 
+#include "content/css/computed_style.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widget_tree.h"
@@ -81,6 +82,84 @@ void Widget::SetHovered(bool hovered) {
 
 bool Widget::IsHovered() const {
     return hovered_;
+}
+
+void Widget::SetActive(bool active) {
+    if (active_ == active) {
+        return;
+    }
+    active_ = active;
+    Invalidate();
+}
+
+// ── CSS style identity ────────────────────────────────────────────
+
+void Widget::SetStyleId(std::string id) {
+    if (style_id_ == id) {
+        return;
+    }
+    style_id_ = std::move(id);
+    Invalidate();
+}
+
+void Widget::AddStyleClass(std::string cls) {
+    if (HasStyleClass(cls)) {
+        return;
+    }
+    style_classes_.push_back(std::move(cls));
+    Invalidate();
+}
+
+void Widget::RemoveStyleClass(std::string_view cls) {
+    const auto it = std::find(style_classes_.begin(),
+                              style_classes_.end(), cls);
+    if (it == style_classes_.end()) {
+        return;
+    }
+    style_classes_.erase(it);
+    Invalidate();
+}
+
+bool Widget::HasStyleClass(std::string_view cls) const {
+    return std::find(style_classes_.begin(), style_classes_.end(), cls)
+           != style_classes_.end();
+}
+
+void Widget::SetStyleAttribute(std::string name, std::string value) {
+    for (auto& [n, v] : style_attributes_) {
+        if (n == name) {
+            if (v == value) return;
+            v = std::move(value);
+            Invalidate();
+            return;
+        }
+    }
+    style_attributes_.emplace_back(std::move(name), std::move(value));
+    Invalidate();
+}
+
+void Widget::SetInlineStyle(std::string property, std::string value) {
+    for (auto& [p, v] : inline_style_) {
+        if (p == property) {
+            if (v == value) return;
+            v = std::move(value);
+            Invalidate();
+            return;
+        }
+    }
+    inline_style_.emplace_back(std::move(property), std::move(value));
+    Invalidate();
+}
+
+void Widget::SetComputedStyle(
+    std::shared_ptr<const Content::CSS::ComputedStyle> style) {
+    computed_style_ = std::move(style);
+    Invalidate();
+}
+
+const std::string* Widget::StyleValue(std::string_view property) const {
+    if (!computed_style_) return nullptr;
+    return computed_style_->Get(std::string(property));
 }
 
 void Widget::SetTooltip(std::string text) {

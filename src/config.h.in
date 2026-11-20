@@ -1,0 +1,109 @@
+#pragma once
+
+// Platform detection macros for XER
+// Sets one of XER_PLATFORM_WINDOWS, XER_PLATFORM_LINUX, XER_PLATFORM_MACOS, XER_PLATFORM_UBUNTU, XER_PLATFORM_OPENBSD, XER_PLATFORM_POSIX
+
+#if defined(_WIN32) || defined(_WIN64)
+    #define XER_PLATFORM_WINDOWS 1
+#else
+    #define XER_PLATFORM_WINDOWS 0
+#endif
+
+#if defined(__APPLE__) && defined(__MACH__)
+    #define XER_PLATFORM_MACOS 1
+#else
+    #define XER_PLATFORM_MACOS 0
+#endif
+
+#if defined(__linux__)
+    #define XER_PLATFORM_LINUX 1
+#else
+    #define XER_PLATFORM_LINUX 0
+#endif
+
+#if defined(__linux__) && defined(__ubuntu__)
+    #define XER_PLATFORM_UBUNTU 1
+#else
+    #define XER_PLATFORM_UBUNTU 0
+#endif
+
+#if defined(__OpenBSD__)
+    #define XER_PLATFORM_OPENBSD 1
+#else
+    #define XER_PLATFORM_OPENBSD 0
+#endif
+
+#if defined(_WIN32) || defined(_WIN64)
+    #define XER_PLATFORM_POSIX 0
+#else
+    #define XER_PLATFORM_POSIX 1
+#endif
+
+// ---------------------------------------------------------------------------
+// XER version — initial release line 1.0.01.
+// Bump PATCH for fixes, MINOR for features, MAJOR for breaking changes;
+// keep XER_VERSION_STRING and XER_VERSION_NUMBER in sync with the triplet.
+#define XER_VERSION_MAJOR 1
+#define XER_VERSION_MINOR 0
+#define XER_VERSION_PATCH 1
+#define XER_VERSION_STRING "1.0.01"
+#define XER_VERSION_NUMBER 10001  /* major*10000 + minor*100 + patch */
+
+// ===========================================================================
+// >>> GENERATED BLOCK — DO NOT EDIT BY HAND <<<
+//
+// Everything below is produced by CMake configure_file() from this
+// src/config.h.in template (see cmake/config_checks.cmake, included by the
+// root CMakeLists.txt). Each XER_HAVE_* macro is the normalized 0/1 result
+// of a real check_include_file() / check_include_file_cxx() /
+// check_include_file_objcxx() probe run at configure time — a header that
+// the toolchain cannot compile degrades to 0, never to a configure error.
+// src/config.h is intentionally generated into the source tree and stays
+// committed; re-run CMake configure to refresh the values.
+
+// --- WinAPI ---------------------------------------------------------------
+#define XER_HAVE_WINDOWS_H @XER_HAVE_WINDOWS_H@
+#define XER_HAVE_WINCODEC_H @XER_HAVE_WINCODEC_H@
+#define XER_HAVE_D2D1_H @XER_HAVE_D2D1_H@
+#define XER_HAVE_D2D1_1_H @XER_HAVE_D2D1_1_H@
+#define XER_HAVE_D3D11_H @XER_HAVE_D3D11_H@
+#define XER_HAVE_D3D12_H @XER_HAVE_D3D12_H@
+#define XER_HAVE_DXGI1_2_H @XER_HAVE_DXGI1_2_H@
+#define XER_HAVE_DWRITE_H @XER_HAVE_DWRITE_H@
+#define XER_HAVE_MMDEVICEAPI_H @XER_HAVE_MMDEVICEAPI_H@
+#define XER_HAVE_AUDIOCLIENT_H @XER_HAVE_AUDIOCLIENT_H@
+#define XER_HAVE_AVRT_H @XER_HAVE_AVRT_H@
+#define XER_HAVE_SHLOBJ_H @XER_HAVE_SHLOBJ_H@
+#define XER_HAVE_WRL_CLIENT_H @XER_HAVE_WRL_CLIENT_H@
+#define XER_HAVE_DWMAPI_H @XER_HAVE_DWMAPI_H@
+
+// --- POSIX / Linux --------------------------------------------------------
+#define XER_HAVE_UNISTD_H @XER_HAVE_UNISTD_H@
+#define XER_HAVE_SYS_MMAN_H @XER_HAVE_SYS_MMAN_H@
+#define XER_HAVE_SYS_SHM_H @XER_HAVE_SYS_SHM_H@
+#define XER_HAVE_FCNTL_H @XER_HAVE_FCNTL_H@
+#define XER_HAVE_DLFCN_H @XER_HAVE_DLFCN_H@
+#define XER_HAVE_PTHREAD_H @XER_HAVE_PTHREAD_H@
+#define XER_HAVE_SCHED_H @XER_HAVE_SCHED_H@
+#define XER_HAVE_SYS_EPOLL_H @XER_HAVE_SYS_EPOLL_H@
+#define XER_HAVE_SYS_INOTIFY_H @XER_HAVE_SYS_INOTIFY_H@
+#define XER_HAVE_X11_XLIB_H @XER_HAVE_X11_XLIB_H@
+
+// --- macOS frameworks -----------------------------------------------------
+#define XER_HAVE_COREFOUNDATION_COREFOUNDATION_H @XER_HAVE_COREFOUNDATION_COREFOUNDATION_H@
+#define XER_HAVE_COCOA_COCOA_H @XER_HAVE_COCOA_COCOA_H@
+#define XER_HAVE_AVFOUNDATION_AVFOUNDATION_H @XER_HAVE_AVFOUNDATION_AVFOUNDATION_H@
+#define XER_HAVE_COREVIDEO_COREVIDEO_H @XER_HAVE_COREVIDEO_COREVIDEO_H@
+#define XER_HAVE_MACH_MACH_TIME_H @XER_HAVE_MACH_MACH_TIME_H@
+
+// --- C++ standard library -------------------------------------------------
+#define XER_HAVE_VERSION @XER_HAVE_VERSION@
+#define XER_HAVE_SOURCE_LOCATION @XER_HAVE_SOURCE_LOCATION@
+#define XER_HAVE_FORMAT @XER_HAVE_FORMAT@
+#define XER_HAVE_JTHREAD @XER_HAVE_JTHREAD@
+#define XER_HAVE_EXECUTION @XER_HAVE_EXECUTION@
+#define XER_HAVE_FILESYSTEM @XER_HAVE_FILESYSTEM@
+#define XER_HAVE_SPAN @XER_HAVE_SPAN@
+#define XER_HAVE_EXPECTED @XER_HAVE_EXPECTED@
+
+// <<< END GENERATED BLOCK >>>

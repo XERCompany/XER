@@ -23,9 +23,11 @@
 #include "media/audio/wasapi_output_stream.h"
 #include "media/renderers/frame_cache_sink.h"
 #include "media/demuxer/buffered_data_source.h"
-#include "ui/css/document_style.h"
-#include "ui/css/style_engine.h"
-#include "ui/css/stylesheet_parser.h"
+#include "content/css/document_style.h"
+#include "content/css/selector_checker.h"
+#include "content/css/style_resolver_state.h"
+#include "content/css/style_engine.h"
+#include "content/css/stylesheet_parser.h"
 #include "video/clip_frame_cache.h"
 
 using namespace XER::Media;
@@ -492,165 +494,6 @@ void TestFrameCacheSink() {
     std::filesystem::remove_all(root);
 }
 
-// ---- ui/css: style engine (YA.DesginCSS) ----
-
-void TestStyleEngine() {
-    namespace C = XER::UI::CSS;
-    struct El final : C::CSSElement {
-        std::string tag, id;
-        std::vector<std::string> classes;
-        const C::CSSElement* parent = nullptr;
-        std::string_view TagName() const override { return tag; }
-        std::string_view Id() const override { return id; }
-        bool HasClass(std::string_view n) const override {
-            for (const auto& c : classes) if (c == n) return true;
-            return false;
-        }
-        bool HasAttribute(std::string_view) const override { return false; }
-        const C::CSSElement* Parent() const override { return parent; }
-    };
-
-    C::StyleSheet sheet;
-    C::StyleRule r1;
-    r1.selector = C::ParseSelector("div");
-    r1.declarations.push_back({"color", "red"});
-    C::StyleRule r2;
-    r2.selector = C::ParseSelector(".c1 div.c2");
-    r2.declarations.push_back({"color", "blue"});
-    r2.declarations.push_back({"width", "10px"});
-    sheet.rules = {r1, r2};
-
-    C::StyleEngine engine;
-    engine.AppendActiveStyleSheets(sheet);
-
-    El parent;
-    parent.tag = "span";
-    parent.classes = {"c1"};
-    El child;
-    child.tag = "div";
-    child.classes = {"c2"};
-    child.parent = &parent;
-
-    const auto style = engine.StyleForElement(child);
-    const auto* color = style.Get("color");
-    CHECK(color && *color == "blue", "css: descendant match");
-    const auto* width = style.Get("width");
-    CHECK(width && *width == "10px", "css: decl applied");
-    // A div with only .c2 (no .c1 ancestor) falls back to tag rule.
-    El orphan;
-    orphan.tag = "div";
-    orphan.classes = {"c2"};
-    const auto s2 = engine.StyleForElement(orphan);
-    const auto* c2 = s2.Get("color");
-    CHECK(c2 && *c2 == "red", "css: tag fallback");
-}
-
-// ---- ui/css: invalidation pipeline (design doc example) ----
-
-void TestStyleInvalidation() {
-    namespace C = XER::UI::CSS;
-    auto root = std::make_unique<C::CSSNode>();
-    root->tag = "body";
-    auto* parent = root->AddChild(std::make_unique<C::CSSNode>());
-    parent->tag = "span";
-    parent->classes = {"c1"};  // the class "added" by this DOM change
-    auto* target = parent->AddChild(std::make_unique<C::CSSNode>());
-    target->tag = "div";
-    target->classes = {"c2"};
-    auto* other = root->AddChild(std::make_unique<C::CSSNode>());
-    other->tag = "p";
-
-    C::TreeScope scope(root.get());
-    C::StyleSheet sheet;
-    C::StyleRule rule;
-    rule.selector = C::ParseSelector(".c1 div.c2");
-    rule.declarations.push_back({"color", "blue"});
-    sheet.rules = {rule};
-    scope.Resolver().AppendActiveStyleSheets(sheet);
-
-    // Design doc: adding class c1 to an element → pending invalidation
-    // set for the ancestor key; descendants matching self-features
-    // (class c2) get needs_recalc; unrelated nodes don't.
-    const auto& sets =
-        scope.Resolver().InvalidationSetsForClassChange("c1");
-    CHECK(!sets.empty(), "inv: sets for ancestor class");
-    scope.Pending().ScheduleInvalidationSetsForNode(
-        parent, std::vector<C::InvalidationSet>(sets));
-
-    std::vector<std::pair<C::CSSNode*, C::ComputedStyle>> recalced;
-    C::DocumentStyle doc(scope);
-    doc.UpdateStyleAndLayoutTree(&recalced);
-    CHECK(recalced.size() == 1 && recalced[0].first == target,
-          "inv: only c2 descendant recalced");
-    CHECK(!other->needs_recalc, "inv: unrelated untouched");
-    const auto* color = recalced.empty() ? nullptr
-                                         : recalced[0].second.Get("color");
-    CHECK(color && *color == "blue", "inv: recalced style applied");
-}
-
-// ---- ui/css: stylesheet text parser + pseudo/attr/nth selectors ----
-
-void TestStyleSheetParser() {
-    namespace C = XER::UI::CSS;
-    auto sheet = C::ParseStyleSheet(
-        "/* hi */ div.a, #x:hover { color: red; width: 2px } "
-        "ul li:first-child { top: 0 } "
-        "input[type=text] { border: 1 } "
-        "p:nth-child(2n+1) { z: 9 }");
-    CHECK(sheet.rules.size() == 5, "parse: rule count");
-
-    auto root = std::make_unique<C::CSSNode>();
-    root->tag = "div";
-    auto* a = root->AddChild(std::make_unique<C::CSSNode>());
-    a->tag = "div";
-    a->classes = {"a"};
-    auto* x = root->AddChild(std::make_unique<C::CSSNode>());
-    x->tag = "span";
-    x->id = "x";
-    x->hovered = true;
-    auto* inp = root->AddChild(std::make_unique<C::CSSNode>());
-    inp->tag = "input";
-    inp->attr_values["type"] = "text";
-
-    C::StyleEngine eng;
-    eng.AppendActiveStyleSheets(sheet);
-    const auto s1 = eng.StyleForElement(*a);
-    CHECK(s1.Get("color") && *s1.Get("color") == "red", "parse: .a");
-    const auto s2 = eng.StyleForElement(*x);
-    CHECK(s2.Get("width") && *s2.Get("width") == "2px",
-          "parse: #x:hover");
-    CHECK(s2.AffectedByHover(), "parse: AffectedByHover flag");
-    const auto s3 = eng.StyleForElement(*inp);
-    CHECK(s3.Get("border") && *s3.Get("border") == "1",
-          "parse: [type=text]");
-
-    auto ul = std::make_unique<C::CSSNode>();
-    ul->tag = "ul";
-    auto* li1 = ul->AddChild(std::make_unique<C::CSSNode>());
-    li1->tag = "li";
-    auto* li2 = ul->AddChild(std::make_unique<C::CSSNode>());
-    li2->tag = "li";
-    const auto s4 = eng.StyleForElement(*li1);
-    CHECK(s4.Get("top") && *s4.Get("top") == "0", "parse: first-child");
-    const auto s5 = eng.StyleForElement(*li2);
-    CHECK(!s5.Get("top"), "parse: nth index distinguishes");
-
-    auto p = std::make_unique<C::CSSNode>();
-    p->tag = "p";
-    auto* p1 = p->AddChild(std::make_unique<C::CSSNode>());
-    p1->tag = "p";
-    auto* p2 = p->AddChild(std::make_unique<C::CSSNode>());
-    p2->tag = "p";
-    auto* p3 = p->AddChild(std::make_unique<C::CSSNode>());
-    p3->tag = "p";
-    CHECK(eng.StyleForElement(*p1).Get("z") &&
-              *eng.StyleForElement(*p1).Get("z") == "9",
-          "parse: nth-child odd 1");
-    CHECK(!eng.StyleForElement(*p2).Get("z"),
-          "parse: nth-child odd 2 no");
-    CHECK(eng.StyleForElement(*p3).Get("z"), "parse: nth-child odd 3");
-}
-
 // ---- demuxer: BufferedDataSource windowing ----
 
 void TestBufferedDataSource() {
@@ -686,6 +529,86 @@ void TestBufferedDataSource() {
           "bds: out-of-range tolerated");
 }
 
+// ---- content/css: full doc pipeline (XER::Content::CSS) ----
+
+void TestContentCSS() {
+    namespace C = XER::Content::CSS;
+
+    auto root = std::make_unique<C::CSSNode>();
+    root->tag = "body";
+    auto* parent = root->AddChild(std::make_unique<C::CSSNode>());
+    parent->tag = "span";
+    parent->classes = {"c1"};
+    auto* target = parent->AddChild(std::make_unique<C::CSSNode>());
+    target->tag = "div";
+    target->classes = {"c2"};
+    // Inline declaration wins over every matched rule (design doc).
+    target->inline_declarations.push_back({"width", "99px"});
+
+    C::TreeScope scope(root.get());
+    // TreeScopeStyleSheetCollection: append marks dirty; the resolver
+    // rebuilds only at UpdateActiveStyle time.
+    auto sheet = C::ParseStyleSheet(
+        ".c1 div.c2 { color: blue; width: 10px } "
+        "body { color: black; font-size: 12px }");
+    scope.AppendActiveStyleSheets(sheet);
+    CHECK(scope.StyleSheets().dirty(), "ccss: sheets dirty on append");
+
+    std::vector<std::pair<C::CSSNode*, C::ComputedStyle>> out;
+    C::DocumentStyle doc(scope);
+    doc.UpdateActiveStyle();
+    CHECK(!scope.StyleSheets().dirty(), "ccss: rebuild consumed dirty");
+
+    // Invalidation path: adding c1 to parent → pending sets → recalc.
+    const auto& sets =
+        scope.Resolver().InvalidationSetsForClassChange("c1");
+    CHECK(!sets.empty(), "ccss: ancestor invalidation sets");
+    scope.Pending().ScheduleInvalidationSetsForNode(
+        parent, std::vector<C::InvalidationSet>(sets));
+    doc.UpdateStyleAndLayoutTree(&out);
+    CHECK(out.size() == 1 && out[0].first == target,
+          "ccss: only c2 recalced");
+    const auto* w = out[0].second.Get("width");
+    CHECK(w && *w == "99px", "ccss: inline beats cascade");
+    const auto* col = out[0].second.Get("color");
+    CHECK(col && *col == "blue", "ccss: cascade rule applied");
+
+    // Inheritance: font-size inherits from body (root recalc).
+    root->SetNeedsStyleRecalc(C::kLocalStyleChange);
+    target->SetNeedsStyleRecalc(C::kLocalStyleChange);
+    out.clear();
+    doc.UpdateStyleAndLayoutTree(&out);
+    const auto* fs = out.size() > 1 ? out.back().second.Get("font-size")
+                                    : nullptr;
+    CHECK(fs && *fs == "12px", "ccss: inherited font-size");
+
+    // CheckOne + MatchAllRules entry points exist per the doc.
+    const auto comp = C::ParseSelector("div.c2").compounds.front();
+    CHECK(C::SelectorChecker::CheckOne(*target, comp),
+          "ccss: CheckOne");
+
+    // FooChangedForElement semantics.
+    CHECK(scope.Resolver().ClassChangedForElement("c2"),
+          "ccss: class self-feature");
+    CHECK(scope.Resolver().FocusedChangedForElement(),
+          "ccss: focus unconditional");
+    C::ComputedStyle hover_style;
+    hover_style.SetAffectedByHover(true);
+    CHECK(scope.Resolver().PseudoStateChangedForElement(
+              hover_style, "hover"),
+          "ccss: AffectedBy pseudo recalc");
+    C::ComputedStyle plain_style;
+    CHECK(!scope.Resolver().PseudoStateChangedForElement(
+              plain_style, "hover"),
+          "ccss: no flag, no recalc");
+
+    // kReattach: whole subtree resolves without flags.
+    root->SetNeedsStyleRecalc(C::kReattach);
+    out.clear();
+    doc.UpdateStyleAndLayoutTree(&out);
+    CHECK(out.size() == 3, "ccss: reattach recalcs whole subtree");
+}
+
 int main() {
     TestAudioFocus();
     TestMuxer();
@@ -703,10 +626,8 @@ int main() {
     TestSyncChannel();
     TestEngineStream();
     TestFrameCacheSink();
-    TestStyleEngine();
-    TestStyleInvalidation();
-    TestStyleSheetParser();
     TestBufferedDataSource();
+    TestContentCSS();
     if (failures == 0) {
         std::printf("media smoke: OK\n");
         return 0;

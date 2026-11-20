@@ -202,8 +202,75 @@ void StreamWriter::MeasureResponse(std::vector<uint8_t>& out,
     PutFloat(out, size.width);
     PutFloat(out, size.height);
 }
+void StreamWriter::SetTargetHwnd(std::vector<uint8_t>& out,
+                                 std::uint64_t hwnd) {
+    Begin(out, Op::kSetTargetHwnd);
+    PutU32(out, static_cast<std::uint32_t>(hwnd & 0xffffffffu));
+    PutU32(out, static_cast<std::uint32_t>(hwnd >> 32));
+}
 void StreamWriter::Shutdown(std::vector<uint8_t>& out) {
     Begin(out, Op::kShutdown);
+}
+void StreamWriter::AttachStore(std::vector<uint8_t>& out,
+                               std::string_view name) {
+    Begin(out, Op::kAttachStore);
+    PutString(out, name);
+}
+void StreamWriter::DrawResource(std::vector<uint8_t>& out,
+                                std::uint32_t id, Layout::Rect dst,
+                                float opacity, float corner_radius) {
+    Begin(out, Op::kDrawResource);
+    PutU32(out, id);
+    PutRect(out, dst);
+    PutFloat(out, opacity);
+    PutFloat(out, corner_radius);
+}
+void StreamWriter::DrawVideoFrame(std::vector<uint8_t>& out,
+                                  std::uint32_t id, Layout::Rect dst,
+                                  float opacity, float corner_radius) {
+    Begin(out, Op::kDrawVideoFrame);
+    PutU32(out, id);
+    PutRect(out, dst);
+    PutFloat(out, opacity);
+    PutFloat(out, corner_radius);
+}
+void StreamWriter::FreeResource(std::vector<uint8_t>& out,
+                                std::uint32_t id) {
+    Begin(out, Op::kFreeResource);
+    PutU32(out, id);
+}
+void StreamWriter::PushLayer(std::vector<uint8_t>& out, float opacity,
+                             std::uint32_t blend_mode, float blur) {
+    Begin(out, Op::kPushLayer);
+    PutFloat(out, opacity);
+    PutU32(out, blend_mode);
+    PutFloat(out, blur);
+}
+void StreamWriter::PopLayer(std::vector<uint8_t>& out) {
+    Begin(out, Op::kPopLayer);
+}
+void StreamWriter::SetTransform(std::vector<uint8_t>& out, float a,
+                                float b, float c, float d, float tx,
+                                float ty) {
+    Begin(out, Op::kSetTransform);
+    PutFloat(out, a);
+    PutFloat(out, b);
+    PutFloat(out, c);
+    PutFloat(out, d);
+    PutFloat(out, tx);
+    PutFloat(out, ty);
+}
+void StreamWriter::ResetTransform(std::vector<uint8_t>& out) {
+    Begin(out, Op::kResetTransform);
+}
+void StreamWriter::DrawSpectrum(std::vector<uint8_t>& out,
+                                std::uint32_t id, Layout::Rect dst,
+                                Theme::Color color, std::uint32_t mode) {
+    Begin(out, Op::kDrawSpectrum);
+    PutU32(out, id);
+    PutRect(out, dst);
+    PutColor(out, color);
+    PutU32(out, mode);
 }
 
 bool StreamReader::Dispatch(Renderer& renderer, const Handlers& handlers,
@@ -308,11 +375,87 @@ bool StreamReader::Dispatch(Renderer& renderer, const Handlers& handlers,
             return false;
         case Op::kMeasureResponse:
             return false;  // only meaningful on the UI side
+        case Op::kSetTargetHwnd: {
+            std::uint32_t lo = 0, hi = 0;
+            if (!c.U32(&lo) || !c.U32(&hi)) return false;
+            if (handlers.on_retarget) {
+                handlers.on_retarget(
+                    static_cast<std::uint64_t>(lo) |
+                    (static_cast<std::uint64_t>(hi) << 32));
+            }
+            return true;
+        }
         case Op::kShutdown:
             if (handlers.on_shutdown) {
                 handlers.on_shutdown();
             }
             return true;
+        case Op::kAttachStore:
+            if (!c.Str(&str)) return false;
+            if (handlers.on_attach_store) {
+                handlers.on_attach_store(str);
+            }
+            return true;
+        case Op::kDrawResource:
+        case Op::kDrawVideoFrame: {
+            if (!c.U32(&u) || !c.Rect(&r) || !c.F32(&f) ||
+                !c.F32(&f2)) {
+                return false;
+            }
+            if (!handlers.on_resource) return false;
+            StreamReader::Handlers::ResourceMeta meta{};
+            const void* pixels = handlers.on_resource(u, &meta);
+            if (pixels == nullptr) return true;  // id absent / in flight
+            if (op_raw == static_cast<std::uint32_t>(Op::kDrawResource)) {
+                renderer.DrawResourcePixels(
+                    pixels, u, static_cast<int>(meta.width),
+                    static_cast<int>(meta.height), r, f, f2);
+            } else {
+                renderer.DrawVideoPixels(
+                    pixels, u, static_cast<int>(meta.width),
+                    static_cast<int>(meta.height), r, f, f2);
+            }
+            return true;
+        }
+        case Op::kFreeResource:
+            if (!c.U32(&u)) return false;
+            renderer.FreeResource(u);
+            return true;
+        case Op::kPushLayer:
+            if (!c.F32(&f) || !c.U32(&u) || !c.F32(&f2)) return false;
+            renderer.PushLayer(f, u, f2);
+            return true;
+        case Op::kPopLayer:
+            renderer.PopLayer();
+            return true;
+        case Op::kSetTransform: {
+            float a_, b_, c_, d_, tx_, ty_;
+            if (!c.F32(&a_) || !c.F32(&b_) || !c.F32(&c_) ||
+                !c.F32(&d_) || !c.F32(&tx_) || !c.F32(&ty_)) {
+                return false;
+            }
+            renderer.SetTransform(a_, b_, c_, d_, tx_, ty_);
+            return true;
+        }
+        case Op::kResetTransform:
+            renderer.ResetTransform();
+            return true;
+        case Op::kDrawSpectrum: {
+            std::uint32_t mode = 0;
+            if (!c.U32(&u) || !c.Rect(&r) || !c.Color(&color) ||
+                !c.U32(&mode)) {
+                return false;
+            }
+            if (!handlers.on_resource) return false;
+            StreamReader::Handlers::ResourceMeta meta{};
+            const void* pixels = handlers.on_resource(u, &meta);
+            if (pixels == nullptr) return true;
+            const std::uint32_t count = meta.payload / sizeof(float);
+            renderer.DrawSpectrumPixels(
+                static_cast<const float*>(pixels), count, r, color,
+                mode);
+            return true;
+        }
         default:
             return false;
     }
@@ -463,6 +606,60 @@ void StreamRenderer::SetDpi(unsigned dpi) {
 void StreamRenderer::SetClearColor(Theme::Color color) {
     std::vector<uint8_t> m;
     Stream::StreamWriter::SetClearColor(m, color);
+    Emit(std::move(m));
+}
+void StreamRenderer::PushLayer(float opacity, std::uint32_t blend_mode,
+                               float blur) {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::PushLayer(m, opacity, blend_mode, blur);
+    Emit(std::move(m));
+}
+void StreamRenderer::PopLayer() {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::PopLayer(m);
+    Emit(std::move(m));
+}
+void StreamRenderer::SetTransform(float a, float b, float c, float d,
+                                  float tx, float ty) {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::SetTransform(m, a, b, c, d, tx, ty);
+    Emit(std::move(m));
+}
+void StreamRenderer::ResetTransform() {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::ResetTransform(m);
+    Emit(std::move(m));
+}
+bool StreamRenderer::DrawResource(std::uint32_t id, Layout::Rect dst,
+                                  float opacity, float corner_radius) {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::DrawResource(m, id, dst, opacity,
+                                       corner_radius);
+    return Emit(std::move(m));
+}
+bool StreamRenderer::DrawVideoFrame(std::uint32_t id, Layout::Rect dst,
+                                    float opacity,
+                                    float corner_radius) {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::DrawVideoFrame(m, id, dst, opacity,
+                                         corner_radius);
+    return Emit(std::move(m));
+}
+bool StreamRenderer::DrawSpectrum(std::uint32_t id, Layout::Rect dst,
+                                  Theme::Color color,
+                                  std::uint32_t mode) {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::DrawSpectrum(m, id, dst, color, mode);
+    return Emit(std::move(m));
+}
+void StreamRenderer::FreeResource(std::uint32_t id) {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::FreeResource(m, id);
+    Emit(std::move(m));
+}
+void StreamRenderer::AttachStore(std::string_view name) {
+    std::vector<uint8_t> m;
+    Stream::StreamWriter::AttachStore(m, name);
     Emit(std::move(m));
 }
 

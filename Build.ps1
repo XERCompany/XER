@@ -7,11 +7,11 @@
 
       1. Configure   cmake --preset <preset>          (auto if no cache)
       2. Build       cmake --build --preset <preset> --target <targets>
-      3. Deploy DLLs - happens automatically in the video_editor POST_BUILD
-                       step (CopyDLL.ps1 via LLVM import scan)
-      4. Tests       -Test runs the editor test runner
-      5. Portable    -Dist builds the video_editor_dist target
-                       -> dist\video_editor\ standalone package
+      3. Tests       -Test runs the editor test runner
+
+    All MSYS2 dependencies link statically — no DLL deployment step.
+    Optional heavy components (OpenCV, ggml/whisper, vulkan) are
+    delay-loaded and only required when the matching feature runs.
 
     cmake/ninja are resolved from PATH first, then the MSYS2 clang64
     toolchain that the windows-clang-msys2 preset targets.
@@ -21,8 +21,8 @@
     Configure (if needed) + build video_editor with the default preset.
 
 .EXAMPLE
-    .\Build.ps1 -Test -Dist
-    Build, run the test suite, and produce dist\video_editor\.
+    .\Build.ps1 -Test
+    Build and run the test suite.
 
 .EXAMPLE
     .\Build.ps1 -Preset default -Target XER_VideoEditor_Tests -Clean
@@ -43,13 +43,7 @@ param(
     [switch]$Clean,
 
     # Run the video-editor test runner after building.
-    [switch]$Test,
-
-    # Build the video_editor_dist portable package.
-    [switch]$Dist,
-
-    # Skip the POST_BUILD DLL deployment (sets cache var off).
-    [switch]$NoDeploy
+    [switch]$Test
 )
 
 Set-StrictMode -Version Latest
@@ -90,21 +84,14 @@ if ($Clean -and (Test-Path $BinaryDir)) {
 $cacheFile = Join-Path $BinaryDir 'CMakeCache.txt'
 if ($Configure -or -not (Test-Path $cacheFile)) {
     Step "Configure preset '$Preset'"
-    $cfgArgs = @('--preset', $Preset)
-    if ($NoDeploy) {
-        $cfgArgs += '-DXER_VIDEO_EDITOR_DEPLOY_DLLS=OFF'
-    }
-    & $cmake @cfgArgs
+    & $cmake --preset $Preset
     if ($LASTEXITCODE -ne 0) { throw "cmake configure failed ($LASTEXITCODE)" }
 }
 
 # ----------------------------------------------------------------- build
-$targets = @($Target)
-if ($Dist) { $targets += 'video_editor_dist' }
-
-Step "Build preset '$Preset'  targets: $($targets -join ', ')"
+Step "Build preset '$Preset'  targets: $($Target -join ', ')"
 $buildArgs = @('--build', '--preset', $Preset)
-foreach ($t in $targets) { $buildArgs += @('--target', $t) }
+foreach ($t in $Target) { $buildArgs += @('--target', $t) }
 & $cmake @buildArgs
 if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
@@ -117,8 +104,6 @@ if ($Test) {
         if ($LASTEXITCODE -ne 0) { throw "test build failed ($LASTEXITCODE)" }
     }
     Step "Run tests"
-    # The runner needs the MSYS2 runtime DLLs on PATH.
-    $env:PATH = "$MsysClangBin;$env:PATH"
     & $testExe
     if ($LASTEXITCODE -ne 0) { throw "tests failed ($LASTEXITCODE)" }
 }
@@ -127,15 +112,5 @@ if ($Test) {
 Step "Done"
 $exe = Join-Path $BinaryDir 'bin\video_editor.exe'
 if (Test-Path $exe) {
-    $dllCount = (Get-ChildItem (Split-Path $exe) -Filter '*.dll' -ErrorAction SilentlyContinue).Count
     Write-Host "exe  : $exe"
-    Write-Host "dlls : $dllCount next to exe"
-}
-if ($Dist) {
-    $distDir = Join-Path $BinaryDir 'dist\video_editor'
-    if (Test-Path $distDir) {
-        $size = [math]::Round(((Get-ChildItem $distDir -Recurse -File |
-            Measure-Object Length -Sum).Sum / 1MB), 1)
-        Write-Host "dist : $distDir  ($size MB)"
-    }
 }

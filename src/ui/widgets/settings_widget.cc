@@ -426,7 +426,8 @@ void SettingsWidget::RefreshDynamic() {
             std::future_status::ready) {
         sys_provider_->pending = false;
         try {
-            sys_provider_->future.get();  // drains the result; last_ is set
+            const auto snapshot = sys_provider_->future.get();
+            (void)snapshot;  // drains the result; last_ is set
             ApplySystemSnapshot();
         } catch (...) {
             for (auto* l : sys_labels_) l->SetText("—");

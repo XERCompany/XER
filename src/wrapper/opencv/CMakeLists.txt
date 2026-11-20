@@ -20,6 +20,15 @@ if(OpenCV_FOUND)
     target_include_directories(XER_BridgeOpenCV PRIVATE ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(XER_BridgeOpenCV PUBLIC ${OpenCV_LIBS})
     target_compile_definitions(XER_BridgeOpenCV PUBLIC ENGINE_HAS_OPENCV_BRIDGE=1)
+    # MSYS2 ships shared-only OpenCV (libopencv_*-N.dll.a). Resolve the
+    # runtime DLL names here (subdirectory scope) so the root list can
+    # add -Wl,--delayload for every exe — binaries start without
+    # OpenCV on PATH and load it on first cv:: call.
+    if(MINGW)
+        xer_collect_delayload_dlls(_ocv_dlls ${OpenCV_LIBS})
+        set(XER_OPENCV_DELAYLOAD_DLLS "${_ocv_dlls}" CACHE INTERNAL
+            "OpenCV DLLs delay-loaded by all executables")
+    endif()
 else()
     message(STATUS "OpenCV not found — XER_BridgeOpenCV reports unavailable")
 endif()

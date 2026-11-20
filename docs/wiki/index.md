@@ -36,6 +36,12 @@ Goal started: 2026-11-15. Design doc:
 - [build-and-test-infra.md](architecture/build-and-test-infra.md) —
   presets, test patterns, XER_Video/Skia linkage traps, FFmpeg DLL
   paths, JSON lib choice, tool registration.
+- [render-worker-infra.md](architecture/render-worker-infra.md) —
+  UiRenderHost worker pool, RenderStore shared-memory resource
+  cache, stream ops, per-element layers/transforms (2026-11-20).
+- [static-link-state.md](architecture/static-link-state.md) —
+  what's static vs delay-loaded vs dynamic in the MSYS2 preset,
+  skia delay-load impossibility, CopyDLL removal (2026-11-20).
 - [builder-check-2026-11-15.md](reviews/builder-check-2026-11-15.md) —
   independent design-doc review findings and how each was resolved.
 

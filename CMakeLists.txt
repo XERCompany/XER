@@ -68,6 +68,12 @@ option(XER_BUILD_XBUILD "Build the xbuild configuration utility" OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Configure-time feature detection -> src/config.h (generated from
+# src/config.h.in; committed on purpose). Runs before the MINGW linker
+# flag block below so the try_compile probes are not affected by the
+# static-runtime -Wl,-Bstatic,... flags appended there.
+include(cmake/config_checks.cmake)
+
 set(SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/main.cc)
 file(GLOB HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/main.h)
 
@@ -517,6 +523,24 @@ add_custom_command(TARGET XERVac POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_CURRENT_SOURCE_DIR}/tools/XERVirtualCable/vac.example.json"
         "${CMAKE_BINARY_DIR}/bin/vac.example.json")
+
+# Delay-load for .dll.a-only heavy deps — every exe/tool defined below
+# starts without them on PATH (they load lazily on first use):
+#   libopencv_* (OpenCV; MSYS2 ships shared-only builds)
+# libskia.dll is intentionally NOT here: its implib exports data
+# symbols (dllimport'd vtables) which delay-load cannot handle.
+if(MINGW)
+    set(_xer_dl_dlls)
+    # Resolved in src/wrapper/opencv (OpenCV_LIBS is subdir-scoped).
+    list(APPEND _xer_dl_dlls ${XER_OPENCV_DELAYLOAD_DLLS})
+    if(_xer_dl_dlls)
+        list(REMOVE_DUPLICATES _xer_dl_dlls)
+        foreach(_d IN LISTS _xer_dl_dlls)
+            add_link_options("-Wl,--delayload,${_d}")
+        endforeach()
+        message(STATUS "Delay-loaded DLLs (all exes below): ${_xer_dl_dlls}")
+    endif()
+endif()
 
 # xer_engine_ui_render.exe — remote render worker. A UI app renders via
 # Rendering::StreamRenderer onto a Cache::SharedMemoryChannel; this

@@ -51,17 +51,9 @@ if(XER_YA_DLLS)
         SOURCES ${XER_YA_SRC_YA.MediaCapture}
         DEPS XER_Helper YA_MediaCore YA_MediaAudio)
 
-    # YA.DesginCSS — XER::UI::CSS style engine (lives in src/ui/css per
-    # the design doc: style calculation belongs to Desgin UI).
-    file(GLOB _css_sources
-        "${CMAKE_SOURCE_DIR}/src/ui/css/*.cc")
-    xer_ya_module(YA_DesginCSS EXPORT_NAME YA.DesginCSS
-        SOURCES ${_css_sources}
-        DEPS XER_Helper)
-    if(TARGET YA_DesginCSS_objs)
-        target_include_directories(YA_DesginCSS_objs PRIVATE
-            ${CMAKE_SOURCE_DIR}/src)
-    endif()
+    # YA.DesginCSS (src/ui/css + src/content/css) is defined in
+    # src/ui/CMakeLists.txt — YA.UICore links it — but stays listed in
+    # this bundle so media consumers keep their link surface.
 
     xer_ya_bundle(XER_Media
         MODULES YA_MediaPipeline YA_MediaCore YA_MediaAudio

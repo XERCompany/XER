@@ -58,27 +58,71 @@ if(XER_YA_DLLS)
     # Branded YA.*.dll modules; XER_UI_Core stays as INTERFACE bundle.
     # Widget/theme/rendering code is mutually referenced by Window — it
     # all lands in YA.UICore; the IPC render stream/host is a separate
-    # module (nothing in core calls it). UIRender/UIDesgin ship as
-    # reserved extension modules.
+    # low-level module (self-contained: Renderer is a header-only
+    # abstract interface, so it needs no UICore symbols). YA.UICore
+    # depends on it because Application::Initialize pre-spawns the
+    # xer_engine_ui_render.exe worker pool through UiRenderHost.
+    # UIRender/UIDesgin ship as reserved extension modules.
     #
     # app_audio_controller.cc (XER::App::AudioController) is compiled
     # here instead of XER_App: UI widgets call it, and App->UI is the
     # higher layer — embedding breaks the App<->UI archive cycle.
     set(_ya_ui "${UI_SOURCES}")
     xer_ya_partition(_ya_ui
-        "YA.UIRenderIPC|render_stream|render_host"
+        "YA.UIRenderIPC|render_stream|render_host|render_store"
         "YA.UICore|.")
+
+    # YA.DesginCSS — the canonical XER::Content::CSS style engine
+    # (src/content/css, per the design doc: style calculation belongs
+    # to Desgin UI). Defined here (not in src/media) so YA.UICore can
+    # link it — Widget and style/widget_style_host consume it.
+    file(GLOB _css_sources
+        "${CMAKE_SOURCE_DIR}/src/content/css/*.cc")
+    xer_ya_module(YA_DesginCSS EXPORT_NAME YA.DesginCSS
+        SOURCES ${_css_sources})
+
+    xer_ya_module(YA_UIRenderIPC EXPORT_NAME YA.UIRenderIPC
+        SOURCES ${XER_YA_SRC_YA.UIRenderIPC}
+        DEPS ${_ui_public_deps})
     xer_ya_module(YA_UICore EXPORT_NAME YA.UICore
         SOURCES ${XER_YA_SRC_YA.UICore} ${UI_HEADERS}
             "${CMAKE_SOURCE_DIR}/src/app/app_audio_controller.cc"
-        DEPS ${_ui_public_deps} XER_ContentAudio XER_AudioCore)
+        DEPS ${_ui_public_deps} YA_UIRenderIPC YA_DesginCSS
+            XER_ContentAudio XER_AudioCore)
     xer_ya_module(YA_UIRender EXPORT_NAME YA.UIRender
         DEPS ${_ui_public_deps} YA_UICore)
     xer_ya_module(YA_UIDesgin EXPORT_NAME YA.UIDesgin
         DEPS ${_ui_public_deps} YA_UICore)
-    xer_ya_module(YA_UIRenderIPC EXPORT_NAME YA.UIRenderIPC
-        SOURCES ${XER_YA_SRC_YA.UIRenderIPC}
-        DEPS ${_ui_public_deps} YA_UICore)
+    # NOTE: libskia.dll can NOT be delay-loaded — its implib exports
+    # data symbols (__declspec(dllimport) vtables) and GNU delay-load
+    # only handles function imports. It stays an eager dependency, so
+    # stage the single required runtime next to YA.UICore — every UI
+    # exe then runs without clang64/bin on PATH.
+    if(MINGW AND TARGET unofficial::skia::skia)
+        get_filename_component(_toolchain_bin "${CMAKE_CXX_COMPILER}"
+                               DIRECTORY)
+        # libskia + its full MSYS2 transitive closure — the only
+        # runtime files a UI exe can't get from the static link (skia
+        # ships shared-only). Stage them once next to YA.UICore so
+        # every UI exe runs without clang64/bin on PATH.
+        set(_skia_rt libskia.dll
+            libpng16-16.dll libjpeg-8.dll zlib1.dll
+            libharfbuzz-0.dll libharfbuzz-subset-0.dll
+            libwebp-7.dll libwebpdemux-2.dll libwebpmux-3.dll
+            libsharpyuv-0.dll libexpat-1.dll libc++.dll
+            libfreetype-6.dll libbz2-1.dll libbrotlicommon.dll
+            libbrotlidec.dll libglib-2.0-0.dll libgraphite2.dll
+            libiconv-2.dll libintl-8.dll libpcre2-8-0.dll)
+        foreach(_dll IN LISTS _skia_rt)
+            if(EXISTS "${_toolchain_bin}/${_dll}")
+                add_custom_command(TARGET YA_UICore POST_BUILD
+                    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                        "${_toolchain_bin}/${_dll}"
+                        "${CMAKE_BINARY_DIR}/bin/${_dll}"
+                    VERBATIM)
+            endif()
+        endforeach()
+    endif()
     if(WIN32)
         target_link_libraries(YA_UICore PRIVATE
             user32 gdi32 d2d1 d3d11 d3d12 dxgi dwrite comdlg32
@@ -93,12 +137,17 @@ if(XER_YA_DLLS)
     endif()
     xer_ya_bundle(XER_UI_Core
         MODULES YA_UICore YA_UIRender YA_UIDesgin YA_UIRenderIPC
+                YA_DesginCSS
         DEPS ${_ui_public_deps}
         INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
                  ${CMAKE_CURRENT_SOURCE_DIR}/..)
 else()
-    # Create UI core library
-    add_library(XER_UI_Core STATIC ${UI_SOURCES} ${UI_HEADERS})
+    # Create UI core library — src/content/css joins so Widget and
+    # style/ resolve their XER::Content::CSS references statically.
+    file(GLOB _css_content_sources
+        "${CMAKE_SOURCE_DIR}/src/content/css/*.cc")
+    add_library(XER_UI_Core STATIC ${UI_SOURCES} ${UI_HEADERS}
+        ${_css_content_sources})
     target_include_directories(XER_UI_Core
         PUBLIC
             ${CMAKE_CURRENT_SOURCE_DIR}

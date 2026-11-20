@@ -41,8 +41,40 @@ enum class Op : std::uint32_t {
     // process replies with kMeasureResponse carrying the same req id.
     kMeasureRequest,
     kMeasureResponse,
+    // Retarget the worker's presentation surface to a (foreign) HWND —
+    // pre-spawned pool workers adopt a window on checkout.
+    // Payload: u64 HWND value; 0 = back to the worker's own surface.
+    kSetTargetHwnd,
     // Render worker should tear down (window closed / stream ended).
     kShutdown,
+    // ---- Resource-store ops (pixel payloads live in RenderStore
+    // shared memory; the stream carries only ids) -----------------
+    // Attach the worker to the named RenderStore. Payload: u16 name
+    // length + UTF-8 name bytes.
+    kAttachStore,
+    // Draw a cached image resource (kImageBgra payload).
+    // Payload: u32 id, Rect dst, f32 opacity, f32 corner_radius.
+    kDrawResource,
+    // Draw the latest frame of a kVideoFrame resource — the widget's
+    // live video/capture surface.
+    // Payload: u32 id, Rect dst, f32 opacity, f32 corner_radius.
+    kDrawVideoFrame,
+    // Free a resource slot in the store.
+    // Payload: u32 id.
+    kFreeResource,
+    // Composite a subtree through an offscreen layer.
+    // Payload: f32 opacity, u32 blend_mode, f32 blur.
+    kPushLayer,
+    kPopLayer,
+    // Set/clear the current 2x3 affine transform (a,b,c,d,tx,ty).
+    kSetTransform,
+    kResetTransform,
+    // Draw audio levels held by a kSpectrumF32 resource — VU meters,
+    // spectrum bars, waveforms — without pushing PCM through the
+    // channel every frame.
+    // Payload: u32 id, Rect dst, Color color, u32 mode
+    // (0=bars, 1=line, 2=mirror).
+    kDrawSpectrum,
 };
 
 // Appends one serialized op message to `out`.
@@ -83,7 +115,28 @@ public:
     static void MeasureResponse(std::vector<uint8_t>& out,
                                 std::uint32_t request_id,
                                 Layout::Size size);
+    static void SetTargetHwnd(std::vector<uint8_t>& out,
+                              std::uint64_t hwnd);
     static void Shutdown(std::vector<uint8_t>& out);
+    static void AttachStore(std::vector<uint8_t>& out,
+                            std::string_view name);
+    static void DrawResource(std::vector<uint8_t>& out, std::uint32_t id,
+                             Layout::Rect dst, float opacity,
+                             float corner_radius);
+    static void DrawVideoFrame(std::vector<uint8_t>& out,
+                               std::uint32_t id, Layout::Rect dst,
+                               float opacity, float corner_radius);
+    static void FreeResource(std::vector<uint8_t>& out,
+                             std::uint32_t id);
+    static void PushLayer(std::vector<uint8_t>& out, float opacity,
+                          std::uint32_t blend_mode, float blur);
+    static void PopLayer(std::vector<uint8_t>& out);
+    static void SetTransform(std::vector<uint8_t>& out, float a, float b,
+                             float c, float d, float tx, float ty);
+    static void ResetTransform(std::vector<uint8_t>& out);
+    static void DrawSpectrum(std::vector<uint8_t>& out, std::uint32_t id,
+                             Layout::Rect dst, Theme::Color color,
+                             std::uint32_t mode);
 };
 
 // Decodes incoming stream messages. `on_measure` answers MeasureText
@@ -99,6 +152,23 @@ public:
                                    const TextStyle& style)>
             on_measure;
         std::function<void()> on_shutdown;
+        // kSetTargetHwnd — the worker recreates its render surface on
+        // this HWND (or its own hidden surface when 0).
+        std::function<void(std::uint64_t hwnd)> on_retarget;
+        // kAttachStore — the worker opens the named RenderStore and
+        // resolves kDrawResource / kDrawVideoFrame / kDrawSpectrum ids.
+        std::function<void(std::string_view name)> on_attach_store;
+        // Resource lookup used by Dispatch for store-backed draws.
+        // Return the payload pointer + fill meta; nullptr when the id
+        // is absent or a write is in flight.
+        struct ResourceMeta {
+            std::uint32_t width = 0;
+            std::uint32_t height = 0;
+            std::uint32_t payload = 0;
+            std::uint32_t kind = 0;
+        };
+        std::function<const void*(std::uint32_t id, ResourceMeta* meta)>
+            on_resource;
     };
 
     // Dispatches `message` (one serialized op) to `renderer` or the
@@ -162,6 +232,23 @@ public:
                        Layout::Rect dst_rect, float opacity) override;
     void SetDpi(unsigned dpi) override;
     void SetClearColor(Theme::Color color) override;
+    void PushLayer(float opacity, std::uint32_t blend_mode,
+                   float blur) override;
+    void PopLayer() override;
+    void SetTransform(float a, float b, float c, float d, float tx,
+                      float ty) override;
+    void ResetTransform() override;
+    bool DrawResource(std::uint32_t id, Layout::Rect dst, float opacity,
+                      float corner_radius) override;
+    bool DrawVideoFrame(std::uint32_t id, Layout::Rect dst,
+                        float opacity, float corner_radius) override;
+    bool DrawSpectrum(std::uint32_t id, Layout::Rect dst,
+                      Theme::Color color,
+                      std::uint32_t mode) override;
+    void FreeResource(std::uint32_t id) override;
+    // Binds the renderer to a named RenderStore — emits kAttachStore
+    // so the worker opens the same shared segment.
+    void AttachStore(std::string_view name);
 
 private:
     bool Emit(std::vector<uint8_t>&& msg);

@@ -29,6 +29,15 @@ public:
     void SetAppName(const std::string& name);
     std::string GetAppName() const;
 
+    // Remote rendering (xer_engine_ui_render.exe worker pool).
+    // Call before Initialize to change the pre-spawned worker count
+    // (default 2; 0 disables process-separated rendering;
+    // XER_UI_RENDER_WORKERS env overrides: N / "auto" / "0").
+    void SetRenderWorkerCount(int count);
+    // Live worker processes / idle pool workers (-1 when unsupported).
+    int RenderWorkerCount() const;
+    int WarmRenderWorkerCount() const;
+
     bool IsInitialized() const;
     bool IsRunning() const;
 
