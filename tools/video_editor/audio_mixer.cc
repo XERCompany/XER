@@ -492,9 +492,11 @@ struct AudioMixer::Impl {
     std::size_t last_index_ = 0;
     FFmpeg::AudioFrameInfo last_chunk_;
     // UI meter state: unclamped |L|,|R| peaks of the last rendered
-    // chunk (LastChunkPeaks()).
-    float last_peak_l = 0.0f;
-    float last_peak_r = 0.0f;
+    // chunk (LastChunkPeaks()). Atomics — GetChunk writes them on the
+    // producer thread while the UI thread polls LastChunkPeaks();
+    // plain floats would be a data race.
+    std::atomic<float> last_peak_l{0.0f};
+    std::atomic<float> last_peak_r{0.0f};
     // Master fader (dB) — atomic so SetMasterGainDb() from any thread
     // applies to the next rendered chunk. Init() loads it from
     // options.master_gain_db.
@@ -703,8 +705,8 @@ struct AudioMixer::Impl {
         warned_once.clear();
         has_last_ = false;
         last_chunk_ = FFmpeg::AudioFrameInfo{};
-        last_peak_l = 0.0f;
-        last_peak_r = 0.0f;
+        last_peak_l.store(0.0f, std::memory_order_relaxed);
+        last_peak_r.store(0.0f, std::memory_order_relaxed);
         cancelled.store(false, std::memory_order_relaxed);
         initialized = false;
         duration_ = 0.0;
@@ -1130,8 +1132,10 @@ struct AudioMixer::Impl {
             }
             std::memcpy(out->data.data(), pcm16.data(),
                         static_cast<std::size_t>(n) * 4u);
-            last_peak_l = static_cast<float>(peak_l);
-            last_peak_r = static_cast<float>(peak_r);
+            last_peak_l.store(static_cast<float>(peak_l),
+                              std::memory_order_relaxed);
+            last_peak_r.store(static_cast<float>(peak_r),
+                              std::memory_order_relaxed);
         }
 
         last_chunk_ = *out;
@@ -1172,7 +1176,8 @@ bool AudioMixer::GetChunk(std::size_t index,
 }
 
 std::pair<float, float> AudioMixer::LastChunkPeaks() const {
-    return {impl_->last_peak_l, impl_->last_peak_r};
+    return {impl_->last_peak_l.load(std::memory_order_relaxed),
+            impl_->last_peak_r.load(std::memory_order_relaxed)};
 }
 
 void AudioMixer::SetMasterGainDb(float db) {

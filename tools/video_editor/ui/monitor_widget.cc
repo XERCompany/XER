@@ -348,6 +348,14 @@ void MonitorWidget::SetExternalPlayback(bool on) {
 void MonitorWidget::SetExternalFrame(const std::vector<std::uint8_t>& bgra,
                                      int width, int height) {
     if (bgra.empty() || width <= 0 || height <= 0) return;
+    // A malformed engine frame (buffer shorter than w*h*4) would make
+    // the display transform and scope scan read out of bounds — drop
+    // it instead. Division form avoids a w*h*4 overflow.
+    if (bgra.size() / 4u <
+        static_cast<std::size_t>(width) *
+            static_cast<std::size_t>(height)) {
+        return;
+    }
     frame_ = bgra;
     frame_width_ = width;
     frame_height_ = height;

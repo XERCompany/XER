@@ -45,7 +45,10 @@ public:
     struct Hooks {
         std::function<void(const Clip&)> on_apply_clip;
         std::function<void(const std::string&)> on_delete_clip;
-        std::function<void(const std::string&)> on_add_transition;
+        // Transition picker: (clip_id, type, duration_seconds). The
+        // panel passes the combo pick + parsed duration field.
+        std::function<void(const std::string&, Transition::Type,
+                           double)> on_add_transition;
         std::function<void(const std::string&, bool)> on_status;
         // Full replacement key list for one property (SetClipKeyframes).
         std::function<void(const std::string& clip_id, KeyProp,
@@ -133,6 +136,9 @@ private:
     void SyncFxRows();
     void SyncKeyframeRows();
     void Apply();
+    // Transition picker commit: combo label + duration field ->
+    // on_add_transition (a parse failure only flags the status line).
+    void CommitTransition();
     // Structural single-field commit (mask add/remove, effect remove,
     // blend select, inverted toggle) — bypasses text-field parsing.
     void CommitClip(const Clip& next);
@@ -156,6 +162,13 @@ private:
     double playhead_ = 0.0;                 // timeline seconds
     KeyProp active_prop_ = KeyProp::Opacity;
     std::set<int> fx_disabled_;             // excluded on next Apply
+    // Basis the fx_disabled_ indices were staged against — the clip's
+    // effect list as of the last row build, plus the owning clip id.
+    // RemapFxDisabled re-derives staged exclusions by effect identity
+    // (type + displayed params) + occurrence ordinal so they follow
+    // the intended effect across rebuilds and text-field edits.
+    std::vector<ClipEffect> fx_effects_basis_;
+    std::string fx_clip_id_;
     float scroll_y_ = 0.0f;
     float content_height_ = 0.0f;
     std::vector<DrawnLine> drawn_;
@@ -168,12 +181,27 @@ private:
     std::vector<KeyRow> key_rows_;   // AllKeyProps() order
     std::shared_ptr<KeyframeEditorWidget> key_editor_;
     std::vector<MaskRow> mask_rows_;
+    // Mark-and-sweep graveyards (one per row family — RebuildDynamic
+    // Rows runs both rebuilders back-to-back, so a shared graveyard
+    // would free the mask retirees during the fx rebuild):
+    // RebuildMaskRows/RebuildFxRows can run inside a row child's own
+    // callback (remove OnClick / checkbox OnChanged / input OnSubmit
+    // -> CommitClip -> SetClip -> rebuild), which would free that
+    // widget mid-dispatch. Retired children are disabled + unparented
+    // and swept on the NEXT rebuild of the same family.
+    std::vector<std::shared_ptr<XER::UI::Widgets::Widget>>
+        retired_mask_children_;
+    std::vector<std::shared_ptr<XER::UI::Widgets::Widget>>
+        retired_fx_children_;
     std::shared_ptr<XER::UI::Widgets::Button> add_rect_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> add_ellipse_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> effects_input_;
     std::vector<FxRow> fx_rows_;
     std::shared_ptr<XER::UI::Widgets::Checkbox> muted_;
     std::shared_ptr<XER::UI::Widgets::Button> apply_btn_;
+    std::shared_ptr<XER::UI::Widgets::Combobox> transition_combo_;
+    std::shared_ptr<XER::UI::Widgets::TextInput>
+        transition_duration_input_;
     std::shared_ptr<XER::UI::Widgets::Button> transition_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> delete_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;

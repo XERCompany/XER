@@ -136,8 +136,12 @@ void JsonEscapeInto(std::string& out, const std::string& s) {
 
 // Structured JS values (plain objects/arrays) round-trip into C++ as
 // JSON text under Kind::Json — e.g. concat's {join: "/"} options object.
+// `free_slots` carries indices released by FreeHandle — see Impl below;
+// they are reused before the table is grown so long sessions don't
+// accumulate V8 Globals without bound.
 OutValue ToOutValue(v8::Isolate* isolate, v8::Local<v8::Context> ctx,
-                    HandlerTable& handlers, v8::Local<v8::Value> v) {
+                    HandlerTable& handlers, std::vector<int>& free_slots,
+                    v8::Local<v8::Value> v) {
     if (v.IsEmpty() || v->IsUndefined() || v->IsNull()) return {};
     if (v->IsString()) return StrVal(FromV8Str(isolate, v));
     if (v->IsNumber())
@@ -146,8 +150,26 @@ OutValue ToOutValue(v8::Isolate* isolate, v8::Local<v8::Context> ctx,
     if (v->IsFunction()) {
         OutValue out;
         out.kind = OutValue::Kind::Handler;
-        out.handler_id = static_cast<int>(handlers.size());
-        handlers.emplace_back(isolate, v);
+        // Function-identity dedupe: re-registering the same JS function
+        // (e.g. setOutAppData called every frame with the same callback)
+        // reuses its slot instead of pushing a new Global per call.
+        for (int i = 0; i < static_cast<int>(handlers.size()); ++i) {
+            if (!handlers[static_cast<size_t>(i)].IsEmpty() &&
+                handlers[static_cast<size_t>(i)]
+                    .Get(isolate)
+                    ->StrictEquals(v)) {
+                out.handler_id = i;
+                return out;
+            }
+        }
+        if (!free_slots.empty()) {
+            out.handler_id = free_slots.back();
+            free_slots.pop_back();
+            handlers[static_cast<size_t>(out.handler_id)].Reset(isolate, v);
+        } else {
+            out.handler_id = static_cast<int>(handlers.size());
+            handlers.emplace_back(isolate, v);
+        }
         return out;
     }
     v8::Local<v8::String> json;
@@ -171,8 +193,11 @@ v8::Local<v8::Value> ToV8Value(v8::Isolate* isolate,
         case OutValue::Kind::Bool:
             return v8::Boolean::New(isolate, v.boolean);
         case OutValue::Kind::Handler:
+            // The IsEmpty guard covers reclaimed slots — a stale id
+            // resolves to undefined, never a Get() on an empty Global.
             if (v.handler_id >= 0 &&
-                v.handler_id < static_cast<int>(handlers.size()))
+                v.handler_id < static_cast<int>(handlers.size()) &&
+                !handlers[static_cast<size_t>(v.handler_id)].IsEmpty())
                 return handlers[v.handler_id].Get(isolate);
             return v8::Undefined(isolate);
         case OutValue::Kind::Json: {
@@ -203,10 +228,47 @@ struct JsEngine::Impl {
     v8::Isolate* isolate = nullptr;
     v8::Global<v8::Context> context;
     HandlerTable handles;
+    // Reclamation: slots whose Global was Reset() by FreeHandle get
+    // reused by ToOutValue/NewObject before the table grows. A slot is
+    // only freed when nothing in out_data still references its id —
+    // the OutValue::handler_id index space is shared with module
+    // object ids, so a freed id would otherwise alias a live entry.
+    std::vector<int> free_handle_slots;
+    // NativeImport capture: module factories run NewObject() — with
+    // slot reuse the module's id is no longer "the previous
+    // handles.size()", so the first NewObject during a factory call is
+    // captured here instead.
+    bool capture_first_handle = false;
+    int first_captured_handle = -1;
     std::vector<std::unique_ptr<NativeFn>> native_fns;
     std::unordered_map<std::string, OutValue> out_data;
     std::unordered_map<std::string, ModuleFactory> module_factories;
     std::unordered_map<std::string, v8::Global<v8::Object>> module_cache;
+
+    // Releases a handle slot for reuse. Idempotent — an already-empty
+    // slot is not queued twice (a duplicate free-list entry would hand
+    // the same id to two different values).
+    void FreeHandle(int id) {
+        if (id < 0 || id >= static_cast<int>(handles.size()) ||
+            handles[static_cast<size_t>(id)].IsEmpty()) {
+            return;
+        }
+        handles[static_cast<size_t>(id)].Reset();
+        free_handle_slots.push_back(id);
+    }
+
+    // True when any out_data entry still points at `id` — a freed slot
+    // would alias that entry to whatever reuses the index next.
+    bool HandleReferenced(int id) const {
+        for (const auto& [key, value] : out_data) {
+            (void)key;
+            if (value.kind == OutValue::Kind::Handler &&
+                value.handler_id == id) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     ~Impl() {
         // Persistent handles die before the isolate that owns them.
@@ -279,27 +341,52 @@ std::unique_ptr<JsEngine> JsEngine::Create(std::string* error) {
             }
             const v8::Context::Scope context_scope(
                 impl->context.Get(iso));
-            const size_t first_object = impl->handles.size();
+            // The module is the first object the factory NewObject()s —
+            // captured through the flag (handle slots are reused, so it
+            // is no longer guaranteed to land at the previous size()).
+            const bool prev_capture = impl->capture_first_handle;
+            const int prev_first = impl->first_captured_handle;
+            impl->capture_first_handle = true;
+            impl->first_captured_handle = -1;
             try {
                 factory->second(*impl->owner);
             } catch (const std::exception& e) {
+                impl->capture_first_handle = prev_capture;
+                impl->first_captured_handle = prev_first;
                 Throw(iso, "NativeImport: factory for '" + name +
                                "' threw: " + e.what());
                 return;
             } catch (...) {
+                impl->capture_first_handle = prev_capture;
+                impl->first_captured_handle = prev_first;
                 Throw(iso, "NativeImport: factory for '" + name +
                                "' threw an unknown exception");
                 return;
             }
-            if (impl->handles.size() == first_object) {
+            const int module_id = impl->first_captured_handle;
+            impl->capture_first_handle = prev_capture;
+            impl->first_captured_handle = prev_first;
+            if (module_id < 0 ||
+                module_id >= static_cast<int>(impl->handles.size()) ||
+                !impl->handles[static_cast<size_t>(module_id)]
+                     .Get(iso)
+                     ->IsObject()) {
                 Throw(iso, "NativeImport: factory for '" + name +
                                "' created no object");
                 return;
             }
             const v8::Local<v8::Object> module =
-                impl->handles[first_object].Get(iso).As<v8::Object>();
+                impl->handles[static_cast<size_t>(module_id)]
+                    .Get(iso)
+                    .As<v8::Object>();
             impl->module_cache.emplace(name,
                                        v8::Global<v8::Object>(iso, module));
+            // The slot only indexed the object for factory setup;
+            // module_cache keeps its own Global — reclaim the index
+            // unless an out-data handler aliased it mid-factory.
+            if (!impl->HandleReferenced(module_id)) {
+                impl->FreeHandle(module_id);
+            }
             info.GetReturnValue().Set(module);
         };
 
@@ -386,9 +473,21 @@ int JsEngine::NewObject() {
     v8::HandleScope handle_scope(iso);
     const v8::Local<v8::Context> ctx = impl_->context.Get(iso);
     const v8::Context::Scope context_scope(ctx);
-    impl_->handles.emplace_back(
-        iso, v8::Local<v8::Value>(v8::Object::New(iso)));
-    return static_cast<int>(impl_->handles.size()) - 1;
+    const v8::Local<v8::Value> obj(v8::Object::New(iso));
+    int id;
+    if (!impl_->free_handle_slots.empty()) {
+        id = impl_->free_handle_slots.back();
+        impl_->free_handle_slots.pop_back();
+        impl_->handles[static_cast<size_t>(id)].Reset(iso, obj);
+    } else {
+        impl_->handles.emplace_back(iso, obj);
+        id = static_cast<int>(impl_->handles.size()) - 1;
+    }
+    if (impl_->capture_first_handle) {
+        impl_->first_captured_handle = id;
+        impl_->capture_first_handle = false;
+    }
+    return id;
 }
 
 bool JsEngine::DefineFunction(int object_id, const std::string& name,
@@ -409,7 +508,9 @@ bool JsEngine::DefineFunction(int object_id, const std::string& name,
             std::vector<OutValue> args;
             args.reserve(static_cast<size_t>(info.Length()));
             for (int i = 0; i < info.Length(); ++i)
-                args.push_back(ToOutValue(iso, ctx, impl->handles, info[i]));
+                args.push_back(ToOutValue(iso, ctx, impl->handles,
+                                          impl->free_handle_slots,
+                                          info[i]));
             OutValue result;
             try {
                 result = (*native)(args);
@@ -468,7 +569,20 @@ bool JsEngine::RegisterModule(const std::string& name, ModuleFactory factory) {
 }
 
 void JsEngine::SetOutData(const std::string& key, const OutValue& value) {
+    // Reclaim the overwritten handler's table slot once nothing else
+    // references it — keeps `handles` bounded when a key is
+    // re-registered repeatedly (e.g. per-frame setOutAppData).
+    const auto old = impl_->out_data.find(key);
+    const int old_handler =
+        old != impl_->out_data.end() &&
+                old->second.kind == OutValue::Kind::Handler
+            ? old->second.handler_id
+            : -1;
     impl_->out_data[key] = value;
+    if (old_handler >= 0 && old_handler != value.handler_id &&
+        !impl_->HandleReferenced(old_handler)) {
+        impl_->FreeHandle(old_handler);
+    }
 }
 
 OutValue JsEngine::GetOutData(const std::string& key) const {
@@ -503,10 +617,19 @@ bool JsEngine::CallHandler(const std::string& key,
         argv.push_back(ToV8Value(iso, ctx, impl_->handles, arg));
 
     v8::TryCatch try_catch(iso);
-    const v8::Local<v8::Function> fn =
-        impl_->handles[it->second.handler_id]
-            .Get(iso)
-            .As<v8::Function>();
+    // Handler ids and object ids share the handle table — the slot may
+    // hold a non-function (or a reclaimed/empty Global). An unchecked
+    // As<Function> would hit a V8 CHECK and abort; validate instead.
+    const v8::Local<v8::Value> fn_value =
+        impl_->handles[it->second.handler_id].Get(iso);
+    if (fn_value.IsEmpty() || !fn_value->IsFunction()) {
+        if (error) {
+            *error = "CallHandler: '" + key +
+                     "' does not reference a function";
+        }
+        return false;
+    }
+    const v8::Local<v8::Function> fn = fn_value.As<v8::Function>();
     if (fn->Call(ctx, ctx->Global(), static_cast<int>(argv.size()),
                  argv.data())
             .IsEmpty()) {

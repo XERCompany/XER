@@ -480,6 +480,33 @@ int XER_VideoEditor_RunStoreTests() {
             v["transitions"][0]["duration"] = -1.5;
             expect_healed(v, "heal_duration_neg.xerproj");
         }
+
+        // Same-time markers self-heal into one — the model keys on
+        // time (AddMarker merges, RemoveMarker hits the first), so a
+        // hand-edited duplicate pair would be unaddressable. The LAST
+        // file entry wins, matching AddMarker's merge.
+        {
+            Json::Value v = base;
+            Json::Value markers(Json::arrayValue);
+            Json::Value first(Json::objectValue);
+            first["time"] = 4.0;
+            first["name"] = "first";
+            Json::Value second(Json::objectValue);
+            second["time"] = 4.0;
+            second["name"] = "second";
+            markers.append(first);
+            markers.append(second);
+            v["markers"] = markers;
+            Project p;
+            std::string lerr;
+            XER_VE_CHECK(
+                TryLoadJson(dir, "heal_dup_markers.xerproj", v, &p,
+                            &lerr));
+            XER_VE_CHECK(p.markers.size() == 1);
+            if (p.markers.size() == 1) {
+                XER_VE_CHECK(p.markers[0].name == "second");
+            }
+        }
     }
 
     // -- 7. empty project round-trips -------------------------------------

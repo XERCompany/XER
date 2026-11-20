@@ -800,6 +800,25 @@ void TestPanelsYaml() {
         XER_VE_CHECK(config.panels[0].min_size == 240);
     }
 
+    // Fraction unit + px min_size: the contradiction clamp must NOT
+    // compare a 0..1 size against a px bound — (int)0.3 would collapse
+    // the min to 0. The resizer resolves the px min at layout.
+    const auto frac_path = dir / "panels_frac_min.yaml";
+    XER_VE_CHECK(WriteFile(frac_path,
+                           "Panels:\n"
+                           "  dock_size_unit: fraction\n"
+                           "  panels:\n"
+                           "    - {id: side, dock: left, size: 0.3,"
+                           " min_size: 250}\n"));
+    config = apprt::PanelsConfig{};
+    error.clear();
+    XER_VE_CHECK(apprt::LoadPanelsConfig(frac_path, &config, &error));
+    XER_VE_CHECK(config.panels.size() == 1);
+    if (config.panels.size() == 1) {
+        XER_VE_CHECK(config.panels[0].size == 0.3f);
+        XER_VE_CHECK(config.panels[0].min_size == 250);
+    }
+
     // Missing Panels: section is a hard failure, like the other loaders.
     const auto bare = dir / "panels_bare.yaml";
     XER_VE_CHECK(WriteFile(bare, "Other:\n  x: 1\n"));

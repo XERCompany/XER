@@ -291,6 +291,13 @@ bool AddTransition(Project&, const std::string& from_clip,
                    double duration, std::string* error_out);
 bool RemoveTransition(Project&, const std::string& from_clip,
                       const std::string& to_clip);
+// All supported transition types in stable menu order — UI pickers
+// (junction context menu, inspector combo) iterate this. Keep in sync
+// with the serialization name table in project_store.cc.
+const std::vector<Transition::Type>& AllTransitionTypes();
+// Human-readable menu label ("Wipe Left") — the lowercase wire names
+// live in project_store.cc.
+const char* TransitionTypeLabel(Transition::Type type);
 // Removes every transition that is not video-track, missing an
 // endpoint, on different tracks, or non-adjacent (to.start ≈
 // from.end). Called by every mutating op and by project_store load.

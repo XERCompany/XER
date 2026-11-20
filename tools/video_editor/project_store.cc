@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <system_error>
 #include <utility>
@@ -915,10 +916,27 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             }
             project.markers.push_back(marker);
         }
-        std::sort(project.markers.begin(), project.markers.end(),
-                  [](const Marker& a, const Marker& b) {
-                      return a.time < b.time;
-                  });
+        std::stable_sort(project.markers.begin(), project.markers.end(),
+                         [](const Marker& a, const Marker& b) {
+                             return a.time < b.time;
+                         });
+        // The model keys markers on time (AddMarker merges equal-time
+        // entries; RemoveMarker hits the first match) — a hand-edited
+        // file with same-time duplicates would leave remove/rename
+        // addressing the wrong marker. Dedupe keeping the LAST entry
+        // of each equal-time run, matching AddMarker's later-wins
+        // merge. Epsilon mirrors timeline_model's kEpsilon.
+        constexpr double kMarkerTimeEps = 1e-6;
+        auto kept = project.markers.begin();
+        for (auto it = project.markers.begin();
+             it != project.markers.end(); ++it) {
+            const bool last_of_run =
+                std::next(it) == project.markers.end() ||
+                std::fabs(std::next(it)->time - it->time) >
+                    kMarkerTimeEps;
+            if (last_of_run) *kept++ = *it;
+        }
+        project.markers.erase(kept, project.markers.end());
     }
 
     {
@@ -1179,23 +1197,12 @@ bool ProjectStore::Save(const Project& project,
         }
     }  // destructor closes the file before the rename (required on Windows)
 
-    // Crash-safe publish: rename over the target. Windows rename()
-    // refuses to overwrite — remove the target and retry once.
-    std::error_code ec;
-    std::filesystem::rename(tmp, target, ec);
-    if (ec) {
-        std::error_code remove_ec;
-        std::filesystem::remove(target, remove_ec);
-        std::filesystem::rename(tmp, target, ec);
-        if (ec) {
-            std::error_code cleanup_ec;
-            std::filesystem::remove(tmp, cleanup_ec);
-            return Fail(error_out,
-                        "cannot rename " + Path::ToUtf8(tmp) + " to " +
-                            Path::ToUtf8(target) + ": " + ec.message());
-        }
-    }
-    return true;
+    // Crash-safe publish: atomic replace — no window where neither the
+    // old project nor its replacement exists. On failure `target` is
+    // untouched and `tmp` stays on disk for recovery — deliberately
+    // NEVER deleted (removing it after a failed publish would destroy
+    // the only remaining copy of the user's data).
+    return Path::AtomicReplace(tmp, target, error_out);
 }
 
 bool ProjectStore::Load(const std::string& utf8_path,

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -73,11 +74,14 @@ std::string MediaExtensionLower(const std::string& utf8_path) {
 // OIIO decode results memoized by UTF-8 path — DrawGrid repaints on
 // every hover/scroll, and decoding EXR/RAW per paint would thrash
 // disk + CPU. Failures are cached too (a corrupt still must not retry
-// every frame). Bounded: the whole map clears on overflow.
+// every frame). Bounded: the whole map clears on overflow — entries
+// are shared_ptrs so a clear can never dangle a reference a caller
+// still holds.
 constexpr std::size_t kOiioThumbCacheMax = 64;
 
-const Io::Image& OiioThumb(const std::string& utf8_path) {
-    static std::unordered_map<std::string, Io::Image> cache;
+std::shared_ptr<const Io::Image> OiioThumb(const std::string& utf8_path) {
+    static std::unordered_map<std::string, std::shared_ptr<Io::Image>>
+        cache;
     const auto it = cache.find(utf8_path);
     if (it != cache.end()) {
         return it->second;
@@ -85,10 +89,10 @@ const Io::Image& OiioThumb(const std::string& utf8_path) {
     if (cache.size() >= kOiioThumbCacheMax) {
         cache.clear();
     }
-    return cache
-        .emplace(utf8_path, Io::ReadImage(
-                                XER::Helper::Path::FromUtf8(utf8_path)))
-        .first->second;
+    auto image = std::make_shared<Io::Image>(
+        Io::ReadImage(XER::Helper::Path::FromUtf8(utf8_path)));
+    cache.emplace(utf8_path, image);
+    return image;
 }
 
 }  // namespace
@@ -138,6 +142,7 @@ void MediaBinWidget::EnsureChildren() {
             const std::string& path =
                 entries_[static_cast<std::size_t>(selected_row_)].path;
             if (hooks_.on_select) hooks_.on_select(path);
+            MaybeOpenSource(selected_row_);
         }
     });
     view_btn_ = std::make_shared<Widgets::Button>(
@@ -214,6 +219,29 @@ void MediaBinWidget::RefreshRows() {
     Invalidate();
 }
 
+void MediaBinWidget::MaybeOpenSource(int entry_index) {
+    // There is no DoubleClick event type — a second Click on the same
+    // entry inside the threshold is the open-in-source-monitor
+    // gesture (Premiere project panel behavior).
+    constexpr auto kDoubleClickWindow = std::chrono::milliseconds(500);
+    if (entry_index < 0 ||
+        entry_index >= static_cast<int>(entries_.size())) {
+        last_click_entry_ = -1;
+        return;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    const bool is_double =
+        entry_index == last_click_entry_ &&
+        now - last_click_at_ < kDoubleClickWindow;
+    last_click_entry_ = entry_index;
+    last_click_at_ = now;
+    if (is_double && hooks_.on_open_source) {
+        last_click_entry_ = -1;   // a third click is a new gesture
+        hooks_.on_open_source(
+            entries_[static_cast<std::size_t>(entry_index)].path);
+    }
+}
+
 std::string MediaBinWidget::SelectedPath() const {
     if (selected_row_ < 0 ||
         selected_row_ >= static_cast<int>(entries_.size())) {
@@ -285,11 +313,12 @@ void MediaBinWidget::DrawGrid(
         // reads the source file straight to BGRA — DrawFrameBgra-ready.
         if (!drew_poster &&
             Io::OiioHandlesExtension(MediaExtensionLower(entry.path))) {
-            const Io::Image& img = OiioThumb(entry.path);
-            if (img.ok && !img.bgra.empty() && img.width > 0 &&
-                img.height > 0) {
+            const std::shared_ptr<const Io::Image> img =
+                OiioThumb(entry.path);
+            if (img != nullptr && img->ok && !img->bgra.empty() &&
+                img->width > 0 && img->height > 0) {
                 drew_poster = renderer.DrawFrameBgra(
-                    img.bgra.data(), img.width, img.height, thumb,
+                    img->bgra.data(), img->width, img->height, thumb,
                     1.0f);
             }
         }
@@ -523,6 +552,15 @@ bool MediaBinWidget::ShowContextMenu(
     }
 
     std::vector<Widgets::ContextMenu::Item> items;
+    Widgets::ContextMenu::Item open_source;
+    open_source.label = "Open in Source Monitor";
+    open_source.enabled = !path.empty() &&
+                          hooks_.on_open_source != nullptr;
+    open_source.action = [this, path] {
+        if (hooks_.on_open_source) hooks_.on_open_source(path);
+    };
+    items.push_back(std::move(open_source));
+
     Widgets::ContextMenu::Item add;
     add.label = "Add to Timeline";
     add.enabled = !path.empty();
@@ -648,6 +686,7 @@ bool MediaBinWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 const std::string& path =
                     entries_[static_cast<std::size_t>(index)].path;
                 if (hooks_.on_select) hooks_.on_select(path);
+                MaybeOpenSource(index);
             }
             Invalidate();
             return true;

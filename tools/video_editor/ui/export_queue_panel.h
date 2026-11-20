@@ -115,6 +115,11 @@ private:
     bool children_attached_ = false;
 
     std::vector<Row> rows_;
+    // Mark-and-sweep graveyard (see MarkersPanelWidget::retired_rows_):
+    // a row button's OnClick can trigger SetJobs -> RebuildRows, which
+    // would free the widget mid-dispatch. Retired buttons are disabled
+    // + unparented and swept on the NEXT rebuild.
+    std::vector<std::shared_ptr<XER::UI::Widgets::Widget>> retired_rows_;
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
 };

@@ -10,6 +10,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <vector>
 
@@ -41,7 +42,7 @@ public:
     int LoadAll(std::vector<std::string>* warnings = nullptr);
     void Unload();
 
-    const std::vector<PluginDesc>& Effects() const { return effects_; }
+    const std::deque<PluginDesc>& Effects() const { return effects_; }
     const PluginDesc* Find(const std::string& id) const;
     // Effects that make sense to list in a UI picker, by kind.
     std::vector<const PluginDesc*> OfKind(XER_PluginKind kind) const;
@@ -66,7 +67,20 @@ private:
         void* handle = nullptr;
     };
     std::vector<Library> libs_;
-    std::vector<PluginDesc> effects_;
+    // std::deque, not vector: push_back during LoadAll never relocates
+    // existing elements — Find()/OfKind()/ForEffectType() hand out
+    // `const PluginDesc*` into this container that live effect
+    // sessions (compositor, audio mixer) keep holding across reloads.
+    std::deque<PluginDesc> effects_;
+    // Retired state kept alive for the process lifetime. Unload()
+    // moves modules and descriptors here instead of freeing them:
+    // sessions still holding PluginDesc*/ApplyFn pointers captured
+    // before a reload must keep working — FreeLibrary would unmap
+    // the code ApplyFn calls into and destroying the descriptors
+    // would dangle every outstanding handle. Plugin sets are small;
+    // the retention is deliberate (see Unload()).
+    std::vector<Library> retired_libs_;
+    std::deque<std::deque<PluginDesc>> retired_effects_;
 };
 
 // Process-wide host — loaded lazily by the compositor/app on first

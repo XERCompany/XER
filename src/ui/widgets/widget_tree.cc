@@ -34,17 +34,16 @@ float StyleFloat(const Widget& w, std::string_view prop,
 }
 
 // Parses `translate(x,y)` / `scale(x[,y])` fragments from the CSS
-// `transform` value — enough for element offsets/zooms carried into
-// the render worker. Returns true when a transform was applied.
-bool ApplyStyleTransform(const Widget& w,
-                         Rendering::Renderer& renderer) {
+// `transform` value into `out` — enough for element offsets/zooms
+// carried into the render worker. Returns true when a transform was
+// specified.
+bool ParseStyleTransform(const Widget& w, RenderTransform* out) {
     const std::string* v = w.StyleValue("transform");
     if (v == nullptr || v->empty() || *v == "none") {
         return false;
     }
-    float a = 1.0f, d = 1.0f, tx = 0.0f, ty = 0.0f;
     bool any = false;
-    auto args = [&](std::string_view fn, std::vector<float>* out) {
+    auto args = [&](std::string_view fn, std::vector<float>* parsed) {
         const auto open = v->find(std::string(fn) + "(");
         if (open == std::string::npos) {
             return;
@@ -54,7 +53,7 @@ bool ApplyStyleTransform(const Widget& w,
             v->substr(open + fn.size() + 1, close - open - fn.size() - 1);
         for (const auto& part : std::views::split(body, ',')) {
             try {
-                out->push_back(
+                parsed->push_back(
                     std::stof(std::string(part.begin(), part.end())));
             } catch (...) {
             }
@@ -64,21 +63,65 @@ bool ApplyStyleTransform(const Widget& w,
     args("translate", &t);
     args("scale", &s);
     if (t.size() >= 2) {
-        tx = t[0];
-        ty = t[1];
+        out->tx = t[0];
+        out->ty = t[1];
         any = true;
     }
     if (!s.empty()) {
-        a = s[0];
-        d = s.size() > 1 ? s[1] : s[0];
+        out->a = s[0];
+        out->d = s.size() > 1 ? s[1] : s[0];
         any = true;
     }
-    if (!any) {
-        return false;
-    }
-    renderer.SetTransform(a, 0.0f, 0.0f, d, tx, ty);
-    return true;
+    return any;
 }
+
+// parent ∘ child — applies `child` first, then `parent`: the child's
+// transform is expressed in the parent's coordinate space, so nested
+// transformed elements accumulate instead of clobbering each other.
+RenderTransform ComposeTransform(const RenderTransform& parent,
+                                 const RenderTransform& child) {
+    return {parent.a * child.a + parent.c * child.b,
+            parent.b * child.a + parent.d * child.b,
+            parent.a * child.c + parent.c * child.d,
+            parent.b * child.c + parent.d * child.d,
+            parent.a * child.tx + parent.c * child.ty + parent.tx,
+            parent.b * child.tx + parent.d * child.ty + parent.ty};
+}
+
+// RAII unwinder for one element's renderer state — on ANY exit path
+// (including exceptions from widget->Render or a child's subtree) it
+// pops clip → transform → layer in reverse push order, restoring the
+// parent's transform matrix so the remote worker's stacks stay
+// balanced.
+struct ElementScope {
+    Rendering::Renderer& renderer;
+    std::vector<RenderTransform>* stack;
+    bool clipped = false;
+    bool transformed = false;
+    bool layered = false;
+    ElementScope(Rendering::Renderer& r,
+                 std::vector<RenderTransform>* s)
+        : renderer(r), stack(s) {}
+    ElementScope(const ElementScope&) = delete;
+    ElementScope& operator=(const ElementScope&) = delete;
+    ~ElementScope() {
+        if (clipped) {
+            renderer.PopClip();
+        }
+        if (transformed) {
+            stack->pop_back();
+            if (stack->empty()) {
+                renderer.ResetTransform();
+            } else {
+                const RenderTransform& m = stack->back();
+                renderer.SetTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
+            }
+        }
+        if (layered) {
+            renderer.PopLayer();
+        }
+    }
+};
 
 }  // namespace
 
@@ -209,12 +252,28 @@ void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& toke
         clip = bounds;
     }
     renderer.PushClip(clip);
-    RenderSubtree(root_, renderer, tokens, fresh_targets ? nullptr : &clip);
-    if (overlay_ != nullptr) {
-        RenderSubtree(overlay_, renderer, tokens, fresh_targets ? nullptr : &clip);
-    }
-    if (passive_overlay_ != nullptr) {
-        RenderSubtree(passive_overlay_, renderer, tokens, fresh_targets ? nullptr : &clip);
+    // Transform stack for the whole frame: each element's CSS
+    // transform composes onto its parent's matrix; RenderSubtree's
+    // scope guards pop exactly what they push.
+    std::vector<RenderTransform> transform_stack;
+    try {
+        RenderSubtree(root_, renderer, tokens,
+                      fresh_targets ? nullptr : &clip, &transform_stack);
+        if (overlay_ != nullptr) {
+            RenderSubtree(overlay_, renderer, tokens,
+                          fresh_targets ? nullptr : &clip,
+                          &transform_stack);
+        }
+        if (passive_overlay_ != nullptr) {
+            RenderSubtree(passive_overlay_, renderer, tokens,
+                          fresh_targets ? nullptr : &clip,
+                          &transform_stack);
+        }
+    } catch (...) {
+        // Balance the frame clip before the throw escapes — an
+        // unbalanced PushClip would clip every later frame.
+        renderer.PopClip();
+        throw;
     }
     renderer.PopClip();
     renderer.EndFrame();
@@ -402,7 +461,8 @@ void WidgetTree::RenderSubtree(
     const std::shared_ptr<Widget>& widget,
     Rendering::Renderer& renderer,
     const Theme::Tokens& tokens,
-    const Layout::Rect* cull
+    const Layout::Rect* cull,
+    std::vector<RenderTransform>* transform_stack
 ) const {
     if (widget == nullptr || !widget->IsVisible()) {
         return;
@@ -442,9 +502,27 @@ void WidgetTree::RenderSubtree(
         }
     }();
     const bool layered = opacity < 1.0f || blur > 0.0f;
-    const bool transformed = ApplyStyleTransform(*widget, renderer);
+    RenderTransform local{};
+    const bool transformed = ParseStyleTransform(*widget, &local);
+
+    // Every renderer state pushed below is unwound by this scope on
+    // ALL exit paths — an exception must not leave the remote worker's
+    // clip/transform/layer stacks unbalanced.
+    ElementScope scope{renderer, transform_stack};
+    if (transformed) {
+        // Compose onto the parent's matrix so nested transforms
+        // accumulate; siblings restore the parent transform on unwind.
+        const RenderTransform parent =
+            transform_stack->empty() ? RenderTransform{}
+                                     : transform_stack->back();
+        transform_stack->push_back(ComposeTransform(parent, local));
+        scope.transformed = true;
+        const RenderTransform& m = transform_stack->back();
+        renderer.SetTransform(m.a, m.b, m.c, m.d, m.tx, m.ty);
+    }
     if (layered) {
         renderer.PushLayer(opacity, 0u, blur);
+        scope.layered = true;
     }
 
     try {
@@ -462,19 +540,12 @@ void WidgetTree::RenderSubtree(
     const bool clips = widget->clips_children_;
     if (clips) {
         renderer.PushClip(widget->bounds_);
+        scope.clipped = true;
     }
     for (const auto& child : widget->GetChildren()) {
-        RenderSubtree(child, renderer, tokens, cull);
+        RenderSubtree(child, renderer, tokens, cull, transform_stack);
     }
-    if (clips) {
-        renderer.PopClip();
-    }
-    if (transformed) {
-        renderer.ResetTransform();
-    }
-    if (layered) {
-        renderer.PopLayer();
-    }
+    // ~ElementScope pops clip → transform → layer in reverse order.
 }
 
 void WidgetTree::CollectFocusable(

@@ -27,6 +27,15 @@ class WidgetStyleHost;
 
 namespace XER::UI::Widgets {
 
+// 2x3 affine matrix (a,b,c,d,tx,ty — the Renderer::SetTransform
+// layout). One frame's render traversal keeps a stack of these so a
+// child's CSS transform composes onto its parent's matrix instead of
+// replacing it.
+struct RenderTransform {
+    float a = 1.0f, b = 0.0f, c = 0.0f, d = 1.0f;
+    float tx = 0.0f, ty = 0.0f;
+};
+
 class WidgetTree {
 public:
     void SetRoot(std::shared_ptr<Widget> root);
@@ -130,7 +139,8 @@ private:
         const std::shared_ptr<Widget>& widget,
         Rendering::Renderer& renderer,
         const Theme::Tokens& tokens,
-        const Layout::Rect* cull
+        const Layout::Rect* cull,
+        std::vector<RenderTransform>* transform_stack
     ) const;
     void CollectFocusable(
         const std::shared_ptr<Widget>& widget,

@@ -4,15 +4,19 @@
 // TimelineHistory; preview and export consume snapshots.
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "export_engine.h"
 #include "media_catalog.h"
+#include "media_prep.h"
 #include "project_autosave.h"
+#include "source_edit.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
 #include "lab/async_op.h"
@@ -33,6 +37,7 @@
 #include "plugins_panel_widget.h"
 #include "settings_dialog.h"
 #include "shortcuts_overlay.h"
+#include "source_monitor_widget.h"
 #include "speed_dialog.h"
 #include "status_toast.h"
 #include "timeline_widget.h"
@@ -111,6 +116,32 @@ private:
     void SelectClip(const std::string& clip_id);
     void Seek(double seconds);
     void TogglePlay();
+    // Pauses the program transport (engine + monitor flags + shuttle
+    // ladder + toolbar label) — shared by TogglePlay's pause branch,
+    // ShuttleStop and the source monitor's exclusive-playback rule.
+    void StopProgramTransport();
+    // ---- source monitor (Premiere-style clip preview) ----
+    // Loads a bin clip into the source monitor: builds the synthetic
+    // single-clip project the source PreviewEngine decodes, restores
+    // the clip's persisted marks, shows the monitor and makes it the
+    // keyboard-transport target.
+    void OpenInSourceMonitor(const std::string& path);
+    void EnsureSourceEngine();              // lazy Init on the source project
+    void SourceSeek(double seconds);
+    void SourceTogglePlay();
+    void SourceShuttleStep(int direction);  // JKL mirror of ShuttleStep
+    void SourceShuttleStop();
+    void StopSourceTransport();
+    void SourceMark(bool mark_in);          // I / O at the source playhead
+    void SourceClearMark(bool mark_in);     // Alt+I / Alt+O
+    // Three-point edits: the marked source range lands on the timeline
+    // at the playhead — insert ripples (InsertClipAt), overwrite
+    // replaces (OverwriteClipAt).
+    void EditSourceToTimeline(bool insert);
+    // Keyboard transport routing: source monitor owns keys while it
+    // was the last monitor interacted with (mirrors Premiere's
+    // last-active-viewer rule).
+    bool SourceActive() const;
     void ApplyClip(const Clip& clip);
     // AI media actions (media-bin context menu): run on one shared
     // background job, results land as markers via Tick().
@@ -125,7 +156,29 @@ private:
                   double point);
     void SplitClip(const std::string& clip_id, double at_seconds);
     void DeleteClip(const std::string& clip_id);
-    void AddTransitionAfter(const std::string& clip_id);
+    // Transition commits — the pickers pass an explicit type/duration;
+    // duration <= 0 falls back to transition_duration_. Every applied
+    // pair also becomes the default for Ctrl+D / the junction menu.
+    void AddTransitionAfter(const std::string& clip_id,
+                            Transition::Type type, double duration);
+    void AddTransitionPair(const std::string& from_id,
+                           const std::string& to_id,
+                           Transition::Type type, double duration);
+    // Ctrl+D: the stored default transition lands on the junction
+    // nearest the playhead (falls back to the selected clip's
+    // out-edge junction when the playhead sits nowhere near a cut).
+    void ApplyDefaultTransition();
+    // JKL shuttle: PreviewEngine::SetRate-driven NLE transport on the
+    // ±{1,2,4,8}x ladder — same-direction presses double (capped),
+    // the opposite key steps back down and flips direction at 1x.
+    void ShuttleStep(int direction);   // +1 = L forward, -1 = J reverse
+    void ShuttleStop();                // K — pause + reset the ladder
+    // Q/W: ripple-trim the head/tail of the clip at the playhead (on
+    // a gap: Q extends the next clip's head back, W the previous
+    // clip's tail forward).
+    void RippleTrimToPlayhead(bool trim_head);
+    // ,/. — move the selected clip (plus its link group) ±1 frame.
+    void NudgeSelection(int direction);
     // Phase-2 edit ops (timeline tool commits -> history commands).
     void RippleDeleteClipById(const std::string& clip_id);
     void RippleTrimClip(const std::string& clip_id, TrimEdge edge,
@@ -144,7 +197,7 @@ private:
     void RenameMarkerAt(double t, const std::string& name);
     void SetWorkAreaRange(double in_s, double out_s);
     void SetTrackFlag(int track, char which, bool on);  // 'm','h','l'
-    void SetRightTab(int tab);                          // 0..8
+    void SetRightTab(int tab);                          // 0..9
     void ApplyProjectSettings(const ProjectSettings& settings);
     void AddGeneratedClip(SourceKind kind);
     void AddVst3FxToSelectedClip();
@@ -184,6 +237,11 @@ private:
     Project project_;
     TimelineHistory history_;
     MediaCatalog catalog_;
+    // Media-prep worker pool (media_prep.h): poster/peaks decodes +
+    // import-poster extraction off the UI thread. Declared right after
+    // the catalog it borrows so the dtor joins its workers before the
+    // catalog dies. Timeline hooks are non-blocking lookups into it.
+    MediaPrep media_prep_{&catalog_};
     std::vector<CatalogEntry> catalog_entries_;
     std::string selected_media_path_;
     std::string selected_clip_id_;
@@ -261,6 +319,7 @@ private:
     std::shared_ptr<NavRailWidget> nav_rail_;
     std::shared_ptr<MediaBinWidget> media_bin_;
     std::shared_ptr<MonitorWidget> monitor_;
+    std::shared_ptr<SourceMonitorWidget> source_monitor_;
     std::shared_ptr<InspectorWidget> inspector_;
     std::shared_ptr<EffectsPanelWidget> effects_panel_;
     std::shared_ptr<PluginsPanelWidget> plugins_panel_;
@@ -299,6 +358,10 @@ private:
     std::vector<ExportOptions> export_job_options_;
     AutosaveManager autosave_;        // initialized once a path exists
     double autosave_poll_ = 0.0;      // Tick accumulator (seconds)
+    // Rate-limiter for the media-prep queue-full poster-drop warning —
+    // drops are counted by MediaPrep and surfaced coalesced here at
+    // most once per few seconds.
+    std::chrono::steady_clock::time_point poster_drop_warned_at_{};
     // Pending autosave-recovery offer (CheckAutosaveRecovery arms it,
     // RecoverAutosave consumes it). Kept outside the manager so an
     // unsaved session can still point at a ./autosave dir.
@@ -323,6 +386,14 @@ private:
     // Monitor context-menu pick (1.0 / 0.5 / 0.25). Init resets the
     // engine's quality command, so EnsurePreviewEngine re-applies it.
     float preview_quality_ = 1.0f;
+    // JKL shuttle state: 0 = not shuttling; sign = direction with
+    // magnitude on the {1,2,4,8}x ladder. Reset by K, Space and the
+    // engine's pause-at-end.
+    double shuttle_rate_ = 0.0;
+    // "Default transition" state — seeded to Premiere's Crossfade @1s
+    // and re-armed by every applied transition pick.
+    Transition::Type transition_type_ = Transition::Type::Crossfade;
+    double transition_duration_ = 1.0;
     std::mutex preview_mutex_;
     std::vector<std::uint8_t> pending_frame_;
     int pending_frame_w_ = 0, pending_frame_h_ = 0;
@@ -335,6 +406,41 @@ private:
     void OnEngineFrame(const video::Frame& frame);
     void OnEnginePeaks(float l, float r);
     void OnEnginePlayhead(double t);
+
+    // ---- source monitor ----
+    // A second PreviewEngine decoding a synthetic one-clip Project on
+    // the loaded media file — same frame/audio path as the program
+    // monitor, its callbacks marshalled through source_*_pending
+    // slots by Tick(). The sink is declared before the engine so the
+    // engine (Shutdown in its dtor) dies first.
+    enum class MonitorTarget { Program, Source };
+    MonitorTarget monitor_target_ = MonitorTarget::Program;
+    class SourceEngineSink;
+    std::unique_ptr<SourceEngineSink> source_sink_;
+    PreviewEngine source_engine_;
+    bool source_ready_ = false;
+    Project source_project_;               // synthetic 1-clip project
+    std::string source_path_;              // UTF-8 media path ("" = none)
+    std::string source_name_;              // basename for the header
+    double source_duration_ = 0.0;
+    int source_media_w_ = 0, source_media_h_ = 0;
+    int source_fps_num_ = 30, source_fps_den_ = 1;
+    bool source_has_video_ = true;
+    double source_playhead_ = 0.0;
+    bool source_playing_ = false;
+    bool source_visible_ = false;
+    double source_shuttle_rate_ = 0.0;
+    // Per-clip marks keyed by normalized media path — survives
+    // reloading the clip (Premiere keeps marks with the master clip).
+    std::unordered_map<std::string, SourceMarks> source_marks_;
+    std::mutex source_mutex_;
+    std::vector<std::uint8_t> source_pending_frame_;
+    int source_pending_w_ = 0, source_pending_h_ = 0;
+    bool source_has_frame_ = false;
+    double source_pending_playhead_ = -1.0;
+
+    void OnSourceEngineFrame(const video::Frame& frame);
+    void OnSourceEnginePlayhead(double t);
 
     // HWND-embedded VST3 plugin editor session (ui/vst3_editor.h).
     Vst3PluginEditor vst3_editor_;

@@ -104,6 +104,10 @@ private:
     // retargets via kSetTargetHwnd on checkout).
     bool SpawnPooledWorker(ChannelEntry* entry, std::string* error_out);
     void CloseWorkerHandle(ChannelEntry* entry);
+    // StreamRenderer teardown hook: clears the entry's checkout so the
+    // worker returns to the warm pool (retargeted onto its hidden
+    // surface), or reaps it when the process died while checked out.
+    void ReleaseChannel(int channel_id);
     void Broadcast(const std::vector<std::uint8_t>& msg);
 
     std::vector<ChannelEntry> channels_;

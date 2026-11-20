@@ -262,14 +262,26 @@ bool ParsePathData(const std::string& d, std::vector<Poly>* polys) {
 // ---- attribute scraping ------------------------------------------------
 
 std::string Attr(const std::string& tag, const std::string& name) {
+    // The name must begin at an attribute boundary — a raw substring
+    // match hits `d=` inside `id=`, `x=` inside `rx=`/`cx=`, `y=`
+    // inside `ry=`/`cy=` and silently returns the wrong attribute.
+    const auto boundary = [&tag](size_t pos) {
+        if (pos == 0) return true;
+        const char c = tag[pos - 1];
+        return c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
+               c == '\f' || c == '\v' || c == '<' || c == '/' ||
+               c == '>';
+    };
     for (const char q : {'"', '\''}) {
         const std::string key = name + "=" + q;
-        size_t pos = tag.find(key);
-        if (pos == std::string::npos) continue;
-        pos += key.size();
-        const size_t close = tag.find(q, pos);
-        if (close == std::string::npos) return {};
-        return tag.substr(pos, close - pos);
+        for (size_t pos = tag.find(key); pos != std::string::npos;
+             pos = tag.find(key, pos + 1)) {
+            if (!boundary(pos)) continue;
+            const size_t value = pos + key.size();
+            const size_t close = tag.find(q, value);
+            if (close == std::string::npos) return {};
+            return tag.substr(value, close - value);
+        }
     }
     return {};
 }

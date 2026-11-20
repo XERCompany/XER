@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -156,35 +157,46 @@ bool GenerateText(const Clip& clip, int canvas_h, video::Frame* out) {
     }
     const int scale = ScaleForTextStyle(style, canvas_h);
     // Per-line metrics: alignment needs each line's own width so it
-    // can be shifted inside the block (the widest line).
+    // can be shifted inside the block (the widest line). All sizing
+    // math runs in int64_t: a crafted text param (~1e5 newlines) used
+    // to overflow the int products to negative, which clamped to a
+    // silent 1-px "text" clip instead of rejecting (bug-audit fix).
     const std::vector<std::string> lines = SplitTextLines(style.text);
     std::vector<int> line_w(lines.size(), 0);
-    int block_w = 0;
+    std::int64_t block_w = 0;
     for (std::size_t i = 0; i < lines.size(); ++i) {
         int line_h = 0;
         if (!BitmapFont::MeasureText(lines[i], scale, &line_w[i],
                                      &line_h)) {
             return false;   // unreachable (scale >= 1) — belt & braces
         }
-        block_w = std::max(block_w, line_w[i]);
+        block_w = std::max<std::int64_t>(block_w, line_w[i]);
     }
     // Same trim as MeasureText: the last line's leading is dropped.
-    const int text_h =
-        (static_cast<int>(lines.size()) * BitmapFont::kLineAdvance - 2) *
+    const std::int64_t text_h =
+        (static_cast<std::int64_t>(lines.size()) *
+             BitmapFont::kLineAdvance - 2) *
         scale;
     // An outline REPLACES the drop shadow: `edge` is the stroke radius
     // in px and pads every side; `shadow` is the two-tap shadow's
     // +x/+y reach otherwise (the classic look, kept for edge == 0).
-    const int edge =
+    const std::int64_t edge =
         style.outline_px > 0.0f
-            ? std::max(1, static_cast<int>(std::lround(
-                              static_cast<double>(style.outline_px))))
+            ? std::max<std::int64_t>(
+                  1, std::lround(
+                         static_cast<double>(style.outline_px)))
             : 0;
-    const int shadow = edge == 0 ? 2 * scale : 0;
-    const int w =
-        std::clamp(block_w + 2 * edge + shadow, 1, kMaxGeneratedDim);
-    const int h =
-        std::clamp(text_h + 2 * edge + shadow, 1, kMaxGeneratedDim);
+    const std::int64_t shadow = edge == 0 ? 2 * scale : 0;
+    const std::int64_t need_w = block_w + 2 * edge + shadow;
+    const std::int64_t need_h = text_h + 2 * edge + shadow;
+    // Oversized text is rejected outright — clamping it to the
+    // dimension cap would silently misrender (and clamping a negative
+    // overflow would produce a 1-px clip).
+    if (need_w > kMaxGeneratedDim || need_h > kMaxGeneratedDim) {
+        return false;
+    }
+    const int w = static_cast<int>(std::max<std::int64_t>(need_w, 1));
+    const int h = static_cast<int>(std::max<std::int64_t>(need_h, 1));
     if (!EnsureFrameSize(out, w, h)) {
         return false;
     }
@@ -193,30 +205,32 @@ bool GenerateText(const Clip& clip, int canvas_h, video::Frame* out) {
     // Draws every line of one pass at offset (dx, dy). Per-line x is
     // the alignment shift: Left -> 0, Center -> half the slack inside
     // the block, Right -> all of it. y walks the fixed line advance.
+    const int edge_px = static_cast<int>(edge);
     auto draw_pass = [&](int dx, int dy,
                          const std::array<std::uint8_t, 4>& bgra) {
         for (std::size_t i = 0; i < lines.size(); ++i) {
             int xoff = 0;
             if (style.align == ClipTextStyle::Align::Center) {
-                xoff = (block_w - line_w[i]) / 2;
+                xoff = static_cast<int>((block_w - line_w[i]) / 2);
             } else if (style.align == ClipTextStyle::Align::Right) {
-                xoff = block_w - line_w[i];
+                xoff = static_cast<int>(block_w - line_w[i]);
             }
             BitmapFont::DrawText(
-                out, lines[i], edge + xoff + dx,
-                edge + dy + static_cast<int>(i) *
-                                BitmapFont::kLineAdvance * scale,
+                out, lines[i], edge_px + xoff + dx,
+                edge_px + dy + static_cast<int>(i) *
+                                   BitmapFont::kLineAdvance * scale,
                 scale, bgra);
         }
     };
-    if (edge > 0) {
+    if (edge_px > 0) {
         // 8-direction offset draws fake a stroke around the glyphs.
         static const int kDirs[8][2] = {
             {-1, -1}, {0, -1}, {1, -1}, {-1, 0},
             {1, 0},   {-1, 1}, {0, 1},  {1, 1},
         };
         for (const auto& dir : kDirs) {
-            draw_pass(dir[0] * edge, dir[1] * edge, style.outline_color);
+            draw_pass(dir[0] * edge_px, dir[1] * edge_px,
+                      style.outline_color);
         }
     } else {
         // Far tap, near tap — the soft drop shadow.

@@ -997,8 +997,18 @@ class TimelineHistory::MacroCommand : public Command {
 public:
     explicit MacroCommand(std::string label) : label_(std::move(label)) {}
     bool Apply(Project& project) override {
-        for (auto& c : commands_) {
-            if (!c->Apply(project)) {
+        // Transaction semantics: a macro applies all-or-nothing. If a
+        // sub-op fails at index i, ops [0, i) are reverted in reverse
+        // order — a half-applied macro with no undo entry would leave
+        // unrecoverable project corruption on every redo (bug-audit
+        // finding). Revert failures are ignored: each Revert restores
+        // the state its own Apply captured, which is still what the
+        // project holds.
+        for (std::size_t i = 0; i < commands_.size(); ++i) {
+            if (!commands_[i]->Apply(project)) {
+                while (i-- > 0) {
+                    commands_[i]->Revert(project);
+                }
                 return false;
             }
         }
@@ -1065,6 +1075,14 @@ bool TimelineHistory::Redo() {
     auto cmd = std::move(redo_.back());
     redo_.pop_back();
     if (!cmd->Apply(project_)) {
+        // A failed apply must not silently discard the command: a
+        // MacroCommand that partially applied would mutate the project
+        // with no undo entry (its Apply now rolls back, but a non-macro
+        // command could still fail mid-mutation). Keep it on redo_ so
+        // the entry is neither lost nor re-queued into undo_ — Redo
+        // reports failure, the caller can Undo or fix the cause and
+        // retry.
+        redo_.push_back(std::move(cmd));
         return false;
     }
     undo_.push_back(std::move(cmd));

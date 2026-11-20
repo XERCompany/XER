@@ -79,6 +79,11 @@ void NavRailWidget::SetItems(std::vector<Item> top,
     bottom_.reserve(bottom.size());
     for (auto& item : top) top_.push_back({std::move(item), {}});
     for (auto& item : bottom) bottom_.push_back({std::move(item), {}});
+    // Replacing the item vectors invalidates every saved index — a
+    // press started under the old list must not resolve into the new
+    // one (stale index -> OOB, or worse, the wrong action).
+    pressed_ = kNoPress;
+    hovered_ = -1;
     Invalidate();
 }
 
@@ -147,11 +152,22 @@ bool NavRailWidget::HandleEvent(
             if (pressed_ != kNoPress && h == pressed_) {
                 const int was = pressed_;
                 pressed_ = kNoPress;
-                const Item& item = was >= 0
-                    ? top_[static_cast<std::size_t>(was)].item
-                    : bottom_[static_cast<std::size_t>(DecodeBottom(was))]
-                          .item;
-                if (item.action) item.action();
+                // Bounds-check the decoded index — SetItems may have
+                // shrunk the vectors since the press landed.
+                const Item* item = nullptr;
+                if (was >= 0) {
+                    if (static_cast<std::size_t>(was) < top_.size()) {
+                        item = &top_[static_cast<std::size_t>(was)].item;
+                    }
+                } else {
+                    const int bi = DecodeBottom(was);
+                    if (bi >= 0 &&
+                        static_cast<std::size_t>(bi) < bottom_.size()) {
+                        item =
+                            &bottom_[static_cast<std::size_t>(bi)].item;
+                    }
+                }
+                if (item != nullptr && item->action) item->action();
                 Invalidate();
                 return true;
             }

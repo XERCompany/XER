@@ -981,6 +981,49 @@ bool AddTransition(Project& project, const std::string& from_clip,
     return true;
 }
 
+const std::vector<Transition::Type>& AllTransitionTypes() {
+    static const std::vector<Transition::Type> kAll = {
+        Transition::Type::Crossfade,
+        Transition::Type::WipeLeft,   Transition::Type::WipeRight,
+        Transition::Type::WipeUp,     Transition::Type::WipeDown,
+        Transition::Type::SlideLeft,  Transition::Type::SlideRight,
+        Transition::Type::SlideUp,    Transition::Type::SlideDown,
+        Transition::Type::DipToBlack, Transition::Type::DipToWhite,
+        Transition::Type::AdditiveDissolve,
+    };
+    return kAll;
+}
+
+const char* TransitionTypeLabel(Transition::Type type) {
+    switch (type) {
+        case Transition::Type::Crossfade:
+            return "Crossfade";
+        case Transition::Type::WipeLeft:
+            return "Wipe Left";
+        case Transition::Type::WipeRight:
+            return "Wipe Right";
+        case Transition::Type::WipeUp:
+            return "Wipe Up";
+        case Transition::Type::WipeDown:
+            return "Wipe Down";
+        case Transition::Type::SlideLeft:
+            return "Slide Left";
+        case Transition::Type::SlideRight:
+            return "Slide Right";
+        case Transition::Type::SlideUp:
+            return "Slide Up";
+        case Transition::Type::SlideDown:
+            return "Slide Down";
+        case Transition::Type::DipToBlack:
+            return "Dip to Black";
+        case Transition::Type::DipToWhite:
+            return "Dip to White";
+        case Transition::Type::AdditiveDissolve:
+            return "Additive Dissolve";
+    }
+    return "Crossfade";  // unreachable
+}
+
 bool RemoveTransition(Project& project, const std::string& from_clip,
                       const std::string& to_clip) {
     const auto it = std::find_if(project.transitions.begin(),

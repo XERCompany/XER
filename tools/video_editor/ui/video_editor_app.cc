@@ -10,6 +10,7 @@
 #include <iostream>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -60,6 +61,31 @@ std::string Basename(const std::string& path) {
     const std::size_t pos = path.find_last_of("/\\");
     return pos == std::string::npos ? path : path.substr(pos + 1);
 }
+
+// MediaPrep::Lookup -> the widget's MediaLookup tri-state (the widget
+// stays decoupled from the worker header).
+MediaLookup ToUiLookup(MediaPrep::Lookup lookup) {
+    switch (lookup) {
+        case MediaPrep::Lookup::kReady:
+            return MediaLookup::kReady;
+        case MediaPrep::Lookup::kPending:
+            return MediaLookup::kPending;
+        case MediaPrep::Lookup::kFailed:
+            break;
+    }
+    return MediaLookup::kFailed;
+}
+
+// UI state the lab worker needs, snapshotted on the UI thread by the
+// lab panel's on_run_prepare hook and carried through
+// RunParams::context — RunLabOperation reads ONLY this, never the
+// live project_/playhead_/project_path_ (the UI thread mutates those
+// through history_ while the job runs).
+struct LabSnapshot {
+    Project project;
+    double playhead = 0.0;
+    std::string project_path;
+};
 
 #ifdef _WIN32
 std::wstring FilterSpec(const wchar_t* name, const wchar_t* pattern) {
@@ -171,6 +197,25 @@ private:
     VideoEditorAppWidget* app_;
 };
 
+// Source monitor's PreviewEngine callbacks — same marshal-to-Tick
+// discipline as EngineSink, minus the meters (the source monitor has
+// no meter chrome in v1).
+class VideoEditorAppWidget::SourceEngineSink final
+    : public PreviewEngine::Sink {
+public:
+    explicit SourceEngineSink(VideoEditorAppWidget* app) : app_(app) {}
+    void OnVideoFrame(const video::Frame& frame) override {
+        app_->OnSourceEngineFrame(frame);
+    }
+    void OnAudioPeakLevels(float, float) override {}
+    void OnPlayhead(double t) override {
+        app_->OnSourceEnginePlayhead(t);
+    }
+
+private:
+    VideoEditorAppWidget* app_;
+};
+
 VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
                                            std::string project_path)
     : parent_hwnd_(parent_hwnd), project_path_(std::move(project_path)),
@@ -192,7 +237,16 @@ VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
 }
 
 VideoEditorAppWidget::~VideoEditorAppWidget() {
+    // The lab worker's on_run calls back into this widget — tear its
+    // panel down (AsyncOp dtor cancels + joins) while lab_mutex_ and
+    // friends are still valid, instead of letting ~Widget destroy it
+    // after the members it touches are gone.
+    if (lab_panel_) {
+        RemoveChild(lab_panel_);
+        lab_panel_.reset();
+    }
     preview_engine_.Shutdown();
+    source_engine_.Shutdown();
     export_engine_.Cancel();
     export_engine_.Wait();
 }
@@ -206,7 +260,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     const auto& layout_cfg = AppRuntime::SharedLayoutConfig();
     left_panel_visible_ = layout_cfg.left_visible;
     right_panel_visible_ = layout_cfg.right_visible;
-    if (layout_cfg.right_tab > 0) {
+    if (layout_cfg.right_tab >= 0) {   // 0 = Inspector; -1 = keep
         right_tab_ = layout_cfg.right_tab;
     }
     // Splitter size overrides start at the manifest widths (0 = use the
@@ -305,6 +359,9 @@ void VideoEditorAppWidget::EnsureChildren() {
     media_hooks.on_select = [this](const std::string& path) {
         selected_media_path_ = path;
         SetStatus("Selected media: " + Basename(path));
+    };
+    media_hooks.on_open_source = [this](const std::string& path) {
+        OpenInSourceMonitor(path);
     };
     media_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
@@ -430,7 +487,20 @@ void VideoEditorAppWidget::EnsureChildren() {
             SetStatus("Remove failed: " + error, true);
             return;
         }
+        // Media left the catalog entirely — drop queued decodes AND
+        // every cached poster/peaks entry for it.
+        media_prep_.PurgePath(entry->path);
         if (selected_media_path_ == path) selected_media_path_.clear();
+        // Same for a clip loaded in the source monitor: its engine
+        // holds an open decoder on the file.
+        if (!source_path_.empty() &&
+            source_path_ == Path::NormalizeUtf8Path(path)) {
+            StopSourceTransport();
+            source_engine_.Shutdown();
+            source_ready_ = false;
+            source_path_.clear();
+            if (source_monitor_) source_monitor_->ClearSource();
+        }
         RefreshCatalog();
         SetStatus("Removed " + Basename(path) + " from catalog");
     });
@@ -451,6 +521,7 @@ void VideoEditorAppWidget::EnsureChildren() {
 
     MonitorWidget::Hooks monitor_hooks;
     monitor_hooks.on_time_changed = [this](double t) {
+        monitor_target_ = MonitorTarget::Program;
         playhead_ = std::clamp(t, 0.0, project_.duration());
         timeline_->SetPlayhead(playhead_);
         // Same sink set as Seek(), minus the engine rebase — this
@@ -485,9 +556,16 @@ void VideoEditorAppWidget::EnsureChildren() {
     // Transport setters added by the monitor pass (parallel fix
     // round): on-monitor play toggle, ruler seeks and the |◀ ▶|
     // frame-step buttons all route through the app's engine paths.
-    monitor_->SetOnPlayToggle([this] { TogglePlay(); });
-    monitor_->SetOnSeekRequest([this](double t) { Seek(t); });
+    monitor_->SetOnPlayToggle([this] {
+        monitor_target_ = MonitorTarget::Program;
+        TogglePlay();
+    });
+    monitor_->SetOnSeekRequest([this](double t) {
+        monitor_target_ = MonitorTarget::Program;
+        Seek(t);
+    });
     monitor_->SetOnFrameStep([this](int dir) {
+        monitor_target_ = MonitorTarget::Program;
         // ±1 frame via the project's fps (fps_den/fps_num seconds).
         const double frame_dt =
             project_.fps_num > 0
@@ -505,6 +583,54 @@ void VideoEditorAppWidget::EnsureChildren() {
         preview_engine_.SetQuality(scale);
     });
 
+    // Source monitor (Premiere-style): a second PreviewEngine decodes
+    // the loaded media file through a synthetic one-clip project and
+    // pumps frames into this widget — every transport action routes
+    // back into the app's Source* methods, which also flip the
+    // keyboard-transport target to Source.
+    SourceMonitorWidget::Hooks source_hooks;
+    source_hooks.on_activate = [this] {
+        monitor_target_ = MonitorTarget::Source;
+    };
+    source_hooks.on_seek_request = [this](double t) {
+        monitor_target_ = MonitorTarget::Source;
+        SourceSeek(t);
+    };
+    source_hooks.on_play_toggle = [this] {
+        monitor_target_ = MonitorTarget::Source;
+        SourceTogglePlay();
+    };
+    source_hooks.on_frame_step = [this](int dir) {
+        monitor_target_ = MonitorTarget::Source;
+        const double frame_dt =
+            source_fps_num_ > 0
+                ? static_cast<double>(source_fps_den_) /
+                      static_cast<double>(source_fps_num_)
+                : 1.0 / 30.0;
+        SourceSeek(source_playhead_ + dir * frame_dt);
+    };
+    source_hooks.on_mark_in = [this] {
+        monitor_target_ = MonitorTarget::Source;
+        SourceMark(true);
+    };
+    source_hooks.on_mark_out = [this] {
+        monitor_target_ = MonitorTarget::Source;
+        SourceMark(false);
+    };
+    source_hooks.on_insert = [this] {
+        monitor_target_ = MonitorTarget::Source;
+        EditSourceToTimeline(true);
+    };
+    source_hooks.on_overwrite = [this] {
+        monitor_target_ = MonitorTarget::Source;
+        EditSourceToTimeline(false);
+    };
+    source_hooks.on_status = [this](const std::string& text, bool err) {
+        SetStatus(text, err);
+    };
+    source_monitor_ =
+        std::make_shared<SourceMonitorWidget>(source_hooks);
+
     InspectorWidget::Hooks inspector_hooks;
     inspector_hooks.on_apply_clip = [this](const Clip& clip) {
         ApplyClip(clip);
@@ -512,9 +638,11 @@ void VideoEditorAppWidget::EnsureChildren() {
     inspector_hooks.on_delete_clip = [this](const std::string& id) {
         DeleteClip(id);
     };
-    inspector_hooks.on_add_transition = [this](const std::string& id) {
-        AddTransitionAfter(id);
-    };
+    inspector_hooks.on_add_transition =
+        [this](const std::string& id, Transition::Type type,
+               double duration) {
+            AddTransitionAfter(id, type, duration);
+        };
     inspector_hooks.on_set_keyframes =
         [this](const std::string& id, KeyProp prop,
                std::vector<Keyframe> keys) {
@@ -565,6 +693,15 @@ void VideoEditorAppWidget::EnsureChildren() {
                const Lab::JobControl& job) {
             return RunLabOperation(params, job);
         };
+    // Runs on the UI thread inside LabPanel::StartRun, before the
+    // worker is dispatched — copy everything the worker will touch.
+    lab_hooks.on_run_prepare = [this](LabPanel::RunParams* params) {
+        auto snapshot = std::make_shared<LabSnapshot>();
+        snapshot->project = project_;
+        snapshot->playhead = playhead_;
+        snapshot->project_path = project_path_;
+        params->context = std::move(snapshot);
+    };
     lab_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
     };
@@ -811,7 +948,10 @@ void VideoEditorAppWidget::EnsureChildren() {
     timeline_hooks.on_select_clip = [this](const std::string& id) {
         SelectClip(id);
     };
-    timeline_hooks.on_seek = [this](double t) { Seek(t); };
+    timeline_hooks.on_seek = [this](double t) {
+        monitor_target_ = MonitorTarget::Program;
+        Seek(t);
+    };
     timeline_hooks.on_move_clip = [this](const std::string& id, double t) {
         MoveClip(id, t);
     };
@@ -848,7 +988,10 @@ void VideoEditorAppWidget::EnsureChildren() {
             SetClipRateBy(id, rate);
         };
     timeline_hooks.on_add_transition =
-        [this](const std::string& id) { AddTransitionAfter(id); };
+        [this](const std::string& id, Transition::Type type,
+               double duration) {
+            AddTransitionAfter(id, type, duration);
+        };
     timeline_hooks.on_add_marker =
         [this](double t, const std::string& name) {
             AddMarkerAt(t, name);
@@ -868,13 +1011,18 @@ void VideoEditorAppWidget::EnsureChildren() {
     timeline_hooks.on_track_locked = [this](int track, bool on) {
         SetTrackFlag(track, 'l', on);
     };
+    // Non-blocking lookups into the media-prep worker — a cold decode
+    // answers kPending and lands on a later frame (ConsumeRenderDirty
+    // in Tick drives the repaint).
     timeline_hooks.get_audio_peaks =
         [this](const std::string& path, AudioPeaks* out) {
-            return catalog_.GetAudioPeaks(path, out);
+            return ToUiLookup(media_prep_.LookupPeaks(path, out));
         };
     timeline_hooks.get_poster =
-        [](const std::string& path, double src_t, video::Frame* frame) {
-            return MediaCatalog::GetPosterAt(path, src_t, frame);
+        [this](const std::string& path, double src_t,
+               video::Frame* frame) {
+            return ToUiLookup(
+                media_prep_.LookupPoster(path, src_t, frame));
         };
     timeline_hooks.get_media_bounds =
         [this](const std::string& path, MediaBounds* out) {
@@ -922,6 +1070,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(nav_rail_);
     AddChild(media_bin_);
     AddChild(monitor_);
+    AddChild(source_monitor_);
     AddChild(inspector_);
     AddChild(effects_panel_);
     AddChild(markers_panel_);
@@ -1113,6 +1262,10 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             right_panel_visible_ = !right_panel_visible_;
             RequestLayout();
         }, true, right_panel_visible_),
+        item("Source Monitor", "", [this] {
+            source_visible_ = !source_visible_;
+            RequestLayout();
+        }, true, source_visible_),
         item("Inspector", "", [this] { SetRightTab(0); }, true,
              right_tab_ == 0, false, true),
         item("Effects", "", [this] { SetRightTab(1); }, true,
@@ -1163,6 +1316,7 @@ void VideoEditorAppWidget::NewProject() {
         return;
     }
     history_.Clear();
+    media_prep_.CancelAllQueued();   // project swap: drop stale decodes
     project_ = Project{};
     project_.width = 1920;
     project_.height = 1080;
@@ -1181,6 +1335,7 @@ void VideoEditorAppWidget::NewProject() {
 bool VideoEditorAppWidget::LoadProject(const std::string& utf8_path) {
     std::string error;
     history_.Clear();
+    media_prep_.CancelAllQueued();   // project swap: drop stale decodes
     if (!ProjectStore::Load(Path::NormalizeUtf8Path(utf8_path), &project_,
                             &error)) {
         SetStatus("Open failed: " + error, true);
@@ -1243,13 +1398,19 @@ void VideoEditorAppWidget::ImportMedia() {
         Path::NormalizeUtf8Path(Str::WideToUtf8(picked));
     std::int64_t id = 0;
     std::string error;
+    // extract_poster=false — the poster PNG decode lands on the
+    // media-prep worker; ConsumeCatalogDirty in Tick refreshes the bin
+    // once poster_path is written.
     if (!catalog_.Open(&error) ||
-        !catalog_.Import(path, &id, true, &error)) {
+        !catalog_.Import(path, &id, false, &error)) {
         SetStatus("Import failed: " + error, true);
         return;
     }
     selected_media_path_ = path;
     RefreshCatalog();
+    const CatalogEntry* imported = FindCatalogEntry(path);
+    media_prep_.RequestImportPoster(imported != nullptr ? imported->path
+                                                        : path);
     SetStatus("Imported " + Basename(path));
 #else
     SetStatus("Import dialog is Windows-only", true);
@@ -1427,6 +1588,7 @@ void VideoEditorAppWidget::AddTrack(TrackKind kind) {
 }
 
 void VideoEditorAppWidget::SelectClip(const std::string& clip_id) {
+    monitor_target_ = MonitorTarget::Program;
     selected_clip_id_ = clip_id;
     timeline_->SetSelectedClip(clip_id);
     inspector_->SetClip(FindClip(project_, clip_id));
@@ -1438,6 +1600,7 @@ void VideoEditorAppWidget::SelectClip(const std::string& clip_id) {
 }
 
 void VideoEditorAppWidget::Seek(double seconds) {
+    monitor_target_ = MonitorTarget::Program;
     playhead_ = std::clamp(seconds, 0.0, project_.duration());
     timeline_->SetPlayhead(playhead_);
     inspector_->SetPlayhead(playhead_);
@@ -1457,9 +1620,27 @@ void VideoEditorAppWidget::Seek(double seconds) {
     }
 }
 
+void VideoEditorAppWidget::StopProgramTransport() {
+    shuttle_rate_ = 0.0;
+    if (!monitor_->IsPlaying()) return;
+    preview_engine_.SetRate(1.0);
+    preview_engine_.SetPlaying(false);
+    monitor_->SetPlaying(false);
+    monitor_->SetExternalPlayback(false);
+    monitor_->SetTime(playhead_, true);  // still at the stop point
+    play_btn_->SetText("Play");
+}
+
 void VideoEditorAppWidget::TogglePlay() {
+    monitor_target_ = MonitorTarget::Program;
     const bool next = !monitor_->IsPlaying();
+    // Space always returns to normal 1x playback — any JKL ladder
+    // state is dropped (K also resets it).
+    shuttle_rate_ = 0.0;
     if (next) {
+        // Exclusive transport: source monitor playback yields to the
+        // program monitor (the two engines share the audio sink).
+        StopSourceTransport();
         EnsurePreviewEngine();
         if (!preview_ready_) {
             SetStatus("Preview engine unavailable", true);
@@ -1480,14 +1661,12 @@ void VideoEditorAppWidget::TogglePlay() {
             }
         }
         preview_engine_.SetLoop(loop_in, loop_out);
+        preview_engine_.SetRate(1.0);
         preview_engine_.SetPlaying(true);
         monitor_->SetExternalPlayback(true);
         monitor_->SetPlaying(true);
     } else {
-        preview_engine_.SetPlaying(false);
-        monitor_->SetPlaying(false);
-        monitor_->SetExternalPlayback(false);
-        monitor_->SetTime(playhead_, true);  // still at the stop point
+        StopProgramTransport();
     }
     play_btn_->SetText(next ? "Pause" : "Play");
 }
@@ -1608,16 +1787,25 @@ void VideoEditorAppWidget::DeleteClip(const std::string& clip_id) {
         SetStatus("Select a clip to delete", true);
         return;
     }
+    // Grab the source path before the clip leaves the model so its
+    // queued media-prep requests can be dropped (still-needed media
+    // simply re-enqueues on the next render).
+    const Clip* doomed = FindClip(project_, clip_id);
+    const std::string source =
+        doomed != nullptr ? doomed->source_path : std::string{};
     if (!history_.RemoveClip(clip_id)) {
         SetStatus("Delete failed", true);
         return;
     }
+    if (!source.empty()) media_prep_.CancelQueued(source);
     selected_clip_id_.clear();
     NotifyProjectChanged();
     SetStatus("Deleted clip");
 }
 
-void VideoEditorAppWidget::AddTransitionAfter(const std::string& clip_id) {
+void VideoEditorAppWidget::AddTransitionAfter(
+    const std::string& clip_id, Transition::Type type,
+    double duration) {
     const Clip* clip = FindClip(project_, clip_id);
     if (clip == nullptr) return;
     const Clip* next = nullptr;
@@ -1635,15 +1823,664 @@ void VideoEditorAppWidget::AddTransitionAfter(const std::string& clip_id) {
         SetStatus("No adjacent clip for transition", true);
         return;
     }
+    AddTransitionPair(clip->id, next->id, type, duration);
+}
+
+void VideoEditorAppWidget::AddTransitionPair(
+    const std::string& from_id, const std::string& to_id,
+    Transition::Type type, double duration) {
+    const double applied =
+        duration > 0.0 ? duration : transition_duration_;
     std::string error;
-    if (!history_.AddTransition(clip->id, next->id,
-                                Transition::Type::Crossfade, 1.0,
+    if (!history_.AddTransition(from_id, to_id, type, applied,
                                 &error)) {
         SetStatus("Transition failed: " + error, true);
         return;
     }
+    // The applied pick re-arms the default — Ctrl+D and the junction
+    // menu's <= 0 duration requests follow the last-used pair.
+    transition_type_ = type;
+    transition_duration_ = applied;
     NotifyProjectChanged();
-    SetStatus("Added crossfade");
+    SetStatus(std::string("Added ") + TransitionTypeLabel(type));
+}
+
+void VideoEditorAppWidget::ApplyDefaultTransition() {
+    // Nearest adjacent pair on a video track to the playhead wins —
+    // Ctrl+D in Premiere applies the default transition to the edit
+    // under the playhead.
+    auto is_video_track = [this](int track) {
+        return track >= 0 &&
+               track < static_cast<int>(project_.tracks.size()) &&
+               project_.tracks[static_cast<std::size_t>(track)].kind ==
+                   TrackKind::Video;
+    };
+    const Clip* from = nullptr;
+    const Clip* to = nullptr;
+    double best = -1.0;
+    for (const Clip& a : project_.clips) {
+        if (!is_video_track(a.track)) continue;
+        const double cut = ClipEndSeconds(a);
+        for (const Clip& b : project_.clips) {
+            if (b.track != a.track ||
+                std::fabs(b.timeline_start - cut) > 1e-6) {
+                continue;
+            }
+            const double d = std::fabs(cut - playhead_);
+            if (best < 0.0 || d < best) {
+                best = d;
+                from = &a;
+                to = &b;
+            }
+        }
+    }
+    if (from != nullptr && to != nullptr) {
+        AddTransitionPair(from->id, to->id, transition_type_,
+                          transition_duration_);
+        return;
+    }
+    // No junction at all — fall back to the selected clip's out-edge
+    // (same adjacency resolution as the pickers).
+    if (!selected_clip_id_.empty()) {
+        AddTransitionAfter(selected_clip_id_, transition_type_, -1.0);
+    } else {
+        SetStatus("No junction for a transition", true);
+    }
+}
+
+void VideoEditorAppWidget::ShuttleStep(int direction) {
+    constexpr double kMaxShuttleRate = 8.0;
+    double rate = shuttle_rate_;
+    if (!monitor_->IsPlaying()) {
+        rate = static_cast<double>(direction);   // stopped -> ±1x
+    } else {
+        if (rate == 0.0) rate = 1.0;  // normal play = +1 on the ladder
+        if ((rate > 0.0) == (direction > 0)) {
+            // Same direction: double, capped at 8x.
+            rate = direction > 0
+                       ? std::min(rate * 2.0, kMaxShuttleRate)
+                       : std::max(rate * 2.0, -kMaxShuttleRate);
+        } else {
+            // Opposite direction: halve toward zero; at 1x the press
+            // reverses onto the other side of the ladder.
+            const double mag = std::fabs(rate);
+            rate = mag <= 1.0 ? static_cast<double>(direction)
+                              : rate * 0.5;
+        }
+    }
+    // Rebuilds land the engine at t=0 — remember so the hot path can
+    // re-seek before resuming (a mid-shuttle project edit dirties the
+    // snapshot; EnsurePreviewEngine lazily re-inits on next touch).
+    const bool rebuilt = preview_dirty_;
+    EnsurePreviewEngine();
+    if (!preview_ready_) {
+        SetStatus("Preview engine unavailable", true);
+        return;
+    }
+    if (!monitor_->IsPlaying()) {
+        // Cold start — the same boot sequence as TogglePlay's play
+        // branch, then the rate command takes over below.
+        if (rate > 0.0 && playhead_ >= project_.duration() - 1e-6) {
+            playhead_ = 0.0;
+        }
+        preview_engine_.Seek(playhead_);
+        double loop_in = 0.0, loop_out = 0.0;
+        if (monitor_->Loop()) {
+            auto [li, lo] = monitor_->LoopRange();
+            loop_in = li;
+            loop_out = lo;
+            if (loop_out <= loop_in) {
+                loop_in = project_.work_in;
+                loop_out = project_.work_out;
+            }
+        }
+        preview_engine_.SetLoop(loop_in, loop_out);
+        monitor_->SetExternalPlayback(true);
+        monitor_->SetPlaying(true);
+    } else if (rebuilt) {
+        // Re-init mid-shuttle: resume the new session at the current
+        // playhead instead of the engine's post-Init t=0.
+        preview_engine_.Seek(playhead_);
+    }
+    // Exclusive transport: a program shuttle starts while the source
+    // monitor may still be playing (they share the audio sink).
+    StopSourceTransport();
+    // SetRate while playing rebases the engine's wall-clock anchor —
+    // the playhead never jumps on a rate flip (preview_engine.cc).
+    preview_engine_.SetRate(rate);
+    preview_engine_.SetPlaying(true);
+    monitor_->SetExternalPlayback(true);
+    monitor_->SetPlaying(true);
+    play_btn_->SetText("Pause");
+    shuttle_rate_ = rate;
+    char label[32];
+    std::snprintf(label, sizeof(label), "x%g", rate);
+    SetStatus(std::string("Shuttle ") + label);
+}
+
+void VideoEditorAppWidget::ShuttleStop() {
+    // Premiere K = pause only (Space toggles) — also the shuttle
+    // brake. Mirrors the TogglePlay else-branch; a paused K is a
+    // no-op beyond resetting the ladder.
+    shuttle_rate_ = 0.0;
+    if (!monitor_->IsPlaying()) return;
+    preview_engine_.SetRate(1.0);
+    preview_engine_.SetPlaying(false);
+    monitor_->SetPlaying(false);
+    monitor_->SetExternalPlayback(false);
+    monitor_->SetTime(playhead_, true);
+    play_btn_->SetText("Play");
+}
+
+// ============================================================================
+// Source monitor — Premiere-style clip preview + three-point edit.
+// A second PreviewEngine decodes a synthetic one-clip Project on the
+// loaded media file, so pixels are real decode output through the same
+// path the program monitor uses. Marks are kept per normalized media
+// path (Premiere stores them on the master clip).
+// ============================================================================
+
+bool VideoEditorAppWidget::SourceActive() const {
+    return source_monitor_ != nullptr && source_monitor_->IsVisible() &&
+           !source_path_.empty() &&
+           (monitor_target_ == MonitorTarget::Source ||
+            source_monitor_->IsFocused());
+}
+
+void VideoEditorAppWidget::OnSourceEngineFrame(
+    const video::Frame& frame) {
+    if (frame.DataSize() == 0 || frame.Width() <= 0 ||
+        frame.Height() <= 0) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(source_mutex_);
+    source_pending_frame_.assign(frame.Data(),
+                                 frame.Data() + frame.DataSize());
+    source_pending_w_ = frame.Width();
+    source_pending_h_ = frame.Height();
+    source_has_frame_ = true;
+}
+
+void VideoEditorAppWidget::OnSourceEnginePlayhead(double t) {
+    std::lock_guard<std::mutex> lock(source_mutex_);
+    source_pending_playhead_ = t;
+}
+
+void VideoEditorAppWidget::EnsureSourceEngine() {
+    if (source_ready_ || source_path_.empty()) return;
+    if (!platform_audio_tried_) {
+        platform_audio_tried_ = true;
+        std::string sink_error;
+        platform_audio_sink_ = MakePlatformAudioSink(&sink_error);
+    }
+    if (!source_sink_) {
+        source_sink_ = std::make_unique<SourceEngineSink>(this);
+    }
+    PreviewOptions options;
+    options.audio_sink = platform_audio_sink_.get();
+    std::string error;
+    source_ready_ =
+        source_engine_.Init(source_project_, options,
+                            source_sink_.get(), &error);
+    if (!source_ready_) {
+        SetStatus("Source preview init failed: " + error, true);
+        if (source_monitor_) {
+            source_monitor_->SetStatusText("Decode failed: " + error,
+                                           true);
+        }
+    }
+}
+
+void VideoEditorAppWidget::OpenInSourceMonitor(
+    const std::string& path) {
+    if (path.empty()) return;
+    const CatalogEntry* entry = FindCatalogEntry(path);
+    double duration = 0.0, fps = 0.0;
+    int w = 0, h = 0;
+    bool has_audio = false;
+    if (entry != nullptr) {
+        duration = entry->duration_seconds;
+        w = entry->width;
+        h = entry->height;
+        fps = entry->fps;
+        has_audio = entry->has_audio;
+    } else {
+        XER::Content::Video::VideoInfo info;
+        std::string error;
+        if (!XER::Content::Video::ProbeVideo(path, &info, &error)) {
+            SetStatus("Source open failed: " + error, true);
+            return;
+        }
+        duration = info.duration_seconds;
+        w = info.width;
+        h = info.height;
+        fps = info.fps;
+        has_audio = true;  // probe doesn't report streams; mixer
+                           // silence is harmless if there is none
+    }
+    const bool has_video = w > 0 && h > 0;
+    if (!has_video && !has_audio) {
+        SetStatus("Media has no decodable streams: " + Basename(path),
+                  true);
+        return;
+    }
+    if (duration <= 0.0) duration = kSourceFallbackSeconds;
+
+    StopSourceTransport();
+    source_engine_.Shutdown();
+    source_ready_ = false;
+    source_path_ = Path::NormalizeUtf8Path(path);
+    source_name_ = Basename(source_path_);
+    source_duration_ = duration;
+    source_media_w_ = w;
+    source_media_h_ = h;
+    source_has_video_ = has_video;
+    source_fps_num_ =
+        fps > 0.0 ? std::max(1, static_cast<int>(std::lround(fps)))
+                  : (project_.fps_num > 0 ? project_.fps_num : 30);
+    source_fps_den_ = 1;
+
+    // Synthetic one-clip project — the engine's compositor path
+    // handles scaling/letterboxing to this canvas. Use the media's own
+    // dims so decode quality is native.
+    source_project_ = Project{};
+    source_project_.width = has_video ? w : project_.width;
+    source_project_.height = has_video ? h : project_.height;
+    source_project_.fps_num = source_fps_num_;
+    source_project_.fps_den = source_fps_den_;
+    Track track;
+    track.name = has_video ? "V1" : "A1";
+    track.kind = has_video ? TrackKind::Video : TrackKind::Audio;
+    source_project_.tracks.push_back(track);
+    Clip clip;
+    clip.id = "src";
+    clip.source_path = source_path_;
+    clip.track = 0;
+    clip.duration = duration;
+    clip.transform =
+        has_video
+            ? FitTransformToCanvas(w, h, w, h)
+            : Transform{};
+    source_project_.clips.push_back(clip);
+
+    // Initial playhead honors a persisted in mark (Premiere drops the
+    // source playhead on the mark when a marked clip reopens).
+    double initial = 0.0;
+    SourceMarks marks;
+    if (const auto it = source_marks_.find(source_path_);
+        it != source_marks_.end()) {
+        marks = it->second;
+        if (marks.HasIn()) initial = marks.in;
+    }
+    source_playhead_ = std::clamp(initial, 0.0, duration);
+    source_playing_ = false;
+    source_shuttle_rate_ = 0.0;
+
+    if (source_monitor_) {
+        source_monitor_->SetSource(source_path_, source_name_, duration,
+                                   source_fps_num_, source_fps_den_,
+                                   has_video);
+        source_monitor_->SetMarks(marks.in, marks.out);
+        source_monitor_->SetPlaying(false);
+        source_monitor_->SetTime(source_playhead_);
+        source_monitor_->SetStatusText(
+            has_video ? "Decoding..." : "Audio only");
+    }
+    source_visible_ = true;
+    monitor_target_ = MonitorTarget::Source;
+
+    EnsureSourceEngine();
+    if (source_ready_) {
+        source_engine_.Seek(source_playhead_);  // paused -> presents
+    }
+    SetStatus("Source: " + source_name_);
+    RequestLayout();
+    Invalidate();
+}
+
+void VideoEditorAppWidget::SourceSeek(double seconds) {
+    if (source_path_.empty() || source_monitor_ == nullptr) return;
+    source_playhead_ = std::clamp(seconds, 0.0, source_duration_);
+    if (source_ready_) {
+        source_engine_.Seek(source_playhead_);
+    }
+    source_monitor_->SetTime(source_playhead_);
+}
+
+void VideoEditorAppWidget::SourceTogglePlay() {
+    if (source_path_.empty()) return;
+    source_shuttle_rate_ = 0.0;
+    const bool next = !source_playing_;
+    if (next) {
+        // Exclusive transport: program playback yields to the source
+        // monitor (the two engines share the audio sink).
+        StopProgramTransport();
+        EnsureSourceEngine();
+        if (!source_ready_) {
+            SetStatus("Source preview unavailable", true);
+            return;
+        }
+        if (source_playhead_ >= source_duration_ - 1e-6) {
+            source_playhead_ = 0.0;
+        }
+        source_engine_.Seek(source_playhead_);
+        source_engine_.SetRate(1.0);
+        source_engine_.SetPlaying(true);
+        source_playing_ = true;
+    } else {
+        source_engine_.SetRate(1.0);
+        source_engine_.SetPlaying(false);
+        source_playing_ = false;
+    }
+    if (source_monitor_) source_monitor_->SetPlaying(source_playing_);
+}
+
+void VideoEditorAppWidget::StopSourceTransport() {
+    source_shuttle_rate_ = 0.0;
+    if (!source_playing_ && !source_ready_) return;
+    source_engine_.SetRate(1.0);
+    source_engine_.SetPlaying(false);
+    source_playing_ = false;
+    if (source_monitor_) source_monitor_->SetPlaying(false);
+}
+
+void VideoEditorAppWidget::SourceShuttleStep(int direction) {
+    if (source_path_.empty()) return;
+    constexpr double kMaxShuttleRate = 8.0;
+    double rate = source_shuttle_rate_;
+    if (!source_playing_) {
+        rate = static_cast<double>(direction);
+    } else {
+        if (rate == 0.0) rate = 1.0;
+        if ((rate > 0) == (direction > 0)) {
+            rate = direction > 0 ? std::min(rate * 2.0, kMaxShuttleRate)
+                                 : std::max(rate * 2.0, -kMaxShuttleRate);
+        } else {
+            rate = std::fabs(rate) <= 1.0 ? direction : rate * 0.5;
+        }
+    }
+    StopProgramTransport();
+    EnsureSourceEngine();
+    if (!source_ready_) {
+        SetStatus("Source preview unavailable", true);
+        return;
+    }
+    if (!source_playing_) {
+        if (rate > 0.0 && source_playhead_ >= source_duration_ - 1e-6) {
+            source_playhead_ = 0.0;
+        }
+        source_engine_.Seek(source_playhead_);
+    }
+    source_engine_.SetRate(rate);
+    source_engine_.SetPlaying(true);
+    source_playing_ = true;
+    source_shuttle_rate_ = rate;
+    if (source_monitor_) source_monitor_->SetPlaying(true);
+    char label[32];
+    std::snprintf(label, sizeof(label), "x%g", rate);
+    SetStatus(std::string("Source shuttle ") + label);
+}
+
+void VideoEditorAppWidget::SourceShuttleStop() {
+    source_shuttle_rate_ = 0.0;
+    if (!source_playing_) return;
+    source_engine_.SetRate(1.0);
+    source_engine_.SetPlaying(false);
+    source_playing_ = false;
+    if (source_monitor_) source_monitor_->SetPlaying(false);
+}
+
+void VideoEditorAppWidget::SourceMark(bool mark_in) {
+    if (source_path_.empty() || source_monitor_ == nullptr) return;
+    SourceMarks& marks = source_marks_[source_path_];
+    if (mark_in) {
+        marks.in = source_playhead_;
+    } else {
+        marks.out = source_playhead_;
+    }
+    source_monitor_->SetMarks(marks.in, marks.out);
+    SetStatus(mark_in ? "Source mark in" : "Source mark out");
+}
+
+void VideoEditorAppWidget::SourceClearMark(bool mark_in) {
+    if (source_path_.empty() || source_monitor_ == nullptr) return;
+    const auto it = source_marks_.find(source_path_);
+    if (it == source_marks_.end()) return;
+    if (mark_in) {
+        it->second.in = -1.0;
+    } else {
+        it->second.out = -1.0;
+    }
+    source_monitor_->SetMarks(it->second.in, it->second.out);
+    SetStatus(mark_in ? "Source mark in cleared"
+                      : "Source mark out cleared");
+}
+
+void VideoEditorAppWidget::EditSourceToTimeline(bool insert) {
+    if (source_path_.empty()) {
+        SetStatus("No clip loaded in the source monitor", true);
+        return;
+    }
+    double src_in = 0.0, src_out = 0.0;
+    const auto marks_it = source_marks_.find(source_path_);
+    const SourceMarks marks = marks_it != source_marks_.end()
+                                  ? marks_it->second
+                                  : SourceMarks{};
+    if (!ResolveSourceRange(marks, source_duration_, &src_in,
+                            &src_out)) {
+        SetStatus("Source range is empty — set in/out marks", true);
+        return;
+    }
+
+    // Target track: the selected clip's track when kind matches, else
+    // the first unlocked track of the media kind, else a new one.
+    const TrackKind wanted =
+        source_has_video_ ? TrackKind::Video : TrackKind::Audio;
+    int track_index = -1;
+    if (const Clip* sel = FindClip(project_, selected_clip_id_);
+        sel != nullptr && sel->track >= 0 &&
+        sel->track < static_cast<int>(project_.tracks.size()) &&
+        project_.tracks[sel->track].kind == wanted &&
+        !project_.tracks[sel->track].locked) {
+        track_index = sel->track;
+    }
+    if (track_index < 0) {
+        for (int i = 0; i < static_cast<int>(project_.tracks.size());
+             ++i) {
+            const Track& t = project_.tracks[i];
+            if (t.kind == wanted && !t.locked) {
+                track_index = i;
+                break;
+            }
+        }
+    }
+    if (track_index < 0) {
+        track_index =
+            history_.AddTrack(wanted, wanted == TrackKind::Video
+                                          ? "Video"
+                                          : "Audio");
+        if (track_index < 0) {
+            SetStatus("Source edit failed: cannot add a track", true);
+            return;
+        }
+    }
+
+    // Premiere drops an insert at the playhead even when it lands
+    // inside a clip — split the straddler first so InsertClipAt's
+    // non-overlap validation passes.
+    double at = snap_enabled_
+                    ? SnapTime(project_, track_index, playhead_, 0.1,
+                               playhead_)
+                    : playhead_;
+    at = std::max(0.0, at);
+    const Clip* straddler = nullptr;
+    if (insert) {
+        for (const Clip& c : project_.clips) {
+            if (c.track == track_index &&
+                c.timeline_start < at - 1e-9 &&
+                ClipEndSeconds(c) > at + 1e-9) {
+                straddler = &c;
+                break;
+            }
+        }
+    }
+
+    Clip clip = MakeSourceClip(source_path_, track_index, at, src_in,
+                               src_out, source_media_w_,
+                               source_media_h_, project_.width,
+                               project_.height);
+    clip.id = NewClipId();
+    const MediaBounds bounds{source_duration_, source_has_video_};
+    std::string error;
+
+    history_.BeginMacro(insert ? "Insert edit" : "Overwrite edit");
+    bool applied_any = false;
+    bool ok = true;
+    if (straddler != nullptr) {
+        std::string ignored;
+        ok = history_.SplitClip(straddler->id, at, &ignored);
+        applied_any |= ok;
+        if (!ok) {
+            error = "straddling split failed";
+        }
+    }
+    if (ok) {
+        std::string new_id;
+        if (insert) {
+            ok = history_.InsertClipAt(clip, bounds, &new_id, &error);
+        } else {
+            ok = history_.OverwriteClipAt(clip, bounds, &new_id,
+                                          &error);
+        }
+        applied_any |= ok;
+        if (ok) clip.id = new_id;
+    }
+    history_.EndMacro();
+    if (!ok) {
+        // Undo whatever the macro applied (typically the straddling
+        // split) so a failed edit leaves the timeline untouched.
+        if (applied_any) history_.Undo();
+        SetStatus("Source edit failed: " + error, true);
+        return;
+    }
+
+    SelectClip(clip.id);
+    Seek(clip.timeline_start + clip.duration);
+    NotifyProjectChanged();
+    SetStatus(std::string(insert ? "Inserted " : "Overwrote ") +
+              source_name_);
+}
+
+void VideoEditorAppWidget::RippleTrimToPlayhead(bool trim_head) {
+    // Clip under the playhead first — the selected clip when it is
+    // one, else the lowest-track clip containing the playhead.
+    const Clip* target = nullptr;
+    if (const Clip* sel = FindClip(project_, selected_clip_id_);
+        sel != nullptr && playhead_ > sel->timeline_start &&
+        playhead_ < ClipEndSeconds(*sel)) {
+        target = sel;
+    }
+    if (target == nullptr) {
+        for (const Clip& c : project_.clips) {
+            if (playhead_ > c.timeline_start &&
+                playhead_ < ClipEndSeconds(c) &&
+                (target == nullptr || c.track < target->track)) {
+                target = &c;
+            }
+        }
+    }
+    if (target == nullptr) {
+        // Playhead on a gap: Q extends the next clip's head back to
+        // the playhead, W the previous clip's tail forward — the
+        // edit-point trim Premiere applies across a gap.
+        for (const Clip& c : project_.clips) {
+            if (trim_head) {
+                if (c.timeline_start >= playhead_ - 1e-9 &&
+                    (target == nullptr ||
+                     c.timeline_start < target->timeline_start ||
+                     (c.timeline_start == target->timeline_start &&
+                      c.track < target->track))) {
+                    target = &c;
+                }
+            } else {
+                const double end = ClipEndSeconds(c);
+                if (end <= playhead_ + 1e-9 &&
+                    (target == nullptr ||
+                     end > ClipEndSeconds(*target) ||
+                     (end == ClipEndSeconds(*target) &&
+                      c.track < target->track))) {
+                    target = &c;
+                }
+            }
+        }
+    }
+    if (target == nullptr) {
+        SetStatus("No clip to ripple-trim at the playhead", true);
+        return;
+    }
+    const TrimEdge edge = trim_head ? TrimEdge::In : TrimEdge::Out;
+    // Model TrimClip takes a SOURCE-time point — map the playhead
+    // through the clip's in-point and playback rate.
+    const double source_point =
+        target->in_point +
+        (playhead_ - target->timeline_start) * target->playback_rate;
+    const double edge_source =
+        edge == TrimEdge::In
+            ? target->in_point
+            : target->in_point +
+                  target->duration * target->playback_rate;
+    if (std::fabs(source_point - edge_source) < 1e-9) {
+        SetStatus("Playhead already on that edge");
+        return;
+    }
+    RippleTrimClip(target->id, edge, source_point);
+}
+
+void VideoEditorAppWidget::NudgeSelection(int direction) {
+    const Clip* clip = FindClip(project_, selected_clip_id_);
+    if (clip == nullptr) {
+        SetStatus("Select a clip to nudge", true);
+        return;
+    }
+    const double frame =
+        project_.fps_num > 0
+            ? static_cast<double>(project_.fps_den) /
+                  static_cast<double>(project_.fps_num)
+            : 1.0 / 30.0;
+    const double delta = static_cast<double>(direction) * frame;
+    // Link-group members ride along in the same undo macro — the
+    // keyboard counterpart of the drag's per-member hook burst.
+    std::vector<const Clip*> movers{clip};
+    if (!clip->link_group.empty()) {
+        for (const Clip& c : project_.clips) {
+            if (c.id != clip->id && c.link_group == clip->link_group) {
+                movers.push_back(&c);
+            }
+        }
+    }
+    history_.BeginMacro("Nudge");
+    bool ok = true;
+    std::string error;
+    for (const Clip* mover : movers) {
+        // Clamp at t=0 — a left nudge at the head parks on the wall
+        // instead of failing the whole gesture.
+        const double start =
+            std::max(0.0, mover->timeline_start + delta);
+        if (!history_.MoveClip(mover->id, start,
+                               BoundsForPath(mover->source_path),
+                               &error)) {
+            ok = false;
+            break;
+        }
+    }
+    history_.EndMacro();
+    if (!ok) {
+        SetStatus("Nudge failed: " + error, true);
+    } else {
+        SetStatus(direction > 0 ? "Nudged +1 frame"
+                              : "Nudged -1 frame");
+    }
+    NotifyProjectChanged();
 }
 
 void VideoEditorAppWidget::RippleDeleteClipById(
@@ -1652,11 +2489,15 @@ void VideoEditorAppWidget::RippleDeleteClipById(
         SetStatus("Select a clip to ripple-delete", true);
         return;
     }
+    const Clip* doomed = FindClip(project_, clip_id);
+    const std::string source =
+        doomed != nullptr ? doomed->source_path : std::string{};
     std::string error;
     if (!history_.RippleDeleteClip(clip_id, &error)) {
         SetStatus("Ripple delete failed: " + error, true);
         return;
     }
+    if (!source.empty()) media_prep_.CancelQueued(source);
     if (selected_clip_id_ == clip_id) selected_clip_id_.clear();
     NotifyProjectChanged();
     SetStatus("Ripple deleted clip");
@@ -1802,10 +2643,26 @@ void VideoEditorAppWidget::ApplyClipSpeed(const std::string& clip_id,
     if (clip == nullptr) return;
     const int track = clip->track;
     const double old_end = ClipEndSeconds(*clip);
+    const MediaBounds bounds = BoundsForPath(clip->source_path);
     std::string error;
     history_.BeginMacro("Speed/Duration");
-    bool ok = history_.SetClipRate(
-        clip_id, rate, BoundsForPath(clip->source_path), &error);
+    bool ok = history_.SetClipRate(clip_id, rate, bounds, &error);
+    if (!ok && bounds.duration_seconds > 0.0 &&
+        clip->in_point + clip->duration * clip->playback_rate >
+            bounds.duration_seconds) {
+        // The clip ALREADY overflows its media (e.g. the bounds were
+        // unknown at insert, or the media was replaced by a shorter
+        // file). SetClipRate preserves the consumed span so it can
+        // never succeed here — clamp the source window to what fits
+        // and apply the rate onto the trimmed clip instead.
+        const double avail = bounds.duration_seconds - clip->in_point;
+        if (avail > 0.0) {
+            Clip fixed = *clip;
+            fixed.playback_rate = rate;
+            fixed.duration = avail / rate;
+            ok = history_.ReplaceClip(clip_id, fixed, bounds, &error);
+        }
+    }
     if (ok && ripple) {
         const Clip* after = FindClip(project_, clip_id);
         const double delta =
@@ -1929,10 +2786,12 @@ void VideoEditorAppWidget::RefreshWaveformPanel() {
     if (!waveform_panel_) return;
     const Clip* clip = FindClip(project_, selected_clip_id_);
     AudioPeaks peaks;
+    // Non-blocking media-prep lookup — a cold decode answers kPending
+    // and ConsumeRenderDirty in Tick re-runs this once it lands.
     const bool has =
         clip != nullptr && clip->source.kind == SourceKind::Media &&
-        catalog_.IsOpen() &&
-        catalog_.GetAudioPeaks(clip->source_path, &peaks) &&
+        media_prep_.LookupPeaks(clip->source_path, &peaks) ==
+            MediaPrep::Lookup::kReady &&
         peaks.buckets > 0;
     if (has) {
         waveform_panel_->SetPeaks(peaks, clip->timeline_start,
@@ -2334,7 +3193,7 @@ void VideoEditorAppWidget::SetTrackFlag(int track, char which, bool on) {
 }
 
 void VideoEditorAppWidget::SetRightTab(int tab) {
-    right_tab_ = std::clamp(tab, 0, 8);
+    right_tab_ = std::clamp(tab, 0, 9);   // 0 Insp .. 9 Web
     const auto style_for = [this](int index) {
         return right_tab_ == index ? Widgets::ButtonStyle::Secondary
                                    : Widgets::ButtonStyle::Ghost;
@@ -2475,15 +3334,25 @@ void VideoEditorAppWidget::OpenVst3FxEditor() {
 bool VideoEditorAppWidget::RunLabOperation(
     const LabPanel::RunParams& params, const Lab::JobControl& job) {
     // Worker-thread entry (LabPanel AsyncOp): no UI access here — the
-    // result PNG path is stashed and imported from Tick on the UI side.
+    // result PNG path is stashed and imported from Tick on the UI
+    // side. The project/playhead/path snapshot was taken on the UI
+    // thread by on_run_prepare; dereferencing live members here would
+    // race history_ mutations.
+    const auto snapshot =
+        std::static_pointer_cast<const LabSnapshot>(params.context);
+    if (snapshot == nullptr) {
+        job.Fail("Lab run missing project snapshot");
+        return false;
+    }
     Compositor compositor;
     std::string error;
-    if (!compositor.Init(project_, CompositorOptions{}, &error)) {
+    if (!compositor.Init(snapshot->project, CompositorOptions{},
+                         &error)) {
         job.Fail("Compositor init failed: " + error);
         return false;
     }
     std::vector<std::uint8_t> bgra;
-    if (!compositor.RenderFrameAt(playhead_, &bgra, &error)) {
+    if (!compositor.RenderFrameAt(snapshot->playhead, &bgra, &error)) {
         job.Fail("Frame render failed: " + error);
         return false;
     }
@@ -2536,10 +3405,10 @@ bool VideoEditorAppWidget::RunLabOperation(
     }
     // Write the result next to the project (or temp when unsaved).
     std::filesystem::path dir =
-        project_path_.empty()
+        snapshot->project_path.empty()
             ? std::filesystem::temp_directory_path()
             : std::filesystem::path(
-                  Path::FromUtf8(project_path_)).parent_path();
+                  Path::FromUtf8(snapshot->project_path)).parent_path();
     static int lab_counter = 0;
     const std::filesystem::path png =
         dir / ("xer_lab_" + std::to_string(++lab_counter) + ".png");
@@ -2909,8 +3778,27 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         bounds.x + bounds.width - margin - right_w + gap;
     const float monitor_w = std::max(
         60.0f, bounds.x + bounds.width - margin - panel_x - right_w);
-    monitor_->Layout({panel_x, panel_y, monitor_w,
-                      std::max(80.0f, central_h)}, tokens);
+    // Premiere layout: Source Monitor left, Program Monitor right. The
+    // source slot only appears once a clip is loaded or the user
+    // toggled it on (View > Source Monitor); below ~2x220px it
+    // collapses back to a single program surface.
+    const bool show_source =
+        source_monitor_ != nullptr && source_visible_ &&
+        monitor_w >= 440.0f;
+    if (source_monitor_) source_monitor_->SetVisible(show_source);
+    if (show_source) {
+        const float source_w = (monitor_w - gap) * 0.5f;
+        source_monitor_->Layout(
+            {panel_x, panel_y, source_w, std::max(80.0f, central_h)},
+            tokens);
+        monitor_->Layout({panel_x + source_w + gap, panel_y,
+                          monitor_w - source_w - gap,
+                          std::max(80.0f, central_h)},
+                         tokens);
+    } else {
+        monitor_->Layout({panel_x, panel_y, monitor_w,
+                          std::max(80.0f, central_h)}, tokens);
+    }
     // Right column: tab strip over the active panel — Premiere's
     // stacked panel group (Inspector/Effects/Markers/Lab/History/Mix).
     inspector_->SetVisible(right_eff && right_tab_ == 0);
@@ -3099,6 +3987,23 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         return true;
     }
     if (event.type == Event::Type::TextInput && event.text.size() == 1 &&
+        !event.is_ctrl && event.is_alt) {
+        // Alt+I / Alt+O clear the source monitor's marks (Premiere
+        // "Clear In / Clear Out"). Only when a source is loaded —
+        // otherwise let the event bubble.
+        const char alt_key = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(event.text.front())));
+        if (alt_key == 'i' && SourceActive()) {
+            SourceClearMark(true);
+            return true;
+        }
+        if (alt_key == 'o' && SourceActive()) {
+            SourceClearMark(false);
+            return true;
+        }
+        return false;
+    }
+    if (event.type == Event::Type::TextInput && event.text.size() == 1 &&
         !event.is_ctrl && !event.is_alt) {
         // Premiere tool letters -> timeline tool selection.
         static const struct { char key; ToolId tool; } kToolKeys[] = {
@@ -3123,10 +4028,18 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 AddMarkerAt(playhead_, "");
                 return true;
             case 'i': case 'I':
-                SetWorkAreaRange(playhead_, project_.work_out);
+                if (SourceActive()) {
+                    SourceMark(true);
+                } else {
+                    SetWorkAreaRange(playhead_, project_.work_out);
+                }
                 return true;
             case 'o': case 'O':
-                SetWorkAreaRange(project_.work_in, playhead_);
+                if (SourceActive()) {
+                    SourceMark(false);
+                } else {
+                    SetWorkAreaRange(project_.work_in, playhead_);
+                }
                 return true;
             case 's': case 'S':
                 snap_enabled_ = !snap_enabled_;
@@ -3137,21 +4050,50 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 SetStatus(snap_enabled_ ? "Snapping on" : "Snapping off");
                 return true;
             case 'j': case 'J':
-                Seek(playhead_ - 5.0);
+                if (SourceActive()) {
+                    SourceShuttleStep(-1);
+                } else {
+                    ShuttleStep(-1);
+                }
                 return true;
             case 'k': case 'K':
-                // Premiere K = pause only (Space toggles). Mirrors the
-                // TogglePlay else-branch; a paused K is a no-op.
-                if (monitor_->IsPlaying()) {
-                    preview_engine_.SetPlaying(false);
-                    monitor_->SetPlaying(false);
-                    monitor_->SetExternalPlayback(false);
-                    monitor_->SetTime(playhead_, true);
-                    play_btn_->SetText("Play");
+                if (SourceActive()) {
+                    SourceShuttleStop();
+                } else {
+                    ShuttleStop();
                 }
                 return true;
             case 'l': case 'L':
-                Seek(playhead_ + 5.0);
+                if (SourceActive()) {
+                    SourceShuttleStep(1);
+                } else {
+                    ShuttleStep(1);
+                }
+                return true;
+            case 'q': case 'Q':
+                // Premiere Q: ripple-trim the head to the playhead.
+                RippleTrimToPlayhead(true);
+                return true;
+            case 'w': case 'W':
+                // Premiere W: ripple-trim the tail to the playhead.
+                RippleTrimToPlayhead(false);
+                return true;
+            case ',':
+                // Premiere: , = insert edit / . = overwrite edit from
+                // the source monitor; with the program monitor active
+                // they nudge the selected clip.
+                if (SourceActive()) {
+                    EditSourceToTimeline(true);
+                } else {
+                    NudgeSelection(-1);
+                }
+                return true;
+            case '.':
+                if (SourceActive()) {
+                    EditSourceToTimeline(false);
+                } else {
+                    NudgeSelection(1);
+                }
                 return true;
             case '?':
                 ToggleShortcutsOverlay();
@@ -3185,24 +4127,64 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         StartExport();
         return true;
     }
+    if (event.is_ctrl && event.key == KeyCode::D) {
+        ApplyDefaultTransition();
+        return true;
+    }
     if (!event.is_ctrl && event.key == KeyCode::Space) {
-        TogglePlay();
+        if (SourceActive()) {
+            SourceTogglePlay();
+        } else {
+            TogglePlay();
+        }
         return true;
     }
     if (!event.is_ctrl && event.key == KeyCode::ArrowLeft) {
-        Seek(playhead_ - (event.is_shift ? 5.0 : 1.0 / 30.0));
+        const double step =
+            event.is_shift ? 5.0
+                           : 1.0 / (SourceActive() &&
+                                            source_fps_num_ > 0
+                                        ? static_cast<double>(
+                                              source_fps_num_) /
+                                              source_fps_den_
+                                        : 30.0);
+        if (SourceActive()) {
+            SourceSeek(source_playhead_ - step);
+        } else {
+            Seek(playhead_ - step);
+        }
         return true;
     }
     if (!event.is_ctrl && event.key == KeyCode::ArrowRight) {
-        Seek(playhead_ + (event.is_shift ? 5.0 : 1.0 / 30.0));
+        const double step =
+            event.is_shift ? 5.0
+                           : 1.0 / (SourceActive() &&
+                                            source_fps_num_ > 0
+                                        ? static_cast<double>(
+                                              source_fps_num_) /
+                                              source_fps_den_
+                                        : 30.0);
+        if (SourceActive()) {
+            SourceSeek(source_playhead_ + step);
+        } else {
+            Seek(playhead_ + step);
+        }
         return true;
     }
     if (!event.is_ctrl && event.key == KeyCode::Home) {
-        Seek(0.0);
+        if (SourceActive()) {
+            SourceSeek(0.0);
+        } else {
+            Seek(0.0);
+        }
         return true;
     }
     if (!event.is_ctrl && event.key == KeyCode::End) {
-        Seek(project_.duration());
+        if (SourceActive()) {
+            SourceSeek(source_duration_);
+        } else {
+            Seek(project_.duration());
+        }
         return true;
     }
     if (!event.is_ctrl && event.key == KeyCode::Delete) {
@@ -3220,6 +4202,36 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
 
 void VideoEditorAppWidget::Tick(double dt_seconds) {
     if (status_toast_) status_toast_->Tick(dt_seconds);
+    // Media-prep completions: fresh posters/peaks need a repaint;
+    // import-poster jobs wrote poster_path rows -> refresh the bin.
+    // NotifyMediaChanged drops the timeline's cached media-duration
+    // misses so waveforms realign once the probe data exists.
+    if (media_prep_.ConsumeRenderDirty()) {
+        if (timeline_) {
+            timeline_->NotifyMediaChanged();
+            timeline_->Invalidate();
+        }
+        RefreshWaveformPanel();
+    }
+    if (media_prep_.ConsumeCatalogDirty()) {
+        RefreshCatalog();
+        if (timeline_) timeline_->NotifyMediaChanged();
+    }
+    // Import-poster requests dropped on a full queue are never retried
+    // — surface them coalesced, rate-limited, instead of spamming the
+    // status bar per drop.
+    if (const std::uint64_t dropped =
+            media_prep_.ConsumeDroppedPosterRequests();
+        dropped > 0) {
+        const auto now = std::chrono::steady_clock::now();
+        if (now - poster_drop_warned_at_ > std::chrono::seconds(5)) {
+            poster_drop_warned_at_ = now;
+            SetStatus("Media queue busy — skipped " +
+                          std::to_string(dropped) +
+                          " poster decode(s)",
+                      true);
+        }
+    }
     // Shared AI job: land finished results (markers) on the UI thread.
     {
         bool ok = false, cancelled = false;
@@ -3235,15 +4247,16 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             if (ok && !result.bounce_path.empty()) {
                 std::int64_t id = 0;
                 std::string imp_err;
+                // Poster decode goes to the media-prep worker — same
+                // fast-import pattern as ImportMedia().
                 if (catalog_.Open(&imp_err) &&
-                    catalog_.Import(result.bounce_path, &id, true,
+                    catalog_.Import(result.bounce_path, &id, false,
                                     &imp_err)) {
                     SetStatus("Audio FX bounce imported: " +
                               Basename(result.bounce_path));
-                    catalog_entries_ = catalog_.List(&imp_err);
-                    if (media_bin_ != nullptr) {
-                        media_bin_->SetEntries(catalog_entries_);
-                    }
+                    RefreshCatalog();
+                    media_prep_.RequestImportPoster(
+                        result.bounce_path);
                 } else {
                     SetStatus("Bounce import failed: " + imp_err, true);
                 }
@@ -3295,41 +4308,64 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             SetStatus("Autosave failed: " + error, true);
         }
     }
-    // Marshal PreviewEngine worker callbacks onto widgets.
+    // Marshal PreviewEngine worker callbacks onto widgets — copy the
+    // pending values out under the mutex, then apply them unlocked:
+    // SetExternalFrame is a full-frame memcpy + display transform +
+    // scope recompute, and holding the lock through it stalls
+    // OnEngineFrame for the whole widget update (frame-drop jitter).
+    std::vector<std::uint8_t> tick_frame;
+    int tick_frame_w = 0, tick_frame_h = 0;
+    bool has_frame = false, has_peaks = false;
+    float tick_peak_l = 0.0f, tick_peak_r = 0.0f;
+    double tick_playhead = -1.0;
     {
         std::lock_guard<std::mutex> lock(preview_mutex_);
         if (has_pending_frame_) {
-            monitor_->SetExternalFrame(pending_frame_, pending_frame_w_,
-                                       pending_frame_h_);
+            tick_frame.swap(pending_frame_);  // take the buffer, no copy
+            tick_frame_w = pending_frame_w_;
+            tick_frame_h = pending_frame_h_;
             has_pending_frame_ = false;
+            has_frame = true;
         }
         if (has_pending_peaks_) {
-            monitor_->SetPeakLevels(pending_peak_l_, pending_peak_r_);
-            if (mixer_panel_) {
-                mixer_panel_->SetPeak(-1, pending_peak_l_,
-                                      pending_peak_r_);
-            }
+            tick_peak_l = pending_peak_l_;
+            tick_peak_r = pending_peak_r_;
             has_pending_peaks_ = false;
+            has_peaks = true;
         }
         if (pending_playhead_ >= 0.0) {
-            playhead_ =
-                std::clamp(pending_playhead_, 0.0, project_.duration());
-            timeline_->SetPlayhead(playhead_);
-            inspector_->SetPlayhead(playhead_);
-            if (markers_panel_) markers_panel_->SetPlayhead(playhead_);
-            if (waveform_panel_ && waveform_panel_->IsVisible()) {
-                waveform_panel_->SetPlayhead(playhead_);
-            }
-            monitor_->SetTime(playhead_, false);
+            tick_playhead = pending_playhead_;
             pending_playhead_ = -1.0;
-            if (preview_ready_ && !preview_engine_.Playing() &&
-                monitor_->IsPlaying()) {
-                // Engine auto-stopped at the end of the timeline.
-                monitor_->SetPlaying(false);
-                monitor_->SetExternalPlayback(false);
-                monitor_->SetTime(playhead_, true);
-                play_btn_->SetText("Play");
-            }
+        }
+    }
+    if (has_frame) {
+        monitor_->SetExternalFrame(tick_frame, tick_frame_w,
+                                   tick_frame_h);
+    }
+    if (has_peaks) {
+        monitor_->SetPeakLevels(tick_peak_l, tick_peak_r);
+        if (mixer_panel_) {
+            mixer_panel_->SetPeak(-1, tick_peak_l, tick_peak_r);
+        }
+    }
+    if (tick_playhead >= 0.0) {
+        playhead_ = std::clamp(tick_playhead, 0.0, project_.duration());
+        timeline_->SetPlayhead(playhead_);
+        inspector_->SetPlayhead(playhead_);
+        if (markers_panel_) markers_panel_->SetPlayhead(playhead_);
+        if (waveform_panel_ && waveform_panel_->IsVisible()) {
+            waveform_panel_->SetPlayhead(playhead_);
+        }
+        monitor_->SetTime(playhead_, false);
+        if (preview_ready_ && !preview_engine_.Playing() &&
+            monitor_->IsPlaying()) {
+            // Engine auto-stopped at the end of the timeline (or
+            // at t=0 on a reverse shuttle).
+            shuttle_rate_ = 0.0;
+            monitor_->SetPlaying(false);
+            monitor_->SetExternalPlayback(false);
+            monitor_->SetTime(playhead_, true);
+            play_btn_->SetText("Play");
         }
     }
     // Mirror the engine's transport state onto the monitor's play
@@ -3338,6 +4374,44 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
     if (monitor_) {
         monitor_->SetEnginePlaying(preview_ready_ &&
                                    preview_engine_.Playing());
+    }
+    // Source monitor pump — same marshal discipline as the program
+    // path (swap pending values out under the lock, apply unlocked).
+    if (source_monitor_ != nullptr) {
+        std::vector<std::uint8_t> src_frame;
+        int src_w = 0, src_h = 0;
+        bool has_src = false;
+        double src_playhead = -1.0;
+        {
+            std::lock_guard<std::mutex> lock(source_mutex_);
+            if (source_has_frame_) {
+                src_frame.swap(source_pending_frame_);
+                src_w = source_pending_w_;
+                src_h = source_pending_h_;
+                source_has_frame_ = false;
+                has_src = true;
+            }
+            if (source_pending_playhead_ >= 0.0) {
+                src_playhead = source_pending_playhead_;
+                source_pending_playhead_ = -1.0;
+            }
+        }
+        if (has_src) {
+            source_monitor_->SetFrame(src_frame, src_w, src_h);
+        }
+        if (src_playhead >= 0.0) {
+            source_playhead_ =
+                std::clamp(src_playhead, 0.0, source_duration_);
+            source_monitor_->SetTime(source_playhead_);
+            if (source_ready_ && !source_engine_.Playing() &&
+                source_playing_) {
+                // Engine auto-stopped at the end of the media (or at
+                // t=0 on a reverse shuttle).
+                source_shuttle_rate_ = 0.0;
+                source_playing_ = false;
+                source_monitor_->SetPlaying(false);
+            }
+        }
     }
     // Import a finished Lab result onto the timeline (worker wrote a
     // PNG; catalog + history edits stay on the UI thread).
@@ -3349,10 +4423,12 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             has_pending_lab_ = false;
             std::int64_t id = 0;
             std::string error;
+            // extract_poster=false — poster decode lands on media_prep.
             if (catalog_.Open(&error) &&
-                catalog_.Import(png, &id, true, &error)) {
+                catalog_.Import(png, &id, false, &error)) {
                 RefreshCatalog();
                 selected_media_path_ = png;
+                media_prep_.RequestImportPoster(png);
                 AddSelectedToTimeline();
                 SetStatus("Lab result added to timeline");
             } else {

@@ -223,12 +223,24 @@ int main(int argc, char** argv) {
                     message.data(),
                     static_cast<uint32_t>(message.size()), &req_id,
                     &text, &style)) {
-                const auto size = renderer->MeasureText(text, style);
-                std::vector<uint8_t> reply;
-                Stream::StreamWriter::MeasureResponse(reply, req_id,
-                                                      size);
-                channel->Send(reply.data(),
-                              static_cast<uint32_t>(reply.size()), 50);
+                try {
+                    const auto size =
+                        renderer->MeasureText(text, style);
+                    std::vector<uint8_t> reply;
+                    Stream::StreamWriter::MeasureResponse(reply,
+                                                          req_id, size);
+                    channel->Send(reply.data(),
+                                  static_cast<uint32_t>(reply.size()),
+                                  50);
+                } catch (const std::exception& e) {
+                    std::fprintf(stderr,
+                                 "xer_engine_ui_render: measure: %s\n",
+                                 e.what());
+                } catch (...) {
+                    std::fprintf(
+                        stderr,
+                        "xer_engine_ui_render: measure failed\n");
+                }
             }
             continue;
         }
@@ -267,10 +279,21 @@ int main(int argc, char** argv) {
             meta->kind = static_cast<std::uint32_t>(v.info.kind);
             return v.data;
         };
-        Stream::StreamReader::Dispatch(*renderer, handlers,
-                                       message.data(),
-                                       static_cast<uint32_t>(
-                                           message.size()));
+        // Renderer calls throw (RequireFrame on a draw outside a
+        // frame, ThrowIfFailed on D2D errors): one bad op must drop
+        // the frame, not the worker — log and keep pumping.
+        try {
+            Stream::StreamReader::Dispatch(*renderer, handlers,
+                                           message.data(),
+                                           static_cast<uint32_t>(
+                                               message.size()));
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "xer_engine_ui_render: dispatch: %s\n",
+                         e.what());
+        } catch (...) {
+            std::fprintf(stderr,
+                         "xer_engine_ui_render: dispatch failed\n");
+        }
     }
     std::fprintf(stderr, "xer_engine_ui_render: stream ended\n");
     return 0;

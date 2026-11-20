@@ -27,6 +27,20 @@ Goal started: 2026-11-15. Design doc:
 - [toolchain-migration-audit.md](research/toolchain-migration-audit.md)
   — choco/msys2 package availability table, ABI analysis, corrected
   installer list, repo-side change list, risk-ranked blockers.
+- [2026-11-20-gap-analysis.md](reports/2026-11-20-gap-analysis.md) —
+  video_editor spec-vs-code gap report: top blocker = synchronous
+  decode on UI thread; transition/JKL/keys parity list.
+- [2026-11-20-bug-audit-core.md](reports/2026-11-20-bug-audit-core.md)
+  — 16 core/infra findings: OIIO extension-dot dead path,
+  plugin_host untrusted-pointer crashes, project_store remove+rename
+  data-loss, mixer peak race.
+- [2026-11-20-bug-audit-ui.md](reports/2026-11-20-bug-audit-ui.md) —
+  32 UI findings: CEF-callback UAF, lab-worker unsync reads,
+  OOB in peaks/nav_rail, SortDedupeKeys data-loss.
+- [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
+  pass-2 review of session's own changes: seqlock ordering bug in
+  RenderStore, channel/worker leak in UiRenderHost, nested-transform
+  breakage, smoke watchdog race.
 
 ## Architecture / verified facts
 
@@ -53,6 +67,9 @@ Goal started: 2026-11-15. Design doc:
 - [phase-1b-timeline-core.md](progress/phase-1b-timeline-core.md)
   — Phase 1B COMPLETE, **merged to main** (`b966af9`); model/history/
   store/catalog/posters + hardening.
+- [2026-11-20-working-version-push.md](progress/2026-11-20-working-version-push.md)
+  — smoke mode (14 checks), config.h generation, FFmpeg bridge
+  fix, check_all.ps1, wave-2/3 queue.
 
 ## Conventions
 

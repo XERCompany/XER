@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <cstdio>
@@ -31,6 +32,7 @@
 #include "project_autosave.h"
 #include "project_store.h"
 #include "sequence_preset.h"
+#include "source_edit.h"
 #include "timecode.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
@@ -249,6 +251,81 @@ std::string CheckTimelineHistory() {
     if (!history.CanRedo() || !history.Redo() ||
         project.clips.size() != 1) {
         return "Redo did not restore the clip";
+    }
+    return {};
+}
+
+std::string CheckSourceEdit() {
+    // Headless three-point-edit path: marked source in/out resolves to
+    // a Clip whose in_point/duration land through the model's
+    // insert/overwrite ops — the same calls the source monitor's ,/.
+    // keys dispatch (through TimelineHistory in the app).
+    Project project;
+    project.width = 320;
+    project.height = 180;
+    project.fps_num = 30;
+    project.fps_den = 1;
+    std::string err;
+    if (AddTrack(project, TrackKind::Video, "V1") != 0) {
+        return "AddTrack failed";
+    }
+    const MediaBounds media{20.0, true};
+    Clip base;
+    base.id = "base";
+    base.source_path = "a.mp4";
+    base.track = 0;
+    base.timeline_start = 0.0;
+    base.duration = 8.0;
+    if (!AddClip(project, base, media, &err)) {
+        return "AddClip failed: " + err;
+    }
+
+    // marks 2.0 -> 5.5 on a 20 s clip: resolves verbatim.
+    SourceMarks marks;
+    marks.in = 2.0;
+    marks.out = 5.5;
+    double src_in = 0.0, src_out = 0.0;
+    if (!ResolveSourceRange(marks, 20.0, &src_in, &src_out) ||
+        src_in != 2.0 || src_out != 5.5) {
+        return "ResolveSourceRange mis-resolved marked range";
+    }
+    Clip edit = MakeSourceClip("b.mp4", 0, 10.0, src_in, src_out,
+                               640, 360, 320, 180);
+    if (edit.in_point != 2.0 || edit.duration != 3.5) {
+        return "MakeSourceClip produced the wrong range";
+    }
+    edit.id = "edit";
+    // Insert at t=10 (past the base clip): no straddler to split.
+    if (!SourceEditAt(project, edit, media, true, &err)) {
+        return "insert edit failed: " + err;
+    }
+    if (project.clips.size() != 2 ||
+        FindClip(project, "edit") == nullptr) {
+        return "inserted clip missing";
+    }
+    // Overwrite over the base clip's middle: [2,5.5) replaces its span.
+    Clip over = MakeSourceClip("c.mp4", 0, 2.0, 3.0, 6.0,
+                               640, 360, 320, 180);
+    over.id = "over";
+    if (!SourceEditAt(project, over, media, false, &err)) {
+        return "overwrite edit failed: " + err;
+    }
+    const Clip* placed = FindClip(project, "over");
+    if (placed == nullptr || placed->in_point != 3.0 ||
+        placed->duration != 3.0) {
+        return "overwrote clip has the wrong source range";
+    }
+    // Unmarked resolve falls back to the whole media duration.
+    if (!ResolveSourceRange(SourceMarks{}, 7.0, &src_in, &src_out) ||
+        src_in != 0.0 || src_out != 7.0) {
+        return "unmarked range did not span the media";
+    }
+    // An inverted range (out <= in) must be rejected, not placed.
+    SourceMarks bad;
+    bad.in = 5.0;
+    bad.out = 5.0;
+    if (ResolveSourceRange(bad, 20.0, &src_in, &src_out)) {
+        return "empty marked range resolved";
     }
     return {};
 }
@@ -528,7 +605,7 @@ std::string CheckExportRender() {
     {
         std::error_code ec;
         std::filesystem::remove(output, ec);
-    }
+    } 
     ExportOptions options;
     options.output_path = Utf8Path(output);
     options.video_bit_rate = 200000;
@@ -568,6 +645,7 @@ constexpr CheckEntry kChecks[] = {
     {"sequence_presets", &CheckSequencePresets},
     {"timeline_model", &CheckTimelineModel},
     {"timeline_history", &CheckTimelineHistory},
+    {"source_edit", &CheckSourceEdit},
     {"keyboard_map", &CheckKeyboardMap},
     {"export_presets", &CheckExportPresets},
     {"generated_source", &CheckGeneratedSource},
@@ -592,12 +670,29 @@ std::vector<std::string> CheckNames() {
 }
 
 int RunAll() {
+    // Keep libav chatter off stderr — encoder stats are noise here;
+    // real encode failures still surface through the check's reason.
+    FFmpeg::SetLogLevel(FFmpeg::LogLevel::kError);
+
     // Hard cap: a hung check (deadlocked decoder, stuck V8 isolate)
     // still takes the process down non-zero instead of blocking a
-    // harness forever. Detached — normal exit kills it first.
-    std::thread([] {
-        std::this_thread::sleep_for(
-            std::chrono::seconds(kWatchdogSeconds));
+    // harness forever. Cancellable: once the suite reports its result
+    // the flag is armed so a slow CRT/FFmpeg teardown past the
+    // deadline can no longer fire a spurious _Exit after
+    // "SMOKE RESULT OK". Detached — normal exit kills it first.
+    std::atomic<bool> watchdog_done{false};
+    std::thread([&watchdog_done] {
+        const auto deadline =
+            std::chrono::steady_clock::now() +
+            std::chrono::seconds(kWatchdogSeconds);
+        while (std::chrono::steady_clock::now() < deadline &&
+               !watchdog_done.load(std::memory_order_acquire)) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(50));
+        }
+        if (watchdog_done.load(std::memory_order_acquire)) {
+            return;
+        }
         std::fprintf(stdout,
                      "SMOKE watchdog FAIL exceeded %d seconds\n",
                      kWatchdogSeconds);
@@ -627,6 +722,8 @@ int RunAll() {
     std::fprintf(stdout, "SMOKE RESULT %s\n",
                  failures == 0 ? "OK" : "FAIL");
     std::fflush(stdout);
+    // Disarm the watchdog before teardown — the result line is out.
+    watchdog_done.store(true, std::memory_order_release);
     return failures == 0 ? 0 : 1;
 }
 

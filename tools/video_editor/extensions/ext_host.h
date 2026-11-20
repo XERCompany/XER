@@ -107,8 +107,18 @@ private:
     struct Loaded {
         Extension ext;
         std::shared_ptr<Tz::TzArchive> archive;
+        // HMODULEs (as void*) opened via xer_ext.loadNative — tracked
+        // so the unload path can FreeLibrary each one instead of
+        // leaking a module refcount per load for the process life.
+        std::vector<void*> native_modules;
     };
     Loaded* FindLoaded(const std::string& id);
+    // FreeLibrary's every native module the Loaded entry holds.
+    void FreeNativeModules(Loaded& loaded);
+    // Frees every loaded extension's native modules and clears
+    // loaded_ — called by Scan() so extensions removed from disk can
+    // no longer be Run().
+    void UnloadAll();
     // Registers the xer_ext module bound to `loaded` on the shared
     // engine (rebound before every Run — the module captures which
     // extension is executing).

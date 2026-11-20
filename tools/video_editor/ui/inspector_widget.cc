@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <iterator>
 #include <set>
 #include <string>
@@ -130,6 +131,57 @@ std::string FormatEffects(const std::vector<ClipEffect>& effects) {
     return text;
 }
 
+// Two effects are "the same" for exclusion staging when they display
+// identically — params compare through the same %.4g text the effects
+// field shows, so a FormatEffects->ParseEffects round-trip can't break
+// the match on float-precision noise.
+bool SameEffect(const ClipEffect& a, const ClipEffect& b) {
+    if (a.type != b.type || a.params.size() != b.params.size()) {
+        return false;
+    }
+    for (std::size_t i = 0; i < a.params.size(); ++i) {
+        char ba[24];
+        char bb[24];
+        std::snprintf(ba, sizeof(ba), "%.4g", a.params[i]);
+        std::snprintf(bb, sizeof(bb), "%.4g", b.params[i]);
+        if (std::strcmp(ba, bb) != 0) return false;
+    }
+    return true;
+}
+
+// Re-derives staged exclusion indices (staged against `basis`) onto
+// `current`: each disabled effect keeps its identity and its
+// occurrence ordinal — the second "blur:1" of the staged list maps to
+// the second "blur:1" of the new list. Effects absent from `current`
+// simply drop out of the set.
+std::set<int> RemapFxDisabled(const std::vector<ClipEffect>& basis,
+                              const std::set<int>& disabled,
+                              const std::vector<ClipEffect>& current) {
+    std::set<int> out;
+    for (const int index : disabled) {
+        if (index < 0 || index >= static_cast<int>(basis.size())) {
+            continue;
+        }
+        const ClipEffect& target = basis[static_cast<std::size_t>(index)];
+        int ordinal = 0;
+        for (int i = 0; i < index; ++i) {
+            if (SameEffect(basis[static_cast<std::size_t>(i)], target)) {
+                ++ordinal;
+            }
+        }
+        int seen = 0;
+        for (std::size_t j = 0; j < current.size(); ++j) {
+            if (!SameEffect(current[j], target)) continue;
+            if (seen == ordinal) {
+                out.insert(static_cast<int>(j));
+                break;
+            }
+            ++seen;
+        }
+    }
+    return out;
+}
+
 // Single effect as "type(p1,p2)" for the per-row label.
 std::string FormatEffectBrief(const ClipEffect& effect) {
     std::string text = effect.type;
@@ -174,14 +226,28 @@ void InspectorWidget::EnsureChildren() {
     apply_btn_ = std::make_shared<Widgets::Button>(
         "Apply", Widgets::ButtonStyle::Primary);
     apply_btn_->SetOnClick([this] { Apply(); });
+    // Transition picker: every supported type in the model's stable
+    // menu order + a duration field; "Add" commits the pair to the
+    // junction after the clip (the shell resolves the adjacent clip).
+    transition_combo_ = Widgets::Combobox::Create();
+    std::vector<Widgets::Combobox::Option> transition_options;
+    for (const Transition::Type type : AllTransitionTypes()) {
+        const char* name = TransitionTypeLabel(type);
+        transition_options.push_back({name, name});
+    }
+    transition_combo_->SetOptions(std::move(transition_options));
+    transition_combo_->SetPlaceholder("Transition type");
+    transition_combo_->SetValue("Crossfade");
+    transition_duration_input_ =
+        std::make_shared<Widgets::TextInput>("1.0");
+    transition_duration_input_->SetPlaceholder("Duration (s)");
+    transition_duration_input_->SetTooltip(
+        "Transition duration in seconds");
     transition_btn_ = std::make_shared<Widgets::Button>(
-        "Crossfade", Widgets::ButtonStyle::Secondary);
-    transition_btn_->SetTooltip("Add a crossfade to the next clip");
-    transition_btn_->SetOnClick([this] {
-        if (has_clip_ && hooks_.on_add_transition) {
-            hooks_.on_add_transition(clip_.id);
-        }
-    });
+        "Add", Widgets::ButtonStyle::Secondary);
+    transition_btn_->SetTooltip(
+        "Add the picked transition to the next clip");
+    transition_btn_->SetOnClick([this] { CommitTransition(); });
     delete_btn_ = std::make_shared<Widgets::Button>(
         "Delete", Widgets::ButtonStyle::Destructive);
     delete_btn_->SetOnClick([this] {
@@ -332,6 +398,8 @@ void InspectorWidget::EnsureChildren() {
     AddChild(effects_input_);
     AddChild(muted_);
     AddChild(apply_btn_);
+    AddChild(transition_combo_);
+    AddChild(transition_duration_input_);
     AddChild(transition_btn_);
     AddChild(delete_btn_);
     AddChild(status_);
@@ -350,14 +418,19 @@ void InspectorWidget::RebuildDynamicRows() {
 
 void InspectorWidget::RebuildMaskRows() {
     namespace Widgets = XER::UI::Widgets;
+    // See retired_mask_children_ in the header: this rebuild may be
+    // running inside a row child's own callback — disable + unparent,
+    // destroy next rebuild.
+    retired_mask_children_.clear();
     for (MaskRow& row : mask_rows_) {
-        RemoveChild(row.cx);
-        RemoveChild(row.cy);
-        RemoveChild(row.w);
-        RemoveChild(row.h);
-        RemoveChild(row.feather);
-        RemoveChild(row.inverted);
-        RemoveChild(row.remove);
+        const std::shared_ptr<Widgets::Widget> children[] = {
+            row.cx, row.cy, row.w, row.h, row.feather, row.inverted,
+            row.remove};
+        for (const auto& child : children) {
+            child->SetEnabled(false);
+            RemoveChild(child);
+            retired_mask_children_.push_back(child);
+        }
     }
     mask_rows_.clear();
 
@@ -415,12 +488,36 @@ void InspectorWidget::RebuildMaskRows() {
 
 void InspectorWidget::RebuildFxRows() {
     namespace Widgets = XER::UI::Widgets;
+    // Same deferred destruction as RebuildMaskRows — a row callback
+    // can trigger this rebuild mid-dispatch (own graveyard so the
+    // back-to-back mask rebuild in RebuildDynamicRows can't free the
+    // firing child early).
+    retired_fx_children_.clear();
     for (FxRow& row : fx_rows_) {
-        RemoveChild(row.enabled);
-        RemoveChild(row.remove);
+        const std::shared_ptr<Widgets::Widget> children[] = {
+            row.enabled, row.remove};
+        for (const auto& child : children) {
+            child->SetEnabled(false);
+            RemoveChild(child);
+            retired_fx_children_.push_back(child);
+        }
     }
     fx_rows_.clear();
-    fx_disabled_.clear();
+    // Staged exclusions survive rebuilds — a rebuild can be triggered
+    // by mask churn or any CommitClip resync, not just an effects
+    // edit, and clearing unconditionally would silently re-apply an
+    // effect the user unchecked. Remap by identity so an edited list
+    // keeps the exclusion on the right effect; a different clip (or a
+    // list that no longer contains it) drops the stale entry.
+    const bool same_clip =
+        has_clip_ && !fx_clip_id_.empty() && clip_.id == fx_clip_id_;
+    fx_disabled_ = same_clip
+                       ? RemapFxDisabled(fx_effects_basis_, fx_disabled_,
+                                         clip_.effects)
+                       : std::set<int>();
+    fx_clip_id_ = has_clip_ ? clip_.id : std::string();
+    fx_effects_basis_ =
+        has_clip_ ? clip_.effects : std::vector<ClipEffect>();
 
     if (has_clip_) {
         fx_rows_.reserve(clip_.effects.size());
@@ -479,7 +576,18 @@ void InspectorWidget::SyncMaskRows() {
 
 void InspectorWidget::SyncFxRows() {
     if (fx_rows_.size() != clip_.effects.size()) {
-        RebuildFxRows();
+        RebuildFxRows();   // remaps basis + staged exclusions itself
+    } else if (clip_.id != fx_clip_id_) {
+        fx_clip_id_ = clip_.id;
+        fx_effects_basis_ = clip_.effects;
+        fx_disabled_.clear();
+    } else {
+        // Same row count but the contents may have changed (Apply
+        // commits round-trip through here) — re-derive staged
+        // exclusions against the current effect set.
+        fx_disabled_ = RemapFxDisabled(fx_effects_basis_, fx_disabled_,
+                                       clip_.effects);
+        fx_effects_basis_ = clip_.effects;
     }
     // Drawn labels pick values up from clip_ — nothing else to sync;
     // keep checkboxes consistent with the disabled set.
@@ -571,6 +679,8 @@ void InspectorWidget::SetClip(const Clip* clip) {
                                      : FormatEffects(clip_.effects));
         effects_input_->SetEnabled(has_clip_);
         apply_btn_->SetEnabled(has_clip_);
+        transition_combo_->SetEnabled(has_clip_);
+        transition_duration_input_->SetEnabled(has_clip_);
         transition_btn_->SetEnabled(has_clip_);
         delete_btn_->SetEnabled(has_clip_);
         for (Row& row : rows_) row.input->SetEnabled(has_clip_);
@@ -789,12 +899,13 @@ bool InspectorWidget::ParseEffects(std::vector<ClipEffect>* effects,
         effects->push_back(std::move(effect));
     }
     // Rows the user unchecked are dropped (see FxRow::enabled tooltip).
-    for (auto rit = fx_disabled_.rbegin(); rit != fx_disabled_.rend();
-         ++rit) {
-        if (*rit >= 0 &&
-            *rit < static_cast<int>(effects->size())) {
-            effects->erase(effects->begin() + *rit);
-        }
+    // Indices were staged against clip_.effects (the fx basis), not this
+    // freshly parsed list — remap by identity so a text-field reorder
+    // or edit can't make the exclusion drop the wrong effect.
+    const std::set<int> drops =
+        RemapFxDisabled(fx_effects_basis_, fx_disabled_, *effects);
+    for (auto rit = drops.rbegin(); rit != drops.rend(); ++rit) {
+        effects->erase(effects->begin() + *rit);
     }
     return true;
 }
@@ -927,6 +1038,33 @@ void InspectorWidget::Apply() {
     syncing_ = false;
     SyncKeyframeRows();
     RequestLayout();   // drawn effect/mask readouts may have changed
+}
+
+void InspectorWidget::CommitTransition() {
+    if (!has_clip_ || !hooks_.on_add_transition) return;
+    // Label -> enum via the model's display table (the combo's options
+    // are the same table); unmatched text falls back to Crossfade.
+    const std::string label = transition_combo_->GetValue().empty()
+                                  ? transition_combo_->GetText()
+                                  : transition_combo_->GetValue();
+    Transition::Type type = Transition::Type::Crossfade;
+    for (const Transition::Type candidate : AllTransitionTypes()) {
+        if (label == TransitionTypeLabel(candidate)) {
+            type = candidate;
+            break;
+        }
+    }
+    const std::string text =
+        Trim(transition_duration_input_->GetValue());
+    char* end = nullptr;
+    errno = 0;
+    const double duration = std::strtod(text.c_str(), &end);
+    if (text.empty() || end == text.c_str() || *end != '\0' ||
+        errno == ERANGE || !std::isfinite(duration) || duration <= 0.0) {
+        SetStatus("Transition duration must be a positive number", true);
+        return;
+    }
+    hooks_.on_add_transition(clip_.id, type, duration);
 }
 
 void InspectorWidget::SetStatus(const std::string& text, bool is_error) {
@@ -1165,15 +1303,28 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         gap(4.0f);
     }
 
+    // ---- transition picker ----
+    label("TRANSITION", 18.0f, 0.0f, true);
+    drawn_.push_back({{inner_x, y, 90.0f, 30.0f}, "Type", false});
+    transition_combo_->Layout(
+        {inner_x + 92.0f, y, std::max(40.0f, inner_w - 92.0f), 30.0f},
+        tokens);
+    y += 36.0f;
+    drawn_.push_back({{inner_x, y, 90.0f, 30.0f}, "Dur (s)", false});
+    transition_duration_input_->Layout(
+        {inner_x + 92.0f, y, std::max(40.0f, inner_w - 92.0f), 30.0f},
+        tokens);
+    transition_btn_->Layout(
+        {inner_x + inner_w - 78.0f, y, 78.0f, 30.0f}, tokens);
+    y += 40.0f;
+
     // ---- actions ----
     muted_->Layout({inner_x, y + 3.0f, 42.0f, 24.0f}, tokens);
     drawn_.push_back(
         {{inner_x + 46.0f, y + 4.0f, 44.0f, 22.0f}, "muted", false});
     apply_btn_->Layout({inner_x + inner_w - 78.0f, y, 78.0f, 30.0f},
                        tokens);
-    y += 40.0f;
-    transition_btn_->Layout({inner_x, y, 104.0f, 30.0f}, tokens);
-    delete_btn_->Layout({inner_x + 112.0f, y, 76.0f, 30.0f}, tokens);
+    delete_btn_->Layout({inner_x, y, 76.0f, 30.0f}, tokens);
     y += 40.0f;
     place(status_, 24.0f);
 

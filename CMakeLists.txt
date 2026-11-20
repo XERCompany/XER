@@ -710,6 +710,24 @@ if(TARGET XER_BridgeOpenCV)
 endif()
 set_target_properties(sd PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+# sd links ggml eagerly via XER_ContentAI (capability probes +
+# generation). The DLLs are shared-only on this toolchain — stage
+# ggml-1/ggml-base plus every ggml-* backend DLL (ggml-cpu-*, blas,
+# vulkan… are dlopen'd at runtime and invisible to objdump walks)
+# next to the exe so it runs without clang64/bin on PATH.
+if(MINGW AND COMMAND xer_stage_runtime_dlls)
+    get_filename_component(_toolchain_bin "${CMAKE_CXX_COMPILER}"
+                           DIRECTORY)
+    file(GLOB _ggml_rt "${_toolchain_bin}/ggml-*.dll")
+    foreach(_f IN LISTS _ggml_rt)
+        get_filename_component(_n "${_f}" NAME)
+        list(APPEND _ggml_seeds "${_n}")
+    endforeach()
+    if(_ggml_seeds)
+        xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin"
+                               "${_toolchain_bin}" ${_ggml_seeds})
+    endif()
+endif()
 
 # HubCivitAIBrowser.exe — GUI Civitai model browser (search + filters +
 # download) built on the src/ui widget framework.

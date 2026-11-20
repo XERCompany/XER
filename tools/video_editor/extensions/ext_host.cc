@@ -238,6 +238,17 @@ ExtHost::Loaded* ExtHost::FindLoaded(const std::string& id) {
     return nullptr;
 }
 
+void ExtHost::FreeNativeModules(Loaded& loaded) {
+#ifdef _WIN32
+    for (void* h : loaded.native_modules) {
+        if (h != nullptr) {
+            ::FreeLibrary(static_cast<HMODULE>(h));
+        }
+    }
+#endif
+    loaded.native_modules.clear();
+}
+
 bool ExtHost::Load(const std::string& path, std::string* error) {
     Extension ext;
     ext.path = path;
@@ -296,6 +307,10 @@ bool ExtHost::Load(const std::string& path, std::string* error) {
     l.archive = std::shared_ptr<Tz::TzArchive>(std::move(archive));
     const std::string id = l.ext.manifest.id;
     if (Loaded* prev = FindLoaded(id)) {
+        // Reload of an already-loaded id — free the previous entry's
+        // native modules first, or overwriting abandons their
+        // LoadLibrary refcounts.
+        FreeNativeModules(*prev);
         *prev = std::move(l);
     } else {
         loaded_.push_back(std::move(l));
@@ -306,6 +321,11 @@ bool ExtHost::Load(const std::string& path, std::string* error) {
 
 void ExtHost::Scan(const std::string& extensions_dir) {
     entries_.clear();
+    // Drop the loaded set with the entry list — otherwise an
+    // extension removed/renamed on disk would stay runnable (its
+    // archive, xer-ext:// registration and Run(id) path all survive a
+    // rescan). Extensions still on disk are re-loaded below.
+    UnloadAll();
     namespace fs = std::filesystem;
     std::error_code ec;
     if (!fs::is_directory(extensions_dir, ec)) return;
@@ -315,6 +335,15 @@ void ExtHost::Scan(const std::string& extensions_dir) {
         std::string err;
         Load(de.path().string(), &err);
     }
+}
+
+void ExtHost::UnloadAll() {
+    for (Loaded& l : loaded_) {
+        FreeNativeModules(l);
+    }
+    loaded_.clear();
+    running_ = nullptr;
+    sink_ = nullptr;
 }
 
 std::vector<std::uint8_t> ExtHost::ReadMember(
@@ -538,11 +567,17 @@ void ExtHost::InstallModule(Loaded& loaded, RunResult* sink) {
                             "\"}";
                         const int rc = init(ctx.c_str());
                         if (rc != 0) {
+                            ::FreeLibrary(h);
                             return apprt::StrVal(
                                 "{\"error\":\"xer_ext_init returned " +
                                 std::to_string(rc) + "\"}");
                         }
                     }
+                    // Track the module on the Loaded entry so the
+                    // unload path (Scan/destruct) frees the per-load
+                    // refcount instead of leaking it for the process.
+                    running_->native_modules.push_back(
+                        static_cast<void*>(h));
                     return apprt::StrVal("{\"loaded\":\"" +
                                          JsonEsc(member) + "\"}");
 #else

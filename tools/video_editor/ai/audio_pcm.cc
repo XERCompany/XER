@@ -44,14 +44,81 @@ void ConvertPlanar(const std::uint8_t* data,
     }
 }
 
-// Appends converted mono samples; false on an unsupported format so the
-// caller can surface a real error instead of silence.
+// Bytes per sample for the FFmpeg formats the tap emits, or 0 for
+// anything else (the caller then reports "unsupported format").
+int SampleBytes(const std::string& fmt) {
+    if (fmt == "flt" || fmt == "fltp") return 4;
+    if (fmt == "s16" || fmt == "s16p") return 2;
+    if (fmt == "s32" || fmt == "s32p") return 4;
+    if (fmt == "u8" || fmt == "u8p") return 1;
+    if (fmt == "dbl" || fmt == "dblp") return 8;
+    return 0;
+}
+
+// Payload bounds check — same strictness as the media catalog's
+// ConsumeAudioBlock: planar needs one declared plane per channel,
+// each holding at least frames*bps bytes with every declared plane
+// inside data (ConvertPlanar uses the reported plane_sizes as its
+// step, so an oversized entry must be backed by real bytes too);
+// interleaved needs count*channels*bps bytes.
+bool FramePayloadValid(const XER::Bridge::FFmpeg::AudioFrameInfo& f,
+                       int frames, int channels, int bps,
+                       std::string* error) {
+    const std::size_t need_per_ch =
+        static_cast<std::size_t>(frames) * static_cast<std::size_t>(bps);
+    if (f.planar) {
+        if (f.plane_sizes.size() < static_cast<std::size_t>(channels)) {
+            *error = "planar audio frame missing plane sizes";
+            return false;
+        }
+        std::size_t offset = 0;
+        for (int c = 0; c < channels; ++c) {
+            const int ps = f.plane_sizes[static_cast<std::size_t>(c)];
+            if (ps < 0 ||
+                static_cast<std::size_t>(ps) < need_per_ch) {
+                *error = "planar audio frame plane truncated";
+                return false;
+            }
+            offset += static_cast<std::size_t>(ps);
+            if (offset > f.data.size()) {
+                *error = "planar audio frame payload truncated";
+                return false;
+            }
+        }
+        return true;
+    }
+    const std::size_t need =
+        need_per_ch * static_cast<std::size_t>(channels);
+    if (f.data.size() < need) {
+        *error = "interleaved audio frame payload truncated";
+        return false;
+    }
+    return true;
+}
+
+// Appends converted mono samples; false on an unsupported format or a
+// malformed payload so the caller can surface a real error instead of
+// silence. The payload is bounds-checked before any sample is read —
+// decoder-reported sizes are untrusted (see media_catalog.cc's
+// ConsumeAudioBlock for the twin validation).
 bool AppendMono(const XER::Bridge::FFmpeg::AudioFrameInfo& f,
-                std::vector<float>* out) {
+                std::vector<float>* out, std::string* error) {
     const int frames = f.sample_count;
-    const int channels = std::max(1, f.channels);
+    const int channels = f.channels;
     if (frames <= 0 || f.data.empty()) return true;
+    if (channels <= 0) {
+        *error = "malformed audio frame";
+        return false;
+    }
     const std::string& fmt = f.sample_format;
+    const int bps = SampleBytes(fmt);
+    if (bps == 0) {
+        *error = "unsupported sample format: " + fmt;
+        return false;
+    }
+    if (!FramePayloadValid(f, frames, channels, bps, error)) {
+        return false;
+    }
     if (fmt == "flt" || fmt == "fltp") {
         if (f.planar) {
             ConvertPlanar<float>(f.data.data(), f.plane_sizes, frames,
@@ -102,8 +169,6 @@ bool AppendMono(const XER::Bridge::FFmpeg::AudioFrameInfo& f,
             ConvertInterleaved<double>(f.data.data(), frames, channels,
                                        1.0f, out);
         }
-    } else {
-        return false;
     }
     return true;
 }
@@ -160,11 +225,39 @@ bool ExtractMonoPcm(const std::string& utf8_path, int target_rate,
 
     std::vector<float> mono;
     int src_rate = 0;
+    int src_channels = 0;
     std::vector<std::uint8_t> bgra;
     int w = 0, h = 0;
     std::vector<XER::Bridge::FFmpeg::AudioFrameInfo> frames;
     std::string conv_error;
     const double cap = max_seconds > 0.0 ? max_seconds : 1.0e9;
+
+    // Drains the tap queue into `mono`. One rate/channel layout per
+    // file — a mid-stream change is fatal (same rule as the mixer's
+    // ConsumeAudioBlock): silently concatenating a different rate
+    // would produce wrong PCM/duration for downstream consumers.
+    // Returns false once a conversion error is latched.
+    const auto drain = [&]() -> bool {
+        while (decoder->ReadAudioFrames(&frames, 64)) {
+            for (const auto& f : frames) {
+                if (f.sample_rate <= 0) continue;
+                if (src_rate == 0) {
+                    src_rate = f.sample_rate;
+                    src_channels = f.channels;
+                } else if (f.sample_rate != src_rate ||
+                           f.channels != src_channels) {
+                    conv_error =
+                        "audio sample rate/channels changed "
+                        "mid-stream";
+                    return false;
+                }
+                if (!AppendMono(f, &mono, &conv_error)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    };
 
     // Contract: pump packets via NextFrame (returns false at EOF /
     // on audio-only files but still pumps a bounded batch), drain the
@@ -176,24 +269,10 @@ bool ExtractMonoPcm(const std::string& utf8_path, int target_rate,
             break;
         }
         decoder->NextFrame(&bgra, &w, &h);
-        while (decoder->ReadAudioFrames(&frames, 64)) {
-            for (const auto& f : frames) {
-                if (f.sample_rate <= 0) continue;
-                if (src_rate == 0) src_rate = f.sample_rate;
-                if (!AppendMono(f, &mono)) {
-                    conv_error = "unsupported sample format: " +
-                                 f.sample_format;
-                }
-            }
-        }
+        if (!drain()) break;
     }
-    // Final drain after the pump loop.
-    while (decoder->ReadAudioFrames(&frames, 64)) {
-        for (const auto& f : frames) {
-            if (src_rate == 0) src_rate = f.sample_rate;
-            AppendMono(f, &mono);
-        }
-    }
+    // Final drain after the pump loop (skipped once an error latched).
+    if (conv_error.empty()) drain();
     decoder->Close();
 
     if (!conv_error.empty()) {

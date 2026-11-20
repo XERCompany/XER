@@ -3,6 +3,7 @@
 // and project mutation through TimelineHistory.
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -27,6 +28,9 @@ public:
         std::function<void(const std::string&)> on_add_to_timeline;
         std::function<void(const std::string&)> on_select;
         std::function<void(const std::string&, bool)> on_status;
+        // Double-click / context-menu "Open in Source Monitor" — the
+        // app loads the media file into the source monitor surface.
+        std::function<void(const std::string&)> on_open_source;
         // AI actions on the media under the cursor (context menu).
         std::function<void(const std::string&)> on_detect_beats;
         std::function<void(const std::string&)> on_transcribe;
@@ -106,6 +110,12 @@ private:
     std::vector<int> visible_;
     int chip_hovered_ = -1;
     void RebuildVisible();
+    // Double-click detection (there's no DoubleClick event type — two
+    // Click events on the same entry within the threshold count).
+    // Works for both the poster grid and the table's row-click hook.
+    void MaybeOpenSource(int entry_index);
+    int last_click_entry_ = -1;
+    std::chrono::steady_clock::time_point last_click_at_{};
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Button> import_btn_;

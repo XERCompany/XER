@@ -4,6 +4,8 @@
 #include <cstring>
 #include <string>
 
+#include "render_store.h"
+
 namespace XER::UI::Rendering::Stream {
 namespace {
 
@@ -406,6 +408,22 @@ bool StreamReader::Dispatch(Renderer& renderer, const Handlers& handlers,
             StreamReader::Handlers::ResourceMeta meta{};
             const void* pixels = handlers.on_resource(u, &meta);
             if (pixels == nullptr) return true;  // id absent / in flight
+            // Validate before the renderer copies meta.width*height*4
+            // bytes out of the shared mapping: the slot kind must match
+            // the op and the payload must cover a full BGRA frame. A
+            // kind-mismatched or torn slot would otherwise read past
+            // the extent — possibly past the end of the mapping.
+            const std::uint32_t want_kind = static_cast<std::uint32_t>(
+                op_raw == static_cast<std::uint32_t>(Op::kDrawResource)
+                    ? RenderStore::Kind::kImageBgra
+                    : RenderStore::Kind::kVideoFrame);
+            const std::uint64_t needed =
+                static_cast<std::uint64_t>(meta.width) * meta.height *
+                4u;
+            if (meta.kind != want_kind || meta.width == 0 ||
+                meta.height == 0 || meta.payload < needed) {
+                return true;  // malformed slot — drop the draw
+            }
             if (op_raw == static_cast<std::uint32_t>(Op::kDrawResource)) {
                 renderer.DrawResourcePixels(
                     pixels, u, static_cast<int>(meta.width),
@@ -450,6 +468,13 @@ bool StreamReader::Dispatch(Renderer& renderer, const Handlers& handlers,
             StreamReader::Handlers::ResourceMeta meta{};
             const void* pixels = handlers.on_resource(u, &meta);
             if (pixels == nullptr) return true;
+            // Same guard as the pixel draws: a non-spectrum slot (or a
+            // torn read) must not be reinterpreted as float levels.
+            if (meta.kind != static_cast<std::uint32_t>(
+                                 RenderStore::Kind::kSpectrumF32) ||
+                meta.payload < sizeof(float)) {
+                return true;  // malformed slot — drop the draw
+            }
             const std::uint32_t count = meta.payload / sizeof(float);
             renderer.DrawSpectrumPixels(
                 static_cast<const float*>(pixels), count, r, color,
@@ -506,6 +531,18 @@ bool StreamReader::ParseMeasureResponse(const uint8_t* message,
 }  // namespace XER::UI::Rendering::Stream
 
 namespace XER::UI::Rendering {
+
+StreamRenderer::StreamRenderer(SendFn send, RequestFn request,
+                               ReleaseFn on_destroy)
+    : send_(std::move(send)),
+      request_(std::move(request)),
+      on_destroy_(std::move(on_destroy)) {}
+
+StreamRenderer::~StreamRenderer() {
+    if (on_destroy_) {
+        on_destroy_();
+    }
+}
 
 bool StreamRenderer::Emit(std::vector<uint8_t>&& msg) {
     return send_ ? send_(std::move(msg)) : false;

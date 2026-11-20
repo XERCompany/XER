@@ -4,14 +4,18 @@
 // Static paths are UTF-8 std::strings; the DB file itself is opened
 // with the UTF-8 path directly (SQLite treats filenames as UTF-8).
 //
-// Concurrency contract: one SQLite connection, UI-thread-owned — NOT
-// internally synchronized (callers serialize, same contract as
-// NodeGraph::ProjectStore).
+// Concurrency contract: one SQLite connection serialized internally
+// by db_mutex_ — worker threads (media_prep) may call GetAudioPeaks /
+// ExtractPoster / Import while the UI thread queries. The expensive
+// parts (probe, peaks decode, poster extraction) run OUTSIDE the
+// lock; only the individual SQL statements are serialized, so a
+// long-running decode never blocks the UI.
 #pragma once
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -57,9 +61,9 @@ struct AudioPeaks {
 
 class MediaCatalog {
 public:
-    // utf8_db_path empty → DefaultDbPath(). Single connection,
-    // UI-thread-owned — NOT internally synchronized (callers serialize,
-    // same contract as NodeGraph::ProjectStore).
+    // utf8_db_path empty → DefaultDbPath(). Single connection —
+    // internally serialized by db_mutex_ (safe to call from the
+    // media-prep workers while the UI thread queries).
     explicit MediaCatalog(std::string utf8_db_path = {});
     ~MediaCatalog();
     MediaCatalog(const MediaCatalog&) = delete;
@@ -98,10 +102,22 @@ public:
     // upserted. SYNCHRONOUS and expensive on a miss: decoding a full
     // stream costs roughly realtime-length I/O + decode, so the decode
     // is capped at the first 10 minutes of audio to bound the cost;
-    // call from a worker, not the UI thread. Returns false (nothing
-    // cached, `out` untouched) for a missing file, a file with no
-    // audio stream, or a decode failure.
+    // call from a worker, not the UI thread (media_prep does). The DB
+    // lock is released while decoding — only the row read/upsert
+    // serialize. Returns false (nothing cached, `out` untouched) for a
+    // missing file, a file with no audio stream, or a decode failure.
     bool GetAudioPeaks(const std::string& utf8_path, AudioPeaks* out,
+                       std::string* error_out = nullptr);
+
+    // Poster (re)extraction for an ALREADY-IMPORTED row — the async
+    // half of Import(): resolves the row by path, writes
+    // posters/<id>.png at duration*0.5 (OIIO for still images,
+    // ClipPoster::Extract otherwise) and updates poster_path.
+    // Best-effort like Import's poster step: returns false and leaves
+    // the row untouched when the media has no video or decode fails.
+    // The expensive extraction runs outside the DB lock; safe to call
+    // from the media-prep worker pool.
+    bool ExtractPoster(const std::string& utf8_path,
                        std::string* error_out = nullptr);
 
     // Poster frame at an arbitrary source time (Phase 2 spec §5) —
@@ -114,9 +130,14 @@ public:
                             std::string* error_out = nullptr);
 
 private:
+    // db_mutex_ held (called from Open only).
     bool EnsureSchema(std::string* error_out);
+    bool IsOpenLocked() const { return db_ != nullptr; }
     std::string PosterDir() const;
     std::string db_path_;
+    // Serializes every statement on the single connection — see the
+    // file-top concurrency contract.
+    mutable std::mutex db_mutex_;
     std::unique_ptr<XER::SQL::Storage::SQLiteDatabase> db_;
 };
 

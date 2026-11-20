@@ -27,6 +27,8 @@ int XER_VideoEditor_RunGeneratedExportTests();
 int XER_VideoEditor_RunModel2Tests();
 int XER_VideoEditor_RunTimecodeTests();
 int XER_VideoEditor_RunAutosaveTests();
+int XER_VideoEditor_RunMediaPrepTests();
+int XER_VideoEditor_RunSourceEditTests();
 int XER_VideoEditor_RunPluginHostTests();
 int XER_VideoEditor_RunAppRuntimeTests();
 int XER_VideoEditor_RunNetClientTests();
@@ -50,9 +52,17 @@ int main(int argc, char** argv) {
         std::printf("net_client_tests: %d failure(s)\n", failures);
         return failures > 255 ? 255 : failures;
     }
+    if (argc == 3 && std::string_view(argv[1]) == "--suite" &&
+        std::string_view(argv[2]) == "mediaprep") {
+        XER_VideoEditor_RunMediaPrepTests();
+        const int failures = XER::VideoEditor::Test::Failures();
+        std::printf("media_prep_tests: %d failure(s)\n", failures);
+        return failures > 255 ? 255 : failures;
+    }
     if (argc != 1) {
         std::fprintf(stderr,
-                     "Usage: XER_VideoEditor_Tests [--suite runtime|net]\n");
+                     "Usage: XER_VideoEditor_Tests"
+                     " [--suite runtime|net|mediaprep]\n");
         return 2;
     }
     XER_VideoEditor_RunModelTests();
@@ -75,6 +85,8 @@ int main(int argc, char** argv) {
     XER_VideoEditor_RunModel2Tests();
     XER_VideoEditor_RunTimecodeTests();
     XER_VideoEditor_RunAutosaveTests();
+    XER_VideoEditor_RunMediaPrepTests();
+    XER_VideoEditor_RunSourceEditTests();
     XER_VideoEditor_RunPluginHostTests();
     XER_VideoEditor_RunAppRuntimeTests();
     XER_VideoEditor_RunScriptHostTests();

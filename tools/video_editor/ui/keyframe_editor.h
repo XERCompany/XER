@@ -129,10 +129,19 @@ private:
     const std::vector<Keyframe>& Keys() const;
     int HitKey(const XER::UI::Layout::Point& position,
                const XER::UI::Layout::Rect& plot) const;
-    void SortDedupeKeys();
+    // Sort by time and merge keys that landed on (nearly) the same
+    // time — the model requires unique times. `preferred` is the key
+    // the user just dragged/added; inside an equal-time run it always
+    // survives so a dragged-to value can never be silently discarded
+    // (without it, the later element of each run wins).
+    void SortDedupeKeys(const Keyframe* preferred = nullptr);
     // Push the current local key list through the hook (and keep the
     // local clip copy in sync so the curve redraws immediately).
     void CommitKeys(const char* status);
+    // After keys.erase(index): every tracked index > index shifts down
+    // one; an index == index is invalidated. Without this a selected
+    // key past the erased one would point at the wrong keyframe.
+    void ShiftKeyIndices(int erased);
     void SetStatus(const std::string& text, bool is_error = false);
 
     Hooks hooks_;

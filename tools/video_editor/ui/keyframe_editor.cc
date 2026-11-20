@@ -183,20 +183,43 @@ int KeyframeEditorWidget::HitKey(const Point& position,
     return best;
 }
 
-void KeyframeEditorWidget::SortDedupeKeys() {
+void KeyframeEditorWidget::SortDedupeKeys(const Keyframe* preferred) {
     auto& keys = Keys();
-    std::sort(keys.begin(), keys.end(),
-              [](const Keyframe& a, const Keyframe& b) {
-                  return a.time < b.time;
-              });
+    // Stable sort so equal-time keys keep their original order — the
+    // last element of a run is then the most recently positioned key.
+    std::stable_sort(keys.begin(), keys.end(),
+                     [](const Keyframe& a, const Keyframe& b) {
+                         return a.time < b.time;
+                     });
     // Merge keys that landed on (nearly) the same time — the model
-    // requires unique times; keep the later (dragged-to) value.
-    keys.erase(std::unique(keys.begin(), keys.end(),
-                           [](const Keyframe& a, const Keyframe& b) {
-                               return std::fabs(a.time - b.time) <
-                                      kKeyTimeEpsilon;
-                           }),
-               keys.end());
+    // requires unique times. std::unique would keep the FIRST of each
+    // equal run; the intent is the opposite — keep the later
+    // (dragged-to) value, and when `preferred` is in the run keep that
+    // exact key so a user's drag is never discarded.
+    std::vector<Keyframe> merged;
+    merged.reserve(keys.size());
+    for (std::size_t i = 0; i < keys.size();) {
+        std::size_t run_end = i + 1;
+        while (run_end < keys.size() &&
+               std::fabs(keys[run_end].time - keys[run_end - 1].time) <
+                   kKeyTimeEpsilon) {
+            ++run_end;
+        }
+        std::size_t keep = run_end - 1;   // last wins
+        if (preferred != nullptr) {
+            for (std::size_t k = i; k < run_end; ++k) {
+                if (std::fabs(keys[k].value - preferred->value) <
+                        1e-5f &&
+                    keys[k].easing == preferred->easing) {
+                    keep = k;
+                    break;
+                }
+            }
+        }
+        merged.push_back(keys[keep]);
+        i = run_end;
+    }
+    keys = std::move(merged);
 }
 
 void KeyframeEditorWidget::CommitKeys(const char* status) {
@@ -208,6 +231,21 @@ void KeyframeEditorWidget::CommitKeys(const char* status) {
 void KeyframeEditorWidget::SetStatus(const std::string& text,
                                      bool is_error) {
     if (hooks_.on_status) hooks_.on_status(text, is_error);
+}
+
+void KeyframeEditorWidget::ShiftKeyIndices(int erased) {
+    const auto fix = [erased](int* index) {
+        if (*index == erased) {
+            *index = -1;
+        } else if (*index > erased) {
+            --*index;
+        }
+    };
+    fix(&selected_key_);
+    fix(&drag_key_);
+    fix(&hover_key_);
+    fix(&last_click_key_);
+    fix(&added_key_);
 }
 
 void KeyframeEditorWidget::Render(
@@ -346,7 +384,7 @@ bool KeyframeEditorWidget::HandleEvent(
                 if (hit >= 0) {
                     auto& keys = Keys();
                     keys.erase(keys.begin() + hit);
-                    if (selected_key_ == hit) selected_key_ = -1;
+                    ShiftKeyIndices(hit);
                     CommitKeys("key removed");
                     Invalidate();
                     return true;
@@ -397,7 +435,9 @@ bool KeyframeEditorWidget::HandleEvent(
                     const auto& keys = Keys();
                     const Keyframe moved = keys[static_cast<std::size_t>(
                         drag_key_)];
-                    SortDedupeKeys();
+                    // The dragged key wins any equal-time merge — its
+                    // dragged-to value is the user's intent.
+                    SortDedupeKeys(&moved);
                     const auto& sorted = Keys();
                     selected_key_ = -1;
                     for (std::size_t i = 0; i < sorted.size(); ++i) {
@@ -471,7 +511,7 @@ bool KeyframeEditorWidget::HandleEvent(
                 selected_key_ = static_cast<int>(at - keys.begin());
             } else {
                 keys.push_back(key);
-                SortDedupeKeys();
+                SortDedupeKeys(&key);
                 const auto& sorted = Keys();
                 for (std::size_t i = 0; i < sorted.size(); ++i) {
                     if (std::fabs(sorted[i].time - key.time) <
@@ -493,8 +533,9 @@ bool KeyframeEditorWidget::HandleEvent(
                 selected_key_ >= 0) {
                 auto& keys = Keys();
                 if (selected_key_ < static_cast<int>(keys.size())) {
-                    keys.erase(keys.begin() + selected_key_);
-                    selected_key_ = -1;
+                    const int erased = selected_key_;
+                    keys.erase(keys.begin() + erased);
+                    ShiftKeyIndices(erased);
                     CommitKeys("key removed");
                     Invalidate();
                 }

@@ -391,7 +391,8 @@ bool LoadLayoutYaml(const std::filesystem::path& path,
                 out->right_width = std::clamp(width, 120, 800);
             int tab = 0;
             if (ReadYamlInt(right["tab"], &tab))
-                out->right_tab = std::clamp(tab, 0, 7);  // else keep -1
+                // The shell has ten right-panel tabs (0 Insp .. 9 Web).
+                out->right_tab = std::clamp(tab, 0, 9);  // else keep -1
         }
     }
 
@@ -654,7 +655,7 @@ bool LoadWorkspacesYaml(const std::filesystem::path& path,
                                                 workspace.right_visible);
         int tab = 0;
         if (ReadYamlInt(entry["right_tab"], &tab))
-            workspace.right_tab = std::clamp(tab, 0, 7);
+            workspace.right_tab = std::clamp(tab, 0, 9);  // 0..9 tabs
         double fraction = 0.0;
         if (ReadYamlDouble(entry["timeline_fraction"], &fraction))
             workspace.timeline_fraction = std::clamp(fraction, 0.05, 0.95);
@@ -825,7 +826,13 @@ bool LoadPanelsConfig(const std::filesystem::path& path,
             }
             // A min above the default size is a contradiction — clamp
             // it down so resize code never sees an impossible range.
-            if (panel.size > 0.0f &&
+            // Only meaningful in px mode: in fraction mode `size` is a
+            // 0..1 share of the dock span while `min_size` is a px
+            // bound, so comparing them directly would collapse any px
+            // min to (int)fraction == 0. The pixel resolution is only
+            // known at layout — the resizer clamps min_size against the
+            // real span there.
+            if (!fraction && panel.size > 0.0f &&
                 static_cast<float>(panel.min_size) > panel.size) {
                 panel.min_size = static_cast<int>(panel.size);
             }

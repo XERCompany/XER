@@ -111,6 +111,8 @@ add_executable(XER_VideoEditor_Tests
     video/video_editor_model2_tests.cc
     video/video_editor_timecode_tests.cc
     video/video_editor_autosave_tests.cc
+    video/video_editor_media_prep_tests.cc
+    video/video_editor_source_edit_tests.cc
     video/plugin_host_tests.cc
     video/app_runtime_tests.cc
     video/script_host_tests.cc

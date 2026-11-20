@@ -236,23 +236,12 @@ bool SavePresets(const std::vector<ExportPreset>& presets,
         }
     }  // destructor closes the file before the rename (Windows)
 
-    // Crash-safe publish: rename over the target. Windows rename()
-    // refuses to overwrite — remove the target and retry once.
-    std::error_code ec;
-    std::filesystem::rename(tmp, target, ec);
-    if (ec) {
-        std::error_code remove_ec;
-        std::filesystem::remove(target, remove_ec);
-        std::filesystem::rename(tmp, target, ec);
-        if (ec) {
-            std::error_code cleanup_ec;
-            std::filesystem::remove(tmp, cleanup_ec);
-            return Fail(error_out,
-                        "cannot rename " + Path::ToUtf8(tmp) + " to " +
-                            Path::ToUtf8(target) + ": " + ec.message());
-        }
-    }
-    return true;
+    // Crash-safe publish: atomic replace — no window where neither the
+    // old presets nor their replacement exist. On failure `target` is
+    // untouched and `tmp` stays on disk for recovery — deliberately
+    // NEVER deleted (removing it after a failed publish would destroy
+    // the only remaining copy of the user's data).
+    return Path::AtomicReplace(tmp, target, error_out);
 }
 
 bool LoadPresets(const std::string& utf8_path,

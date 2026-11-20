@@ -1,9 +1,11 @@
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include "content/css/computed_style.h"
 #include "rendering/renderer.h"
 #include "theme/theme.h"
 #include "widgets/widget_tree.h"
@@ -90,6 +92,65 @@ public:
             kids[1]->Layout({bounds.x + bounds.width * 0.5f, bounds.y,
                              bounds.width * 0.5f, bounds.height});
         }
+    }
+};
+
+// Records transform/layer/clip traffic so CSS-transform composition
+// and exception unwinding can be asserted call-for-call.
+class TransformRenderer final : public Renderer {
+public:
+    struct Matrix {
+        float a, b, c, d, tx, ty;
+    };
+
+    void BeginFrame(Rect) override {}
+    void EndFrame() override {}
+    void FillRect(Rect, Color, float) override {}
+    void StrokeRect(Rect, Color, float, float) override {}
+    void DrawLine(Point, Point, Color, float) override {}
+    void DrawText(std::string_view, Rect, TextStyle) override {}
+    Size MeasureText(std::string_view, TextStyle) const override {
+        return {0, 0};
+    }
+    void SetTransform(float a, float b, float c, float d, float tx,
+                      float ty) override {
+        sets.push_back({a, b, c, d, tx, ty});
+    }
+    void ResetTransform() override { ++resets; }
+    void PushLayer(float, std::uint32_t, float) override { ++pushes; }
+    void PopLayer() override { ++pops; }
+    void PushClip(Rect) override { ++clip_pushes; }
+    void PopClip() override { ++clip_pops; }
+
+    std::vector<Matrix> sets;
+    int resets = 0;
+    int pushes = 0;
+    int pops = 0;
+    int clip_pushes = 0;
+    int clip_pops = 0;
+};
+
+// Writes a computed-style property directly (StyleValue() reads only
+// computed styles — no CSS cascade needed for these tests). Merges
+// into any style already on the widget: SetComputedStyle replaces the
+// whole set, so repeated calls would clobber earlier properties.
+void SetStyleProp(Widget& w, std::string prop, std::string value) {
+    auto style =
+        std::make_shared<XER::Content::CSS::ComputedStyle>();
+    if (const auto prev = w.GetComputedStyle()) {
+        for (const auto& [k, v] : prev->values()) {
+            style->Set(k, v);
+        }
+    }
+    style->Set(std::move(prop), std::move(value));
+    w.SetComputedStyle(std::move(style));
+}
+
+class ThrowOnRender final : public ProbeWidget {
+public:
+    using ProbeWidget::ProbeWidget;
+    void Render(Renderer&, const Tokens&) override {
+        throw std::runtime_error("render boom");
     }
 };
 
@@ -347,6 +408,83 @@ XER_UI_TEST(WidgetTreeRefreshesHoverAfterCaptureRelease) {
     tree.HandleEvent(up);
     XER_UI_EXPECT_FALSE(left->IsHovered());
     XER_UI_EXPECT_TRUE(right->IsHovered());
+}
+
+XER_UI_TEST(WidgetTreeComposesNestedTransforms) {
+    // root: translate(10,20); child: scale(2); sibling: none.
+    // The child must see parent ∘ child — not an absolute replace —
+    // and the sibling must see the parent's transform restored.
+    auto root = std::make_shared<ProbeWidget>("root");
+    auto child = std::make_shared<ProbeWidget>("child");
+    auto sibling = std::make_shared<ProbeWidget>("sibling");
+    root->AddChild(child);
+    root->AddChild(sibling);
+    SetStyleProp(*root, "transform", "translate(10,20)");
+    SetStyleProp(*child, "transform", "scale(2)");
+
+    WidgetTree tree;
+    tree.SetRoot(root);
+    tree.Layout({0, 0, 100, 100});
+    TransformRenderer renderer;
+    tree.Render(renderer, Tokens{});
+
+    // Expected SetTransform stream:
+    //   root      -> (1,0,0,1,10,20)
+    //   child     -> translate ∘ scale = (2,0,0,2,10,20)
+    //   unwind    -> parent restored for sibling = (1,0,0,1,10,20)
+    XER_UI_EXPECT_EQ(3u, renderer.sets.size());
+    if (renderer.sets.size() == 3) {
+        const auto& s0 = renderer.sets[0];
+        XER_UI_EXPECT_TRUE(s0.a == 1.f && s0.d == 1.f &&
+                           s0.tx == 10.f && s0.ty == 20.f);
+        const auto& s1 = renderer.sets[1];
+        XER_UI_EXPECT_TRUE(s1.a == 2.f && s1.d == 2.f &&
+                           s1.tx == 10.f && s1.ty == 20.f);
+        const auto& s2 = renderer.sets[2];
+        XER_UI_EXPECT_TRUE(s2.a == 1.f && s2.d == 1.f &&
+                           s2.tx == 10.f && s2.ty == 20.f);
+    }
+    // Stack emptied at the root unwind → exactly one ResetTransform.
+    XER_UI_EXPECT_EQ(1, renderer.resets);
+    XER_UI_EXPECT_EQ(renderer.clip_pushes, renderer.clip_pops);
+    XER_UI_EXPECT_EQ(renderer.pushes, renderer.pops);
+}
+
+XER_UI_TEST(WidgetTreeUnwindsLayersAndTransformsOnThrow) {
+    // A widget->Render exception must unwind the clip, transform and
+    // layer state of every enclosing element — the remote worker's
+    // stacks cannot stay unbalanced.
+    auto root = std::make_shared<ProbeWidget>("root");
+    auto mid = std::make_shared<ProbeWidget>("mid");
+    auto bad = std::make_shared<ThrowOnRender>("bad");
+    root->AddChild(mid);
+    mid->AddChild(bad);
+    SetStyleProp(*root, "transform", "translate(10,20)");
+    SetStyleProp(*root, "opacity", "0.5");
+    SetStyleProp(*mid, "transform", "scale(2)");
+    SetStyleProp(*mid, "opacity", "0.5");
+
+    WidgetTree tree;
+    tree.SetRoot(root);
+    tree.Layout({0, 0, 100, 100});
+    TransformRenderer renderer;
+    bool threw = false;
+    try {
+        tree.Render(renderer, Tokens{});
+    } catch (const std::exception&) {
+        threw = true;
+    }
+    XER_UI_EXPECT_TRUE(threw);
+    // Both layers popped, both transform scopes unwound (mid restores
+    // the parent matrix via SetTransform; root ends on ResetTransform).
+    XER_UI_EXPECT_EQ(2, renderer.pushes);
+    XER_UI_EXPECT_EQ(2, renderer.pops);
+    XER_UI_EXPECT_EQ(1, renderer.resets);
+    XER_UI_EXPECT_EQ(renderer.clip_pushes, renderer.clip_pops);
+    if (renderer.sets.size() == 3) {
+        const auto& restored = renderer.sets[2];
+        XER_UI_EXPECT_TRUE(restored.a == 1.f && restored.tx == 10.f);
+    }
 }
 
 XER_UI_TEST(WidgetTreeRoutesKeyboardEventsToFocusedWidget) {

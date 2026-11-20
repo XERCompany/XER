@@ -169,8 +169,12 @@ void EffectsPanelWidget::RecomputeFilter() {
         }
     }
     content_height_ = kRowHeight * static_cast<float>(filtered_.size());
-    scroll_y_ = std::clamp(scroll_y_, 0.0f,
-                           std::max(0.0f, content_height_));
+    // Clamp to the last page, not past it — Layout() uses the same
+    // content_height - view formula.
+    const float view_h = rows_bottom_ - rows_top_;
+    scroll_y_ = std::clamp(
+        scroll_y_, 0.0f,
+        std::max(0.0f, content_height_ - std::max(view_h, 0.0f)));
     if (selected_ >= static_cast<int>(filtered_.size())) selected_ = -1;
     hovered_ = -1;
     if (children_attached_) UpdateAddEnabled();

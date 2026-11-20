@@ -502,8 +502,13 @@ void ExportDialog::Layout(const XER::UI::Layout::Rect& bounds) {
 }
 
 bool ExportDialog::HandleEvent(const XER::UI::Widgets::Event& event) {
+    // Escape maps to the action button's secondary role: cancel while
+    // an export is running (on_cancel_or_close carries the cancel),
+    // close once finished. Without this, Escape during running_
+    // propagated to the app shell mid-export.
     if (event.type == XER::UI::Widgets::Event::Type::KeyDown &&
-        event.key == XER::UI::Widgets::KeyCode::Escape && finished_) {
+        event.key == XER::UI::Widgets::KeyCode::Escape &&
+        (running_ || finished_)) {
         if (hooks_.on_cancel_or_close) hooks_.on_cancel_or_close();
         return true;
     }

@@ -210,4 +210,28 @@ XER_UI_TEST(RenderHost_WarmPoolCheckout) {
 #endif
 }
 
+XER_UI_TEST(RenderHost_CheckoutReleaseReturnsToPool) {
+#ifdef _WIN32
+    auto& host = XER::UI::Core::UiRenderHost::Instance();
+    std::string err;
+    if (!host.EnsureWorkers(1, &err)) {
+        return;  // no worker binary — same graceful skip as above
+    }
+    const int warm_before = host.WarmWorkerCount();
+    {
+        auto renderer = host.CreateRemoteRenderer(0, &err);
+        XER::UI::Test::Expect(renderer != nullptr, "checkout",
+                              __FILE__, __LINE__);
+        XER::UI::Test::Expect(host.WarmWorkerCount() < warm_before,
+                              "worker checked out", __FILE__, __LINE__);
+    }
+    // ~StreamRenderer fires the release hook: the channel entry clears
+    // in_use and the live worker goes back to the warm pool.
+    XER::UI::Test::Expect(host.WarmWorkerCount() >= warm_before,
+                          "worker released to pool", __FILE__,
+                          __LINE__);
+    host.ShutdownAll();
+#endif
+}
+
 }  // namespace

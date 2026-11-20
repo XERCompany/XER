@@ -46,6 +46,12 @@ public:
         int feather_px = 0;
         int search_radius = 24;              // inpaint only
         std::vector<Lab::IntPoint> polygon;  // lasso; empty => rect
+        // Opaque host payload filled by Hooks::on_run_prepare on the UI
+        // thread — the panel only copies it into the worker lambda.
+        // The app uses it to hand the worker a snapshot of whatever UI
+        // state on_run needs (project copy, playhead, project path) so
+        // the job never dereferences live UI state.
+        std::shared_ptr<const void> context;
         // Effective mask choice for Cutout/CopyToLayer/Remove:
         // polygon (>=3 pts) wins over the rect when present.
         bool UseLasso() const { return polygon.size() >= 3; }
@@ -59,6 +65,10 @@ public:
         // ctl.ShouldCancel() in long loops (inpaint wiring does this).
         std::function<bool(const RunParams&, const Lab::JobControl&)>
             on_run;
+        // Optional UI-thread hook invoked in StartRun BEFORE the job
+        // is dispatched — the host snapshots live state the worker
+        // will need into params->context (see RunParams::context).
+        std::function<void(RunParams*)> on_run_prepare;
         // Always invoked on the UI thread from the panel itself.
         std::function<void(const std::string&, bool is_error)> on_status;
     };

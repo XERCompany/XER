@@ -39,16 +39,20 @@ function Invoke-Check([string]$name, [string]$exe, [string[]]$args_, [int]$timeo
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
     $proc = [System.Diagnostics.Process]::Start($psi)
-    # Bounded wait: drain pipes on exit to avoid 64KB-buffer deadlocks.
+    # Drain pipes asynchronously BEFORE waiting — a child that fills
+    # the 4KB pipe buffer blocks on write and deadlocks a parent that
+    # is only waiting for exit.
+    $outTask = $proc.StandardOutput.ReadToEndAsync()
+    $errTask = $proc.StandardError.ReadToEndAsync()
     if (-not $proc.WaitForExit($timeoutSec * 1000)) {
         $proc.Kill()
         $script:results += "FAIL  $name  (timeout ${timeoutSec}s)"
         $script:failed = 1
+        $proc.Dispose()
         return
     }
-    $proc.WaitForExit()  # flush async output pipes fully
-    $out = $proc.StandardOutput.ReadToEnd()
-    $err = $proc.StandardError.ReadToEnd()
+    $out = $outTask.Result
+    $err = $errTask.Result
     $code = $proc.ExitCode
     $proc.Dispose()
     if ($code -eq 0) {
@@ -69,7 +73,7 @@ Invoke-Check "XER_Media_Smoke"   "XER_Media_Smoke.exe"   @()
 Invoke-Check "EngineScanVST3"    "EngineScanVST3.exe"    @()
 if (-not $Quick) {
     Invoke-Check "video_editor --smoke" "video_editor.exe" @("--smoke") 30
-    Invoke-Check "sd"                   "sd.exe"           @() 30
+    Invoke-Check "sd --help"            "sd.exe"           @("--help") 30
     Invoke-Check "preview"              "preview.exe"      @("--help") 15
 }
 

@@ -298,6 +298,57 @@ function(xer_collect_delayload_dlls out_var)
     set(${out_var} "${_dlls}" PARENT_SCOPE)
 endfunction()
 
+# xer_stage_runtime_dlls(<out_dir> <toolchain_bin> <seed-dll>...)
+# Recursively walks the PE import + delay-import tables of each seed
+# DLL (via CMAKE_OBJDUMP -p) and copies every dependency that resolves
+# inside <toolchain_bin> into <out_dir>. Names found in neither dir are
+# OS-provided (KERNEL32/…, api-ms-*, …) and skipped; names already in
+# <out_dir> are followed but not re-copied. Runs at configure time so
+# every consumer target inherits the staged runtime for free — the
+# delay-load helper only defers a missing DLL to first call, where it
+# still hard-kills the process (exit 127 under MSYS2).
+function(xer_stage_runtime_dlls out_dir toolchain_bin)
+    file(MAKE_DIRECTORY "${out_dir}")
+    set(_queue ${ARGN})
+    set(_seen)
+    set(_staged)
+    while(_queue)
+        list(POP_FRONT _queue _dll)
+        string(TOLOWER "${_dll}" _lc)
+        if(_lc IN_LIST _seen)
+            continue()
+        endif()
+        list(APPEND _seen "${_lc}")
+        if(EXISTS "${out_dir}/${_dll}")
+            set(_src "${out_dir}/${_dll}")
+        elseif(EXISTS "${toolchain_bin}/${_dll}")
+            set(_src "${toolchain_bin}/${_dll}")
+        else()
+            continue()  # OS-provided / non-toolchain — nothing to stage
+        endif()
+        execute_process(
+            COMMAND "${CMAKE_OBJDUMP}" -p "${_src}"
+            OUTPUT_VARIABLE _imports ERROR_QUIET
+            OUTPUT_STRIP_TRAILING_WHITESPACE)
+        string(REGEX MATCHALL "DLL Name:[ \t]*[^ \t\r\n]+" _deps "${_imports}")
+        foreach(_line IN LISTS _deps)
+            string(REGEX REPLACE "^DLL Name:[ \t]*" "" _dep "${_line}")
+            string(STRIP "${_dep}" _dep)
+            string(TOLOWER "${_dep}" _dep_lc)
+            if(NOT _dep_lc IN_LIST _seen)
+                list(APPEND _queue "${_dep}")
+            endif()
+        endforeach()
+        if(_src STREQUAL "${toolchain_bin}/${_dll}")
+            file(COPY "${_src}" DESTINATION "${out_dir}")
+            list(APPEND _staged "${_dll}")
+        endif()
+    endwhile()
+    list(LENGTH _staged _n)
+    message(STATUS "xer_stage_runtime_dlls: ${_n} toolchain DLL(s) "
+                   "staged into ${out_dir} (seeds: ${ARGN})")
+endfunction()
+
 # xer_delayload(<target> <dll>...)
 # Adds --delayload link options: the binary starts without those DLLs
 # on PATH; they load lazily on first call into them.

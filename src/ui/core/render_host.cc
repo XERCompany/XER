@@ -269,8 +269,43 @@ UiRenderHost::CreateRemoteRenderer(uintptr_t target_hwnd,
         }
         return {0.0f, 0.0f};
     };
+    // Teardown hook: entry is captured by channel_id, not pointer —
+    // channels_ (a vector) may reallocate on a later on-demand spawn.
+    const int channel_id = entry->channel_id;
+    auto release = [this, channel_id] { ReleaseChannel(channel_id); };
     return std::make_unique<Rendering::StreamRenderer>(
-        std::move(send), std::move(request));
+        std::move(send), std::move(request), std::move(release));
+}
+
+void UiRenderHost::ReleaseChannel(int channel_id) {
+    for (auto& e : channels_) {
+        if (e.channel_id != channel_id) {
+            continue;
+        }
+        e.in_use = false;
+        if (e.worker_process != nullptr &&
+            WaitForSingleObject(e.worker_process, 0) == WAIT_TIMEOUT) {
+            // Live worker — park it on its own hidden surface so it
+            // goes back to the warm pool for the next checkout.
+            if (e.channel) {
+                std::vector<uint8_t> msg;
+                Rendering::Stream::StreamWriter::SetTargetHwnd(msg, 0);
+                e.channel->Send(msg.data(),
+                                static_cast<uint32_t>(msg.size()), 100);
+            }
+        } else {
+            // Died while checked out: drop the handle and refill the
+            // pool slot while we're below the configured target (a
+            // nullptr process is skipped by ReapAndRespawn, so the
+            // respawn has to happen here).
+            CloseWorkerHandle(&e);
+            if (WarmWorkerCount() < warm_target_) {
+                std::string err;
+                SpawnPooledWorker(&e, &err);
+            }
+        }
+        return;
+    }
 }
 
 Rendering::RenderStore* UiRenderHost::Store() {
@@ -394,6 +429,7 @@ std::unique_ptr<Rendering::StreamRenderer>
 UiRenderHost::CreateRemoteRenderer(uintptr_t, std::string*) {
     return nullptr;
 }
+void UiRenderHost::ReleaseChannel(int) {}
 void UiRenderHost::ShutdownAll() {}
 Rendering::RenderStore* UiRenderHost::Store() { return nullptr; }
 bool UiRenderHost::UploadImage(std::uint32_t, const void*, int, int) {

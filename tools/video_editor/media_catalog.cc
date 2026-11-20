@@ -10,6 +10,7 @@
 #include <cstring>
 #include <filesystem>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -650,6 +651,27 @@ Blob SerializePeaks(const AudioPeaks& peaks) {
     return blob;
 }
 
+// Poster-file writer shared by Import and ExtractPoster: still images
+// (OIIO-decoded) write the PNG directly; FFmpeg containers go through
+// ClipPoster::Extract. `poster_path` is the posters/<id>.png target —
+// callers create the directory first. Best-effort contract: false on
+// any decode/write failure, never throws.
+bool WritePosterFile(const std::string& canon, bool is_still,
+                     double seek_seconds,
+                     const std::string& poster_path,
+                     std::string* error_out) {
+    if (is_still) {
+        // OIIO decodes it — write the PNG poster directly.
+        const Io::Image still = Io::ReadImage(Path::FromUtf8(canon));
+        return still.ok &&
+               Io::WriteImage(Path::FromUtf8(poster_path),
+                              still.bgra.data(), still.width,
+                              still.height);
+    }
+    return ClipPoster::Extract(canon, seek_seconds, poster_path,
+                               error_out);
+}
+
 bool DeserializePeaks(std::int64_t channels, std::int64_t spp,
                       std::int64_t buckets, const Blob& blob,
                       AudioPeaks* out) {
@@ -685,9 +707,15 @@ MediaCatalog::MediaCatalog(std::string utf8_db_path)
 
 MediaCatalog::~MediaCatalog() { Close(); }
 
-void MediaCatalog::Close() { db_.reset(); }
+void MediaCatalog::Close() {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    db_.reset();
+}
 
-bool MediaCatalog::IsOpen() const { return db_ != nullptr; }
+bool MediaCatalog::IsOpen() const {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    return db_ != nullptr;
+}
 
 std::string MediaCatalog::DefaultDbPath() {
     // UTF-8 safe env chain: LOCALAPPDATA arrives ANSI on non-EN Windows
@@ -717,7 +745,8 @@ std::string MediaCatalog::DefaultDbPath() {
 }
 
 bool MediaCatalog::Open(std::string* error_out) {
-    Close();
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    db_.reset();
     if (db_path_.empty()) {
         db_path_ = DefaultDbPath();
     }
@@ -746,6 +775,7 @@ bool MediaCatalog::Open(std::string* error_out) {
     return true;
 }
 
+// db_mutex_ held (called from Open only).
 bool MediaCatalog::EnsureSchema(std::string* error_out) {
     for (const char* sql : kSchemaStatements) {
         if (!db_->Execute(sql, {}, error_out)) {
@@ -764,9 +794,8 @@ bool MediaCatalog::Import(const std::string& utf8_path,
                           std::int64_t* id_out,
                           bool extract_poster,
                           std::string* error_out) {
-    if (!IsOpen()) {
-        return Fail(error_out, "catalog is not open");
-    }
+    // Canonicalize + probe run outside the DB lock — only the SQL
+    // statements below serialize on db_mutex_.
     std::string canon;
     if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
         return false;
@@ -817,51 +846,66 @@ bool MediaCatalog::Import(const std::string& utf8_path,
 
     const std::string probe_json = ProbeJsonFor(canon, info, file_size);
     const std::int64_t now_unix = NowUnixSeconds();
-
-    // Upsert by canonical path: refresh the probe fields on conflict,
-    // keep added_at (and poster_path until re-extraction below).
-    if (!db_->Execute(
-            "UPDATE media SET duration = ?, width = ?, height = ?,"
-            " fps = ?, video_codec = ?, audio_codec = ?, has_audio = ?,"
-            " file_size = ?, mtime = ?, probe_json = ? WHERE path = ?",
-            {VReal(info.duration_seconds), VInt(info.width),
-             VInt(info.height), VReal(info.fps), VStr(info.video_codec),
-             VStr(info.audio_codec), VBool(info.has_audio), VInt(file_size),
-             VInt(mtime_unix), VStr(probe_json), VStr(canon)},
-            error_out)) {
-        return false;
-    }
-    if (db_->Changes() == 0) {
+    std::int64_t id = 0;
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (!IsOpenLocked()) {
+            return Fail(error_out, "catalog is not open");
+        }
+        // Upsert by canonical path: refresh the probe fields on
+        // conflict, keep added_at (and poster_path until re-extraction
+        // below).
         if (!db_->Execute(
-                "INSERT INTO media(path, duration, width, height, fps,"
-                " video_codec, audio_codec, has_audio, file_size, mtime,"
-                " probe_json, added_at)"
-                " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                {VStr(canon), VReal(info.duration_seconds),
-                 VInt(info.width), VInt(info.height), VReal(info.fps),
+                "UPDATE media SET duration = ?, width = ?, height = ?,"
+                " fps = ?, video_codec = ?, audio_codec = ?,"
+                " has_audio = ?, file_size = ?, mtime = ?,"
+                " probe_json = ? WHERE path = ?",
+                {VReal(info.duration_seconds), VInt(info.width),
+                 VInt(info.height), VReal(info.fps),
                  VStr(info.video_codec), VStr(info.audio_codec),
-                 VBool(info.has_audio), VInt(file_size), VInt(mtime_unix),
-                 VStr(probe_json), VInt(now_unix)},
+                 VBool(info.has_audio), VInt(file_size),
+                 VInt(mtime_unix), VStr(probe_json), VStr(canon)},
                 error_out)) {
             return false;
         }
-    }
+        if (db_->Changes() == 0) {
+            if (!db_->Execute(
+                    "INSERT INTO media(path, duration, width, height,"
+                    " fps, video_codec, audio_codec, has_audio,"
+                    " file_size, mtime, probe_json, added_at)"
+                    " VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    {VStr(canon), VReal(info.duration_seconds),
+                     VInt(info.width), VInt(info.height), VReal(info.fps),
+                     VStr(info.video_codec), VStr(info.audio_codec),
+                     VBool(info.has_audio), VInt(file_size),
+                     VInt(mtime_unix), VStr(probe_json),
+                     VInt(now_unix)},
+                    error_out)) {
+                return false;
+            }
+        }
 
-    std::vector<Row> id_rows;
-    if (!db_->Query("SELECT id FROM media WHERE path = ?",
-                    {VStr(canon)}, id_rows, error_out) ||
-        id_rows.empty() || id_rows.front().columns.empty()) {
-        return Fail(error_out, "catalog row missing after upsert: " + canon);
-    }
-    const std::int64_t id = AsInt(id_rows.front().columns.front());
-    if (id <= 0) {
-        return Fail(error_out, "catalog row has invalid id: " + canon);
+        std::vector<Row> id_rows;
+        if (!db_->Query("SELECT id FROM media WHERE path = ?",
+                        {VStr(canon)}, id_rows, error_out) ||
+            id_rows.empty() || id_rows.front().columns.empty()) {
+            return Fail(error_out,
+                        "catalog row missing after upsert: " + canon);
+        }
+        id = AsInt(id_rows.front().columns.front());
+        if (id <= 0) {
+            return Fail(error_out,
+                        "catalog row has invalid id: " + canon);
+        }
     }
 
     // Poster extraction is best-effort and non-fatal: the row already
     // upserted, and poster_path keeps its previous/empty value on
     // failure. Only files with video get posters (ClipPoster rejects
     // audio-only anyway; the width>0 gate just skips the attempt).
+    // Runs OUTSIDE the DB lock — callers wanting it off the UI thread
+    // pass extract_poster=false and enqueue ExtractPoster on
+    // media_prep instead.
     if (extract_poster && info.width > 0) {
         const double seek = info.duration_seconds > 0.0
                                 ? info.duration_seconds * 0.5
@@ -875,25 +919,16 @@ bool MediaCatalog::Import(const std::string& utf8_path,
         const std::string poster_path =
             poster_dir + "/" + std::to_string(id) + ".png";
         std::string poster_error;
-        bool poster_ok = false;
-        if (is_still) {
-            // OIIO decodes it — write the PNG poster directly.
-            const Io::Image still =
-                Io::ReadImage(Path::FromUtf8(canon));
-            poster_ok =
-                still.ok &&
-                Io::WriteImage(Path::FromUtf8(poster_path),
-                               still.bgra.data(), still.width,
-                               still.height);
-        } else {
-            poster_ok = ClipPoster::Extract(canon, seek, poster_path,
-                                            &poster_error);
-        }
-        if (poster_ok) {
+        if (WritePosterFile(canon, is_still, seek, poster_path,
+                            &poster_error)) {
+            std::lock_guard<std::mutex> lock(db_mutex_);
             // Failure here is also non-fatal — the poster file exists
             // but the path simply will not be recorded.
-            db_->Execute("UPDATE media SET poster_path = ? WHERE id = ?",
-                         {VStr(poster_path), VInt(id)}, nullptr);
+            if (IsOpenLocked()) {
+                db_->Execute(
+                    "UPDATE media SET poster_path = ? WHERE id = ?",
+                    {VStr(poster_path), VInt(id)}, nullptr);
+            }
         }
     }
 
@@ -906,12 +941,16 @@ bool MediaCatalog::Import(const std::string& utf8_path,
 bool MediaCatalog::FindByPath(const std::string& utf8_path,
                               CatalogEntry* out,
                               std::string* error_out) const {
-    if (!IsOpen() || out == nullptr) {
-        return Fail(error_out, "catalog is not open");
+    if (out == nullptr) {
+        return Fail(error_out, "null catalog out-param");
     }
     std::string canon;
     if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
         return false;
+    }
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!IsOpenLocked()) {
+        return Fail(error_out, "catalog is not open");
     }
     std::vector<Row> rows;
     // `path = ?` compares under the column's COLLATE NOCASE.
@@ -931,7 +970,11 @@ bool MediaCatalog::FindByPath(const std::string& utf8_path,
 bool MediaCatalog::FindById(std::int64_t id,
                             CatalogEntry* out,
                             std::string* error_out) const {
-    if (!IsOpen() || out == nullptr) {
+    if (out == nullptr) {
+        return Fail(error_out, "null catalog out-param");
+    }
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!IsOpenLocked()) {
         return Fail(error_out, "catalog is not open");
     }
     std::vector<Row> rows;
@@ -950,7 +993,8 @@ bool MediaCatalog::FindById(std::int64_t id,
 
 std::vector<CatalogEntry> MediaCatalog::List(std::string* error_out) const {
     std::vector<CatalogEntry> out;
-    if (!IsOpen()) {
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!IsOpenLocked()) {
         Fail(error_out, "catalog is not open");
         return out;
     }
@@ -971,23 +1015,26 @@ std::vector<CatalogEntry> MediaCatalog::List(std::string* error_out) const {
 bool MediaCatalog::Remove(std::int64_t id,
                           bool remove_poster_file,
                           std::string* error_out) {
-    if (!IsOpen()) {
-        return Fail(error_out, "catalog is not open");
-    }
-    // Read poster_path first so the file can be removed after the row
-    // is gone (the path is not recoverable once the row is deleted).
-    std::vector<Row> rows;
-    if (!db_->Query("SELECT poster_path FROM media WHERE id = ?",
-                    {VInt(id)}, rows, error_out)) {
-        return false;
-    }
     std::string poster_path;
-    if (!rows.empty() && !rows.front().columns.empty()) {
-        poster_path = AsString(rows.front().columns.front());
-    }
-    if (!db_->Execute("DELETE FROM media WHERE id = ?",
-                      {VInt(id)}, error_out)) {
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (!IsOpenLocked()) {
+            return Fail(error_out, "catalog is not open");
+        }
+        // Read poster_path first so the file can be removed after the row
+        // is gone (the path is not recoverable once the row is deleted).
+        std::vector<Row> rows;
+        if (!db_->Query("SELECT poster_path FROM media WHERE id = ?",
+                        {VInt(id)}, rows, error_out)) {
+            return false;
+        }
+        if (!rows.empty() && !rows.front().columns.empty()) {
+            poster_path = AsString(rows.front().columns.front());
+        }
+        if (!db_->Execute("DELETE FROM media WHERE id = ?",
+                          {VInt(id)}, error_out)) {
+            return false;
+        }
     }
     if (remove_poster_file && !poster_path.empty()) {
         // Best-effort: a missing/locked poster file is not an error.
@@ -1000,29 +1047,36 @@ bool MediaCatalog::Remove(std::int64_t id,
 bool MediaCatalog::GetAudioPeaks(const std::string& utf8_path,
                                  AudioPeaks* out,
                                  std::string* error_out) {
-    if (!IsOpen() || out == nullptr) {
-        return Fail(error_out, "catalog is not open");
+    if (out == nullptr) {
+        return Fail(error_out, "null peaks out-param");
     }
     std::string canon;
     if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
         return false;
     }
     const std::filesystem::path canon_fs = Path::FromUtf8(canon);
-    {
-        std::error_code ec;
-        if (ec || !std::filesystem::exists(canon_fs, ec)) {
-            // A cached row for a vanished file is stale — drop it
-            // (best-effort) so the table tracks the filesystem.
-            db_->Execute("DELETE FROM peaks WHERE path = ?",
-                         {VStr(canon)}, nullptr);
-            return Fail(error_out, "media file not found: " + canon);
-        }
-    }
     const std::int64_t mtime_unix = FileMtimeUnix(canon_fs);
 
-    // Cache hit: a row with the CURRENT mtime and a blob that round-
-    // trips. A stale-mtime or corrupt row falls through to re-decode.
     {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (!IsOpenLocked()) {
+            return Fail(error_out, "catalog is not open");
+        }
+        {
+            std::error_code ec;
+            if (ec || !std::filesystem::exists(canon_fs, ec)) {
+                // A cached row for a vanished file is stale — drop it
+                // (best-effort) so the table tracks the filesystem.
+                db_->Execute("DELETE FROM peaks WHERE path = ?",
+                             {VStr(canon)}, nullptr);
+                return Fail(error_out,
+                            "media file not found: " + canon);
+            }
+        }
+
+        // Cache hit: a row with the CURRENT mtime and a blob that
+        // round-trips. A stale-mtime or corrupt row falls through to
+        // re-decode.
         std::vector<Row> rows;
         if (!db_->Query(
                 "SELECT mtime, channels, spp, buckets, data"
@@ -1044,23 +1098,99 @@ bool MediaCatalog::GetAudioPeaks(const std::string& utf8_path,
     }
 
     // Cache miss / stale / corrupt: decode (10-minute cap — see the
-    // header doc) and upsert. Decode failures are NOT cached.
+    // header doc) OUTSIDE the DB lock so worker decodes never stall UI
+    // catalog queries. Decode failures are NOT cached.
     AudioPeaks computed;
     if (!DecodeAudioPeaks(canon, &computed, error_out)) {
         return false;
     }
     const Blob blob = SerializePeaks(computed);
-    if (!db_->Execute(
-            "INSERT OR REPLACE INTO peaks(path, mtime, channels, spp,"
-            " buckets, data) VALUES(?, ?, ?, ?, ?, ?)",
-            {VStr(canon), VInt(mtime_unix), VInt(computed.channels),
-             VInt(computed.samples_per_peak),
-             VInt(static_cast<std::int64_t>(computed.buckets)),
-             VBlob(blob)},
-            error_out)) {
-        return false;
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (!IsOpenLocked()) {
+            // Catalog closed mid-decode — the peaks are still valid;
+            // just skip persisting them.
+            *out = std::move(computed);
+            return true;
+        }
+        if (!db_->Execute(
+                "INSERT OR REPLACE INTO peaks(path, mtime, channels,"
+                " spp, buckets, data) VALUES(?, ?, ?, ?, ?, ?)",
+                {VStr(canon), VInt(mtime_unix), VInt(computed.channels),
+                 VInt(computed.samples_per_peak),
+                 VInt(static_cast<std::int64_t>(computed.buckets)),
+                 VBlob(blob)},
+                error_out)) {
+            return false;
+        }
     }
     *out = std::move(computed);
+    return true;
+}
+
+bool MediaCatalog::ExtractPoster(const std::string& utf8_path,
+                                 std::string* error_out) {
+    std::string canon;
+    if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
+        return false;
+    }
+
+    // Row lookup under the DB lock; decode + file write outside it.
+    std::int64_t id = 0;
+    double duration = 0.0;
+    int width = 0;
+    std::string video_codec;
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (!IsOpenLocked()) {
+            return Fail(error_out, "catalog is not open");
+        }
+        std::vector<Row> rows;
+        if (!db_->Query(
+                "SELECT id, duration, width, video_codec"
+                " FROM media WHERE path = ?",
+                {VStr(canon)}, rows, error_out)) {
+            return false;
+        }
+        if (rows.empty() || rows.front().columns.size() < 4u) {
+            return Fail(error_out,
+                        "media not in catalog (import first): " + canon);
+        }
+        const auto& cols = rows.front().columns;
+        id = AsInt(cols[0]);
+        duration = AsReal(cols[1]);
+        width = static_cast<int>(AsInt(cols[2]));
+        video_codec = AsString(cols[3]);
+    }
+    if (id <= 0) {
+        return Fail(error_out, "catalog row has invalid id: " + canon);
+    }
+    if (width <= 0) {
+        return Fail(error_out, "no video stream: " + canon);
+    }
+
+    const std::string poster_dir = PosterDir();
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(Path::FromUtf8(poster_dir),
+                                            ec);
+    }
+    const std::string poster_path =
+        poster_dir + "/" + std::to_string(id) + ".png";
+    const double seek = duration > 0.0 ? duration * 0.5 : 0.0;
+    // Import() tags OIIO-only stills with video_codec = "image".
+    const bool is_still = video_codec == "image";
+    if (!WritePosterFile(canon, is_still, seek, poster_path,
+                         error_out)) {
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(db_mutex_);
+        if (IsOpenLocked()) {
+            db_->Execute("UPDATE media SET poster_path = ? WHERE id = ?",
+                         {VStr(poster_path), VInt(id)}, nullptr);
+        }
+    }
     return true;
 }
 

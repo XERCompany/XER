@@ -6,6 +6,7 @@
 #include "oiio_image.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -24,10 +25,54 @@
 #include "helper/path_utils.h"
 #endif
 
+#if XER_VE_HAVE_OIIO && defined(_WIN32) && \
+    defined(XER_VE_OIIO_RUNTIME_DLLS)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
+
 namespace XER::VideoEditor::Io {
 
 #if XER_VE_HAVE_OIIO
 namespace {
+
+// The OIIO import is delay-loaded into the module: the first call into
+// the DLL fires the GNU delay-load helper, which terminates the process
+// outright when the DLL is absent. Probe with LoadLibrary first so a
+// missing runtime degrades to failure (the documented contract) instead
+// of killing the host; a module that loads stays resident and the
+// delay-import binder then binds to it directly.
+// XER_VE_OIIO_RUNTIME_DLLS is the '|'-separated list of delay-load
+// target names resolved at link time.
+bool EnsureOiioRuntime() {
+#if defined(_WIN32) && defined(XER_VE_OIIO_RUNTIME_DLLS)
+    static const bool kLoaded = [] {
+        const std::string names = XER_VE_OIIO_RUNTIME_DLLS;
+        std::size_t pos = 0;
+        while (true) {
+            const std::size_t bar = names.find('|', pos);
+            const std::string name =
+                names.substr(pos, bar == std::string::npos
+                                      ? std::string::npos
+                                      : bar - pos);
+            if (!name.empty()) {
+                const std::wstring wname(name.begin(), name.end());
+                if (::LoadLibraryW(wname.c_str()) == nullptr) {
+                    return false;
+                }
+            }
+            if (bar == std::string::npos) break;
+            pos = bar + 1;
+        }
+        return true;
+    }();
+    return kLoaded;
+#else
+    return true;
+#endif
+}
 
 // [0,inf) -> byte. HDR/linear sources get Reinhard + a 1/2.2 display
 // gamma; LDR sources are assumed display-referred and only clamped.
@@ -59,6 +104,7 @@ std::uint8_t AlphaToByte(float v) {
 
 Image ReadImage(const std::filesystem::path& path) {
 #if XER_VE_HAVE_OIIO
+    if (!EnsureOiioRuntime()) return {};  // absent runtime
     // OIIO filename params are const std::string& / string_view /
     // fs::path depending on the release — a UTF-8 std::string converts
     // to all of them, and OIIO expects UTF-8 bytes anyway.
@@ -131,6 +177,7 @@ Image ReadImage(const std::filesystem::path& path) {
 bool WriteImage(const std::filesystem::path& path,
                 const std::uint8_t* bgra, int width, int height) {
 #if XER_VE_HAVE_OIIO
+    if (!EnsureOiioRuntime()) return false;  // absent runtime
     if (bgra == nullptr || width <= 0 || height <= 0) {
         return false;
     }
@@ -167,12 +214,25 @@ bool WriteImage(const std::filesystem::path& path,
 #endif
 }
 
-bool OiioHandlesExtension(const std::string& ext_lower) {
-    static const std::unordered_set<std::string_view> kExts = {
+bool OiioHandlesExtension(const std::string& ext) {
+    static const std::unordered_set<std::string> kExts = {
         "exr", "dpx", "tif",  "tiff", "raw", "cr2", "nef",
         "arw", "dng", "psd",  "hdr",  "r3d", "ora", "pfm",
     };
-    return kExts.count(ext_lower) != 0;
+    // Normalize: callers pass either "exr" or the path.extension()
+    // form ".exr" — strip a leading dot and lowercase so BOTH resolve.
+    // (The un-normalized lookup silently rejected every dot-prefixed
+    // extension, which made the entire OIIO still-image path dead
+    // code — bug-audit finding.)
+    std::string key = ext;
+    if (!key.empty() && key.front() == '.') {
+        key.erase(key.begin());
+    }
+    for (char& c : key) {
+        c = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(c)));
+    }
+    return kExts.count(key) != 0;
 }
 
 }  // namespace XER::VideoEditor::Io

@@ -197,9 +197,18 @@ void WasapiSink::Close() {
     buffer_frames_ = 0;
     open_ = false;
     // Release our COM init count only on the thread that took it —
-    // a stray CoUninitialize on another thread would pop its count.
-    if (com_init_) {
-        if (GetCurrentThreadId() == com_thread_) CoUninitialize();
+    // CoUninitialize on a different thread would pop THAT thread's
+    // count (COM init is per-thread). A cross-thread Close therefore
+    // KEEPS com_init_ set instead of clearing it: a later Close() on
+    // the owning thread (e.g. Open()'s leading Close, or teardown on
+    // the audio worker) still balances the count. There is no
+    // marshaling channel back to the owning thread from here — if the
+    // last Close runs elsewhere the count is released with the owning
+    // thread's apartment teardown; leaking it would be strictly worse
+    // because clearing the flag made it unrecoverable (bug-audit
+    // finding).
+    if (com_init_ && GetCurrentThreadId() == com_thread_) {
+        CoUninitialize();
         com_init_ = false;
     }
 }

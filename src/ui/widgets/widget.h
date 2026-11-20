@@ -44,6 +44,7 @@ enum class KeyCode {
     // Letter keys are reported only while Ctrl is held (editing/app shortcuts).
     A,
     C,
+    D,
     F,
     K,
     N,

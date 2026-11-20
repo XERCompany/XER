@@ -10,6 +10,7 @@
 
 #include <json/json.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -131,9 +132,68 @@ std::string ExtractJsonStringField(const std::string& json,
     if (pos == std::string::npos) return "";
     pos = json.find('"', pos + 1);
     if (pos == std::string::npos) return "";
-    size_t end = json.find('"', pos + 1);
-    if (end == std::string::npos) return "";
-    return json.substr(pos + 1, end - pos - 1);
+    // Escape-aware scan: the value ends at the first UNESCAPED quote —
+    // a raw find('"') truncates values containing \" (and would split
+    // on a \\ pair's quote). The returned string is unescaped so the
+    // caller sees the real value.
+    std::string out;
+    for (size_t i = pos + 1; i < json.size(); ++i) {
+        const char c = json[i];
+        if (c == '"') return out;
+        if (c != '\\' || i + 1 >= json.size()) {
+            out.push_back(c);
+            continue;
+        }
+        const char esc = json[++i];
+        switch (esc) {
+            case 'n': out.push_back('\n'); break;
+            case 't': out.push_back('\t'); break;
+            case 'r': out.push_back('\r'); break;
+            case 'b': out.push_back('\b'); break;
+            case 'f': out.push_back('\f'); break;
+            case 'u': {
+                // Keep the \uXXXX decode minimal — this extractor only
+                // serves small option fields; ASCII hex is enough and
+                // non-hex tails stay escaped.
+                unsigned cp = 0;
+                bool ok = i + 4 < json.size();
+                if (ok) {
+                    for (int k = 1; k <= 4; ++k) {
+                        const char h = json[i + k];
+                        cp <<= 4;
+                        if (h >= '0' && h <= '9') cp |= unsigned(h - '0');
+                        else if (h >= 'a' && h <= 'f')
+                            cp |= unsigned(h - 'a' + 10);
+                        else if (h >= 'A' && h <= 'F')
+                            cp |= unsigned(h - 'A' + 10);
+                        else { ok = false; break; }
+                    }
+                }
+                if (ok) {
+                    i += 4;
+                    if (cp < 0x80) {
+                        out.push_back(static_cast<char>(cp));
+                    } else if (cp < 0x800) {
+                        out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
+                        out.push_back(
+                            static_cast<char>(0x80 | (cp & 0x3F)));
+                    } else {
+                        out.push_back(
+                            static_cast<char>(0xE0 | (cp >> 12)));
+                        out.push_back(static_cast<char>(
+                            0x80 | ((cp >> 6) & 0x3F)));
+                        out.push_back(
+                            static_cast<char>(0x80 | (cp & 0x3F)));
+                    }
+                } else {
+                    out.push_back(esc);
+                }
+                break;
+            }
+            default: out.push_back(esc); break;
+        }
+    }
+    return out;
 }
 
 void BuildWinkernel(JsEngine& engine) {
@@ -263,13 +323,20 @@ OutValue DownloadJsonResult(const std::string& path, bool ok,
     return out;
 }
 
+// Hard caps for app_super_net timeouts — see BuildNet's comment.
+constexpr long kMaxFetchTimeoutMs = 30000;      // 30 s hard cap
+constexpr long kMaxDownloadTimeoutMs = 120000;  // 2 min hard cap
+
 void BuildNet(JsEngine& engine) {
     int obj = engine.NewObject();
     if (obj < 0) return;
-    // Blocking fetch — SyncRequest bounds the whole exchange by
-    // timeout_ms, so a script can stall at worst that long on the UI
-    // thread. Callers that need concurrency should queue their own
-    // worker instead of growing async machinery here.
+    // Blocking fetch — the NativeFn contract is a synchronous OutValue
+    // return (there is no promise/deferred kind to hand back), so the
+    // network call unavoidably runs on the calling thread. What we CAN
+    // bound is the stall: the transport honors timeout_ms, and the
+    // caps below stop a script from parking the UI for minutes by
+    // passing a huge (or invalid) timeout. Callers that need real
+    // concurrency must queue their own worker.
     engine.DefineFunction(
         obj, "fetch",
         [](const std::vector<OutValue>& args) {
@@ -283,6 +350,7 @@ void BuildNet(JsEngine& engine) {
                 ApplyFetchOptions(args[1], &method, &body, &timeout_ms,
                                   &headers);
             }
+            timeout_ms = std::clamp(timeout_ms, 1L, kMaxFetchTimeoutMs);
             return FetchJsonResult(XER::Network::Fetch(
                 method, url, body, headers, timeout_ms));
         });
@@ -298,6 +366,8 @@ void BuildNet(JsEngine& engine) {
                 args[2].kind == OutValue::Kind::Number) {
                 timeout_ms = static_cast<long>(args[2].num);
             }
+            timeout_ms =
+                std::clamp(timeout_ms, 1L, kMaxDownloadTimeoutMs);
             std::string error;
             const bool ok = XER::Network::DownloadFile(url, path,
                                                        timeout_ms, &error);

@@ -51,6 +51,14 @@ private:
     void Navigate(const std::string& input);
     void SyncBrowserRect();
 
+    // CEF-thread event sink: HostEvents callbacks hold a weak_ptr to
+    // this block and drop events once it expires (widget teardown), so
+    // a callback in flight during ~BrowserPanelWidget can never touch
+    // freed widget state. Render() drains it under the sink mutex on
+    // the UI thread — the same pattern PreviewEngine pending_* uses.
+    struct CefEvents;
+    std::shared_ptr<CefEvents> cef_events_;
+
     void* parent_hwnd_ = nullptr;
     std::shared_ptr<XER::UI::Widgets::Button> back_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> fwd_btn_;
@@ -58,7 +66,7 @@ private:
     std::shared_ptr<XER::UI::Widgets::TextInput> url_input_;
     std::unique_ptr<XER::Cef::CefHost> cef_;
     XER::UI::Layout::Rect view_rect_{};
-    std::string status_;
+    std::string status_;   // UI thread only
     bool cef_tried_ = false;
     bool cef_ok_ = false;
 };

@@ -31,6 +31,15 @@ struct BootResult {
     // produced out-data; nullptr when the assets layer is absent —
     // callers fall back to compiled-in defaults.
     std::unique_ptr<JsEngine> engine;
+
+    BootResult() = default;
+    BootResult(BootResult&&) noexcept = default;
+    BootResult& operator=(BootResult&&) noexcept = default;
+    BootResult(const BootResult&) = delete;
+    BootResult& operator=(const BootResult&) = delete;
+    // Clears SharedBootEngine() when it still points at this result's
+    // engine — the process-wide pointer can never outlive its owner.
+    ~BootResult();
 };
 
 // Locates the assets directory: <exe_dir>/assets, then CWD/assets.
@@ -42,7 +51,9 @@ BootResult Boot(std::string* status);
 
 // Process-wide pointer to the booted engine (nullptr before Boot or
 // when the assets layer is absent). Ownership stays with the
-// BootResult the caller keeps — main.cc stashes it in a static.
+// BootResult the caller keeps — main.cc stashes it in a static; the
+// BootResult destructor clears this slot when it still points at the
+// dying engine, so it never dangles.
 JsEngine*& SharedBootEngine();
 
 // Fires handler.plugin_load (if registered) with the plugin descriptor

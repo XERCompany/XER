@@ -209,13 +209,11 @@ bool SpeedDialog::Valid() const {
     if (!std::isfinite(rate) || rate < kMinRate || rate > kMaxRate) {
         return false;
     }
-    // The consumed span is preserved by construction, so this can only
-    // fail when SetClip() was handed an already-overflowing clip —
-    // still worth surfacing instead of applying blindly.
-    if (media_duration_ > 0.0 &&
-        in_point_ + consumed_ > media_duration_ + 1e-6) {
-        return false;
-    }
+    // An already-overflowing clip (in_point + consumed > media) is NOT
+    // rejected: the consumed span is preserved by every field edit, so
+    // no user input could ever clear the flag — disabling Apply would
+    // leave the dialog permanently stuck. The apply path clamps the
+    // source window to the media bound instead (see ApplyClipSpeed).
     return true;
 }
 
@@ -235,10 +233,6 @@ std::string SpeedDialog::HintText() const {
     if (duration <= 0.0) {
         return "Duration must be greater than zero.";
     }
-    if (media_duration_ > 0.0 &&
-        in_point_ + consumed_ > media_duration_ + 1e-6) {
-        return "Consumed source span exceeds the media duration.";
-    }
     return {};
 }
 
@@ -253,12 +247,18 @@ void SpeedDialog::RefreshValidation() {
     if (valid) {
         const double rate = GetRate();
         const double duration = ParsedDurationSeconds();
-        char buffer[192];
+        // A clip that already overflows its media gets clamped on
+        // apply — say so in the readout.
+        const bool overflows =
+            media_duration_ > 0.0 &&
+            in_point_ + consumed_ > media_duration_ + 1e-6;
+        char buffer[224];
         std::snprintf(buffer, sizeof(buffer),
                       "Consumes %.3f s of source (%.3f\u2013%.3f) \u00b7 "
-                      "rate %.2fx \u00b7 new duration %.3f s",
+                      "rate %.2fx \u00b7 new duration %.3f s%s",
                       consumed_, in_point_, in_point_ + consumed_, rate,
-                      duration);
+                      duration,
+                      overflows ? " \u2014 trims to media end" : "");
         readout_label_->SetText(buffer);
     } else {
         char buffer[128];

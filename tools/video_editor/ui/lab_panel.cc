@@ -227,6 +227,13 @@ void LabPanel::StartRun() {
         return;
     }
     progress_->SetValue(0.0f);
+    // UI-thread hook: the host snapshots whatever state the worker
+    // will need (project copy etc.) into params->context BEFORE the
+    // job lambda captures params — the worker then reads the snapshot
+    // instead of racing live UI state.
+    if (hooks_.on_run_prepare) {
+        hooks_.on_run_prepare(&params);
+    }
     // Copy hooks + params into the job — never capture `this`: the
     // panel could be destroyed while the worker is still running.
     const Hooks hooks = hooks_;

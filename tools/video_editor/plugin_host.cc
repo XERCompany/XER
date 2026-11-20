@@ -3,6 +3,7 @@
 #include "app_runtime/app_runtime.h"
 
 #include <algorithm>
+#include <iterator>
 #include <mutex>
 
 #ifdef _WIN32
@@ -64,6 +65,11 @@ void UnloadLib(void* lib) {
     dlclose(lib);
 #endif
 }
+
+// Upper bound on the plugin-reported parameter count — the ABI
+// declares 0..8; a plugin reporting more is malformed and must not
+// drive a read of params[0..n).
+constexpr int32_t kMaxPluginParams = 64;
 
 std::vector<std::string> ListPluginDlls(const std::string& dir) {
     std::vector<std::string> out;
@@ -138,12 +144,37 @@ int PluginHost::LoadAll(std::vector<std::string>* warnings) {
             desc.vendor = info->vendor != nullptr ? info->vendor : "";
             desc.file = Basename(path);
             desc.kind = static_cast<XER_PluginKind>(info->kind);
+            bool params_ok = true;
             if (params_fn != nullptr) {
                 int32_t n = 0;
                 const XER_ParamDesc* params = params_fn(i, &n);
-                for (int32_t p = 0; p < n; ++p) {
-                    desc.params.push_back(params[p]);
+                // The plugin reports both the pointer and the count —
+                // a malformed plugin can hand back nullptr (or a short
+                // buffer) with n > 0, which would dereference straight
+                // into unmapped memory. Validate before copying.
+                if (n < 0 || n > kMaxPluginParams ||
+                    (n > 0 && params == nullptr)) {
+                    params_ok = false;
+                } else if (params != nullptr) {
+                    for (int32_t p = 0; p < n; ++p) {
+                        if (params[p].name == nullptr) {
+                            params_ok = false;
+                            break;
+                        }
+                    }
+                    if (params_ok) {
+                        desc.params.assign(params, params + n);
+                    }
                 }
+            }
+            if (!params_ok) {
+                if (warnings != nullptr) {
+                    warnings->push_back(
+                        "plugin effect '" + desc.id + "' in " +
+                        Basename(path) +
+                        " reported a malformed param table; skipped");
+                }
+                continue;
             }
             if (video_fn != nullptr) desc.video_fn = video_fn(i);
             if (audio_fn != nullptr) desc.audio_fn = audio_fn(i);
@@ -165,8 +196,24 @@ int PluginHost::LoadAll(std::vector<std::string>* warnings) {
 }
 
 void PluginHost::Unload() {
-    for (const Library& lib : libs_) UnloadLib(lib.handle);
+    // Retire, don't free. Callers (VideoEffectSession,
+    // AudioEffectChainSession) hold `const PluginDesc*` and
+    // ApplyFn/ProcessFn pointers obtained from Find()/OfKind() — the
+    // descriptors live in effects_ and the entry points live inside
+    // the mapped DLL images. FreeLibrary + effects_.clear() would
+    // leave those sessions calling into unmapped code and
+    // dereferencing freed memory. There is no refcount over sessions,
+    // so modules and descriptors stay resident until process exit
+    // (the OS reclaims them); the retained footprint is a handful of
+    // small DLLs at most.
+    retired_libs_.insert(retired_libs_.end(),
+                         std::make_move_iterator(libs_.begin()),
+                         std::make_move_iterator(libs_.end()));
     libs_.clear();
+    // Moving the deque into retired_effects_ is constant-time and
+    // preserves element addresses — outstanding PluginDesc* stay
+    // valid across a LoadAll reload.
+    retired_effects_.push_back(std::move(effects_));
     effects_.clear();
 }
 

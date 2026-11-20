@@ -10,6 +10,7 @@
 // never fatal.
 #include "app_runtime.h"
 
+#include <cstdio>
 #include <filesystem>
 #include <iterator>
 #include <string>
@@ -72,10 +73,28 @@ std::string JsonEscape(const std::string& s) {
     std::string out;
     out.reserve(s.size() + 2);
     for (const char c : s) {
-        if (c == '\\' || c == '"') {
-            out.push_back('\\');
+        switch (c) {
+            case '"': out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\b': out += "\\b"; break;
+            case '\f': out += "\\f"; break;
+            case '\n': out += "\\n"; break;
+            case '\r': out += "\\r"; break;
+            case '\t': out += "\\t"; break;
+            default:
+                // Control chars below 0x20 must be \uXXXX-escaped —
+                // raw ones produce malformed JSON (same rules as
+                // native_modules.cc's JsonEscapeInto).
+                if (static_cast<unsigned char>(c) < 0x20) {
+                    char buf[8];
+                    std::snprintf(buf, sizeof(buf), "\\u%04x",
+                                  static_cast<unsigned int>(
+                                      static_cast<unsigned char>(c)));
+                    out += buf;
+                } else {
+                    out.push_back(c);
+                }
         }
-        out.push_back(c);
     }
     return out;
 }
@@ -85,6 +104,15 @@ std::string JsonEscape(const std::string& s) {
 JsEngine*& SharedBootEngine() {
     static JsEngine* engine = nullptr;
     return engine;
+}
+
+BootResult::~BootResult() {
+    // The global borrows this result's engine — invalidate it with the
+    // owner. Only clears when the slot still points at OUR engine: a
+    // later Boot() (or a manual assignment, e.g. smoke tests) wins.
+    if (SharedBootEngine() == engine.get()) {
+        SharedBootEngine() = nullptr;
+    }
 }
 
 AssetsConfig& SharedAssetsConfig() {

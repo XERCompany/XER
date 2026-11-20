@@ -24,6 +24,14 @@ if(XER_YA_DLLS AND XER_FFMPEG_API_ARCHIVES)
     target_include_directories(XER_FFmpeg_impl PUBLIC ${_ffmpeg_bridge_includes})
     target_link_libraries(XER_FFmpeg_impl PUBLIC absl::strings XER_Helper)
     target_compile_features(XER_FFmpeg_impl PUBLIC cxx_std_23)
+    # The bridge implementation itself is gated on these macros — the
+    # INTERFACE copies on XER_FFmpeg below only reach consumers, so
+    # without this PRIVATE set the module ships stub functions and
+    # FFmpeg::IsAvailable() reports false (found via --smoke).
+    target_compile_definitions(XER_FFmpeg_impl PRIVATE
+        ENGINE_HAS_FFMPEG_BRIDGE
+        ENGINE_HAS_FFMPEG_AVFILTER
+        ENGINE_HAS_FFMPEG_AVDEVICE)
     xer_add_ya_dll(YA_MediaDecoderUniversal
         EXPORT_NAME YA.MediaDecoderUniversal
         API_ARCHIVES ${XER_FFMPEG_API_ARCHIVES}

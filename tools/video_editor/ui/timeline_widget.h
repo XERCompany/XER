@@ -44,6 +44,18 @@ struct AudioPeaks;  // media_catalog.h — waveform hook out-param only
 
 namespace XER::VideoEditor::Ui {
 
+// Tri-state answer of the async media hooks below. A shell serving a
+// background-warmed store (the app's media_prep worker pool) returns
+// kPending for in-flight decodes — the widget draws the placeholder
+// and asks again next frame — and kFailed for permanent misses, which
+// the widget negative-caches. A purely synchronous shell simply
+// answers kReady/kFailed and behaves exactly like the old bool hook.
+enum class MediaLookup {
+    kReady,    // out-param filled — usable now
+    kPending,  // decode queued/running — retry next frame
+    kFailed,   // permanent miss — widget caches the failure
+};
+
 class TimelineWidget final : public XER::UI::Widgets::Widget,
                              private ToolCommit {
 public:
@@ -77,8 +89,11 @@ public:
         // Rate stretch (R): new playback_rate (Speed/Duration).
         std::function<void(const std::string&, double)> on_rate_stretch;
         // Clip junction context menu (right-click on a clip's
-        // out-edge): add a transition to the next clip on the track.
-        std::function<void(const std::string&)> on_add_transition;
+        // out-edge): add a transition of `type` to the next clip on
+        // the track. duration_seconds <= 0 asks the shell for its
+        // default transition duration.
+        std::function<void(const std::string&, Transition::Type,
+                           double)> on_add_transition;
         // Marker lane: (time_seconds, name — "" lets the shell pick a
         // default label) / remove the marker at `time`.
         std::function<void(double, const std::string&)> on_add_marker;
@@ -91,17 +106,18 @@ public:
         std::function<void(int, bool)> on_track_hidden;
         std::function<void(int, bool)> on_track_locked;
         // Optional media queries — every one degrades gracefully when
-        // unset. get_audio_peaks fills AudioPeaks for the media path;
-        // a cold decode is synchronous + expensive (catalog docs), so
-        // the shell should serve a background-warmed cache — the
-        // widget itself caches hits AND misses per path. get_poster
-        // fills a BGRA video::Frame at the SOURCE seconds given.
+        // unset. Tri-state non-blocking contract (see MediaLookup):
+        // the shell serves a warm cache and answers kPending while a
+        // worker decodes — never block the UI thread here. get_audio_
+        // peaks fills AudioPeaks for the media path; get_poster fills
+        // a BGRA video::Frame at the SOURCE seconds given.
         // get_media_bounds feeds the seconds->bucket mapping for
         // waveforms (AudioPeaks carries no sample rate — without this
         // the widget estimates buckets at 48 kHz).
-        std::function<bool(const std::string&, AudioPeaks*)>
+        std::function<MediaLookup(const std::string&, AudioPeaks*)>
             get_audio_peaks;
-        std::function<bool(const std::string&, double, video::Frame*)>
+        std::function<MediaLookup(const std::string&, double,
+                                  video::Frame*)>
             get_poster;
         std::function<bool(const std::string&, MediaBounds*)>
             get_media_bounds;
@@ -112,6 +128,13 @@ public:
 
     void SetProject(const Project* project);
     void SetPlayhead(double seconds);
+    // Tells the widget the media pipeline published fresh data (the
+    // app's media-prep ConsumeRenderDirty/ConsumeCatalogDirty drains):
+    // cached media-duration MISSES are dropped so the next paint
+    // re-probes — a waveform that estimated its span before the media
+    // landed realigns instead of staying wrong for the session.
+    // Positive durations stay cached.
+    void NotifyMediaChanged();
     void SetSelectedClip(const std::string& clip_id);
     void SetSnapEnabled(bool enabled);
     bool SnapEnabled() const { return snap_enabled_; }
@@ -300,16 +323,22 @@ private:
     float last_ruler_click_x_ = -1.0e9f;
     bool last_ruler_click_valid_ = false;
 
-    // Media caches — see PeaksFor/WaveFor/PosterFor.
+    // Media caches — see PeaksFor/WaveFor/PosterFor. Every container is
+    // bounded: *_lru_ deques carry FIFO eviction order for their map/
+    // set so a long session can't grow them without bound.
     std::unordered_map<std::string, std::shared_ptr<const AudioPeaks>>
         peaks_cache_;
+    std::deque<std::string> peaks_lru_;
     std::unordered_set<std::string> peaks_missing_;
+    std::deque<std::string> peaks_missing_lru_;
     std::unordered_map<std::string, WaveRow> wave_cache_;
     std::deque<std::string> wave_lru_;
     std::unordered_map<std::string, double> media_duration_cache_;
+    std::deque<std::string> duration_lru_;
     std::unordered_map<PosterKey, std::shared_ptr<video::Frame>,
                        PosterKeyHash> poster_cache_;
     std::unordered_set<std::string> poster_missing_;  // "path@ms"
+    std::deque<std::string> poster_missing_lru_;
     std::deque<PosterKey> poster_lru_;
 
     XER::UI::Layout::Rect timeline_area_{};

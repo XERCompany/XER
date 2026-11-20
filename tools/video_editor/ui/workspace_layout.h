@@ -4,8 +4,9 @@
 //   left_visible       -> media-bin column visibility
 //   right_visible      -> right-column tab group visibility
 //   right_tab          -> active right-column tab, the same index the
-//                         tab strip uses:
-//                           0 Insp · 1 FX · 2 Mkr · 3 Lab · 4 Hist · 5 Mix
+//                         tab strip uses (0..9):
+//                           0 Insp · 1 FX · 2 Mkr · 3 Lab · 4 Hist ·
+//                           5 Mix · 6 Queue · 7 Plugins · 8 Color · 9 Web
 //   timeline_fraction  -> timeline height as a fraction of the
 //                         vertical content area (0.32 matches the
 //                         app's default editing split; the host

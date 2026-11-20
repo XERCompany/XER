@@ -206,9 +206,13 @@ public:
     using SendFn = std::function<bool(std::vector<uint8_t>&&)>;
     using RequestFn =
         std::function<Layout::Size(std::vector<uint8_t>&&, std::uint32_t)>;
+    // Called once from the destructor — the render host uses it to
+    // release the worker back to the warm pool (or reap its entry).
+    using ReleaseFn = std::function<void()>;
 
-    StreamRenderer(SendFn send, RequestFn request)
-        : send_(std::move(send)), request_(std::move(request)) {}
+    StreamRenderer(SendFn send, RequestFn request,
+                   ReleaseFn on_destroy = {});
+    ~StreamRenderer() override;
 
     void BeginFrame(Layout::Rect bounds) override;
     void EndFrame() override;
@@ -256,6 +260,7 @@ private:
 
     SendFn send_;
     RequestFn request_;
+    ReleaseFn on_destroy_;
     mutable std::uint32_t next_request_id_ = 1;
 };
 

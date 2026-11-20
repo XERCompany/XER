@@ -119,4 +119,44 @@ inline std::string ToUtf8(const std::filesystem::path& p) {
 #endif
 }
 
+// Crash-safe publish: replaces `target` with the fully-written temp
+// file `tmp` atomically — at no instant do both the old and new file
+// fail to exist.
+//
+// Windows: MoveFileExW with MOVEFILE_REPLACE_EXISTING | WRITE_THROUGH
+// replaces in one operation and flushes to media, so a share-violation
+// or AV-scan transient leaves `target` untouched and `tmp` ON DISK for
+// recovery — callers must never delete tmp on failure (a remove-then-
+// rename fallback would reopen the data-loss window this closes).
+// POSIX: rename(2) is already an atomic replace, so
+// std::filesystem::rename carries the same contract.
+inline bool AtomicReplace(const std::filesystem::path& tmp,
+                          const std::filesystem::path& target,
+                          std::string* error_out = nullptr) {
+#if defined(_WIN32)
+    if (::MoveFileExW(tmp.wstring().c_str(), target.wstring().c_str(),
+                      MOVEFILE_REPLACE_EXISTING |
+                          MOVEFILE_WRITE_THROUGH) != 0) {
+        return true;
+    }
+    if (error_out != nullptr) {
+        *error_out = "cannot replace " + ToUtf8(target) + " with " +
+                     ToUtf8(tmp) + " (error " +
+                     std::to_string(::GetLastError()) + ")";
+    }
+    return false;
+#else
+    std::error_code ec;
+    std::filesystem::rename(tmp, target, ec);
+    if (ec) {
+        if (error_out != nullptr) {
+            *error_out = "cannot rename " + ToUtf8(tmp) + " to " +
+                         ToUtf8(target) + ": " + ec.message();
+        }
+        return false;
+    }
+    return true;
+#endif
+}
+
 }  // namespace XER::Helper::Path

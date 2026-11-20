@@ -169,17 +169,21 @@ void* RenderStore::BeginWrite(std::uint32_t id, Kind kind,
     }
     // Grow-only arena: when the payload no longer fits the previous
     // allocation, bump the top and hand the slot a fresh extent.
-    if (e->kind == 0 || e->payload < payload) {
-        const std::uint32_t top = shared_->alloc_top;
-        if (top + payload > shared_->capacity) {
-            return nullptr;
-        }
+    const bool needs_extent = e->kind == 0 || e->payload < payload;
+    const std::uint32_t top = shared_->alloc_top;
+    if (needs_extent && top + payload > shared_->capacity) {
+        return nullptr;
+    }
+    // seqlock: flip seq odd BEFORE any Entry mutation — a racing Read()
+    // that snapshots an even seq must never observe half-written state
+    // (new offset + old payload/kind) and hand back a pointer into a
+    // fresh, unwritten extent.
+    e->seq = (e->seq + 1) | 1u;
+    std::atomic_thread_fence(std::memory_order_release);
+    if (needs_extent) {
         e->offset = top;
         shared_->alloc_top = top + payload;
     }
-    // seqlock: odd while the memcpy below is in flight.
-    e->seq = (e->seq + 1) | 1u;
-    std::atomic_thread_fence(std::memory_order_release);
     e->kind = static_cast<std::uint32_t>(kind);
     e->width = width;
     e->height = height;

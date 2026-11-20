@@ -202,7 +202,7 @@ struct WorkspaceDef {
     std::string name;
     bool left_visible = true;
     bool right_visible = true;
-    int right_tab = 0;              // right-column tab index (0..8)
+    int right_tab = 0;              // right-column tab index (0..9)
     double timeline_fraction = 0.32;
 };
 

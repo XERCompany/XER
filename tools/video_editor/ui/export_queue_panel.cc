@@ -128,10 +128,15 @@ void ExportQueuePanelWidget::SetJobs(
 
 void ExportQueuePanelWidget::RebuildRows() {
     namespace Widgets = XER::UI::Widgets;
+    // Sweep the previous generation's retirees (see retired_rows_ in
+    // the header — RebuildRows can run inside a row button's OnClick).
+    retired_rows_.clear();
     for (Row& row : rows_) {
-        RemoveChild(row.cancel);
-        RemoveChild(row.reveal);
-        RemoveChild(row.retry);
+        for (const auto& button : {row.cancel, row.reveal, row.retry}) {
+            button->SetEnabled(false);
+            RemoveChild(button);
+            retired_rows_.push_back(button);
+        }
     }
     rows_.clear();
     rows_.reserve(jobs_.size());

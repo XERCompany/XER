@@ -4,6 +4,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <filesystem>
 #include <string>
 #include <unordered_map>
@@ -63,6 +64,12 @@ private:
     std::filesystem::path dir_;
     std::unordered_map<std::string, std::string> mapping_;
     std::unordered_map<Key, IconBitmap, KeyHash> cache_;
+    // FIFO eviction order — `px`/`argb` are caller-chosen so the key
+    // space is unbounded; cap the map instead of growing forever.
+    // Eviction invalidates previously returned pointers (they are
+    // meant for transient per-call use only).
+    std::deque<Key> cache_order_;
+    static constexpr std::size_t kMaxCacheEntries = 256;
 };
 
 // Process-wide icon pack, configured by Boot() when assets/icons.yaml

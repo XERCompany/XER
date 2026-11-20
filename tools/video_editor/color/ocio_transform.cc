@@ -20,6 +20,7 @@
 #include <map>
 #include <mutex>
 #include <string>
+#include <system_error>
 #include <vector>
 
 #if defined(__has_include)
@@ -30,6 +31,14 @@
 namespace OCIO = OCIO_NAMESPACE;
 #define XER_VE_HAVE_OCIO_H 1
 #endif
+#endif
+
+#if defined(XER_VE_HAVE_OCIO_H) && defined(_WIN32) && \
+    defined(XER_VE_OCIO_RUNTIME_DLLS)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #endif
 
 namespace XER::VideoEditor::Color {
@@ -53,6 +62,42 @@ bool ReadBool(const YAML::Node& node, const char* key, bool* value) {
     const YAML::Node child = node[key];
     if (!child.IsDefined() || !child.IsScalar()) return false;
     return YAML::convert<bool>::decode(child, *value);
+}
+
+// The OCIO import is delay-loaded into the module: the first call into
+// the DLL fires the GNU delay-load helper, which raises an uncatchable
+// error and terminates the process when the DLL is absent. That is
+// exactly the "absent runtime" case CachedCpu's contract is meant to
+// cover, so probe with LoadLibrary first — a module that loads stays
+// resident and the delay-import binder then binds to it directly.
+// XER_VE_OCIO_RUNTIME_DLLS is the '|'-separated list of delay-load
+// target names resolved at link time (e.g. libOpenColorIO_2_6.dll).
+bool EnsureOcioRuntime() {
+#if defined(_WIN32) && defined(XER_VE_OCIO_RUNTIME_DLLS)
+    static const bool kLoaded = [] {
+        const std::string names = XER_VE_OCIO_RUNTIME_DLLS;
+        std::size_t pos = 0;
+        while (true) {
+            const std::size_t bar = names.find('|', pos);
+            const std::string name =
+                names.substr(pos, bar == std::string::npos
+                                      ? std::string::npos
+                                      : bar - pos);
+            if (!name.empty()) {
+                const std::wstring wname(name.begin(), name.end());
+                if (::LoadLibraryW(wname.c_str()) == nullptr) {
+                    return false;
+                }
+            }
+            if (bar == std::string::npos) break;
+            pos = bar + 1;
+        }
+        return true;
+    }();
+    return kLoaded;
+#else
+    return true;
+#endif
 }
 
 // One cached CPU processor per unique (config, source, display, view).
@@ -123,6 +168,7 @@ Entry BuildEntry(const OcioConfig& cfg) {
 // this cfg cannot be resolved (absent runtime, bad config, unknown
 // colorspace/display/view names).
 OCIO::ConstCPUProcessorRcPtr CachedCpu(const OcioConfig& cfg) {
+    if (!EnsureOcioRuntime()) return nullptr;  // absent runtime
     const std::string key = CacheKey(cfg);
     std::lock_guard<std::mutex> lock(CacheMutex());
     std::map<std::string, Entry>& cache = Cache();
@@ -181,6 +227,7 @@ Entry BuildProfileEntry(const OcioConfig& cfg, const std::string& lut_src,
 OCIO::ConstCPUProcessorRcPtr CachedProfileCpu(
     const OcioProfile& profile, const OcioConfig& cfg,
     const std::filesystem::path& assets_dir) {
+    if (!EnsureOcioRuntime()) return nullptr;  // absent runtime
     // Empty profile fields inherit the display-path defaults from cfg.
     const std::string source =
         profile.source.empty() ? cfg.source : profile.source;
@@ -268,7 +315,11 @@ bool LoadOcioConfig(const std::filesystem::path& yaml_path,
                     OcioConfig* out, std::string* error) {
     if (out == nullptr) return false;
 #if defined(XER_VE_HAVE_OCIO_H)
-    if (!std::filesystem::exists(yaml_path)) {
+    // error_code overload — a path with invalid filesystem chars must
+    // fail the bool contract, not throw std::filesystem_error out of
+    // a guarded config API.
+    std::error_code exists_ec;
+    if (!std::filesystem::exists(yaml_path, exists_ec)) {
         if (error) *error = "color.yaml not found";
         return false;
     }
@@ -336,7 +387,10 @@ bool LoadOcioProfiles(const std::filesystem::path& yaml_path,
                       std::vector<OcioProfile>* out, std::string* error) {
     if (out == nullptr) return false;
     out->clear();
-    if (!std::filesystem::exists(yaml_path)) {
+    // error_code overload — same never-throw contract as
+    // LoadOcioConfig above.
+    std::error_code exists_ec;
+    if (!std::filesystem::exists(yaml_path, exists_ec)) {
         if (error) *error = "color.yaml not found";
         return false;
     }

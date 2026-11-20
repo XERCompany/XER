@@ -96,6 +96,13 @@ private:
     std::chrono::steady_clock::time_point last_click_time_{};
 
     std::vector<Row> rows_;
+    // Mark-and-sweep graveyard: RebuildRows can fire from inside a row
+    // button's own OnClick (remove -> hook -> SetProject -> rebuild),
+    // which would destroy the very widget mid-dispatch. Retired
+    // buttons are disabled + unparented but kept alive here until the
+    // NEXT rebuild, so a firing button can never be freed under its
+    // own event regardless of how dispatch holds refs.
+    std::vector<std::shared_ptr<XER::UI::Widgets::Widget>> retired_rows_;
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> rename_input_;

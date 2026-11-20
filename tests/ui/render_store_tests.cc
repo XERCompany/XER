@@ -249,6 +249,64 @@ XER_UI_TEST(RenderStream_ResourceOpsDispatch) {
                           "missing id skipped", __FILE__, __LINE__);
 }
 
+XER_UI_TEST(RenderStream_DropsMalformedResourceOps) {
+    std::string err;
+    auto store = MakeStore(&err);
+    if (!store) return;
+    const std::uint8_t px[4 * 4 * 4] = {0};
+    // Slot 1: valid image. Slot 2: valid video frame. Slot 3: image
+    // slot whose declared 100x100 geometry needs 40000 BGRA bytes but
+    // carries only 64 — the dispatch must drop it before the renderer
+    // reads past the shared extent.
+    store->Write(1, RenderStore::Kind::kImageBgra, 4, 4, px,
+                 sizeof(px));
+    store->Write(2, RenderStore::Kind::kVideoFrame, 4, 4, px,
+                 sizeof(px));
+    store->Write(3, RenderStore::Kind::kImageBgra, 100, 100, px,
+                 sizeof(px));
+
+    FakeRenderer renderer;
+    auto handlers = StoreHandlers(store.get());
+    std::vector<std::uint8_t> msg;
+    const auto bytes = [&] {
+        return static_cast<std::uint32_t>(msg.size());
+    };
+    const Rect dst{0, 0, 10, 10};
+
+    // Kind mismatches: video read as image, image read as video and
+    // image read as spectrum — none may reach the renderer.
+    Stream::StreamWriter::DrawResource(msg, 2, dst, 1.0f, 0.0f);
+    Stream::StreamReader::Dispatch(renderer, handlers, msg.data(),
+                                   bytes());
+    Stream::StreamWriter::DrawVideoFrame(msg, 1, dst, 1.0f, 0.0f);
+    Stream::StreamReader::Dispatch(renderer, handlers, msg.data(),
+                                   bytes());
+    Stream::StreamWriter::DrawSpectrum(msg, 1, dst, {1, 1, 1, 1}, 0);
+    Stream::StreamReader::Dispatch(renderer, handlers, msg.data(),
+                                   bytes());
+    // Truncated BGRA payload (w*h*4 > payload) is dropped too.
+    Stream::StreamWriter::DrawResource(msg, 3, dst, 1.0f, 0.0f);
+    Stream::StreamReader::Dispatch(renderer, handlers, msg.data(),
+                                   bytes());
+    Stream::StreamWriter::DrawVideoFrame(msg, 3, dst, 1.0f, 0.0f);
+    Stream::StreamReader::Dispatch(renderer, handlers, msg.data(),
+                                   bytes());
+    XER::UI::Test::Expect(renderer.log.empty(),
+                          "malformed ops dropped", __FILE__, __LINE__);
+
+    // Sanity: the well-formed slots still draw.
+    Stream::StreamWriter::DrawResource(msg, 1, dst, 1.0f, 0.0f);
+    Stream::StreamReader::Dispatch(renderer, handlers, msg.data(),
+                                   bytes());
+    Stream::StreamWriter::DrawVideoFrame(msg, 2, dst, 1.0f, 0.0f);
+    Stream::StreamReader::Dispatch(renderer, handlers, msg.data(),
+                                   bytes());
+    XER::UI::Test::Expect(renderer.log.size() == 2 &&
+                              renderer.log[0] == "res" &&
+                              renderer.log[1] == "video",
+                          "valid ops still draw", __FILE__, __LINE__);
+}
+
 XER_UI_TEST(RenderStream_LayerTransformSpectrum) {
     std::string err;
     auto store = MakeStore(&err);

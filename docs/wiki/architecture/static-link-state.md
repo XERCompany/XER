@@ -44,6 +44,24 @@ via `INTERFACE` link options.
 - CEF (`libcef.dll`, `chrome_elf.dll`, resources/locales) —
   third-party binary runtime, deployed beside CEF apps.
 
+## Delay-load trap (learned 2026-11-20, ocio_transform exit 127)
+
+GNU delay-load is **not recoverable**: when the helper fails to
+resolve a missing DLL it hard-terminates the process (exit 127
+on the suite runner). An "absent runtime → nullptr" contract can
+never fire — the caller must probe `LoadLibraryW` over the resolved
+runtime names *before* first use (see `EnsureOcioRuntime()` in
+`tools/video_editor/color/ocio_transform.cc`,
+`EnsureOiioRuntime()` in `io/oiio_image.cc`; names baked via
+`XER_VE_OCIO_RUNTIME_DLLS`/`XER_VE_OIIO_RUNTIME_DLLS` defines).
+
+`xer_stage_runtime_dlls(<out_dir> <toolchain_bin> <seeds>...)` in
+`cmake/YaDll.cmake` generalizes the libskia staging: configure-time
+recursive walk of PE import+delay-import tables via
+`CMAKE_OBJDUMP -p`, copying everything resolvable into the bin dir.
+OCIO/OIIO closure = 115 DLLs (~200 MB: openvdb, ffmpeg, dcmtk,
+jxl, heif…). Runs once at configure.
+
 ## Removed
 
 - `CopyDLL.ps1` deleted; `video_editor_dist` /

@@ -70,6 +70,7 @@ void IconPack::Configure(
     dir_ = std::move(icons_dir);
     mapping_ = std::move(mapping);
     cache_.clear();
+    cache_order_.clear();
 }
 
 const IconBitmap* IconPack::Get(const std::string& name, int px,
@@ -98,7 +99,14 @@ const IconBitmap* IconPack::Get(const std::string& name, int px,
         bmp.ok = true;
     }
     // Cache the result either way — an ok=false marker for failures so
-    // a missing/broken icon isn't re-read every frame.
+    // a missing/broken icon isn't re-read every frame. The key space
+    // is caller-chosen (name, px, argb): bound the map with FIFO
+    // eviction so a hostile/scripted caller can't grow it forever.
+    cache_order_.push_back(key);
+    while (cache_order_.size() > kMaxCacheEntries) {
+        cache_.erase(cache_order_.front());
+        cache_order_.pop_front();
+    }
     auto [stored, inserted] = cache_.emplace(key, std::move(bmp));
     (void)inserted;
     return stored->second.ok ? &stored->second : nullptr;

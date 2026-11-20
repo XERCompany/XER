@@ -109,6 +109,23 @@ if(TARGET OpenColorIO::OpenColorIO)
         target_link_libraries(YA_VideoEditor_Core_objs PRIVATE OpenColorIO::OpenColorIO)
         target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE XER_VE_HAS_OCIO=1)
     endif()
+    if(MINGW)
+        # Delay-load target names for the LoadLibrary probe in
+        # color/ocio_transform.cc — an absent runtime must degrade to
+        # "unavailable" (the header contract), not terminate the process
+        # when the delay-import first binds.
+        xer_collect_delayload_dlls(_ve_ocio_rt OpenColorIO::OpenColorIO)
+        if(_ve_ocio_rt)
+            list(JOIN _ve_ocio_rt "|" _ve_ocio_rt_s)
+            if(XER_YA_DLLS)
+                target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE
+                    "XER_VE_OCIO_RUNTIME_DLLS=\"${_ve_ocio_rt_s}\"")
+            else()
+                target_compile_definitions(XER_VideoEditor_Core PUBLIC
+                    "XER_VE_OCIO_RUNTIME_DLLS=\"${_ve_ocio_rt_s}\"")
+            endif()
+        endif()
+    endif()
 endif()
 if(TARGET OpenImageIO::OpenImageIO)
     target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope}
@@ -120,9 +137,29 @@ if(TARGET OpenImageIO::OpenImageIO)
         target_link_libraries(YA_VideoEditor_Core_objs PRIVATE OpenImageIO::OpenImageIO)
         target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE XER_VE_HAS_OIIO=1)
     endif()
+    if(MINGW)
+        # Delay-load target names for the LoadLibrary probe in
+        # io/oiio_image.cc — same "absent runtime degrades, never kills"
+        # contract as the OCIO side.
+        xer_collect_delayload_dlls(_ve_oiio_rt OpenImageIO::OpenImageIO)
+        if(_ve_oiio_rt)
+            list(JOIN _ve_oiio_rt "|" _ve_oiio_rt_s)
+            if(XER_YA_DLLS)
+                target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE
+                    "XER_VE_OIIO_RUNTIME_DLLS=\"${_ve_oiio_rt_s}\"")
+            else()
+                target_compile_definitions(XER_VideoEditor_Core PUBLIC
+                    "XER_VE_OIIO_RUNTIME_DLLS=\"${_ve_oiio_rt_s}\"")
+            endif()
+        endif()
+    endif()
     # OCIO/OIIO ship .dll.a only — delay-load them inside the module
     # so video_editor starts without the MSYS2 bin dir on PATH and
-    # pulls them lazily on first color/image call.
+    # pulls them lazily on first color/image call. Delay-load only
+    # defers the failure though: a DLL absent at first call still kills
+    # the process (exit 127 under MSYS2 — the app_runtime ocio_transform/
+    # oiio_* tests died exactly this way), so the toolchain runtime
+    # closure is staged next to the binaries like src/ui does for libskia.
     if(MINGW)
         set(_ve_dl)
         foreach(_t OpenColorIO::OpenColorIO OpenImageIO::OpenImageIO)
@@ -132,8 +169,14 @@ if(TARGET OpenImageIO::OpenImageIO)
             endif()
         endforeach()
         if(_ve_dl)
-            xer_delayload(YA_VideoEditor_Core ${_ve_dl})
+            if(TARGET YA_VideoEditor_Core)
+                xer_delayload(YA_VideoEditor_Core ${_ve_dl})
+            endif()
             xer_delayload(XER_VideoEditor_Core ${_ve_dl})
+            get_filename_component(_ve_toolchain_bin
+                "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin"
+                "${_ve_toolchain_bin}" ${_ve_dl})
         endif()
     endif()
 endif()

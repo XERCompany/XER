@@ -1,0 +1,110 @@
+# Progress: "make it really work" push (2026-11-20)
+
+Coordination log for the multi-agent effort on video_editor +
+config.h. Sources: subagent reports in this session.
+
+## Landed (committed)
+
+- **`video_editor --smoke` / `--smoke-list`** (`cf7bb61` + follow-up):
+  14 machine-checkable checks — timecode, sequence presets,
+  timeline model/history, keyboard map, export presets,
+  generated_source, compositor_render, audio_mixer, project_store,
+  project_autosave, media_catalog, app_boot (assets→V8→window.yaml),
+  export_render (real libx264 MP4). `SMOKE <name> OK/FAIL`, exit
+  0/1, 15s watchdog, files under `%TEMP%/xer_video_editor_smoke/`.
+  All 14 green on 2026-11-20.
+- **FFmpeg bridge fix** (same wave): `ENGINE_HAS_FFMPEG_*` defs were
+  INTERFACE-only on `XER_FFmpeg` and never reached
+  `XER_FFmpeg_impl` → `YA.MediaDecoderUniversal.dll` shipped stub
+  bridge functions; `--export` and `MediaCatalog::Import` probing
+  were silently broken in the YA-DLL preset. Fixed by adding the
+  defs PRIVATE to the impl target in
+  `src/wrapper/ffmpeg/CMakeLists.txt`.
+- **Configure-generated `src/config.h`** (`93273a7`): template
+  `src/config.h.in` + `cmake/config_checks.cmake`; 37 `XER_HAVE_*`
+  macros probed via `check_include_file[s]` —
+  WinAPI (combined `windows.h;<h>` probes for non-self-contained
+  headers), POSIX, macOS (OBJCXX probes for Cocoa/AVFoundation),
+  C++ STL. Real values on windows-clang-msys2 include
+  `XER_HAVE_SYS_MMAN_H 0` (mingw CRT has no mman.h) and
+  `XER_HAVE_JTHREAD 0` (libc++ there lacks it).
+- **`tools/check_all.ps1`** — repeatable check harness:
+  XER_UI_Tests / XER_Media_Smoke / EngineScanVST3 always;
+  video_editor --smoke / sd / preview unless `-Quick`.
+
+## Completed 2026-11-20 (waves 2-3)
+
+- **Media-prep worker**: `MediaPrep` pool (2 threads), dedup+back-
+  pressure queue, results → `PosterCache` + peaks store; widget hooks
+  tri-state (`kReady/kPending/kFailed`), `Tick` drains dirty flags →
+  repaint. Tests: `tests/video/video_editor_media_prep_tests.cc`.
+- **Quick wins**: 12-type transition picker (junction menu +
+  inspector type/duration), full JKL shuttle → `SetRate`, Q/W
+  ripple-trim, `,`/`.` nudge ±1f, Ctrl+D default transition.
+- **Core audit fixes (15/15)**: plugin_host params validation +
+  retire-list for DLLs; audio_pcm bounds + rate latch;
+  `Helper::Path::AtomicReplace` (project_store + export_preset);
+  MacroCommand rollback; OIIO extension normalize (stills path
+  un-dead); media_prep purge-generation; atomic peaks; OCIO
+  call_once; ext_host unload; generated_source overflow guard.
+- **UI audit fixes (11/11)**: CEF-callback weak_ptr sink, lab
+  snapshot context, peaks bounds, nav_rail index guard, OIIO thumb
+  shared_ptr, SharedBootEngine invalidation, graveyard rebuilds,
+  SortDedupeKeys keep-last, right_tab 0..9, svg Attr boundaries,
+  duration-probe eviction.
+- **Pass-2 diff-review fixes (7/7)**: seqlock ordering in
+  RenderStore, kind/payload validation on resource ops, worker
+  dispatch try/catch, purge TOCTOU closed, StreamRenderer
+  release→pool, transform stack + RAII unwind in widget_tree,
+  cancellable smoke watchdog.
+- **`ocio_transform` exit 127**: `xer_stage_runtime_dlls` helper +
+  `EnsureOcioRuntime`/`EnsureOiioRuntime` LoadLibrary probes.
+- **sd.exe**: ggml runtime staged (22 DLLs incl. dlopen'd backends).
+- **`check_all.ps1` pipe-deadlock fixed**: async pipe drain before
+  WaitForExit (was the phantom XER_UI_Tests timeout).
+- **Final verification**: `check_all.ps1` 6/6 PASS —
+  XER_UI_Tests (94), Media_Smoke, EngineScanVST3,
+  video_editor --smoke (14), sd --help, preview.
+
+## Completed 2026-11-20 (waves 4-5)
+
+- **Remaining UI-audit fixes (agent c4eb9a24)**: js_engine
+  `As<Function>` guard + handle free-list reclamation; monitor
+  `SetExternalFrame` size check; `fx_disabled_` survives rebuilds
+  via basis+ordinal remap; markers dedupe in store; keyframe
+  index-shift on erase; speed-dialog dead-Apply fixed via clamp
+  fallback; effects-panel scroll clamp; BuildNet timeout caps
+  (30s/120s — async needs engine promise support, documented);
+  icon_pack FIFO cap 256; timeline caches bounded; Tick
+  `preview_mutex_` swap-out pattern; export-dialog Escape→cancel;
+  `RequestImportPoster` drop counter + rate-limited status warn.
+- **Source Monitor (agent 371af282)**: `source_edit.{h,cc}` —
+  `SourceMarks`/`ResolveSourceRange`/`MakeSourceClip`/
+  `SourceEditAt` (insert/overwrite, Premiere-style clamp);
+  `ui/source_monitor_widget.{h,cc}` — seek ruler, in/out brackets,
+  transport row, timecode footer; second `PreviewEngine` decoding a
+  synthetic one-clip `Project` (real decoded pixels); I/O marks
+  per-path; JKL/arrows/Space/,/. route to last-touched monitor
+  (`monitor_target_`); exclusive transport; View→Source Monitor
+  toggle; `EditSourceToTimeline` splits straddlers inside a macro
+  (undoes on failure). Smoke: 15 checks (`source_edit` added).
+- **Final verification**: `check_all.ps1` 6/6 PASS —
+  XER_UI_Tests, Media_Smoke, EngineScanVST3,
+  video_editor --smoke (15), sd --help, preview.
+
+## Queued (next)
+
+- Dockable panels + remappable shortcuts (spec parity, larger
+  chunks).
+- JS `BuildNet` true-async needs an engine promise kind in
+  `OutValue` (documented constraint).
+- `config.h` dual-toolchain clobber — generated into source tree
+  per user request; two presets overwrite each other's values
+  (last configure wins).
+
+## Process note
+
+Commits to this working tree happen from an external process —
+agents observed their changes swept into `93273a7`/`cf7bb61`
+mid-flight. Treat `git log` as shared history, don't expect a clean
+commit boundary per task.

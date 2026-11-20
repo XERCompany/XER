@@ -13,6 +13,7 @@
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <set>
 
 #include "app_runtime/app_runtime.h"
@@ -861,18 +862,22 @@ struct Compositor::Impl {
                     Color::FindOcioProfile(type.substr(5));
                 if (profile != nullptr &&
                     frame.Format() == video::PixelFormat::BGRA8) {
-                    static bool ocio_loaded = false;
+                    // Export + preview compositors run on different
+                    // threads — the one-shot config load must be
+                    // synchronized (std::call_once) or a concurrent
+                    // reader could observe a half-written ocio_cfg.
+                    static std::once_flag ocio_once;
                     static Color::OcioConfig ocio_cfg;
                     static std::filesystem::path ocio_assets_dir;
-                    if (!ocio_loaded) {
-                        ocio_loaded = true;
+                    std::call_once(ocio_once, [] {
                         const std::filesystem::path yaml_path(
-                            AppRuntime::SharedAssetsConfig().color_yaml);
+                            AppRuntime::SharedAssetsConfig()
+                                .color_yaml);
                         std::string load_error;
                         Color::LoadOcioConfig(yaml_path, &ocio_cfg,
                                               &load_error);
                         ocio_assets_dir = yaml_path.parent_path();
-                    }
+                    });
                     Color::ApplyProfileTransform(
                         frame.Data(), frame.Width(), frame.Height(),
                         frame.Stride(), *profile, ocio_cfg,

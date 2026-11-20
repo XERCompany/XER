@@ -95,9 +95,18 @@ void MarkersPanelWidget::SetPlayhead(double timeline_seconds) {
 
 void MarkersPanelWidget::RebuildRows() {
     namespace Widgets = XER::UI::Widgets;
+    // Sweep the previous generation's retirees — by now any event that
+    // was dispatching through them has long returned.
+    retired_rows_.clear();
     for (Row& row : rows_) {
-        RemoveChild(row.jump);
-        RemoveChild(row.remove);
+        // Disable first so a stale mouse-capture can't fire a detached
+        // button's action, then retire it alive one rebuild (see
+        // retired_rows_ in the header).
+        for (const auto& button : {row.jump, row.remove}) {
+            button->SetEnabled(false);
+            RemoveChild(button);
+            retired_rows_.push_back(button);
+        }
     }
     rows_.clear();
     rows_.reserve(markers_.size());

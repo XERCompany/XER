@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <deque>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -37,6 +38,9 @@ constexpr double kMaxZoom = 600.0;
 constexpr std::chrono::milliseconds kDoubleClick{450};
 constexpr std::size_t kMaxWaveRows = 24;   // downsampled-waveform LRU
 constexpr std::size_t kMaxPosters = 48;    // poster-frame LRU
+constexpr std::size_t kMaxPeaks = 32;      // decoded AudioPeaks (MBs each)
+constexpr std::size_t kMaxMediaDurations = 512;  // per-path doubles
+constexpr std::size_t kMaxMissingKeys = 1024;    // negative-result sets
 constexpr double kPosterQuantize = 0.25;   // poster cache quantum (s)
 constexpr double kFallbackSampleRate = 48000.0;  // when bounds are unknown
 
@@ -395,19 +399,82 @@ void TimelineWidget::SetStatus(const std::string& text, bool is_error) {
 
 // ---- media caches ----
 
+namespace {
+
+// FIFO-tracked insert into a bounded miss set — evicts the oldest key
+// once `lru` exceeds `cap` so per-session misses stay bounded.
+void TrackMissing(std::unordered_set<std::string>& missing,
+                  std::deque<std::string>& lru, const std::string& key,
+                  std::size_t cap) {
+    missing.insert(key);
+    lru.push_back(key);
+    while (lru.size() > cap) {
+        missing.erase(lru.front());
+        lru.pop_front();
+    }
+}
+
+}  // namespace
+
 const AudioPeaks* TimelineWidget::PeaksFor(const std::string& path) {
     if (!hooks_.get_audio_peaks || path.empty()) return nullptr;
     if (peaks_missing_.count(path) != 0u) return nullptr;
     const auto it = peaks_cache_.find(path);
     if (it != peaks_cache_.end()) return it->second.get();
     auto fresh = std::make_shared<AudioPeaks>();
-    if (hooks_.get_audio_peaks(path, fresh.get()) &&
-        fresh->buckets > 0 && fresh->channels > 0) {
-        peaks_cache_[path] = fresh;
-        return fresh.get();
+    switch (hooks_.get_audio_peaks(path, fresh.get())) {
+        case MediaLookup::kReady:
+            // Validate the AudioPeaks contract before caching — a
+            // corrupt/partial payload (data shorter than
+            // channels*buckets*2 min/max floats) would make WaveFor
+            // read out of bounds. Same guard waveform_panel.cc uses.
+            // Division form: a forged giant `buckets` cannot wrap the
+            // product back under data.size().
+            if (fresh->buckets > 0 && fresh->channels > 0 &&
+                fresh->data.size() /
+                            (2u * static_cast<std::size_t>(
+                                      fresh->channels)) >=
+                    fresh->buckets) {
+                peaks_cache_[path] = fresh;
+                peaks_lru_.push_back(path);
+                while (peaks_lru_.size() > kMaxPeaks) {
+                    peaks_cache_.erase(peaks_lru_.front());
+                    peaks_lru_.pop_front();
+                }
+                return fresh.get();
+            }
+            // unusable payload = miss
+            TrackMissing(peaks_missing_, peaks_missing_lru_, path,
+                         kMaxMissingKeys);
+            return nullptr;
+        case MediaLookup::kPending:
+            return nullptr;   // worker decoding — re-asked next frame
+        case MediaLookup::kFailed:
+            // cached miss — no re-probe
+            TrackMissing(peaks_missing_, peaks_missing_lru_, path,
+                         kMaxMissingKeys);
+            return nullptr;
     }
-    peaks_missing_.insert(path);   // miss is cached too — no re-probe
     return nullptr;
+}
+
+void TimelineWidget::NotifyMediaChanged() {
+    // Only failed/zero probes are evicted — a positive duration is
+    // stable for the session. Dropping misses here keeps the failure
+    // cache between notifications (no per-frame re-probe of dead
+    // media) while letting a late-arriving probe finally stick.
+    for (auto it = media_duration_cache_.begin();
+         it != media_duration_cache_.end();) {
+        if (it->second <= 0.0) {
+            duration_lru_.erase(
+                std::remove(duration_lru_.begin(), duration_lru_.end(),
+                            it->first),
+                duration_lru_.end());
+            it = media_duration_cache_.erase(it);
+        } else {
+            ++it;
+        }
+    }
 }
 
 double TimelineWidget::MediaDurationFor(const std::string& path) {
@@ -420,7 +487,16 @@ double TimelineWidget::MediaDurationFor(const std::string& path) {
         bounds.duration_seconds > 0.0) {
         duration = bounds.duration_seconds;
     }
+    // Failures ARE cached (a missing file must not re-probe every
+    // paint) but evicted by NotifyMediaChanged when the media
+    // pipeline lands fresh data — until then the waveform keeps its
+    // 48 kHz-bucket estimate.
     media_duration_cache_[path] = duration;
+    duration_lru_.push_back(path);
+    while (duration_lru_.size() > kMaxMediaDurations) {
+        media_duration_cache_.erase(duration_lru_.front());
+        duration_lru_.pop_front();
+    }
     return duration;
 }
 
@@ -510,18 +586,30 @@ const video::Frame* TimelineWidget::PosterFor(const std::string& path,
     const auto it = poster_cache_.find(key);
     if (it != poster_cache_.end()) return it->second.get();
     auto frame = std::make_shared<video::Frame>();
-    if (hooks_.get_poster(path, seconds, frame.get()) &&
-        frame->IsValid() && frame->Width() > 0 && frame->Height() > 0 &&
-        frame->Format() == video::PixelFormat::BGRA8) {
-        poster_cache_[key] = frame;
-        poster_lru_.push_back(key);
-        while (poster_lru_.size() > kMaxPosters) {
-            poster_cache_.erase(poster_lru_.front());
-            poster_lru_.pop_front();
-        }
-        return frame.get();
+    switch (hooks_.get_poster(path, seconds, frame.get())) {
+        case MediaLookup::kReady:
+            if (frame->IsValid() && frame->Width() > 0 &&
+                frame->Height() > 0 &&
+                frame->Format() == video::PixelFormat::BGRA8) {
+                poster_cache_[key] = frame;
+                poster_lru_.push_back(key);
+                while (poster_lru_.size() > kMaxPosters) {
+                    poster_cache_.erase(poster_lru_.front());
+                    poster_lru_.pop_front();
+                }
+                return frame.get();
+            }
+            // unusable payload
+            TrackMissing(poster_missing_, poster_missing_lru_, miss_key,
+                         kMaxMissingKeys);
+            return nullptr;
+        case MediaLookup::kPending:
+            return nullptr;   // worker decoding — re-asked next frame
+        case MediaLookup::kFailed:
+            TrackMissing(poster_missing_, poster_missing_lru_, miss_key,
+                         kMaxMissingKeys);
+            return nullptr;
     }
-    poster_missing_.insert(miss_key);
     return nullptr;
 }
 
@@ -1414,17 +1502,26 @@ bool TimelineWidget::ShowContextMenu(
             items.push_back(std::move(split));
 
             // Junction pick: right-click on a clip's out-edge offers
-            // the crossfade to the next clip (the shell resolves the
-            // adjacent clip, same as Inspector's "Add Transition").
+            // every supported transition type to the next clip (the
+            // shell resolves the adjacent clip and supplies the
+            // default duration for a <= 0 request — same contract as
+            // Inspector's transition picker).
             if (hit.part == ClipPart::EdgeOut) {
-                Widgets::ContextMenu::Item trans;
-                trans.label = "Add Crossfade";
-                trans.action = [this, id] {
-                    if (hooks_.on_add_transition) {
-                        hooks_.on_add_transition(id);
-                    }
-                };
-                items.push_back(std::move(trans));
+                bool first = true;
+                for (const Transition::Type type :
+                     AllTransitionTypes()) {
+                    Widgets::ContextMenu::Item trans;
+                    trans.label = std::string("Transition: ") +
+                                  TransitionTypeLabel(type);
+                    trans.separator_before = first;
+                    trans.action = [this, id, type] {
+                        if (hooks_.on_add_transition) {
+                            hooks_.on_add_transition(id, type, -1.0);
+                        }
+                    };
+                    items.push_back(std::move(trans));
+                    first = false;
+                }
             }
 
             if (!clip.is_adjustment) {

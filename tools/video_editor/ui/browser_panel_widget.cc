@@ -19,11 +19,20 @@ constexpr float kChromeH = 30.0f;
 constexpr float kStatusH = 18.0f;
 constexpr float kPad = 8.0f;
 
-std::mutex g_event_mutex;
-std::string g_pending_url;
-std::string g_pending_title;
-
 }  // namespace
+
+// Per-instance event mailbox — CEF UI-thread callbacks write here
+// under the mutex; Render() drains it on the app UI thread. Scoped to
+// the widget (not file-static): a recreated panel never sees a dead
+// panel's pending events, and a weak_ptr-held sink means callbacks
+// outliving the widget resolve to nothing instead of a dangling this.
+struct BrowserPanelWidget::CefEvents {
+    std::mutex mutex;
+    std::string url;
+    std::string title;
+    bool loading = false;
+    bool has_loading = false;
+};
 
 BrowserPanelWidget::BrowserPanelWidget(void* parent_hwnd)
     : parent_hwnd_(parent_hwnd) {
@@ -55,6 +64,10 @@ BrowserPanelWidget::BrowserPanelWidget(void* parent_hwnd)
 }
 
 BrowserPanelWidget::~BrowserPanelWidget() {
+    // Expire the event sink first: any HostEvents callback still in
+    // flight on the CEF thread resolves its weak_ptr to nothing after
+    // this — it can never write into a half-destroyed widget.
+    cef_events_.reset();
     if (cef_) {
         cef_->Close();
     }
@@ -75,17 +88,29 @@ void BrowserPanelWidget::EnsureBrowser() {
         return;
     }
     cef_ = std::make_unique<XER::Cef::CefHost>();
+    // Callbacks capture a weak_ptr to the sink — never `this`: the CEF
+    // thread may invoke them after the widget is gone.
+    cef_events_ = std::make_shared<CefEvents>();
+    const std::weak_ptr<CefEvents> sink = cef_events_;
     XER::Cef::HostEvents events;
-    events.on_url = [](const std::string& url) {
-        std::lock_guard<std::mutex> lk(g_event_mutex);
-        g_pending_url = url;
+    events.on_url = [sink](const std::string& url) {
+        if (const auto s = sink.lock()) {
+            std::lock_guard<std::mutex> lk(s->mutex);
+            s->url = url;
+        }
     };
-    events.on_title = [](const std::string& title) {
-        std::lock_guard<std::mutex> lk(g_event_mutex);
-        g_pending_title = title;
+    events.on_title = [sink](const std::string& title) {
+        if (const auto s = sink.lock()) {
+            std::lock_guard<std::mutex> lk(s->mutex);
+            s->title = title;
+        }
     };
-    events.on_loading = [this](bool loading) {
-        status_ = loading ? "Loading..." : "";
+    events.on_loading = [sink](bool loading) {
+        if (const auto s = sink.lock()) {
+            std::lock_guard<std::mutex> lk(s->mutex);
+            s->loading = loading;
+            s->has_loading = true;
+        }
     };
     cef_ok_ = cef_->Create(static_cast<CefHostNativeHandle>(parent_hwnd_),
                            static_cast<int>(view_rect_.x),
@@ -173,14 +198,18 @@ void BrowserPanelWidget::Render(
     XER::UI::Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens) {
     // Apply CEF-thread events on the UI thread.
-    {
-        std::lock_guard<std::mutex> lk(g_event_mutex);
-        if (!g_pending_url.empty()) {
-            url_input_->SetValue(g_pending_url);
-            g_pending_url.clear();
+    if (cef_events_) {
+        std::lock_guard<std::mutex> lk(cef_events_->mutex);
+        if (!cef_events_->url.empty()) {
+            url_input_->SetValue(cef_events_->url);
+            cef_events_->url.clear();
         }
-        if (!g_pending_title.empty()) {
-            g_pending_title.clear();
+        // The title is tracked but not drawn anywhere yet — drain so
+        // the slot doesn't hold a stale value.
+        cef_events_->title.clear();
+        if (cef_events_->has_loading) {
+            status_ = cef_events_->loading ? "Loading..." : "";
+            cef_events_->has_loading = false;
         }
     }
     const auto bounds = GetBounds();
