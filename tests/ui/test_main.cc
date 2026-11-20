@@ -2,6 +2,54 @@
 #include <iostream>
 #include <string_view>
 
+#ifdef _WIN32
+#include <windows.h>
+#include <dbghelp.h>
+#pragma comment(lib, "dbghelp.lib")
+
+static LONG WINAPI CrashTrace(EXCEPTION_POINTERS* e) {
+    void* addr = e->ExceptionRecord->ExceptionAddress;
+    HMODULE mod = nullptr;
+    std::fprintf(stderr, "\n[CRASH] code=0x%08lx addr=%p\n",
+                 e->ExceptionRecord->ExceptionCode, addr);
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                               GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           reinterpret_cast<LPCSTR>(addr), &mod)) {
+        char name[MAX_PATH]{};
+        GetModuleFileNameA(mod, name, MAX_PATH);
+        std::fprintf(stderr, "[CRASH] module=%s rva=%p\n", name,
+                     reinterpret_cast<char*>(addr) -
+                         reinterpret_cast<char*>(mod));
+    }
+    HANDLE proc = GetCurrentProcess();
+    SymInitialize(proc, nullptr, TRUE);
+    void* stack[64];
+    USHORT frames = CaptureStackBackTrace(0, 64, stack, nullptr);
+    for (USHORT i = 0; i < frames; ++i) {
+        char buffer[sizeof(SYMBOL_INFO) + MAX_SYM_NAME]{};
+        auto* sym = reinterpret_cast<SYMBOL_INFO*>(buffer);
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen = MAX_SYM_NAME;
+        DWORD64 disp = 0;
+        if (SymFromAddr(proc, reinterpret_cast<DWORD64>(stack[i]), &disp,
+                        sym)) {
+            HMODULE smod = nullptr;
+            char mname[MAX_PATH]{};
+            if (GetModuleHandleExA(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    reinterpret_cast<LPCSTR>(stack[i]), &smod)) {
+                GetModuleFileNameA(smod, mname, MAX_PATH);
+            }
+            std::fprintf(stderr, "  #%u %s!%s+0x%llx\n", i, mname, sym->Name,
+                         disp);
+        }
+    }
+    std::fflush(stderr);
+    return EXCEPTION_EXECUTE_HANDLER;
+}
+#endif
+
 #include "colorspace/color_space.h"
 #include "test_harness.h"
 
@@ -18,6 +66,9 @@ XER_UI_TEST(sc_rgb_is_hdr) {
 }
 
 int main(int argc, char* argv[]) {
+#ifdef _WIN32
+    SetUnhandledExceptionFilter(CrashTrace);
+#endif
     std::string_view filter;
     if (argc == 3 && std::string_view{argv[1]} == "--filter") {
         filter = argv[2];

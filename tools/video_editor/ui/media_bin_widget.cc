@@ -363,16 +363,19 @@ void MediaBinWidget::DrawGrid(
             thumb.x + thumb.width - bs.width - 8.0f,
             thumb.y + thumb.height - bs.height - 5.0f,
             bs.width + 6.0f, bs.height + 3.0f};
-        renderer.FillRect(badge, {0.0f, 0.0f, 0.0f, 0.65f}, 3.0f);
+        renderer.FillRect(badge, {0.0f, 0.0f, 0.0f, 0.65f},
+                          tokens.radius_small);
         renderer.DrawText(dur,
                           {badge.x + 3.0f, badge.y + 1.5f,
                            badge.width - 6.0f, badge.height - 3.0f},
                           badge_style);
 
-        // Name under the thumb, truncated by the renderer's clip.
+        // Name under the thumb — a small inset keeps text off the
+        // card edges; the renderer's clip truncates the tail.
         renderer.DrawText(
             Basename(entry.path),
-            {card.x, card.y + thumb_h + 4.0f, card.width, 16.0f},
+            {card.x + 4.0f, card.y + thumb_h + 5.0f, card.width - 8.0f,
+             16.0f},
             {selected ? tokens.accent : tokens.foreground,
              tokens.font_small, 400});
     }
@@ -482,7 +485,10 @@ void MediaBinWidget::DrawChips(
                     : XER::UI::Theme::Color{tokens.hover.r,
                                             tokens.hover.g,
                                             tokens.hover.b, 0.6f},
-                12.0f);
+                rect.height * 0.5f);   // pill
+        } else {
+            renderer.StrokeRect(rect, tokens.border, 1.0f,
+                                rect.height * 0.5f);
         }
         renderer.DrawText(kChipLabels[i],
                           {rect.x, rect.y + 1.0f, rect.width,

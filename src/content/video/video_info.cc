@@ -31,17 +31,68 @@ bool IsImageCodecName(const std::string& codec_name) {
     return false;
 }
 
-// Embedded cover art shows up as a "video" stream flagged attached-
-// pic — the bridge's StreamInfo drops the disposition flags, so the
-// probe reads the tell-tale signs instead:
+// Audio-only demuxer names (MediaInfo::format_name is the comma-
+// separated iformat alias list, e.g. "mp3" or "mov,mp4,m4a,3gp,3g2,
+// mj2"). These containers physically cannot carry a real video
+// track — any "video" stream they surface is embedded art. The
+// ambiguous families are deliberately ABSENT: mov/mp4/m4a muxes real
+// video, matroska/webm carries mka next to mkv, ogg carries theora,
+// asf carries wmv.
+bool IsAudioPrimaryFormat(const std::string& format_name) {
+    static constexpr const char* kAudioFormats[] = {
+        "mp3",   "mp2",  "mp1",  "flac",  "wav",   "w64",
+        "aiff",  "aif",  "aifc", "ape",   "wv",    "tta",
+        "aac",   "adts", "ac3",  "eac3",  "dts",   "dtshd",
+        "mlp",   "truehd", "caf", "oma",  "aa",    "amr",
+        "au",    "voc",  "mpc",  "mpc8",  "tak",   "shn",
+        "spx",
+    };
+    std::size_t pos = 0;
+    while (pos <= format_name.size()) {
+        const std::size_t comma = format_name.find(',', pos);
+        const std::size_t end =
+            comma == std::string::npos ? format_name.size() : comma;
+        const std::string token = format_name.substr(pos, end - pos);
+        for (const char* name : kAudioFormats) {
+            if (token == name) {
+                return true;
+            }
+        }
+        if (comma == std::string::npos) {
+            break;
+        }
+        pos = comma + 1;
+    }
+    return false;
+}
+
+}  // namespace
+
+// Embedded cover art shows up as a "video" stream in audio files.
+// The bridge now surfaces the disposition flag, and the probe layers
+// the remaining tell-tale signs so a stream that dodges one marker
+// is still caught — an mp3 whose cover lacks BOTH the attached_pic
+// flag and "cover" metadata was a real-world miss (bug report
+// 2026-11-21):
+//   * disposition AV_DISPOSITION_ATTACHED_PIC (bridge StreamInfo::
+//     attached_pic) — the authoritative marker,
 //   * stream metadata mentioning "cover" (id3v2 APIC / FLAC picture
 //     block / mp4 "covr" all surface a comment like "Cover (front)"),
-//   * or a single-frame image-codec stream next to an audio stream
-//     (a real video has many frames or a non-image codec; the audio
-//     gate keeps a lone PNG/JPEG from losing its picture).
-bool IsAttachedPicture(
+//   * ANY picture stream in an audio-only container (mp3/flac/wav-
+//     family demuxers cannot carry a real video track — whatever
+//     picture appears there is art regardless of codec or frame
+//     count; this is what catches a cover written without the
+//     disposition flag),
+//   * or a short (1-2 frame) image-codec clip next to audio in a
+//     general container — a real video has many frames, and an
+//     unknown/0 count is NOT treated as art there (camera MJPEG
+//     footage with uncounted frames must stay video).
+// The audio gate throughout keeps a lone PNG/JPEG (a real still)
+// counting as video.
+bool IsAttachedPictureStream(
     const XER::Bridge::FFmpeg::StreamInfo& stream,
-    bool has_audio_stream) {
+    bool has_audio_stream,
+    const std::string& container_format) {
     for (const auto& entry : stream.metadata) {
         std::string haystack = entry.key + "=" + entry.value;
         for (char& c : haystack) {
@@ -52,11 +103,18 @@ bool IsAttachedPicture(
             return true;
         }
     }
-    return has_audio_stream && stream.frame_count == 1 &&
-           IsImageCodecName(stream.codec_name);
+    if (!has_audio_stream) {
+        return false;
+    }
+    if (stream.attached_pic) {
+        return true;
+    }
+    if (IsAudioPrimaryFormat(container_format)) {
+        return true;
+    }
+    return IsImageCodecName(stream.codec_name) &&
+           stream.frame_count >= 1 && stream.frame_count <= 2;
 }
-
-}  // namespace
 
 bool ProbeVideo(const std::string& path, VideoInfo* info,
                 std::string* error_out) {
@@ -85,7 +143,8 @@ bool ProbeVideo(const std::string& path, VideoInfo* info,
     const XER::Bridge::FFmpeg::StreamInfo* video = nullptr;
     for (const auto& stream : media.streams) {
         if (stream.media_type == "video" &&
-            !IsAttachedPicture(stream, audio != nullptr)) {
+            !IsAttachedPictureStream(stream, audio != nullptr,
+                                     media.format_name)) {
             video = &stream;
             break;
         }

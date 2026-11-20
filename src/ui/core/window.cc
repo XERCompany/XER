@@ -207,7 +207,27 @@ public:
     }
 
     void SetTheme(Theme::Variant variant) {
+        // Picking a builtin variant drops any file/custom token set so
+        // theme toggles always restore a real variant look.
+        theme_.ClearTokens();
         theme_.SetVariant(variant);
+        if (hwnd_ != nullptr) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+
+    void SetTokens(Theme::Tokens tokens) {
+        // Custom sets keep the current variant's metric base unless the
+        // caller pre-baked metrics in — the recorded variant drives
+        // GetTheme() reporting and any later ClearTheme().
+        theme_.SetTokens(std::move(tokens), theme_.GetVariant());
+        if (hwnd_ != nullptr) {
+            InvalidateRect(hwnd_, nullptr, FALSE);
+        }
+    }
+
+    void ClearTheme() {
+        theme_.ClearTokens();
         if (hwnd_ != nullptr) {
             InvalidateRect(hwnd_, nullptr, FALSE);
         }
@@ -1059,6 +1079,14 @@ Theme::Variant Window::GetTheme() const {
 
 bool Window::SetThemeFile(const std::string& path, std::string* error) {
     return impl_->SetThemeFile(path, error);
+}
+
+void Window::SetTokens(Theme::Tokens tokens) {
+    impl_->SetTokens(std::move(tokens));
+}
+
+void Window::ClearTheme() {
+    impl_->ClearTheme();
 }
 
 std::string Window::GetLastRenderError() const {

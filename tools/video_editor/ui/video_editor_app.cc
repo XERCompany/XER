@@ -3830,6 +3830,10 @@ void VideoEditorAppWidget::Render(
     EnsureChildren();
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.background, 0.0f);
+    // Toolbar chrome band under the title bar — the same elevation as
+    // the status bar/tab strip so the chrome reads as one frame.
+    renderer.FillRect({bounds.x, bounds.y + 38.0f, bounds.width, 44.0f},
+                      tokens.panel, 0.0f);
     renderer.DrawLine({bounds.x, bounds.y + 82.0f},
                       {bounds.x + bounds.width, bounds.y + 82.0f},
                       tokens.border, 1.0f);
@@ -3852,6 +3856,15 @@ void VideoEditorAppWidget::Render(
             {tab_strip_rect_.x + tab_strip_rect_.width,
              tab_strip_rect_.y + tab_strip_rect_.height},
             tokens.border, 1.0f);
+        // Active-tab indicator: a 2px accent underline centered under
+        // the tab button (cached rect from Layout).
+        if (active_tab_rect_.width > 0.0f) {
+            renderer.FillRect(
+                {active_tab_rect_.x + 6.0f,
+                 tab_strip_rect_.y + tab_strip_rect_.height - 2.0f,
+                 active_tab_rect_.width - 12.0f, 2.0f},
+                tokens.accent, 1.0f);
+        }
     }
     if (timeline_top_ > 0.0f) {
         renderer.DrawLine({bounds.x, timeline_top_},
@@ -3911,7 +3924,8 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
 
     const float toolbar_y = bounds.y + 38.0f;
     const float toolbar_h = 44.0f;
-    const float margin = 10.0f;
+    // Outer margin uses the 12px content-padding step of the grid.
+    const float margin = tokens.spacing_medium;
     // Export stays pinned right; the left button row hides buttons that
     // would collide with it instead of drawing underneath.
     const float export_x = bounds.x + bounds.width - margin - 84.0f;
@@ -4075,9 +4089,14 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             tab_queue_btn_, tab_plugins_btn_, tab_color_btn_,
             tab_browser_btn_};
         float tx = inspector_x;
-        for (const auto& btn : tabs) {
-            btn->Layout({tx, panel_y + 3.0f, tab_w, tab_h - 6.0f},
-                        tokens);
+        active_tab_rect_ = {};
+        for (std::size_t ti = 0; ti < 10; ++ti) {
+            const XER::UI::Layout::Rect tab_rect{
+                tx, panel_y + 3.0f, tab_w, tab_h - 6.0f};
+            tabs[ti]->Layout(tab_rect, tokens);
+            if (static_cast<int>(ti) == right_tab_) {
+                active_tab_rect_ = tab_rect;
+            }
             tx += tab_w + gap;
         }
         std::shared_ptr<Widgets::Widget> panels[] = {

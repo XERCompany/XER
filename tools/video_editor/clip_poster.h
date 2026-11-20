@@ -37,9 +37,13 @@ public:
     // BGRA8). Unlike Extract's clamp, an out-of-range `seconds`
     // (< 0 or beyond the probed duration) falls back to the
     // mid-stream frame — the catalog's default poster position.
-    // Returns false with error_out set for a null frame_out, a missing
-    // file, an audio-only container, or when no frame decodes.
-    // Stateless/static — callers own concurrency.
+    // The result is thumbnail-sized: frames wider/taller than 320 px
+    // on the long edge are area-downscaled (aspect preserved) so the
+    // byte-bounded PosterCache downstream can hold hundreds of them —
+    // full-resolution posters made the cache thrash and the timeline
+    // thumbnails blink. Returns false with error_out set for a null
+    // frame_out, a missing file, an audio-only container, or when no
+    // frame decodes. Stateless/static — callers own concurrency.
     static bool GetPosterAt(const std::string& utf8_source_path,
                             double seconds,
                             video::Frame* frame_out,

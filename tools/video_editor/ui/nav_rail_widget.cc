@@ -200,6 +200,13 @@ void NavRailWidget::Render(
                 : Fade(tokens.hover, pressed ? 0.9f : 0.6f);
             renderer.FillRect(slot.rect, fill, tokens.radius_medium);
         }
+        if (active) {
+            // Accent bar on the slot's left edge — the selected-section
+            // indicator, Premiere/VS Code activity-bar style.
+            renderer.FillRect({slot.rect.x + 1.0f, slot.rect.y + 9.0f,
+                               3.0f, slot.rect.height - 18.0f},
+                              tokens.accent, 1.5f);
+        }
         const auto color =
             active ? tokens.accent
                    : (hovered ? tokens.foreground : tokens.muted);

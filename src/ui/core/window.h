@@ -79,6 +79,14 @@ public:
     // and repaints. Returns false and fills `error` on parse failure;
     // the previous theme is kept.
     bool SetThemeFile(const std::string& path, std::string* error = nullptr);
+    // Applies a fully custom token set built in code (e.g. an
+    // app-specific palette derived from a builtin variant). The tokens
+    // persist until ClearTheme() or the next SetTheme()/SetThemeFile()
+    // call — SetTheme(variant) restores the builtin variant outright.
+    void SetTokens(Theme::Tokens tokens);
+    // Drops any custom token set (SetTokens/SetThemeFile) so the window
+    // renders with the builtin Light/Dark variant again.
+    void ClearTheme();
     // Empty after a successful paint; otherwise returns the most recent native paint error.
     std::string GetLastRenderError() const;
     // Frame-time and damage-coverage counters for the last painted frames.

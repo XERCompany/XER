@@ -20,6 +20,7 @@
 #include <json/json.h>
 
 #include "video_editor_test_util.h"
+#include "content/video/video_info.h"
 #include "frame.h"
 #include "helper/path_utils.h"
 #include "media_catalog.h"
@@ -316,6 +317,89 @@ int XER_VideoEditor_RunCatalogTests() {
         }
     }
 
+    // -- 1b. Cover-art classification seam -----------------------------
+    // IsAttachedPictureStream is pure logic — no fixtures, no FFmpeg
+    // dependency — so it runs even when the bridge is unavailable. It
+    // must catch the reported miss: an mp3 whose embedded cover
+    // stream has NEITHER the attached_pic disposition NOR "cover"
+    // metadata NOR a countable frame total (nb_frames = 0).
+    {
+        using XER::Content::Video::IsAttachedPictureStream;
+        using StreamInfo = XER::Bridge::FFmpeg::StreamInfo;
+
+        // The reported file's shape: mjpeg "video" stream in an mp3,
+        // no flag, no metadata, unknown frame count.
+        StreamInfo mp3_cover;
+        mp3_cover.media_type = "video";
+        mp3_cover.codec_name = "mjpeg";
+        mp3_cover.width = 500;
+        mp3_cover.height = 500;
+        mp3_cover.frame_count = 0;         // uncounted
+        XER_VE_CHECK(IsAttachedPictureStream(mp3_cover, true, "mp3"));
+
+        // Explicit disposition flag — authoritative on any container.
+        StreamInfo flagged = mp3_cover;
+        flagged.attached_pic = true;
+        XER_VE_CHECK(IsAttachedPictureStream(
+            flagged, true, "mov,mp4,m4a,3gp,3g2,mj2"));
+
+        // "cover" metadata marker — works even without audio.
+        StreamInfo tagged;
+        tagged.media_type = "video";
+        tagged.codec_name = "h264";
+        tagged.metadata.push_back({"comment", "Cover (front)"});
+        XER_VE_CHECK(IsAttachedPictureStream(
+            tagged, true, "mov,mp4,m4a,3gp,3g2,mj2"));
+
+        // Single/double-frame image-codec clip next to audio in a
+        // general container — art.
+        StreamInfo one_frame;
+        one_frame.media_type = "video";
+        one_frame.codec_name = "png";
+        one_frame.frame_count = 1;
+        XER_VE_CHECK(IsAttachedPictureStream(
+            one_frame, true, "mov,mp4,m4a,3gp,3g2,mj2"));
+        one_frame.frame_count = 2;
+        XER_VE_CHECK(IsAttachedPictureStream(
+            one_frame, true, "mov,mp4,m4a,3gp,3g2,mj2"));
+
+        // -- negatives: real video and real stills must NOT be art ---
+        // Real h264 movie stream in mp4, audio present.
+        StreamInfo movie;
+        movie.media_type = "video";
+        movie.codec_name = "h264";
+        movie.frame_count = 4500;
+        XER_VE_CHECK(!IsAttachedPictureStream(
+            movie, true, "mov,mp4,m4a,3gp,3g2,mj2"));
+        // Camera MJPEG footage: image codec + audio but MANY frames —
+        // a real video, not a cover.
+        StreamInfo mjpeg_cam;
+        mjpeg_cam.media_type = "video";
+        mjpeg_cam.codec_name = "mjpeg";
+        mjpeg_cam.frame_count = 18000;
+        XER_VE_CHECK(!IsAttachedPictureStream(
+            mjpeg_cam, true, "avi"));
+        // Same footage with an UNCOUNTED frame total in a general
+        // container: the count alone must not condemn it.
+        mjpeg_cam.frame_count = 0;
+        XER_VE_CHECK(!IsAttachedPictureStream(
+            mjpeg_cam, true, "matroska,webm"));
+        // Lone still image (no audio stream) — never cover art even
+        // in an audio-primary format name: it keeps its picture.
+        XER_VE_CHECK(!IsAttachedPictureStream(mp3_cover, false, "mp3"));
+        // A 1-2 frame NON-image clip in a general container keeps
+        // being video (motion-photo-ish edge; the audio gate alone
+        // cannot brand it).
+        StreamInfo tiny_clip;
+        tiny_clip.media_type = "video";
+        tiny_clip.codec_name = "h264";
+        tiny_clip.frame_count = 1;
+        XER_VE_CHECK(!IsAttachedPictureStream(
+            tiny_clip, true, "mov,mp4,m4a,3gp,3g2,mj2"));
+        // Flagged/audio-primary guesses without audio stay video.
+        XER_VE_CHECK(!IsAttachedPictureStream(flagged, false, "mp3"));
+    }
+
     // Cases 2-8 need probed media fixtures — skip cleanly without FFmpeg.
     if (!XER::Bridge::FFmpeg::IsAvailable()) {
         return 0;
@@ -605,6 +689,78 @@ int XER_VideoEditor_RunCatalogTests() {
         } else {
             std::fprintf(stderr,
                          "note: still fixture could not be created\n");
+        }
+
+        // An mp3 with embedded cover art: the mp3 muxer accepts one
+        // image-codec "video" stream and writes it as an id3v2 APIC
+        // attached picture. When the mux/encoder combo is available,
+        // the file MUST classify as audio — HasVideo() false — the
+        // regression this fix covers (a tagged mp3 landing on V1).
+        const auto cover_mp3 = dir / "cover.mp3";
+        {
+            const auto chunks = MakeSineFrames(kAudioTotalSamples);
+            auto cover_video = [](std::size_t index,
+                                  XER::Bridge::FFmpeg::VideoFrameInfo*
+                                      out,
+                                  std::string*) {
+                (void)index;
+                FillVideoFrame(out, 0);
+                return true;
+            };
+            auto cover_audio = [&chunks](
+                                   std::size_t index,
+                                   XER::Bridge::FFmpeg::
+                                       AudioFrameInfo* out,
+                                   std::string*) {
+                if (index >= chunks.size()) {
+                    return false;
+                }
+                *out = chunks[index];
+                return true;
+            };
+            bool muxed = false;
+            for (const char* audio_codec : {"libmp3lame", "mp3"}) {
+                for (const char* video_codec : {"mjpeg", "png"}) {
+                    XER::Bridge::FFmpeg::EncodeAudioVideoParams p;
+                    p.video.output_path = Utf8Path(cover_mp3);
+                    p.video.codec_name = video_codec;
+                    p.video.width = kVideoW;
+                    p.video.height = kVideoH;
+                    p.video.pixel_format = "bgra";
+                    p.video.fps_num = 25;
+                    p.video.fps_den = 1;
+                    p.audio.codec_name = audio_codec;
+                    p.audio.sample_rate = kAudioRate;
+                    p.audio.channels = kAudioChannels;
+                    p.audio.sample_format = "s16";
+                    p.audio.bit_rate = 128000;
+                    err.clear();
+                    if (XER::Bridge::FFmpeg::EncodeAudioVideoStream(
+                            p, 1, cover_video, chunks.size(),
+                            cover_audio, &err)) {
+                        muxed = true;
+                        break;
+                    }
+                }
+                if (muxed) break;
+            }
+            if (muxed) {
+                std::int64_t mp3_id = 0;
+                perr.clear();
+                XER_VE_CHECK(cat.Import(Utf8Path(cover_mp3), &mp3_id,
+                                        false, &perr));
+                CatalogEntry mp3;
+                XER_VE_CHECK(cat.FindById(mp3_id, &mp3, &perr));
+                // Cover art must NOT count as video — the mp3 is an
+                // audio clip, never a V1 resident.
+                XER_VE_CHECK(mp3.HasAudio());
+                XER_VE_CHECK(!mp3.HasVideo());
+            } else {
+                std::fprintf(stderr,
+                             "note: mp3+cover fixture encode failed:"
+                             " %s\n",
+                             err.c_str());
+            }
         }
     }
 

@@ -270,6 +270,9 @@ private:
     float status_bar_top_ = 0.0f;
     float timeline_top_ = 0.0f;
     XER::UI::Layout::Rect tab_strip_rect_{};
+    // Active tab's bounds (cached by Layout) so Render() can draw the
+    // accent underline indicator under it.
+    XER::UI::Layout::Rect active_tab_rect_{};
     // User-resizable panels: Layout() fills these 6px hit-rects inside
     // the gap strips the child layout leaves between panels (left
     // panel's right edge / right panel's left edge / timeline's top

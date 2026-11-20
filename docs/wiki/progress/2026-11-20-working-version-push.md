@@ -128,3 +128,29 @@ commit boundary per task.
   to clip.audio_fx via history on close); per-row Editor buttons
   in Inspector; `video_editor.exe --cef-check` — real browser +
   load event. Gaps: no IPlugFrame; editor instance ≠ live mixer node.
+
+## Completed 2026-11-20 (waves 7-9)
+
+- **Flicker fix** (agent 48c85630): root cause = native-res posters
+  (~8.3 MB each) in the 64 MiB PosterCache → ~7 slots vs dozens of
+  250 ms buckets → LRU thrash → visible blink. Fix: `kPosterMaxEdge`
+  320 px area-average downscale before caching (~285 entries).
+- **Cover-art classification**: `StreamInfo.attached_pic` +
+  ProbeVideo skips attached_pic / "cover" metadata / ≤2-frame
+  image-codec streams beside audio — tagged mp3/flac → audio-only.
+- **CEF + VST3 view** (agent 50a6e277): browser DPI fix; VST3 editor
+  = owned resizable popup with param commit-back via history;
+  `--cef-check` flag verifies real CEF in-process.
+- **Full UI redesign** (agent 092e81cb): `ui/ve_theme.{h,cc}` design
+  tokens (violet accent #8B5CF6 from editor.yaml, spacing 4-24px,
+  radius 4-8, fonts 11/13/18); `Window::SetTokens/ClearTheme` in
+  src/ui; timeline chrome bands, kind-tinted track headers w/ badges
+  + M/H/L chips, two-tone rounded clips w/ label strip + link
+  indicator, refined ruler + playhead handle; panel chrome/spacing
+  everywhere.
+- **SEH crash tracer** in tests/ui/test_main.cc — any future crash
+  prints module+RVA+symbolized stack instead of bare exit code.
+- **False-alarm diagnosis**: XER_UI_Tests segfault under check_all
+  was an ABI skew (AudioFrameInfo grew channel_layout mid-commit;
+  consistent rebuild → green, 3x3 runs clean).
+- Final: `check_all` 6/6 PASS; smoke 16/16; UI tests 106+.

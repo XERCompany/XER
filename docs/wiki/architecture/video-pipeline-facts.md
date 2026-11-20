@@ -354,6 +354,20 @@ Supporting rules (media_catalog.h holds the authoritative doc):
 - Cover art is NOT video: `ProbeVideo` skips attached-picture streams
   (AV_DISPOSITION_ATTACHED_PIC / single-frame image codec next to
   audio) so tagged mp3/flac/m4a classify as audio.
+- 2026-11-21 hardening (cover art that dodged the first heuristic):
+  `StreamInfo::attached_pic` now carries the disposition flag, and
+  `IsAttachedPictureStream` (exported from video_info.h as the test
+  seam) additionally treats ANY picture stream in an audio-only
+  demuxer (mp3/flac/wav-family — tokenized from
+  MediaInfo::format_name; mov/mp4/m4a, matroska/webm, ogg, asf stay
+  general) as art, plus 1-2 frame image-codec streams next to audio
+  in general containers. Unknown (0) frame counts are NOT condemned
+  in general containers — camera MJPEG footage stays video.
+- Timeline flicker fix (same change): `ClipPoster::GetPosterAt`
+  area-downscales posters to <= 320 px on the long edge — full-res
+  BGRA frames (~8.3 MB @1080p) overflowed the 64 MiB PosterCache in
+  ~7 entries vs dozens of visible 0.25 s buckets per clip, and the
+  LRU thrash was what made thumbnails blink.
 - `MediaBounds.has_audio` does not exist — placement only gates on
   `has_video`; the mixer taps audio from the source file regardless
   of track kind.

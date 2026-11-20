@@ -1167,13 +1167,20 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         y += height;
     };
 
+    // Section headers get a 20px row and extra air above so the groups
+    // read as distinct blocks instead of a wall of text.
+    const auto section = [&](const char* text) {
+        label(text, 20.0f, 0.0f, true);
+        gap(2.0f);
+    };
+
     place(title_, 24.0f);
     place(source_, 22.0f);
     gap(10.0f);
 
     // ---- details (CapCut-style clip summary, read-only) ----
     if (has_clip_) {
-        label("DETAILS", 18.0f, 0.0f, true);
+        section("DETAILS");
         const char* kind = "media";
         if (clip_.is_adjustment) kind = "adjustment";
         else if (clip_.source.kind == SourceKind::ColorMatte)
@@ -1184,13 +1191,13 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             kind = "title";
         char line[160];
         std::snprintf(line, sizeof(line), "type      %s", kind);
-        label(line, 16.0f);
+        label(line, 18.0f);
         std::snprintf(line, sizeof(line), "rate      %.2fx",
                       clip_.playback_rate);
-        label(line, 16.0f);
+        label(line, 18.0f);
         std::snprintf(line, sizeof(line), "blend     %s",
                       BlendModeName(clip_.blend_mode));
-        label(line, 16.0f);
+        label(line, 18.0f);
         int key_count = 0;
         for (const auto& [prop, keys] : clip_.keyframes) {
             key_count += static_cast<int>(keys.size());
@@ -1198,8 +1205,8 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         std::snprintf(line, sizeof(line), "masks %d   fx %d   keys %d",
                       static_cast<int>(clip_.masks.size()),
                       static_cast<int>(clip_.effects.size()), key_count);
-        label(line, 16.0f);
-        gap(6.0f);
+        label(line, 18.0f);
+        gap(10.0f);
     }
 
     const auto input_row = [&](Field field) {
@@ -1213,15 +1220,15 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     };
 
     // ---- timing ----
-    label("TIMING", 18.0f, 0.0f, true);
+    section("TIMING");
     input_row(Field::Start);
     input_row(Field::InPoint);
     input_row(Field::Duration);
     input_row(Field::Rate);
-    gap(6.0f);
+    gap(10.0f);
 
     // ---- transform ----
-    label("TRANSFORM", 18.0f, 0.0f, true);
+    section("TRANSFORM");
     input_row(Field::OffsetX);
     input_row(Field::OffsetY);
     input_row(Field::Scale);
@@ -1233,25 +1240,25 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         {inner_x + 92.0f, y, std::max(40.0f, inner_w - 92.0f), 30.0f},
         tokens);
     y += 36.0f;
-    gap(4.0f);
+    gap(10.0f);
 
     // ---- audio ----
-    label("AUDIO", 18.0f, 0.0f, true);
+    section("AUDIO");
     input_row(Field::GainDb);
     input_row(Field::Pan);
     input_row(Field::FadeIn);
     input_row(Field::FadeOut);
-    gap(4.0f);
+    gap(10.0f);
 
     // ---- link group ----
-    label("LINK", 18.0f, 0.0f, true);
+    section("LINK");
     place(link_input_, 30.0f);
     gap(2.0f);
-    label("same group moves/trims together", 16.0f, 0.0f, true);
-    gap(6.0f);
+    label("same group moves/trims together", 18.0f, 0.0f, true);
+    gap(10.0f);
 
     // ---- keyframes ----
-    label("KEYFRAMES", 18.0f, 0.0f, true);
+    section("KEYFRAMES");
     for (const KeyRow& row : key_rows_) {
         row.select->Layout({inner_x, y, inner_w - 116.0f, 26.0f}, tokens);
         row.toggle->Layout({inner_x + inner_w - 112.0f, y, 30.0f, 26.0f},
@@ -1265,10 +1272,10 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         y += 30.0f;
     }
     place(key_editor_, 140.0f);
-    gap(8.0f);
+    gap(10.0f);
 
     // ---- masks ----
-    label("MASKS", 18.0f, 0.0f, true);
+    section("MASKS");
     add_rect_btn_->Layout({inner_x, y, 70.0f, 26.0f}, tokens);
     add_ellipse_btn_->Layout({inner_x + 76.0f, y, 80.0f, 26.0f}, tokens);
     y += 32.0f;
@@ -1303,10 +1310,10 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             tokens);
         y += 34.0f;
     }
-    gap(4.0f);
+    gap(10.0f);
 
     // ---- video effects ----
-    label("EFFECTS", 18.0f, 0.0f, true);
+    section("EFFECTS");
     place(effects_input_, 30.0f);
     gap(4.0f);
     for (std::size_t i = 0; i < fx_rows_.size(); ++i) {
@@ -1323,11 +1330,11 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             {inner_x + inner_w - 26.0f, y, 24.0f, 24.0f}, tokens);
         y += 26.0f;
     }
-    gap(4.0f);
+    gap(10.0f);
 
     // ---- hosted audio fx (name + per-row Editor button) ----
     if (!clip_.audio_fx.empty()) {
-        label("AUDIO FX (VST3)", 18.0f, 0.0f, true);
+        section("AUDIO FX (VST3)");
         constexpr float kEditorBtnW = 58.0f;
         for (std::size_t i = 0; i < clip_.audio_fx.size(); ++i) {
             const ClipAudioFx& fx = clip_.audio_fx[i];
@@ -1347,11 +1354,11 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             }
             y += 24.0f;
         }
-        gap(4.0f);
+        gap(10.0f);
     }
 
     // ---- transition picker ----
-    label("TRANSITION", 18.0f, 0.0f, true);
+    section("TRANSITION");
     drawn_.push_back({{inner_x, y, 90.0f, 30.0f}, "Type", false});
     transition_combo_->Layout(
         {inner_x + 92.0f, y, std::max(40.0f, inner_w - 92.0f), 30.0f},

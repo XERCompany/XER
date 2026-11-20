@@ -29,6 +29,69 @@ bool Fail(std::string* error_out, const std::string& message) {
     return false;
 }
 
+// Thumbnail pixel budget: the in-memory posters decoded by
+// GetPosterAt feed the timeline's per-clip thumbnail strip via
+// MediaPrep -> PosterCache, which is byte-bounded (64 MiB). A
+// native-resolution BGRA frame costs ~8.3 MB at 1080p — the cache
+// could hold only ~7 of them, while ONE clip's strip already asks
+// for dozens of distinct 0.25 s buckets. The resulting LRU thrash
+// re-decoded a different slot almost every paint, which is what made
+// the timeline thumbnails visibly blink (kPending -> blank -> kReady
+// -> evicted -> kPending ...). Capping the long edge at 320 px keeps
+// each poster ~230 KB, so hundreds stay resident and a widget-level
+// cache miss is answered kReady synchronously.
+constexpr int kPosterMaxEdge = 320;
+
+// Aspect-preserving BGRA area-average downscale: each destination
+// pixel averages the source rectangle it covers (proper minification
+// for the large ratios posters see, unlike nearest sampling).
+// `src` must be BGRA8; `dst_w`/`dst_h` must be <= the source size.
+bool DownscaleBgra(const video::Frame& src, int dst_w, int dst_h,
+                   video::Frame* dst) {
+    const int src_w = src.Width();
+    const int src_h = src.Height();
+    if (!src.IsValid() || src.Format() != video::PixelFormat::BGRA8 ||
+        dst == nullptr || dst_w <= 0 || dst_h <= 0 ||
+        dst_w > src_w || dst_h > src_h) {
+        return false;
+    }
+    if (!dst->Allocate(dst_w, dst_h, video::PixelFormat::BGRA8)) {
+        return false;
+    }
+    const std::uint8_t* sp = src.Data();
+    std::uint8_t* dp = dst->Data();
+    for (int dy = 0; dy < dst_h; ++dy) {
+        const int sy0 = dy * src_h / dst_h;
+        const int sy1 = (dy + 1) * src_h / dst_h;   // > sy0 (dst<=src)
+        for (int dx = 0; dx < dst_w; ++dx) {
+            const int sx0 = dx * src_w / dst_w;
+            const int sx1 = (dx + 1) * src_w / dst_w;
+            std::uint32_t b = 0, g = 0, r = 0, a = 0;
+            for (int sy = sy0; sy < sy1; ++sy) {
+                const std::uint8_t* row =
+                    sp + (static_cast<std::size_t>(sy) * src_w + sx0) *
+                         4u;
+                for (int sx = sx0; sx < sx1; ++sx) {
+                    b += row[0];
+                    g += row[1];
+                    r += row[2];
+                    a += row[3];
+                    row += 4;
+                }
+            }
+            const std::uint32_t n =
+                static_cast<std::uint32_t>((sy1 - sy0) * (sx1 - sx0));
+            std::uint8_t* out =
+                dp + (static_cast<std::size_t>(dy) * dst_w + dx) * 4u;
+            out[0] = static_cast<std::uint8_t>(b / n);
+            out[1] = static_cast<std::uint8_t>(g / n);
+            out[2] = static_cast<std::uint8_t>(r / n);
+            out[3] = static_cast<std::uint8_t>(a / n);
+        }
+    }
+    return true;
+}
+
 // Shared decode core for Extract/GetPosterAt — the decoder must be
 // open and carry video (width/height > 0). Seeks keyframe-backward to
 // `target` (best-effort — Seek clamps out-of-range values itself; on
@@ -157,7 +220,28 @@ bool ClipPoster::GetPosterAt(const std::string& utf8_source_path,
     if (!(target >= 0.0) || (duration > 0.0 && target > duration)) {
         target = duration > 0.0 ? duration * 0.5 : 0.0;
     }
-    return DecodeFrameAt(decoder, target, frame_out, error_out);
+    video::Frame decoded;
+    if (!DecodeFrameAt(decoder, target, &decoded, error_out)) {
+        return false;
+    }
+
+    // Shrink to thumbnail size before handing the frame to the
+    // byte-bounded PosterCache — see kPosterMaxEdge above. Sources at
+    // or under the cap pass through untouched.
+    const int w = decoded.Width(), h = decoded.Height();
+    const int longest = std::max(w, h);
+    if (longest <= kPosterMaxEdge) {
+        *frame_out = decoded;
+        return true;
+    }
+    const double scale =
+        static_cast<double>(kPosterMaxEdge) / longest;
+    const int dst_w = std::max(1, static_cast<int>(w * scale));
+    const int dst_h = std::max(1, static_cast<int>(h * scale));
+    if (!DownscaleBgra(decoded, dst_w, dst_h, frame_out)) {
+        return Fail(error_out, "poster downscale failed");
+    }
+    return true;
 }
 
 }  // namespace XER::VideoEditor

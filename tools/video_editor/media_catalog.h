@@ -146,9 +146,11 @@ public:
 
     // Poster frame at an arbitrary source time (Phase 2 spec §5) —
     // canonicalizes the path then forwards to ClipPoster::GetPosterAt:
-    // the decoded BGRA frame nearest `seconds`, or the mid-stream
-    // frame when `seconds` is out of range. Reads no tables and
-    // writes no poster files; requires no open catalog (static).
+    // the decoded BGRA frame nearest `seconds` (thumbnail-sized —
+    // ClipPoster caps the long edge at 320 px so the byte-bounded
+    // PosterCache holds hundreds), or the mid-stream frame when
+    // `seconds` is out of range. Reads no tables and writes no
+    // poster files; requires no open catalog (static).
     static bool GetPosterAt(const std::string& utf8_path,
                             double seconds, video::Frame* frame_out,
                             std::string* error_out = nullptr);

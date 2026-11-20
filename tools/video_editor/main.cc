@@ -30,6 +30,7 @@
 #include "ui/core/application.h"
 #include "ui/core/window.h"
 #include "ui/theme/theme.h"
+#include "ui/ve_theme.h"
 #include "ui/video_editor_app.h"
 #include "ui/widgets/app_title_bar.h"
 
@@ -138,6 +139,12 @@ int RunGui(const std::string& project_path) {
         window->GetHWND(), project_path);
     window->SetContent(editor);
     window->SetTheme(XER::UI::Theme::Variant::Dark);
+    // Editor design tokens (ui/ve_theme.h): refined dark palette on top
+    // of the builtin Dark variant; assets/editor.yaml `Accent:` wins.
+    XER::VideoEditor::Ui::VeTheme::ApplyToWindow(
+        window.get(),
+        XER::VideoEditor::AppRuntime::SharedAssetsConfig()
+            .editor.accent_argb);
     window->SetCustomTitleBar(true, 38.0f);
     window->SetTitleBarHitTest([editor](XER::UI::Layout::Point point) {
         auto* title_bar = editor->TitleBar();
@@ -163,6 +170,14 @@ int RunGui(const std::string& project_path) {
         title_bar->SetThemeToggle(true, [window](bool dark) {
             window->SetTheme(dark ? XER::UI::Theme::Variant::Dark
                                   : XER::UI::Theme::Variant::Light);
+            if (dark) {
+                // SetTheme() restores the stock variant — re-layer the
+                // editor palette so toggling back keeps the VE look.
+                XER::VideoEditor::Ui::VeTheme::ApplyToWindow(
+                    window.get(), XER::VideoEditor::AppRuntime::
+                                      SharedAssetsConfig()
+                                          .editor.accent_argb);
+            }
         });
     }
     const auto sync_maximize = [window, title_bar] {
