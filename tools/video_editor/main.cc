@@ -703,10 +703,37 @@ int main(int argc, char** argv) {
     if (cef_exit >= 0) {
         return cef_exit;
     }
+    const std::vector<std::string> args = CommandLineArgsUtf8();
+    // Non-Debug builds link GUI-subsystem (-mwindows): no console is
+    // allocated, so double-click/Explorer launches never flash a
+    // terminal. When started FROM a terminal we still want --smoke,
+    // --export, --audio-probe output — borrow the parent's console.
+    // Skipped for --media-worker (stdout is the JSON-lines IPC pipe)
+    // and CEF --type= children (handled above anyway).
+    bool pipe_mode = false;
+    for (const std::string& a : args) {
+        if (a == "--media-worker" || a.rfind("--type=", 0) == 0) {
+            pipe_mode = true;
+        }
+    }
+    // stdout already redirected (pipe/file)? Leave it alone — output
+    // is captured fine. Only when it goes nowhere (GUI launch with a
+    // parent console) do we rebind to the parent's console.
+    const DWORD stdout_type =
+        GetFileType(GetStdHandle(STD_OUTPUT_HANDLE));
+    const bool stdout_redirected =
+        stdout_type == FILE_TYPE_PIPE || stdout_type == FILE_TYPE_DISK;
+    if (!pipe_mode && !stdout_redirected &&
+        AttachConsole(ATTACH_PARENT_PROCESS)) {
+        FILE* f = nullptr;
+        freopen_s(&f, "CONOUT$", "w", stdout);
+        freopen_s(&f, "CONOUT$", "w", stderr);
+        fwide(stdin, 1);
+        freopen_s(&f, "CONIN$", "r", stdin);
+    }
     SetConsoleOutputCP(CP_UTF8);
     (void)argc;
     (void)argv;
-    const std::vector<std::string> args = CommandLineArgsUtf8();
 #else
     std::vector<std::string> args(argv, argv + argc);
 #endif

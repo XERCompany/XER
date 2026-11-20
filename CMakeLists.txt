@@ -1,6 +1,29 @@
 cmake_minimum_required(VERSION 3.21)
 
-project(Editor)
+project(Editor LANGUAGES C CXX RC)
+
+# App icon shared by every shipped exe — generated from icon.jpg at
+# repo root (ffmpeg -i icon.jpg icon.ico). app.rc is compiled by
+# windres/llvm-windres into a version+icon resource.
+set(XER_APP_RC "${CMAKE_CURRENT_SOURCE_DIR}/app.rc")
+
+# xer_app_win32(target): icon resource + GUI subsystem on non-Debug
+# builds ("убрать Terminal — только при Debug"). GUI-subsystem exes
+# keep stdout working through inherited pipes/handles; interactive
+# consoles are re-attached in code (see video_editor main.cc).
+function(xer_app_win32 target)
+    if(WIN32)
+        target_sources(${target} PRIVATE ${XER_APP_RC})
+        if(MSVC)
+            target_link_options(${target} PRIVATE
+                "$<$<NOT:$<CONFIG:Debug>>:/SUBSYSTEM:WINDOWS>"
+                "$<$<NOT:$<CONFIG:Debug>>:/ENTRY:mainCRTStartup>")
+        else()
+            target_link_options(${target} PRIVATE
+                "$<$<NOT:$<CONFIG:Debug>>:-mwindows>")
+        endif()
+    endif()
+endfunction()
 
 # Set C++23 standard
 set(CMAKE_CXX_STANDARD 23)
@@ -932,5 +955,18 @@ foreach(_t EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
         audioapplyeffect audioprobe audioplayer preview Editor)
     if(TARGET ${_t})
         xer_link_msys2_static(${_t})
+    endif()
+endforeach()
+
+# App icon (icon.ico via app.rc) + GUI subsystem on non-Debug builds —
+# "icon.jpg везде exe, Terminal только при Debug". CLI/test/smoke
+# targets (ztzmake, *_Tests, *_Smoke, audioconvert/audioprobe...) keep
+# console subsystem: their stdout IS the interface.
+foreach(_app EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
+        SecurityFlashService ControllAccountsWindows ServerAudio
+        ArchiveManager HubCivitAIBrowser Editor video_editor
+        XBrowser XER_VST3_CEF xer_browser_shell)
+    if(TARGET ${_app})
+        xer_app_win32(${_app})
     endif()
 endforeach()
