@@ -26,6 +26,7 @@
 #include <windows.h>
 
 #include "frame.h"
+#include "helper/win_job.h"
 
 namespace XER::VideoEditor {
 namespace {
@@ -154,6 +155,9 @@ struct MediaWorkerClient::Impl {
             return false;
         }
         proc = pi;
+        // Group the worker with the editor: a killed/crashed editor
+        // must not leave a headless decoder holding media/build locks.
+        XER::Helper::WinJobGroup::Shared().Assign(pi.hProcess);
         child_stdin = in_write;
         child_stdout = out_read;
         reader_done.store(false);

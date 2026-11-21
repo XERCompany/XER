@@ -656,11 +656,12 @@ bool EffectRequiresSkia(const std::string& type) {
 }
 
 // "script:<id>" effect types resolve through the JS fx registry
-// (assets/scripts/fx/fx.json) — loaded once per process.
+// (assets/scripts/fx/fx.json) — loaded once per process. Preview and
+// export compositors can each lazily trigger the load from their own
+// worker thread, so the one-shot is a call_once, not a raced flag.
 constexpr const char* kScriptFxPrefix = "script:";
-bool g_jsfx_catalog_tried = false;
-JsFxRuntime* g_jsfx_catalog_engine = nullptr;   // borrowed, UI-thread
-std::string g_jsfx_catalog_error;
+std::once_flag g_jsfx_catalog_once;
+std::string g_jsfx_catalog_error;   // written inside call_once only
 
 float EffectParam(const ClipEffect& effect, std::size_t index,
                   float fallback) {
@@ -708,14 +709,13 @@ struct Compositor::Impl {
     JsFxRuntime* JsFx() {
         if (!js_fx_tried) {
             js_fx_tried = true;
-            if (!g_jsfx_catalog_tried) {
-                g_jsfx_catalog_tried = true;
+            std::call_once(g_jsfx_catalog_once, [] {
                 const std::filesystem::path dir =
                     AppRuntime::SharedAssetsConfig().assets_dir /
                     "scripts" / "fx";
                 JsFxRuntime::LoadCatalog(dir.string(),
                                          &g_jsfx_catalog_error);
-            }
+            });
             js_fx = std::make_unique<JsFxRuntime>();
             std::string fx_error;
             if (!js_fx->EnsureLoaded(&fx_error)) {
@@ -1131,8 +1131,11 @@ struct Compositor::Impl {
                 JsFxRuntime* fx = JsFx();
                 if (fx != nullptr) {
                     std::string fx_error;
+                    // ctx.clip_id scopes script-side state to this
+                    // clip (parity with the audio dispatch).
                     if (!fx->ApplyVideo(fx_id, &frame, effect.params,
-                                        clip_time_s, &fx_error)) {
+                                        clip_time_s, s.clip->id,
+                                        &fx_error)) {
                         Warn("js effect '" + fx_id + "': " +
                              (fx_error.empty() ? "not found"
                                                : fx_error));

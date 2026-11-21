@@ -5,26 +5,28 @@
 
 #include "app_runtime/app_runtime.h"
 #include "helper/path_utils.h"
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
 #include "widgets/label.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
-using ThemeColor = XER::UI::Theme::Color;
 namespace Ocio = XER::VideoEditor::Color;
 namespace Path = XER::Helper::Path;
 
-constexpr float kRowHeight = 38.0f;
-constexpr float kHeaderHeight = 24.0f;
+// Two-line catalog row: body-size name over a caption-size subtitle.
+constexpr float kRowHeight = VeTheme::kFontBody * 1.4f +
+                             VeTheme::kFontCaption * 1.4f +
+                             VeTheme::kSpaceXs;
+constexpr float kHeaderHeight = VeTheme::kRowHeight;
+constexpr float kHeaderIcon = VeTheme::kFontBody;
+constexpr float kRowIcon = VeTheme::kSpaceLg;
+constexpr float kActionWidth = 100.0f;   // "Add to Clip" button
 constexpr auto kDoubleClickWindow = std::chrono::milliseconds(450);
-
-ThemeColor WithAlpha(ThemeColor color, float alpha) {
-    color.a *= alpha;
-    return color;
-}
 
 // Last path segment of `path` — color.yaml LUT paths may use either
 // separator style regardless of platform.
@@ -116,12 +118,17 @@ void ColorPanelWidget::Refresh() {
     entries_.clear();
     int profile_count = 0;
     const auto& profiles = Ocio::SharedOcioProfiles();
-    const auto append_group = [&](bool looks, const char* label) {
+    // Header entries stash their group icon name (assets/icons.yaml)
+    // in `tag` — headers never render a tag line, and the icon names
+    // double as the section icon for the rows that follow (same
+    // convention as the plugins panel).
+    const auto append_group = [&](bool looks, const char* label,
+                                  const char* icon) {
         bool headed = false;
         for (const Ocio::OcioProfile& profile : profiles) {
             if (looks != !profile.lut_path.empty()) continue;
             if (!headed) {
-                entries_.push_back({true, label, {}, {}});
+                entries_.push_back({true, label, icon, {}});
                 headed = true;
             }
             entries_.push_back({false, profile.name,
@@ -129,8 +136,8 @@ void ColorPanelWidget::Refresh() {
             ++profile_count;
         }
     };
-    append_group(true, "LOOKS");
-    append_group(false, "TRANSFORMS");
+    append_group(true, "LOOKS", "shadow");
+    append_group(false, "TRANSFORMS", "compare_arrows");
 
     content_height_ = 0.0f;
     for (const Entry& entry : entries_) {
@@ -250,49 +257,96 @@ void ColorPanelWidget::Render(
     }
 
     // Rows are drawn (not child widgets) so clicks land on the panel —
-    // widget-tree Click events do not bubble up from Label children.
+    // verified: WidgetTree dispatches Click to the deepest hit target
+    // only (widget_tree.cc); child widgets do not bubble it up. The
+    // clip keeps a half-scrolled row from bleeding into the header or
+    // footer band (same PushClip convention the inspector uses).
     if (rows_top_ <= 0.0f) return;   // not yet laid out
-    const float width = bounds.width - 24.0f;
+    const float inset = VeTheme::kSpaceSm;
+    const float width = bounds.width - inset * 2.0f;
+    const float title_h = tokens.font_body * 1.4f;
+    const float sub_h = tokens.font_small * 1.4f;
     float y = rows_top_ - scroll_y_;
+    // Icon of the section currently being walked — headers carry it in
+    // `tag`; rows reuse it so a group and its items share a glyph.
+    const char* section_icon = nullptr;
+    renderer.PushClip({bounds.x, rows_top_, bounds.width,
+                       rows_bottom_ - rows_top_});
     for (std::size_t i = 0; i < entries_.size(); ++i) {
         const Entry& entry = entries_[i];
         const float h = EntryHeight(static_cast<int>(i));
         if (y + h < rows_top_ || y > rows_bottom_) {
+            // Keep tracking the section even for clipped headers.
+            if (entry.header && !entry.tag.empty()) {
+                section_icon = entry.tag.c_str();
+            }
             y += h;
             continue;
         }
         if (entry.header) {
+            // Section header — the inspector's drawn-label convention:
+            // muted, small, weight 600, vertically centered.
+            float label_x = bounds.x + VeTheme::kSpaceMd;
+            if (!entry.tag.empty()) {
+                section_icon = entry.tag.c_str();
+                if (VeIcons::DrawIcon(renderer, section_icon,
+                             static_cast<int>(kHeaderIcon), tokens.muted,
+                             {label_x,
+                              y + (kHeaderHeight - kHeaderIcon) * 0.5f,
+                              kHeaderIcon, kHeaderIcon})) {
+                    label_x += kHeaderIcon + VeTheme::kSpaceXs;
+                }
+            }
             renderer.DrawText(entry.text,
-                              {bounds.x + 12.0f, y + 7.0f,
-                               bounds.width - 24.0f, 14.0f},
+                              {label_x,
+                               y + (kHeaderHeight - sub_h) * 0.5f,
+                               bounds.x + bounds.width - label_x -
+                                   VeTheme::kSpaceMd,
+                               sub_h},
                               XER::UI::Rendering::TextStyle{
                                   tokens.muted, tokens.font_small, 600});
         } else {
             const int idx = static_cast<int>(i);
-            const XER::UI::Layout::Rect row{bounds.x + 8.0f, y, width,
-                                            kRowHeight - 3.0f};
+            const XER::UI::Layout::Rect row{
+                bounds.x + inset, y + VeTheme::kSpaceXxs, width,
+                kRowHeight - VeTheme::kSpaceXs};
             if (idx == selected_) {
-                renderer.FillRect(row, WithAlpha(tokens.accent, 0.16f),
+                renderer.FillRect(row, tokens.selection,
                                   tokens.radius_small);
-                renderer.StrokeRect(row, WithAlpha(tokens.accent, 0.5f),
-                                    1.0f, tokens.radius_small);
+                renderer.StrokeRect(
+                    row, VeTheme::WithAlpha(tokens.accent, 0.5f), 1.0f,
+                    tokens.radius_small);
             } else if (idx == hovered_) {
                 renderer.FillRect(row, tokens.hover, tokens.radius_small);
             }
+            float text_x = row.x + VeTheme::kSpaceSm;
+            if (section_icon != nullptr &&
+                VeIcons::DrawIcon(renderer, section_icon,
+                         static_cast<int>(kRowIcon), tokens.foreground,
+                         {row.x + VeTheme::kSpaceXs,
+                          row.y + (row.height - kRowIcon) * 0.5f,
+                          kRowIcon, kRowIcon})) {
+                text_x = row.x + VeTheme::kSpaceXs + kRowIcon +
+                         VeTheme::kSpaceSm;
+            }
+            const float text_w =
+                row.x + row.width - text_x - VeTheme::kSpaceSm;
             renderer.DrawText(entry.text,
-                              {row.x + 8.0f, row.y + 3.0f,
-                               row.width - 16.0f, 16.0f},
+                              {text_x, row.y + VeTheme::kSpaceXxs, text_w,
+                               title_h},
                               XER::UI::Rendering::TextStyle{
                                   tokens.foreground, tokens.font_body,
                                   500});
             renderer.DrawText(entry.tag,
-                              {row.x + 8.0f, row.y + 20.0f,
-                               row.width - 16.0f, 14.0f},
+                              {text_x,
+                               row.y + VeTheme::kSpaceXxs + title_h,
+                               text_w, sub_h},
                               XER::UI::Rendering::TextStyle{
                                   tokens.muted, tokens.font_small, 400});
         }
         y += h;
     }
+    renderer.PopClip();
 }
 
 void ColorPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -301,21 +355,26 @@ void ColorPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
     const float gap = tokens.spacing_small;
+    const float inner_x = bounds.x + pad;
+    const float inner_w = bounds.width - pad * 2.0f;
+    float y = bounds.y + pad * 0.6f;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f},
-                   tokens);
-    ocio_state_->Layout({bounds.x + pad, bounds.y + 34.0f,
-                         bounds.width - pad * 2.0f, 16.0f},
-                        tokens);
-    rows_top_ = bounds.y + 34.0f + 18.0f + gap;
-    const float footer_y = bounds.y + bounds.height - 30.0f;
+    title_->Layout({inner_x, y, inner_w, VeTheme::kRowHeight}, tokens);
+    y += VeTheme::kRowHeight + VeTheme::kSpaceXxs;
+    ocio_state_->Layout({inner_x, y, inner_w, VeTheme::kSpaceLg}, tokens);
+    y += VeTheme::kSpaceLg + gap;
+    rows_top_ = y;
+
+    const float footer_h = VeTheme::kControlHeight;
+    const float footer_y =
+        bounds.y + bounds.height - footer_h - VeTheme::kSpaceXs;
     rows_bottom_ = footer_y - gap;
-    add_btn_->Layout({bounds.x + pad, footer_y, 100.0f, 26.0f}, tokens);
-    status_->Layout({bounds.x + pad + 108.0f, footer_y + 2.0f,
-                     std::max(40.0f, bounds.width - pad * 2.0f - 108.0f),
-                     22.0f},
-                    tokens);
+    add_btn_->Layout({inner_x, footer_y, kActionWidth, footer_h}, tokens);
+    status_->Layout(
+        {inner_x + kActionWidth + gap, footer_y + VeTheme::kSpaceXxs,
+         std::max(40.0f, inner_w - kActionWidth - gap),
+         footer_h - VeTheme::kSpaceXs},
+        tokens);
     // Keep the list viewport out of the footer.
     const float view_h = footer_y - rows_top_ - gap;
     scroll_y_ = std::clamp(

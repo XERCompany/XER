@@ -8,10 +8,13 @@
 #include <string>
 #include <utility>
 
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
 #include "widgets/checkbox.h"
+#include "widgets/field.h"
 #include "widgets/label.h"
 #include "widgets/text_input.h"
 
@@ -20,6 +23,22 @@ namespace {
 
 namespace Layout = XER::UI::Layout;
 namespace Rendering = XER::UI::Rendering;
+
+// The Field whose inner control is `control` (the Field owns the
+// widget it captions).
+XER::UI::Widgets::Field* FieldHosting(
+    XER::UI::Widgets::Widget* parent,
+    const XER::UI::Widgets::Widget* control) {
+    if (parent == nullptr || control == nullptr) return nullptr;
+    for (const auto& child : parent->GetChildren()) {
+        auto* field = dynamic_cast<XER::UI::Widgets::Field*>(child.get());
+        if (field == nullptr) continue;
+        for (const auto& inner : field->GetChildren()) {
+            if (inner.get() == control) return field;
+        }
+    }
+    return nullptr;
+}
 
 // TimelineModel::SetClipRate accepts any positive rate; the dialog keeps
 // the Premiere-like useful band (1%..10000% == 0.01x..100x).
@@ -68,6 +87,8 @@ void SpeedDialog::EnsureChildren() {
     if (children_attached_) return;
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
+    // Icon-capable buttons resolve through the pack (idempotent).
+    VeIcons::InstallButtonIconResolver();
     title_ = std::make_shared<Widgets::Label>("Clip speed / duration");
     info_label_ = std::make_shared<Widgets::Label>("", true);
     speed_input_ = std::make_shared<Widgets::TextInput>("100.00");
@@ -124,8 +145,22 @@ void SpeedDialog::EnsureChildren() {
 
     AddChild(title_);
     AddChild(info_label_);
-    AddChild(speed_input_);
-    AddChild(duration_input_);
+    // Field captions host the inputs (lab_panel convention). Each
+    // keeps a permanent muted description so the footer band — and
+    // thus the rows below — never moves when validation toggles; an
+    // error line replaces the description while invalid.
+    const auto wrap_field =
+        [this](const char* caption, const char* description,
+               const std::shared_ptr<Widgets::TextInput>& input) {
+            auto field = std::make_shared<Widgets::Field>();
+            field->SetLabel(caption);
+            field->SetDescription(description);
+            field->AddChild(input);
+            AddChild(field);
+        };
+    wrap_field("Speed (%)", "1\u201310000 % (0.01x\u2013100x)",
+               speed_input_);
+    wrap_field("Duration (s)", "seconds", duration_input_);
     AddChild(readout_label_);
     AddChild(reverse_check_);
     AddChild(ripple_check_);
@@ -242,6 +277,19 @@ void SpeedDialog::RefreshValidation() {
     hint_text_ = HintText();
     apply_button_->SetEnabled(valid);
 
+    // The hint rides the offending field's error line in danger
+    // color (Field::SetError replaces the description footer).
+    const double speed = ParsedSpeedPercent();
+    const bool speed_bad =
+        !std::isfinite(speed) || speed <= 0.0 ||
+        speed / 100.0 < kMinRate || speed / 100.0 > kMaxRate;
+    if (auto* field = FieldHosting(this, speed_input_.get())) {
+        field->SetError(speed_bad ? hint_text_ : "");
+    }
+    if (auto* field = FieldHosting(this, duration_input_.get())) {
+        field->SetError(!speed_bad ? hint_text_ : "");
+    }
+
     // Live readout: consumed source span is invariant; show it plus the
     // rate/new-duration pair the apply would produce.
     if (valid) {
@@ -304,22 +352,14 @@ void SpeedDialog::Render(
     const XER::UI::Theme::Tokens& tokens) {
     EnsureChildren();
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, {0.0f, 0.0f, 0.0f, 0.58f}, 0.0f);
+    renderer.FillRect(bounds, VeTheme::kScrim, 0.0f);
+    // Card chrome per the panel convention: surface fill + hairline
+    // border at the large radius, accent edge bar.
     const auto panel = PanelRect();
     renderer.FillRect(panel, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(panel, tokens.border, 1.0f, tokens.radius_large);
     renderer.FillRect({panel.x, panel.y, 4.0f, panel.height},
                       tokens.accent, tokens.radius_large);
-
-    // Field captions.
-    const float px = panel.x + kPanelPad;
-    const Rendering::TextStyle caption{tokens.muted, tokens.font_small,
-                                       600};
-    renderer.DrawText("Speed (%)",
-                      {px, panel.y + 88.0f, 150.0f, 14.0f}, caption);
-    renderer.DrawText("Duration (s)",
-                      {px + 180.0f, panel.y + 88.0f, 150.0f, 14.0f},
-                      caption);
 
     // Checkbox captions (the box itself is a Checkbox child; the text
     // is drawn here so the whole row stays clickable by the dialog).
@@ -341,15 +381,8 @@ void SpeedDialog::Render(
                       {ripple_row.x + 26.0f, ripple_row.y + 2.0f,
                        260.0f, 20.0f},
                       check_text);
-
-    // Validation hint in danger red (not a child — Label has no
-    // danger-colored variant).
-    if (!hint_text_.empty()) {
-        renderer.DrawText(hint_text_,
-                          {px, panel.y + 178.0f,
-                           panel.width - kPanelPad * 2.0f, 18.0f},
-                          {tokens.danger, tokens.font_small, 500});
-    }
+    // The validation hint is drawn by the offending input's Field
+    // error line (RefreshValidation → Field::SetError).
 }
 
 void SpeedDialog::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -363,12 +396,22 @@ void SpeedDialog::Layout(const XER::UI::Layout::Rect& bounds) {
     title_->Layout({px, panel.y + 14.0f, pw, 26.0f}, tokens);
     info_label_->Layout({px, panel.y + 42.0f, pw, 18.0f}, tokens);
 
-    const float field_y = panel.y + 108.0f;
-    speed_input_->Layout({px, field_y, 150.0f, 32.0f}, tokens);
-    duration_input_->Layout({px + 180.0f, field_y, 150.0f, 32.0f},
-                            tokens);
+    // Field = caption band + 32px input + error footer (the footer
+    // band is reserved whether or not a hint is showing so the rows
+    // below never shift when validation toggles).
+    const float caption_h =
+        tokens.font_small * 1.4f + tokens.spacing_small * 0.5f;
+    const float footer_h = tokens.font_small * 1.5f + 6.0f;
+    const float field_y = panel.y + 86.0f;
+    const float field_h = caption_h + 32.0f + footer_h;
+    if (auto* field = FieldHosting(this, speed_input_.get())) {
+        field->Layout({px, field_y, 150.0f, field_h}, tokens);
+    }
+    if (auto* field = FieldHosting(this, duration_input_.get())) {
+        field->Layout({px + 180.0f, field_y, 150.0f, field_h}, tokens);
+    }
 
-    readout_label_->Layout({px, panel.y + 156.0f, pw, 18.0f}, tokens);
+    readout_label_->Layout({px, panel.y + 168.0f, pw, 18.0f}, tokens);
 
     const auto reverse_row = ReverseRowRect();
     reverse_check_->Layout({reverse_row.x, reverse_row.y + 2.0f, 20.0f,

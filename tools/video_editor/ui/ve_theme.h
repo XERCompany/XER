@@ -53,6 +53,15 @@ inline constexpr float kRowHeight = 24.0f;       // list/inspector rows
 inline constexpr float kControlHeight = 28.0f;   // inputs, small buttons
 inline constexpr float kPanelHeaderHeight = 30.0f;  // panel title band
 
+// ---- overlay colors ----
+// Modal backdrop dim: dialogs, sheets and the shortcuts overlay all
+// darken the workspace under their card with exactly this scrim.
+inline constexpr Color kScrim{0.0f, 0.0f, 0.0f, 0.58f};
+// The single canonical "overlay black" for chips/badges drawn on top
+// of media (monitor overlays, preview badges) — panels must use this
+// instead of hand-rolled {0,0,0,a} literals.
+inline constexpr Color kOverlayChip{0.0f, 0.0f, 0.0f, 0.62f};
+
 // ---- semantic timeline colors ----
 // Kind-coded clip fills: video reads blue, audio reads green at a
 // glance (Premiere/CapCut convention), with per-track hue rotation so

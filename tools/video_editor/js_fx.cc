@@ -2,10 +2,18 @@
 #include "js_fx.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <mutex>
+#include <shared_mutex>
 #include <sstream>
+#include <thread>
 #include <unordered_map>
 
 #include <json/json.h>
@@ -22,12 +30,36 @@ namespace XER::VideoEditor {
 namespace {
 
 // ---- process-wide catalog (JSON only — no V8) ----------------------
+//
+// LoadCatalog can run on any thread while compositor/mixer workers
+// read the lists, so access goes through an immutable-snapshot
+// scheme: each load builds a Catalog locally and publishes it under
+// an exclusive lock. Snapshots live in an APPEND-ONLY deque — deque
+// elements never move and entries are never erased, so a reader that
+// grabbed `g_catalog` (or a reference the accessors returned) keeps a
+// valid view even if a later load supersedes it. Superseded snapshots
+// stay allocated; loads are rare (once per process in practice) and
+// each snapshot is a few KiB.
 
-std::string g_fx_dir;
-std::vector<JsFxRuntime::FxDesc> g_video_fx;
-std::vector<JsFxRuntime::FxDesc> g_audio_fx;
-std::vector<JsFxRuntime::FxDesc> g_transitions;
-bool g_catalog_loaded = false;
+struct Catalog {
+    std::string fx_dir;
+    std::vector<JsFxRuntime::FxDesc> video_fx;
+    std::vector<JsFxRuntime::FxDesc> audio_fx;
+    std::vector<JsFxRuntime::FxDesc> transitions;
+    bool loaded = false;
+};
+
+std::shared_mutex g_catalog_mu;
+std::deque<Catalog> g_catalogs;       // append-only — stable refs
+const Catalog* g_catalog = nullptr;   // latest published snapshot
+
+// Snapshot the current catalog. The returned pointer stays valid for
+// the rest of the process (see the deque contract above); nullptr
+// means LoadCatalog was never called.
+const Catalog* CurrentCatalog() {
+    std::shared_lock lock(g_catalog_mu);
+    return g_catalog;
+}
 
 void ParseParamDefs(const Json::Value& arr,
                     std::vector<JsFxRuntime::ParamDef>* out) {
@@ -76,16 +108,18 @@ const JsFxRuntime::FxDesc* FindDesc(
 
 bool JsFxRuntime::LoadCatalog(const std::string& fx_dir,
                               std::string* error) {
+    Catalog next;
+    next.fx_dir = fx_dir;
     const std::filesystem::path manifest =
         std::filesystem::path(fx_dir) / "fx.json";
     std::ifstream in(manifest, std::ios::binary);
     if (!in) {
         if (error) *error = "fx.json not found: " + manifest.string();
-        g_video_fx.clear();
-        g_audio_fx.clear();
-        g_transitions.clear();
-        g_fx_dir = fx_dir;
-        g_catalog_loaded = false;
+        // Publish the empty snapshot — readers see "loaded=false",
+        // never a torn list.
+        std::unique_lock lock(g_catalog_mu);
+        g_catalogs.push_back(std::move(next));
+        g_catalog = &g_catalogs.back();
         return false;
     }
     std::stringstream ss;
@@ -95,29 +129,38 @@ bool JsFxRuntime::LoadCatalog(const std::string& fx_dir,
     Json::CharReaderBuilder builder;
     if (!Json::parseFromStream(builder, ss, &root, &errs)) {
         if (error) *error = "fx.json parse: " + errs;
-        return false;
+        return false;   // keep the previous snapshot on parse failure
     }
-    g_fx_dir = fx_dir;
-    g_video_fx.clear();
-    g_audio_fx.clear();
-    g_transitions.clear();
-    ParseDescList(root["video"], &g_video_fx);
-    ParseDescList(root["audio"], &g_audio_fx);
-    ParseDescList(root["transitions"], &g_transitions);
-    g_catalog_loaded = true;
+    ParseDescList(root["video"], &next.video_fx);
+    ParseDescList(root["audio"], &next.audio_fx);
+    ParseDescList(root["transitions"], &next.transitions);
+    next.loaded = true;
+    std::unique_lock lock(g_catalog_mu);
+    g_catalogs.push_back(std::move(next));
+    g_catalog = &g_catalogs.back();
     return true;
 }
 
 const std::vector<JsFxRuntime::FxDesc>& JsFxRuntime::VideoEffects() {
-    return g_video_fx;
+    static const std::vector<FxDesc> kEmpty;
+    const Catalog* cat = CurrentCatalog();
+    return cat == nullptr ? kEmpty : cat->video_fx;
 }
 const std::vector<JsFxRuntime::FxDesc>& JsFxRuntime::AudioEffects() {
-    return g_audio_fx;
+    static const std::vector<FxDesc> kEmpty;
+    const Catalog* cat = CurrentCatalog();
+    return cat == nullptr ? kEmpty : cat->audio_fx;
 }
 const std::vector<JsFxRuntime::FxDesc>& JsFxRuntime::ScriptTransitions() {
-    return g_transitions;
+    static const std::vector<FxDesc> kEmpty;
+    const Catalog* cat = CurrentCatalog();
+    return cat == nullptr ? kEmpty : cat->transitions;
 }
-const std::string& JsFxRuntime::FxDir() { return g_fx_dir; }
+const std::string& JsFxRuntime::FxDir() {
+    static const std::string kEmpty;
+    const Catalog* cat = CurrentCatalog();
+    return cat == nullptr ? kEmpty : cat->fx_dir;
+}
 
 // ------------------------------------------------------------------
 #if defined(XER_VE_HAS_V8)
@@ -191,10 +234,21 @@ std::string FormatV8Error(v8::Isolate* iso, v8::TryCatch& try_catch) {
     const v8::Local<v8::Message> msg = try_catch.Message();
     std::string out;
     if (!msg.IsEmpty()) {
-        out = V8Str(iso, msg->GetSourceLine(ctx).ToLocalChecked());
+        // GetSourceLine can legitimately return empty (compiled code
+        // without an attached source, terminated execution) — a
+        // ToLocalChecked() here would CHECK-fail *while reporting the
+        // error*. Fall back to the message text instead.
+        v8::Local<v8::String> line;
+        if (msg->GetSourceLine(ctx).ToLocal(&line)) {
+            out = V8Str(iso, line);
+        }
+        if (out.empty()) {
+            out = V8Str(iso, msg->Get());
+        }
         out += " : ";
     }
     out += V8Str(iso, try_catch.Exception());
+    if (out.empty()) out = "(unknown script error)";
     return out;
 }
 
@@ -263,6 +317,127 @@ SandboxView BufferView(v8::Isolate* iso, const void* data,
     return out;
 }
 
+// ---- runaway-script watchdog ----------------------------------------
+//
+// One leaked worker thread process-wide. Each Arm() registers the
+// (isolate, deadline) pair; the worker sleeps until the earliest
+// deadline and calls Isolate::TerminateExecution() on any entry still
+// armed — TerminateExecution is documented as callable from any
+// thread without a Locker (v8-isolate.h). A terminated Call() surfaces
+// as TryCatch::HasTerminated(); the caller then runs
+// CancelTerminateExecution() so the isolate keeps working.
+// Runtimes are thread-confined, so armed entries never contend with
+// each other — the mutex below only serializes the registry itself.
+constexpr auto kVideoApplyBudget = std::chrono::milliseconds(500);
+constexpr auto kAudioProcessBudget = std::chrono::milliseconds(100);
+constexpr auto kTransitionBudget = std::chrono::milliseconds(500);
+constexpr auto kScriptLoadBudget = std::chrono::milliseconds(1000);
+
+class FxWatchdog {
+public:
+    struct Entry {
+        v8::Isolate* iso = nullptr;
+        std::chrono::steady_clock::time_point deadline;
+        std::atomic<bool> done{false};
+        bool fired = false;
+    };
+
+    static FxWatchdog& Get() {
+        // Intentionally leaked: the worker sleeps on the CV for the
+        // whole process; a destructed static would have to join it.
+        static FxWatchdog* watchdog = new FxWatchdog();
+        return *watchdog;
+    }
+
+    // RAII guard — arm on the isolate-owning thread, disarm as soon
+    // as the JS call returns (destructor covers early exits).
+    class Arm {
+    public:
+        Arm(v8::Isolate* iso, std::chrono::milliseconds budget)
+            : entry_(std::make_shared<Entry>()) {
+            entry_->iso = iso;
+            entry_->deadline =
+                std::chrono::steady_clock::now() + budget;
+            FxWatchdog::Get().Add(entry_);
+        }
+        ~Arm() { FxWatchdog::Get().Remove(entry_); }
+        Arm(const Arm&) = delete;
+        Arm& operator=(const Arm&) = delete;
+        // Stop the watchdog firing while C++ epilogue work (e.g. the
+        // framebuffer memcpy-back) is still running; entry removal
+        // stays for the destructor.
+        void Disarm() {
+            entry_->done.store(true, std::memory_order_release);
+        }
+    private:
+        std::shared_ptr<Entry> entry_;
+    };
+
+private:
+    FxWatchdog() : worker_([this] { Run(); }) { worker_.detach(); }
+
+    void Add(const std::shared_ptr<Entry>& entry) {
+        {
+            const std::lock_guard lock(mu_);
+            entries_.push_back(entry);
+        }
+        cv_.notify_one();
+    }
+
+    void Remove(const std::shared_ptr<Entry>& entry) {
+        {
+            const std::lock_guard lock(mu_);
+            entry->done.store(true, std::memory_order_release);
+            std::erase(entries_, entry);
+        }
+        cv_.notify_one();
+    }
+
+    void Run() {
+        std::unique_lock lock(mu_);
+        for (;;) {
+            auto nearest =
+                std::chrono::steady_clock::time_point::max();
+            for (const auto& e : entries_) {
+                if (!e->fired &&
+                    !e->done.load(std::memory_order_acquire) &&
+                    e->deadline < nearest) {
+                    nearest = e->deadline;
+                }
+            }
+            if (nearest ==
+                std::chrono::steady_clock::time_point::max()) {
+                cv_.wait(lock);
+                continue;
+            }
+            cv_.wait_until(lock, nearest);
+            const auto now = std::chrono::steady_clock::now();
+            for (const auto& e : entries_) {
+                if (!e->fired &&
+                    !e->done.load(std::memory_order_acquire) &&
+                    now >= e->deadline) {
+                    e->fired = true;
+                    e->iso->TerminateExecution();
+                }
+            }
+        }
+    }
+
+    std::mutex mu_;
+    std::condition_variable cv_;
+    std::vector<std::shared_ptr<Entry>> entries_;
+    std::thread worker_;
+};
+
+// Message text for a watchdog-terminated call — carries the script id
+// so the callers' warn-once dedup reports it once per effect.
+std::string BudgetError(const std::string& id,
+                        std::chrono::milliseconds budget) {
+    return "script '" + id + "' exceeded the " +
+           std::to_string(budget.count()) +
+           "ms execution budget (terminated)";
+}
+
 }  // namespace
 
 JsFxRuntime::JsFxRuntime() : impl_(std::make_unique<Impl>()) {}
@@ -277,7 +452,8 @@ bool JsFxRuntime::EnsureLoaded(std::string* error) {
         return true;
     }
     impl_->load_attempted = true;
-    if (!g_catalog_loaded) {
+    const Catalog* catalog = CurrentCatalog();
+    if (catalog == nullptr || !catalog->loaded) {
         if (error) *error = "js fx catalog not loaded";
         return false;
     }
@@ -338,18 +514,32 @@ bool JsFxRuntime::EnsureLoaded(std::string* error) {
     auto run_files = [&](const std::vector<FxDesc>& list) {
         for (const auto& d : list) {
             const std::string path =
-                (std::filesystem::path(g_fx_dir) / d.file).string();
+                (std::filesystem::path(catalog->fx_dir) / d.file)
+                    .string();
+            // A while(1){} at file scope would hang the loader — the
+            // same budget mechanism that guards apply()/process().
+            FxWatchdog::Arm guard(impl_->engine->isolate(),
+                                  kScriptLoadBudget);
             std::string run_error;
-            if (!impl_->engine->RunFile(path, &run_error)) {
-                if (first_error.empty()) {
-                    first_error = d.file + ": " + run_error;
-                }
+            const bool ran =
+                impl_->engine->RunFile(path, &run_error);
+            guard.Disarm();
+            v8::Isolate* iso = impl_->engine->isolate();
+            if (iso->IsExecutionTerminating()) {
+                // The file's own TryCatch already unwound the
+                // termination; resume execution capability so the
+                // remaining files still evaluate.
+                iso->CancelTerminateExecution();
+                run_error = "execution budget exceeded (terminated)";
+            }
+            if (!ran && first_error.empty()) {
+                first_error = d.file + ": " + run_error;
             }
         }
     };
-    run_files(g_video_fx);
-    run_files(g_audio_fx);
-    run_files(g_transitions);
+    run_files(catalog->video_fx);
+    run_files(catalog->audio_fx);
+    run_files(catalog->transitions);
     if (!first_error.empty() && error != nullptr) {
         *error = first_error;   // reported once; fns that loaded work
     }
@@ -368,7 +558,8 @@ bool JsFxRuntime::HasTransition(const std::string& id) const {
 
 bool JsFxRuntime::ApplyVideo(const std::string& id, video::Frame* frame,
                              const std::vector<float>& params,
-                             double time_s, std::string* error) {
+                             double time_s, const std::string& clip_id,
+                             std::string* error) {
     if (frame == nullptr || !frame->IsValid() ||
         frame->Format() != video::PixelFormat::BGRA8) {
         return false;
@@ -377,7 +568,9 @@ bool JsFxRuntime::ApplyVideo(const std::string& id, video::Frame* frame,
     if (it == impl_->video_fns.end()) return false;
     Impl* impl = impl_.get();
     const v8::Global<v8::Function>* fn = &it->second;
-    const FxDesc* desc = FindDesc(g_video_fx, id);
+    const Catalog* catalog = CurrentCatalog();
+    const FxDesc* desc =
+        catalog != nullptr ? FindDesc(catalog->video_fx, id) : nullptr;
     bool ok = false;
     impl->engine->WithContext(
         [&](v8::Isolate* iso, v8::Local<v8::Context> ctx) {
@@ -408,15 +601,30 @@ bool JsFxRuntime::ApplyVideo(const std::string& id, video::Frame* frame,
                 ->Set(ctx, v8::String::NewFromUtf8Literal(iso, "time"),
                       v8::Number::New(iso, time_s))
                 .Check();
+            ctx_obj
+                ->Set(ctx,
+                      v8::String::NewFromUtf8Literal(iso, "clip_id"),
+                      v8::String::NewFromUtf8(iso, clip_id.c_str())
+                          .ToLocalChecked())
+                .Check();
             const auto fn_local =
                 v8::Local<v8::Function>::New(iso, *fn);
             v8::Local<v8::Value> argv[] = {
                 frame_obj, ParamsObject(iso, ctx, desc, params),
                 ctx_obj};
+            FxWatchdog::Arm guard(iso, kVideoApplyBudget);
             v8::MaybeLocal<v8::Value> result =
                 fn_local->Call(ctx, ctx->Global(), 3, argv);
+            guard.Disarm();
             if (result.IsEmpty() || try_catch.HasCaught()) {
-                if (error != nullptr) {
+                if (try_catch.HasTerminated()) {
+                    // Unwind complete — resume execution capability
+                    // so later calls into this isolate still work.
+                    iso->CancelTerminateExecution();
+                    if (error != nullptr) {
+                        *error = BudgetError(id, kVideoApplyBudget);
+                    }
+                } else if (error != nullptr) {
                     *error = FormatV8Error(iso, try_catch);
                 }
                 return false;
@@ -433,13 +641,16 @@ bool JsFxRuntime::ApplyVideo(const std::string& id, video::Frame* frame,
 bool JsFxRuntime::ProcessAudio(const std::string& id, float* interleaved,
                                int frames, int sample_rate,
                                const std::map<std::uint32_t, float>& params,
-                               double time_s, std::string* error) {
+                               double time_s, const std::string& clip_id,
+                               std::string* error) {
     if (interleaved == nullptr || frames <= 0) return false;
     const auto it = impl_->audio_fns.find(id);
     if (it == impl_->audio_fns.end()) return false;
     Impl* impl = impl_.get();
     const v8::Global<v8::Function>* fn = &it->second;
-    const FxDesc* desc = FindDesc(g_audio_fx, id);
+    const Catalog* catalog = CurrentCatalog();
+    const FxDesc* desc =
+        catalog != nullptr ? FindDesc(catalog->audio_fx, id) : nullptr;
     bool ok = false;
     impl->engine->WithContext(
         [&](v8::Isolate* iso, v8::Local<v8::Context> ctx) {
@@ -454,6 +665,12 @@ bool JsFxRuntime::ProcessAudio(const std::string& id, float* interleaved,
                       v8::String::NewFromUtf8Literal(iso, "sample_rate"),
                       v8::Number::New(iso, sample_rate))
                 .Check();
+            ctx_obj
+                ->Set(ctx,
+                      v8::String::NewFromUtf8Literal(iso, "clip_id"),
+                      v8::String::NewFromUtf8(iso, clip_id.c_str())
+                          .ToLocalChecked())
+                .Check();
             const auto fn_local =
                 v8::Local<v8::Function>::New(iso, *fn);
             SandboxView pcm_view =
@@ -464,10 +681,17 @@ bool JsFxRuntime::ProcessAudio(const std::string& id, float* interleaved,
             v8::Local<v8::Value> argv[] = {
                 pcm_view.view,
                 ParamsObject(iso, ctx, desc, params), ctx_obj};
+            FxWatchdog::Arm guard(iso, kAudioProcessBudget);
             v8::MaybeLocal<v8::Value> result =
                 fn_local->Call(ctx, ctx->Global(), 3, argv);
+            guard.Disarm();
             if (result.IsEmpty() || try_catch.HasCaught()) {
-                if (error != nullptr) {
+                if (try_catch.HasTerminated()) {
+                    iso->CancelTerminateExecution();
+                    if (error != nullptr) {
+                        *error = BudgetError(id, kAudioProcessBudget);
+                    }
+                } else if (error != nullptr) {
                     *error = FormatV8Error(iso, try_catch);
                 }
                 return false;
@@ -497,9 +721,17 @@ double JsFxRuntime::TransitionWeight(const std::string& id,
             v8::Local<v8::Value> argv[] = {
                 v8::Number::New(iso, progress), ctx_obj};
             v8::Local<v8::Value> result;
-            if (!fn_local->Call(ctx, ctx->Global(), 2, argv)
-                     .ToLocal(&result) ||
-                !result->IsNumber() || try_catch.HasCaught()) {
+            FxWatchdog::Arm guard(iso, kTransitionBudget);
+            const bool called =
+                fn_local->Call(ctx, ctx->Global(), 2, argv)
+                    .ToLocal(&result);
+            guard.Disarm();
+            if (try_catch.HasTerminated()) {
+                iso->CancelTerminateExecution();
+                return false;
+            }
+            if (!called || !result->IsNumber() ||
+                try_catch.HasCaught()) {
                 return false;
             }
             w = result.As<v8::Number>()->Value();
@@ -529,12 +761,13 @@ bool JsFxRuntime::HasTransition(const std::string&) const {
 }
 bool JsFxRuntime::ApplyVideo(const std::string&, video::Frame*,
                              const std::vector<float>&, double,
-                             std::string*) {
+                             const std::string&, std::string*) {
     return false;
 }
 bool JsFxRuntime::ProcessAudio(const std::string&, float*, int, int,
                                const std::map<std::uint32_t, float>&,
-                               double, std::string*) {
+                               double, const std::string&,
+                               std::string*) {
     return false;
 }
 double JsFxRuntime::TransitionWeight(const std::string&, double progress) {

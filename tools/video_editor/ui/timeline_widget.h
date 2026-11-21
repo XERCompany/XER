@@ -157,6 +157,13 @@ public:
     // shows the matching menu. Returns true when a menu was shown.
     bool ShowContextMenu(XER::UI::Layout::Point position);
 
+    // Media-bin drag->drop target API (absolute-space points, same
+    // coordinates events/bounds use): TimeAtDropPoint maps a drop x to
+    // a timeline time (clamped >= 0); SetExternalDropHover toggles the
+    // accent-frame affordance while a bin drag hovers this widget.
+    double TimeAtDropPoint(XER::UI::Layout::Point point) const;
+    void SetExternalDropHover(bool active);
+
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
     void Layout(const XER::UI::Layout::Rect& bounds) override;
@@ -305,6 +312,9 @@ private:
     // projects scroll under the fixed ruler/marker lanes.
     float track_scroll_ = 0.0f;
     bool ruler_scrub_ = false;   // ruler press-drag emits on_seek
+    // Media-bin drag hovering this widget — Render strokes an accent
+    // frame so the panel reads as a live drop target.
+    bool external_drop_hover_ = false;
 
     // Tool model — one instance per ToolId, active_tool_ picks the
     // receiver of pointer events.

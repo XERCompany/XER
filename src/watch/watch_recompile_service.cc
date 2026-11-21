@@ -3,6 +3,7 @@
 #include "error_handler/err_capture.h"
 #include "watch/watch_lock_recovery.h"
 #include "helper/string_utils.h"
+#include "helper/win_job.h"
 
 #include <filesystem>
 
@@ -109,6 +110,9 @@ bool WatchRecompileService::SpawnChild(const std::string& script_path,
         }
         return false;
     }
+    // Group the watch child with this process: a dead parent must not
+    // leave a `run <script>` orphan holding recompile locks.
+    XER::Helper::WinJobGroup::Shared().Assign(pi.hProcess);
     CloseHandle(pi.hThread);
     child_process_ = pi.hProcess;
     return true;

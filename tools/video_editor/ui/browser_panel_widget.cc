@@ -20,6 +20,7 @@
 #include "cef/cef_runtime.h"
 #include "rendering/renderer.h"
 #include "widgets/button.h"
+#include "widgets/label.h"
 #include "widgets/text_input.h"
 
 namespace XER::VideoEditor {
@@ -67,10 +68,13 @@ BrowserPanelWidget::BrowserPanelWidget(void* parent_hwnd)
     url_input_ = std::make_shared<XER::UI::Widgets::TextInput>();
     url_input_->SetPlaceholder("https://...");
     url_input_->SetOnSubmit([this] { Navigate(url_input_->GetValue()); });
+    status_label_ =
+        std::make_shared<XER::UI::Widgets::Label>("", /*muted=*/true);
     AddChild(back_btn_);
     AddChild(fwd_btn_);
     AddChild(reload_btn_);
     AddChild(url_input_);
+    AddChild(status_label_);
 }
 
 BrowserPanelWidget::~BrowserPanelWidget() {
@@ -208,6 +212,10 @@ void BrowserPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     y += kChromeH + 2.0f;
     view_rect_ = {bx, y, bounds.width - 2.0f * kPad,
                   bounds.y + bounds.height - kPad - kStatusH - y};
+    status_label_->Layout(
+        {bounds.x + kPad, bounds.y + bounds.height - kStatusH - 2.0f,
+         bounds.width - 2.0f * kPad, kStatusH},
+        tokens);
     EnsureBrowser();
     SyncBrowserRect();
 }
@@ -268,16 +276,10 @@ void BrowserPanelWidget::Render(
             XER::UI::Rendering::TextStyle{tokens.muted,
                                           tokens.font_small, 400});
     }
-    // Status strip.
-    if (!status_.empty()) {
-        renderer.DrawText(
-            status_,
-            {bounds.x + kPad,
-             bounds.y + bounds.height - kStatusH - 2.0f,
-             bounds.width - 2.0f * kPad, kStatusH},
-            XER::UI::Rendering::TextStyle{tokens.muted,
-                                          tokens.font_small, 400});
-    }
+    // Status strip is a Label child — feed it the drained status_ and
+    // hide it when there is nothing to say.
+    status_label_->SetText(status_);
+    status_label_->SetVisible(!status_.empty());
 }
 
 }  // namespace XER::VideoEditor

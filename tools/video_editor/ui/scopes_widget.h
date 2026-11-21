@@ -12,9 +12,15 @@
 
 #include <chrono>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 #include "widgets/widget.h"
+
+namespace XER::UI::Widgets {
+class Button;
+class ButtonGroup;
+}
 
 namespace XER::VideoEditor::Ui {
 
@@ -59,7 +65,15 @@ public:
     }
 
 private:
-    XER::UI::Layout::Rect TabRect(int index) const;
+    // The widget is hosted off-tree (MonitorWidget paints it directly
+    // inside the program-monitor overlay), so the segmented mode strip
+    // is rendered/laid-out/hit-tested manually from Render/Layout/
+    // HandleEvent — the WidgetTree only walks children of widgets it
+    // owns.
+    void EnsureChildren();
+    // Primary fill on the active mode, Secondary on the rest — the
+    // lab_panel mode-strip convention.
+    void SyncModeButtons();
     XER::UI::Layout::Rect ScopeAreaRect() const;
     void Recompute();
     void ComputeWaveform();
@@ -88,6 +102,13 @@ private:
     int computed_w_ = 0;
     int computed_h_ = 0;
     std::chrono::steady_clock::time_point last_compute_{};
+
+    bool children_attached_ = false;
+    std::shared_ptr<XER::UI::Widgets::ButtonGroup> mode_group_;
+    std::shared_ptr<XER::UI::Widgets::Button> wfm_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> parade_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> hist_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> vscope_btn_;
 };
 
 }  // namespace XER::VideoEditor::Ui

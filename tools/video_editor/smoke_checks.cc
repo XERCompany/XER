@@ -13,9 +13,12 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -23,15 +26,20 @@
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
+#include "audio_sync.h"
 #include "compositor.h"
+#include "content/video/video_info.h"
 #include "export_engine.h"
 #include "export_preset.h"
 #include "frame.h"
+#include "frame_exporter.h"
 #include "generated_source.h"
 #include "helper/path_utils.h"
+#include "helper/string_utils.h"
 #include "js_fx.h"
 #include "keyboard_map.h"
 #include "media_catalog.h"
+#include "poster_cache.h"
 #include "project_autosave.h"
 #include "project_store.h"
 #include "sequence_preset.h"
@@ -41,7 +49,56 @@
 #include "timeline_model.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
-namespace XER::VideoEditor::Smoke {
+namespace XER::VideoEditor {
+namespace {
+
+// Canonical importable-media extension list — the single source of
+// truth behind MediaImportExtensions(); see smoke_checks.h for why it
+// lives in the UI-free core.
+const std::string kMediaImportExtensions =
+    // video containers FFmpeg demuxes
+    "mp4;m4v;mkv;mov;qt;avi;divx;wmv;asf;webm;mpg;mpeg;mpe;m1v;m2v;mpv;"
+    "ts;mts;m2ts;vob;3gp;3g2;flv;f4v;mxf;dv;dif;ogv;rm;rmvb;y4m;nut;bik;amv;"
+    // audio-only containers
+    "wav;mp3;m4a;m4b;aac;flac;ogg;oga;opus;wma;aif;aiff;aifc;mka;ac3;"
+    "eac3;dts;amr;au;caf;wv;ape;tta;spx;voc;gsm;oma;"
+    // still images (FFmpeg image2 + OIIO set)
+    "png;jpg;jpeg;jpe;bmp;dib;gif;tif;tiff;webp;tga;ppm;pgm;pbm;pam;xpm;"
+    "avif;heic;exr;dpx;hdr;psd;pfm;raw;cr2;nef;arw;dng;ora";
+
+}  // namespace
+
+const std::string& MediaImportExtensions() {
+    return kMediaImportExtensions;
+}
+
+bool IsMediaImportPath(const std::string& utf8_path) {
+    // Extension after the last '.', unless a path separator follows
+    // it (a dot inside a directory name is not an extension).
+    const std::size_t dot = utf8_path.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= utf8_path.size()) {
+        return false;
+    }
+    const std::size_t sep = utf8_path.find_last_of("/\\");
+    if (sep != std::string::npos && sep > dot) return false;
+    const std::string ext =
+        XER::Helper::String::ToLowerAscii(utf8_path.substr(dot + 1));
+    // Token-compare, never substring — "xmp4" must not match "mp4".
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t next = kMediaImportExtensions.find(';', pos);
+        const std::string_view token =
+            std::string_view(kMediaImportExtensions)
+                .substr(pos, next == std::string::npos
+                                 ? std::string::npos
+                                 : next - pos);
+        if (token == ext) return true;
+        if (next == std::string::npos) return false;
+        pos = next + 1;
+    }
+}
+
+namespace Smoke {
 namespace {
 
 namespace Path = XER::Helper::Path;
@@ -437,6 +494,79 @@ std::string CheckCompositorRender() {
     return {};
 }
 
+// The `--screenshot` pipeline in-process: a project round-trips
+// through ProjectStore, the program frame renders through the
+// headless Compositor and lands on disk as a PNG via
+// video::FrameExporter — the file must carry the PNG magic plus an
+// IHDR matching the canvas size.
+std::string CheckScreenshotPng() {
+    Project project = MakeRenderProject(160, 90, 15);
+    const std::string proj_path =
+        Utf8Path(SmokeTempDir() / "shot_project.xerproj");
+    std::string err;
+    if (!ProjectStore::Save(project, proj_path, &err)) {
+        return "project save failed: " + err;
+    }
+    Project loaded;
+    if (!ProjectStore::Load(proj_path, &loaded, &err)) {
+        return "project reload failed: " + err;
+    }
+    Compositor compositor;
+    if (!compositor.Init(loaded, {}, &err)) {
+        return "Compositor::Init failed: " + err;
+    }
+    std::vector<std::uint8_t> bgra;
+    const bool rendered = compositor.RenderFrameAt(0.5, &bgra, &err);
+    compositor.Shutdown();
+    if (!rendered) {
+        return "RenderFrameAt failed: " + err;
+    }
+    video::Frame frame;
+    if (!frame.Allocate(160, 90, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    std::memcpy(frame.Data(), bgra.data(), bgra.size());
+    const std::string png_path =
+        Utf8Path(SmokeTempDir() / "shot_project.png");
+    video::FrameExporter exporter;
+    if (!exporter.ToFile(png_path, frame)) {
+        return "PNG export failed";
+    }
+    std::ifstream in(Path::FromUtf8(png_path),
+                     std::ios::binary | std::ios::ate);
+    if (!in) {
+        return "PNG missing after export";
+    }
+    const auto size = in.tellg();
+    if (size < 64) {   // header alone is 33 bytes; bars need data too
+        return "PNG suspiciously small (" +
+               std::to_string(static_cast<long long>(size)) + " bytes)";
+    }
+    in.seekg(0);
+    std::uint8_t header[24] = {};
+    in.read(reinterpret_cast<char*>(header), sizeof(header));
+    static const std::uint8_t kMagic[8] = {0x89, 'P', 'N', 'G',
+                                           0x0D, 0x0A, 0x1A, 0x0A};
+    if (in.gcount() != static_cast<std::streamsize>(sizeof(header)) ||
+        std::memcmp(header, kMagic, 8) != 0) {
+        return "PNG magic mismatch";
+    }
+    // Bytes 8..11 = IHDR length (13 BE), 12..15 = "IHDR",
+    // 16..23 = width/height big-endian.
+    const auto be32 = [](const std::uint8_t* p) {
+        return (static_cast<std::uint32_t>(p[0]) << 24) |
+               (static_cast<std::uint32_t>(p[1]) << 16) |
+               (static_cast<std::uint32_t>(p[2]) << 8) |
+               static_cast<std::uint32_t>(p[3]);
+    };
+    if (be32(header + 8) != 13 ||
+        std::memcmp(header + 12, "IHDR", 4) != 0 ||
+        be32(header + 16) != 160 || be32(header + 20) != 90) {
+        return "IHDR dimensions mismatch";
+    }
+    return {};
+}
+
 
 // Curve easings + glass/lens kernels: new KeyEase curves must land on
 // their endpoints (Bounce/Elastic/Back overshoot mid-span only); the
@@ -552,7 +682,7 @@ std::string CheckJsFx() {
     if (!frame.Allocate(4, 4, video::PixelFormat::BGRA8)) {
         return "frame allocate failed";
     }
-    if (!fx.ApplyVideo("invert", &frame, {}, 0.0, &err)) {
+    if (!fx.ApplyVideo("invert", &frame, {}, 0.0, "bars", &err)) {
         return "invert apply failed: " + err;
     }
     if (frame.Data()[0] != 255 || frame.Data()[1] != 255 ||
@@ -561,7 +691,7 @@ std::string CheckJsFx() {
     }
     float pcm[4] = {0.1f, -0.1f, 0.9f, -0.9f};
     if (!fx.ProcessAudio("bitcrush", pcm, 2, 48000, {{0, 4.0f}}, 0.0,
-                         &err)) {
+                         "bars", &err)) {
         return "bitcrush process failed: " + err;
     }
     // 4-bit → 16 levels; 0.9 quantizes to a multiple of 1/16.
@@ -572,6 +702,102 @@ std::string CheckJsFx() {
     const double w = fx.TransitionWeight("smoothstep", 0.5);
     if (std::fabs(w - 0.5) > 0.01) {
         return "smoothstep(0.5) != 0.5";
+    }
+
+    // ---- hardening: hostile scripts ----------------------------------
+    // A private catalog + runtime exercises the failure paths the
+    // stock scripts never hit: a throwing apply(), a runaway loop the
+    // watchdog must terminate, and a stateful counter proving
+    // ctx.clip_id scopes closure state per clip.
+    const auto hostile_dir = SmokeTempDir() / "fx_hostile";
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(hostile_dir, ec);
+        auto write = [&](const char* name, const char* text) {
+            std::ofstream(hostile_dir / name,
+                          std::ios::binary | std::ios::trunc)
+                << text;
+        };
+        write("fx.json",
+              "{\"video\":["
+              "{\"id\":\"thrower\",\"file\":\"thrower.js\",\"params\":[]},"
+              "{\"id\":\"runaway\",\"file\":\"runaway.js\",\"params\":[]},"
+              "{\"id\":\"ok\",\"file\":\"ok.js\",\"params\":[]}],"
+              "\"audio\":["
+              "{\"id\":\"counter\",\"file\":\"counter.js\",\"params\":[]}],"
+              "\"transitions\":[]}");
+        write("thrower.js",
+              "xerFxVideo({id:\"thrower\",apply(f,p,c){"
+              "throw new Error(\"smoke boom\");}});\n");
+        write("runaway.js",
+              "xerFxVideo({id:\"runaway\",apply(f,p,c){"
+              "while(true){}}});\n");
+        write("ok.js",
+              "xerFxVideo({id:\"ok\",apply(f,p,c){"
+              "f.data[0]=42;}});\n");
+        write("counter.js",
+              "xerFxAudio(function(){const counts={};return{"
+              "id:\"counter\",process(pcm,p,ctx){"
+              "const k=ctx.clip_id||\"\";"
+              "const c=(counts[k]=(counts[k]||0)+1);"
+              "for(let i=0;i<pcm.length;++i)pcm[i]=c;}};}());\n");
+    }
+    if (!JsFxRuntime::LoadCatalog(hostile_dir.string(), &err)) {
+        return "hostile fx catalog failed: " + err;
+    }
+    JsFxRuntime hostile;
+    if (!hostile.EnsureLoaded(&err)) {
+        return "hostile js runtime failed: " + err;
+    }
+    // (a) exception inside apply(): false + error text, no crash.
+    video::Frame f2;
+    if (!f2.Allocate(2, 2, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    if (hostile.ApplyVideo("thrower", &f2, {}, 0.0, "c1", &err)) {
+        return "throwing apply() reported success";
+    }
+    if (err.find("boom") == std::string::npos) {
+        return "apply() error text lost: " + err;
+    }
+    // (b) runaway apply(): the watchdog (500 ms budget) must kill it —
+    // generous 4 s ceiling for CI jitter. Returns false (identity).
+    const auto runaway_t0 = std::chrono::steady_clock::now();
+    const bool runaway_ok =
+        hostile.ApplyVideo("runaway", &f2, {}, 0.0, "c1", &err);
+    const auto runaway_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - runaway_t0)
+            .count();
+    if (runaway_ok) {
+        return "runaway apply() reported success";
+    }
+    if (runaway_ms > 4000) {
+        return "runaway script not terminated (" +
+               std::to_string(static_cast<long long>(runaway_ms)) +
+               "ms)";
+    }
+    // The isolate must stay usable — termination is per-call.
+    if (!hostile.ApplyVideo("ok", &f2, {}, 0.0, "c1", &err)) {
+        return "runtime stayed broken after termination: " + err;
+    }
+    if (f2.Data()[0] != 42) {
+        return "ok script did not run after termination";
+    }
+    // (c) ctx.clip_id scopes stateful audio closures: clipA counts
+    // 1,2 while clipB starts its own counter at 1.
+    float pcm_c[2] = {0.0f, 0.0f};
+    auto count_for = [&](const std::string& clip) {
+        pcm_c[0] = 0.0f;
+        if (!hostile.ProcessAudio("counter", pcm_c, 1, 48000, {}, 0.0,
+                                  clip, &err)) {
+            return -1.0f;
+        }
+        return pcm_c[0];
+    };
+    if (count_for("clipA") != 1.0f || count_for("clipA") != 2.0f ||
+        count_for("clipB") != 1.0f) {
+        return "ctx.clip_id did not isolate per-clip script state";
     }
     return {};
 }
@@ -611,6 +837,133 @@ std::string CheckAudioMixer() {
                     [](std::uint8_t byte) { return byte == 0; });
     if (!silent) {
         return "decoderless project produced non-silent audio";
+    }
+    return {};
+}
+
+// Audio-sync lag math (audio_sync.h): synthetic AudioPeaks driven
+// through the peaks-provider seam — no decoder, no media files. B is
+// A delayed by kShift buckets: the plan must recover that lag and
+// emit a NEGATIVE timeline shift of kShift bucket-seconds (the clip
+// moves earlier because its take's audio sits later in its own
+// recording). A leading copy proves the positive direction, and a
+// noise-only clip proves the confidence gate.
+std::string CheckAudioSync() {
+    constexpr int kBuckets = 4096;   // ~21.8 s at 256/48k per bucket
+    constexpr int kShift = 148;      // buckets; 37 envelope cells (x4)
+    constexpr double kCell = 256.0 / 48000.0 * 4.0;  // env cell secs
+    const auto pattern = [](int i) {
+        // Deterministic non-periodic energy + quiet floor.
+        std::uint32_t h = static_cast<std::uint32_t>(i) * 2654435761u;
+        h ^= h >> 16;
+        return 0.05f + 0.9f * (h % 1024) / 1024.0f;
+    };
+    // Peak buckets for the reference pattern shifted by `shift`
+    // (positive = audio lands later in this file's own recording).
+    const auto make_peaks = [&](int shift) {
+        AudioPeaks peaks;
+        peaks.channels = 1;
+        peaks.samples_per_peak = 256;
+        peaks.buckets = kBuckets;
+        peaks.data.resize(static_cast<std::size_t>(kBuckets) * 2);
+        for (int b = 0; b < kBuckets; ++b) {
+            const int src = b - shift;
+            const float v = (src >= 0 && src < kBuckets)
+                                ? pattern(src)
+                                : 0.02f;  // noise floor off-pattern
+            peaks.data[2 * b] = -v;
+            peaks.data[2 * b + 1] = v;
+        }
+        return peaks;
+    };
+    const AudioPeaks peaks_a = make_peaks(0);
+    const AudioPeaks peaks_b = make_peaks(kShift);    // delayed copy
+    const AudioPeaks peaks_d = make_peaks(-kShift);   // leading copy
+    const AudioPeaks peaks_n = make_peaks(1 << 30);   // pure floor
+
+    const auto provider = [&](const std::string& path,
+                              AudioPeaks* out) -> bool {
+        if (path == "cam_a.mp4") { *out = peaks_a; return true; }
+        if (path == "cam_b.mp4") { *out = peaks_b; return true; }
+        if (path == "cam_d.mp4") { *out = peaks_d; return true; }
+        if (path == "cam_n.mp4") { *out = peaks_n; return true; }
+        return false;
+    };
+
+    Project project;
+    project.width = 320;
+    project.height = 180;
+    project.fps_num = 30;
+    project.fps_den = 1;
+    project.tracks.push_back(Track{TrackKind::Video, "V1"});
+    project.tracks.push_back(Track{TrackKind::Audio, "A1"});
+    project.tracks.push_back(Track{TrackKind::Audio, "A2"});
+    project.tracks.push_back(Track{TrackKind::Audio, "A3"});
+    const auto media_clip = [](const std::string& id,
+                               const std::string& path, int track,
+                               double start, double dur) {
+        Clip clip;
+        clip.id = id;
+        clip.source_path = path;
+        clip.source.kind = SourceKind::Media;
+        clip.track = track;
+        clip.timeline_start = start;
+        clip.duration = dur;
+        return clip;
+    };
+    project.clips.push_back(
+        media_clip("ref", "cam_a.mp4", 0, 0.0, 20.0));
+    project.clips.push_back(
+        media_clip("delayed", "cam_b.mp4", 1, 5.0, 20.0));
+    project.clips.push_back(
+        media_clip("leading", "cam_d.mp4", 2, 2.0, 20.0));
+    project.clips.push_back(
+        media_clip("noise", "cam_n.mp4", 3, 12.0, 10.0));
+
+    AudioSyncReport report;
+    std::string err;
+    if (!ComputeAudioSyncPlanWithPeaks(project, "ref", provider,
+                                       &report, &err)) {
+        return "plan failed: " + err;
+    }
+    if (report.reference_clip_id != "ref" || report.status.empty()) {
+        return "report missing reference/status";
+    }
+    const auto entry_for = [&](const std::string& id)
+        -> const AudioSyncEntry* {
+        for (const auto& e : report.entries) {
+            if (e.clip_id == id) return &e;
+        }
+        return nullptr;
+    };
+    // lag cells = kShift/4 = 37 → delta = -37 * kCell ≈ -0.789 s.
+    const double want_delta = -(kShift / 4.0) * kCell;
+    const AudioSyncEntry* delayed = entry_for("delayed");
+    if (delayed == nullptr || !delayed->matched) {
+        return "delayed clip did not match";
+    }
+    if (std::fabs(delayed->delta_seconds - want_delta) > 1e-3 ||
+        std::fabs(delayed->new_timeline_start -
+                  (5.0 + want_delta)) > 1e-3) {
+        return "delayed clip shift wrong: " +
+               std::to_string(delayed->delta_seconds);
+    }
+    if (delayed->confidence < 0.5) {
+        return "delayed clip confidence too low";
+    }
+    const AudioSyncEntry* leading = entry_for("leading");
+    if (leading == nullptr || !leading->matched) {
+        return "leading clip did not match";
+    }
+    if (std::fabs(leading->delta_seconds + want_delta) > 1e-3 ||
+        std::fabs(leading->new_timeline_start -
+                  (2.0 - want_delta)) > 1e-3) {
+        return "leading clip shift wrong (sign): " +
+               std::to_string(leading->delta_seconds);
+    }
+    const AudioSyncEntry* noise = entry_for("noise");
+    if (noise == nullptr || noise->matched) {
+        return "noise clip falsely matched";
     }
     return {};
 }
@@ -736,6 +1089,202 @@ std::string CheckMediaCatalog() {
     return {};
 }
 
+// IsAttachedPictureStream() — the exported seam ProbeVideo applies to
+// every "video"-typed stream to decide whether it is embedded cover
+// art (never the primary video) or real footage. Truth-table the real
+// contract: attached_pic disposition, "cover" metadata, any picture
+// stream in an audio-primary container, and a 1-2 frame image-codec
+// stream beside audio all classify as art — while MJPEG camera
+// footage with an unknown frame count and lone stills must stay video.
+std::string CheckProbeClassification() {
+    namespace CV = XER::Content::Video;
+    const std::string mp4 = "mov,mp4,m4a,3gp,3g2,mj2";
+
+    FFmpeg::StreamInfo base;
+    base.media_type = "video";
+    base.codec_name = "mjpeg";
+
+    // attached_pic disposition beside audio -> art.
+    FFmpeg::StreamInfo pic = base;
+    pic.attached_pic = true;
+    pic.frame_count = 1;
+    if (!CV::IsAttachedPictureStream(pic, true, mp4)) {
+        return "attached_pic stream not classified as art";
+    }
+    // "cover" metadata marker -> art even without an audio stream
+    // (the metadata check runs before the audio gate).
+    FFmpeg::StreamInfo meta = base;
+    meta.metadata.push_back({"comment", "Cover (front)"});
+    if (!CV::IsAttachedPictureStream(meta, false, mp4)) {
+        return "cover metadata not classified as art";
+    }
+    // mjpeg inside an audio-primary container (mp3) with 1-2 frames
+    // next to audio -> art even with no disposition/metadata tells.
+    FFmpeg::StreamInfo mp3_art = base;
+    for (const std::int64_t frames : {1, 2}) {
+        mp3_art.frame_count = frames;
+        if (!CV::IsAttachedPictureStream(mp3_art, true, "mp3")) {
+            return "mp3 picture stream (" + std::to_string(frames) +
+                   " frames) not classified as art";
+        }
+    }
+    // MJPEG camera footage: image codec but frame_count unknown (0)
+    // in a general container -> stays video.
+    FFmpeg::StreamInfo camera = base;  // frame_count stays 0
+    if (CV::IsAttachedPictureStream(camera, true, mp4)) {
+        return "uncounted MJPEG footage misclassified as art";
+    }
+    // Many image-codec frames -> a real video, not a cover.
+    camera.frame_count = 300;
+    if (CV::IsAttachedPictureStream(camera, true, mp4)) {
+        return "300-frame MJPEG stream misclassified as art";
+    }
+    // A 1-2 frame image-codec stream beside audio in a general
+    // container -> art by the frame-count heuristic.
+    FFmpeg::StreamInfo still = base;
+    still.codec_name = "png";
+    still.frame_count = 1;
+    if (!CV::IsAttachedPictureStream(still, true, mp4)) {
+        return "1-frame image stream beside audio not classified as art";
+    }
+    // The same lone still with no audio anywhere keeps counting as
+    // video — the audio gate keeps single pictures usable.
+    if (CV::IsAttachedPictureStream(still, false, mp4)) {
+        return "lone still without audio misclassified as art";
+    }
+    // A real video codec never classifies on frame count alone.
+    FFmpeg::StreamInfo h264 = base;
+    h264.codec_name = "h264";
+    h264.frame_count = 1;
+    if (CV::IsAttachedPictureStream(h264, true, mp4)) {
+        return "1-frame h264 stream misclassified as art";
+    }
+    return {};
+}
+
+// PosterCache (poster_cache.h) byte-budgeted LRU: an oversized frame
+// is never retained, many small frames evict LRU-first until
+// BytesUsed() fits the capacity, and a Get() hit promotes the key so
+// it survives further evictions. UI-free — frames only, no decoder.
+std::string CheckPosterCacheLru() {
+    constexpr std::size_t kCapacity = 1u * 1024u * 1024u;  // 1 MiB
+    PosterCache cache(kCapacity);
+
+    // Oversized: a 2 MiB frame exceeds the whole budget -> the cache
+    // drops it immediately instead of keeping it.
+    video::Frame big;
+    if (!big.Allocate(512, 1024, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    cache.Put("big.mp4", 0, std::move(big));
+    if (cache.Get("big.mp4", 0) != nullptr) {
+        return "oversized frame was retained";
+    }
+
+    // 64 KiB frames: 16 fit exactly in 1 MiB. One hot key plus 15 cold
+    // keys, touch the hot one, then churn 8 more — the promoted key
+    // must survive while the oldest cold keys evict.
+    video::Frame small;
+    if (!small.Allocate(128, 128, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    cache.Put("hot.mp4", 0, small);
+    for (int i = 0; i < 15; ++i) {
+        cache.Put("clip.mp4", i, small);
+    }
+    if (cache.Get("hot.mp4", 0) == nullptr) {
+        return "hot key missing before the churn";
+    }
+    for (int i = 0; i < 8; ++i) {
+        cache.Put("filler.mp4", i, small);
+    }
+    const PosterCache::Stats stats = cache.GetStats();
+    if (stats.bytes > stats.capacity_bytes) {
+        return "BytesUsed() exceeds capacity";
+    }
+    if (stats.evictions == 0) {
+        return "no evictions recorded under pressure";
+    }
+    if (cache.Get("hot.mp4", 0) == nullptr) {
+        return "hot key evicted despite Get() promotion";
+    }
+    return {};
+}
+
+// Deployed assets audit: the app boots off <exe>/assets/app.yaml, the
+// icon pack rasterizes SVGs resolved through icons.yaml, and the
+// .xexrj extension host scans assets/extensions/. Everything the
+// runtime loads must actually be deployed — missing entries are
+// reported in the error string.
+std::string CheckAssetsIcons() {
+    std::string status;
+    auto boot = AppRuntime::Boot(&status);  // resolves assets_dir
+    // Same hygiene as app_boot: drop the published engine pointer
+    // before this result dies.
+    AppRuntime::SharedBootEngine() = nullptr;
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) {
+        return "assets dir not deployed (app.yaml not found)";
+    }
+    std::error_code ec;
+    std::vector<std::string> missing;
+    if (!std::filesystem::exists(cfg.assets_dir / "app.yaml", ec)) {
+        missing.push_back("app.yaml");
+    }
+    if (!std::filesystem::exists(cfg.assets_dir / "icons.yaml", ec)) {
+        missing.push_back("icons.yaml");
+    }
+    // Icons dir: the path Boot resolved, falling back to the
+    // conventional assets/icons layout.
+    const std::filesystem::path icons_dir =
+        !cfg.icons_dir.empty() ? cfg.icons_dir
+                               : cfg.assets_dir / "icons";
+    if (!std::filesystem::is_directory(icons_dir, ec)) {
+        missing.push_back("icons/");
+    } else {
+        int svg_count = 0;
+        for (const auto& de :
+             std::filesystem::directory_iterator(icons_dir, ec)) {
+            if (de.path().extension() == ".svg") {
+                ++svg_count;
+            }
+        }
+        if (svg_count == 0) {
+            missing.push_back("icons/*.svg");
+        }
+        // Every icons.yaml mapping must resolve under the icons dir —
+        // IconPack::Get() builds its path exactly this way.
+        for (const auto& [name, file] : cfg.icon_map) {
+            if (!std::filesystem::exists(icons_dir / file, ec)) {
+                missing.push_back("icon:" + name + "->" + file);
+            }
+        }
+    }
+    // .xexrj extension packages — the ext host rescans this dir.
+    const std::filesystem::path ext_dir = cfg.assets_dir / "extensions";
+    bool has_xexrj = false;
+    if (std::filesystem::is_directory(ext_dir, ec)) {
+        for (const auto& de :
+             std::filesystem::directory_iterator(ext_dir, ec)) {
+            if (de.path().extension() == ".xexrj") {
+                has_xexrj = true;
+                break;
+            }
+        }
+    }
+    if (!has_xexrj) {
+        missing.push_back("extensions/*.xexrj");
+    }
+    if (!missing.empty()) {
+        std::string reason = "missing:";
+        for (const std::string& entry : missing) {
+            reason += " " + entry;
+        }
+        return reason;
+    }
+    return {};
+}
+
 // End-to-end: compositor -> libx264 -> mp4 mux via the real FFmpeg
 // bridge, all on procedural clips — no media fixture required. Kept
 // last since it is the slowest check (~1 s typical).
@@ -772,6 +1321,29 @@ std::string CheckExportRender() {
     return {};
 }
 
+// Shared import filter (smoke_checks.h) — the same predicate the
+// file dialog's pattern list and the OS file-drop filter are built
+// from: common video/audio/still extensions accept (any case),
+// obvious non-media and edge cases (no dot, trailing dot, dot inside
+// a directory name, near-miss extensions) reject.
+std::string CheckMediaImportFilter() {
+    for (const char* path :
+         {"a.mp4", "B.MP4", "x/song.flac", "pic.PNG", "clip.m2ts",
+          "still.dng", "C:\\dir\\clip.mkv"}) {
+        if (!IsMediaImportPath(path)) {
+            return std::string("rejected media path: ") + path;
+        }
+    }
+    for (const char* path :
+         {"a.txt", "b.xerproj", "c.exe", "noext", "trailing.",
+          "dir.name/file", "archive.mp4x", "xmp4"}) {
+        if (IsMediaImportPath(path)) {
+            return std::string("accepted non-media path: ") + path;
+        }
+    }
+    return {};
+}
+
 // ---- registry + runner ----------------------------------------------
 
 using CheckFn = std::string (*)();
@@ -792,12 +1364,18 @@ constexpr CheckEntry kChecks[] = {
     {"export_presets", &CheckExportPresets},
     {"generated_source", &CheckGeneratedSource},
     {"compositor_render", &CheckCompositorRender},
+    {"screenshot_png", &CheckScreenshotPng},
     {"curves_lens", &CheckCurvesAndLens},
     {"js_fx", &CheckJsFx},
     {"audio_mixer", &CheckAudioMixer},
+    {"audio_sync", &CheckAudioSync},
     {"project_store", &CheckProjectStore},
     {"project_autosave", &CheckProjectAutosave},
     {"media_catalog", &CheckMediaCatalog},
+    {"media_import_filter", &CheckMediaImportFilter},
+    {"probe_classification", &CheckProbeClassification},
+    {"poster_cache_lru", &CheckPosterCacheLru},
+    {"assets_icons", &CheckAssetsIcons},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };
@@ -871,4 +1449,5 @@ int RunAll() {
     return failures == 0 ? 0 : 1;
 }
 
-}  // namespace XER::VideoEditor::Smoke
+}  // namespace Smoke
+}  // namespace XER::VideoEditor

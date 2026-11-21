@@ -18,6 +18,7 @@ extern "C" {
 
 #include <algorithm>
 #include <climits>
+#include <cstdio>
 #include <mutex>
 
 namespace XER::Bridge::FFmpeg {
@@ -143,6 +144,28 @@ struct VideoDecoder::Impl {
     // and resumes on the next call.
     static constexpr size_t kQueuedAudioHighWater = 1024;
 
+    // Lifetime count of audio packets lost to consumer back-pressure:
+    // dropped from the queue front by the kMaxQueuedAudioPackets cap,
+    // or skipped by a demux pump that found the queue already at the
+    // high-water mark. Any non-zero value means decoded audio has a
+    // silence hole, so the first loss is logged (see NoteAudioPacketDrop).
+    std::atomic<std::uint64_t> dropped_audio_packets{0};
+
+    // Counts one lost audio packet and logs once. Called under
+    // audio_mutex from PushAudioPacket() and lock-free from the A/V
+    // demux path — both callers are safe: the counter is atomic and
+    // the log fires only on the 0->1 transition.
+    void NoteAudioPacketDrop() {
+        if (dropped_audio_packets.fetch_add(
+                1, std::memory_order_relaxed) == 0) {
+            std::fprintf(stderr,
+                         "ffmpeg_video_decoder: audio tap losing "
+                         "packets (queue cap %zu) — decoded audio "
+                         "will gap\n",
+                         kMaxQueuedAudioPackets);
+        }
+    }
+
     size_t QueuedAudioPackets() {
         std::lock_guard<std::mutex> lock(audio_mutex);
         return audio_queue.size();
@@ -151,8 +174,13 @@ struct VideoDecoder::Impl {
     void PushAudioPacket(const AVPacket* src) {
         std::lock_guard<std::mutex> lock(audio_mutex);
         if (audio_queue.size() >= kMaxQueuedAudioPackets) {
+            // Hard cap reached: the OLDEST (next-needed) packet goes,
+            // punching a silence hole into decoded output — the bug
+            // the high-water pump guards exist to prevent. Counted so
+            // a stalled consumer is observable instead of silent.
             av_packet_free(&audio_queue.front());
             audio_queue.pop_front();
+            NoteAudioPacketDrop();
         }
         AVPacket* clone = av_packet_alloc();
         if (clone != nullptr && av_packet_ref(clone, src) == 0) {
@@ -576,7 +604,19 @@ bool VideoDecoder::NextFrame(std::vector<uint8_t>& bgra, int& width, int& height
             // being dropped — ReadAudioFrames() decodes them off-thread.
             if (p.audio_tap && p.packet->stream_index == p.audio_stream_index &&
                 p.audio_codec != nullptr) {
-                p.PushAudioPacket(p.packet);
+                if (p.QueuedAudioPackets() >=
+                    Impl::kQueuedAudioHighWater) {
+                    // Same back-pressure guard as the audio-only pump:
+                    // feeding past this mark only drives the queue into
+                    // the hard cap, which drops the OLDEST (next-needed)
+                    // packets. This loop cannot pause — video still needs
+                    // the next packet — so the audio packet is skipped
+                    // instead; the loss is counted and the hole lands at
+                    // the queue tail, not under the decoder.
+                    p.NoteAudioPacketDrop();
+                } else {
+                    p.PushAudioPacket(p.packet);
+                }
             }
             av_packet_unref(p.packet);
             continue;

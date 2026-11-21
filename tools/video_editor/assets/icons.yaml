@@ -1,8 +1,10 @@
 # Logical icon name → SVG file in assets/icons/
+# All files are Material Symbols (outlined) glyphs from
+# google/material-design-icons — single-path, 24px-box artwork.
 Icons:
-  nav.media: apps.svg
-  nav.audio: sync.svg
-  nav.text: translate.svg
+  nav.media: movie.svg
+  nav.audio: instant_mix.svg
+  nav.text: title.svg
   nav.fx: bolt.svg
   nav.markers: bookmark_stacks.svg
   nav.settings: settings.svg
@@ -13,8 +15,9 @@ Icons:
   transport.fullscreen: fullscreen.svg
   transport.loop: autorenew.svg
   transport.grid: tile_medium.svg
-  transport.safe: select_window.svg
+  transport.safe: margin.svg
   bin.import: arrow_download.svg
+  bin.add: playlist_add.svg
   bin.grid: tile_large.svg
   bin.list: lists.svg
   bin.search: search.svg
@@ -22,11 +25,11 @@ Icons:
   tab.inspector: toolbar.svg
   tab.effects: polymer.svg
   tab.markers: bookmark_stacks.svg
-  tab.lab: gesture.svg
-  tab.history: undo.svg
-  tab.mixer: shadow.svg
-  tab.export: arrow_circle_up.svg
-  tab.plugins: token.svg
+  tab.lab: science.svg
+  tab.history: history.svg
+  tab.mixer: equalizer.svg
+  tab.export: ios_share.svg
+  tab.plugins: extension.svg
   action.undo: undo.svg
   action.redo: redo.svg
   action.delete: delete_forever.svg
@@ -36,4 +39,12 @@ Icons:
   action.more: more_vert.svg
   action.refresh: refresh.svg
   action.file_open: file_open.svg
-  action.save: file_json.svg
+  action.save: save.svg
+  fx.adjust: tune.svg
+  fx.color: palette.svg
+  fx.blur: blur_on.svg
+  fx.flip: flip.svg
+  fx.distort: transform.svg
+  fx.stylize: brush.svg
+  fx.overlay: layers.svg
+  fx.key: key.svg

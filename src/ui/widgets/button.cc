@@ -23,6 +23,14 @@ std::size_t Utf8Length(std::string_view text) {
 
 constexpr float kPi = 3.14159265358979323846f;
 
+// Icon layout metrics (DIP).
+constexpr float kIconSize = 16.0f;
+constexpr float kIconGap = 6.0f;
+
+// Process-wide icon resolver installed by the host app (see
+// Button::SetIconResolver). Empty => every button stays text-only.
+Button::IconResolver g_icon_resolver;
+
 } // namespace
 
 Button::Button(std::string text, ButtonStyle style)
@@ -53,6 +61,19 @@ void Button::SetOnClick(std::function<void()> callback) {
 void Button::SetStyle(ButtonStyle style) {
     style_ = style;
     Invalidate();
+}
+
+void Button::SetIconResolver(IconResolver resolver) {
+    g_icon_resolver = std::move(resolver);
+}
+
+void Button::SetIcon(std::string icon_name) {
+    if (icon_ == icon_name) {
+        return;
+    }
+    icon_ = std::move(icon_name);
+    Invalidate();
+    RequestLayout();
 }
 
 void Button::SetLoading(bool loading) {
@@ -183,10 +204,29 @@ void Button::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
         const float text_w = text_.empty() ? 0.0f : measured.width;
         const float text_h = measured.height;
         constexpr float kMinPad = 8.0f;
+        // Icon sits left of the label; icon-only buttons center it.
+        // The (icon + gap + text) block centers as a unit so the pair
+        // reads as one control.
+        const bool has_icon = !icon_.empty() &&
+                              static_cast<bool>(g_icon_resolver);
+        const float icon_block =
+            has_icon ? kIconSize + (text_w > 0.0f ? kIconGap : 0.0f)
+                     : 0.0f;
         const float avail_w = std::max(0.0f, surface.width - 2.0f * kMinPad);
-        const float x = (text_w < avail_w)
-            ? (surface.x + kMinPad + (avail_w - text_w) * 0.5f)
+        const float content_w = icon_block + text_w;
+        float x = (content_w < avail_w)
+            ? (surface.x + kMinPad + (avail_w - content_w) * 0.5f)
             : (surface.x + kMinPad);
+        if (has_icon) {
+            const Layout::Rect icon_box{
+                x, surface.y +
+                       std::max(0.0f, (surface.height - kIconSize) * 0.5f),
+                kIconSize, kIconSize};
+            g_icon_resolver(renderer, icon_.c_str(),
+                            static_cast<int>(kIconSize), text_color,
+                            icon_box);
+            x += icon_block;
+        }
         const float max_w = std::max(0.0f, surface.Right() - kMinPad - x);
         const float draw_w = (text_w < avail_w) ? std::min(max_w, text_w + 2.0f) : avail_w;
         const float y = surface.y + std::max(0.0f, (surface.height - text_h) * 0.5f);
@@ -282,7 +322,8 @@ Layout::Size Button::GetPreferredSize() const {
     return {
         std::max(GetMinSize().width,
                  static_cast<float>(Utf8Length(text_)) * 7.7f +
-                     32.0f + (loading_ ? 16.0f : 0.0f)),
+                     32.0f + (loading_ ? 16.0f : 0.0f) +
+                     (icon_.empty() ? 0.0f : kIconSize + kIconGap)),
         36.0f
     };
 }

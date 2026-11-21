@@ -36,6 +36,7 @@
 #include "async_io/io_thread_pool.h"
 #include "audio/plugin_wrappers/vst3_plugin_scanner.h"
 #include "helper/string_utils.h"
+#include "helper/win_job.h"
 
 namespace {
 
@@ -174,6 +175,11 @@ ProbeRun RunProbeProcess(const std::wstring& exe, const std::string& module,
         run.spawn_failed = true;
         return run;
     }
+
+    // Group the probe worker with the orchestrator: killing the scan
+    // (Task Manager / console close) must reap every --probe child —
+    // a hung plugin must not outlive the scan holding module locks.
+    XER::Helper::WinJobGroup::Shared().Assign(pi.hProcess);
 
     std::thread reader([read_pipe, &run] {
         char buf[8192];

@@ -7,19 +7,16 @@
 
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
+#include "widgets/badge.h"
 #include "widgets/button.h"
 #include "widgets/label.h"
+#include "widgets/progress.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
 using XER::UI::Layout::Rect;
-using XER::UI::Theme::Color;
-
-Color WithAlpha(Color color, float alpha) {
-    color.a *= alpha;
-    return color;
-}
 
 ExportJobState StateOf(const ExportJobRow& job) {
     switch (static_cast<ExportJobState>(job.state)) {
@@ -42,30 +39,22 @@ const char* StateLabel(ExportJobState state) {
     return "?";
 }
 
-// Chip fill/text per state — token-driven so the panel follows the
-// theme (Queued/Running read as neutral/active, Done as accent,
-// Failed as destructive).
-void StateColors(ExportJobState state,
-                 const XER::UI::Theme::Tokens& tokens,
-                 Color* fill, Color* text) {
+// State -> BadgeVariant: Failed takes the danger Destructive chip,
+// Running takes Accent (ties the chip to the accent progress fill =
+// "work in progress"), Done settles into quiet Secondary, and Queued
+// stays hollow Outline.
+XER::UI::Widgets::BadgeVariant StateVariant(ExportJobState state) {
     switch (state) {
         case ExportJobState::Queued:
-            *fill = tokens.secondary;
-            *text = tokens.muted;
-            return;
+            return XER::UI::Widgets::BadgeVariant::Outline;
         case ExportJobState::Running:
-            *fill = WithAlpha(tokens.accent, 0.35f);
-            *text = tokens.accent;
-            return;
+            return XER::UI::Widgets::BadgeVariant::Accent;
         case ExportJobState::Done:
-            *fill = tokens.accent;
-            *text = tokens.accent_foreground;
-            return;
+            return XER::UI::Widgets::BadgeVariant::Secondary;
         case ExportJobState::Failed:
-            *fill = tokens.danger;
-            *text = tokens.danger_foreground;
-            return;
+            return XER::UI::Widgets::BadgeVariant::Destructive;
     }
+    return XER::UI::Widgets::BadgeVariant::Outline;
 }
 
 }  // namespace
@@ -95,19 +84,14 @@ void ExportQueuePanelWidget::SetJobs(
     hovered_ = -1;
     scroll_y_ = std::clamp(scroll_y_, 0.0f, ScrollRange());
     if (children_attached_) {
-        // Buttons carry per-row state (visibility by job state), so a
-        // count change rebuilds; same-count updates only retoggle.
+        // Children carry per-row state (badge variant, progress value,
+        // action visibility), so a count change rebuilds; same-count
+        // updates only re-sync.
         if (!same_count) {
             RebuildRows();
         } else {
             for (std::size_t i = 0; i < rows_.size(); ++i) {
-                const ExportJobState s = StateOf(jobs_[i]);
-                Row& row = rows_[i];
-                row.cancel->SetVisible(s == ExportJobState::Queued ||
-                                       s == ExportJobState::Running ||
-                                       s == ExportJobState::Failed);
-                row.reveal->SetVisible(s == ExportJobState::Done);
-                row.retry->SetVisible(s == ExportJobState::Failed);
+                SyncRow(i);
             }
             RequestLayout();
         }
@@ -132,18 +116,21 @@ void ExportQueuePanelWidget::RebuildRows() {
     // the header — RebuildRows can run inside a row button's OnClick).
     retired_rows_.clear();
     for (Row& row : rows_) {
-        for (const auto& button : {row.cancel, row.reveal, row.retry}) {
-            button->SetEnabled(false);
-            RemoveChild(button);
-            retired_rows_.push_back(button);
+        const std::shared_ptr<Widgets::Widget> children[] = {
+            row.badge, row.progress, row.cancel, row.reveal, row.retry};
+        for (const auto& child : children) {
+            child->SetEnabled(false);
+            RemoveChild(child);
+            retired_rows_.push_back(child);
         }
     }
     rows_.clear();
     rows_.reserve(jobs_.size());
     for (std::size_t i = 0; i < jobs_.size(); ++i) {
         const int job = static_cast<int>(i);
-        const ExportJobState s = StateOf(jobs_[i]);
         Row row;
+        row.badge = std::make_shared<Widgets::Badge>();
+        row.progress = std::make_shared<Widgets::Progress>(0.0f);
         row.cancel = std::make_shared<Widgets::Button>(
             "x", Widgets::ButtonStyle::Ghost);
         row.cancel->SetTooltip("Cancel / remove job");
@@ -164,32 +151,48 @@ void ExportQueuePanelWidget::RebuildRows() {
             if (hooks_.on_retry) hooks_.on_retry(job);
             SetStatus("job requeued");
         });
-        row.cancel->SetVisible(s == ExportJobState::Queued ||
-                               s == ExportJobState::Running ||
-                               s == ExportJobState::Failed);
-        row.reveal->SetVisible(s == ExportJobState::Done);
-        row.retry->SetVisible(s == ExportJobState::Failed);
+        AddChild(row.badge);
+        AddChild(row.progress);
         AddChild(row.cancel);
         AddChild(row.reveal);
         AddChild(row.retry);
         rows_.push_back(std::move(row));
+        SyncRow(i);
     }
     RequestLayout();
 }
 
+void ExportQueuePanelWidget::SyncRow(std::size_t index) {
+    if (index >= rows_.size() || index >= jobs_.size()) return;
+    const ExportJobRow& job = jobs_[index];
+    const ExportJobState s = StateOf(job);
+    Row& row = rows_[index];
+    row.badge->SetText(StateLabel(s));
+    row.badge->SetVariant(StateVariant(s));
+    row.progress->SetValue(
+        std::clamp(std::isfinite(job.progress) ? job.progress : 0.0f,
+                   0.0f, 1.0f));
+    row.cancel->SetVisible(s == ExportJobState::Queued ||
+                           s == ExportJobState::Running ||
+                           s == ExportJobState::Failed);
+    row.reveal->SetVisible(s == ExportJobState::Done);
+    row.retry->SetVisible(s == ExportJobState::Failed);
+}
+
 Rect ExportQueuePanelWidget::RowRect(int row) const {
     const auto bounds = GetBounds();
-    return {bounds.x + 8.0f,
+    return {bounds.x + VeTheme::kSpaceSm,
             rows_top_ + static_cast<float>(row) * row_height_ - scroll_y_,
-            bounds.width - 16.0f, row_height_ - 4.0f};
+            bounds.width - VeTheme::kSpaceSm * 2.0f,
+            row_height_ - 4.0f};
 }
 
 Rect ExportQueuePanelWidget::ProgressRect(int row) const {
     const Rect r = RowRect(row);
     // Below the detail line; ends before the right-side button column
     // (and its trailing % readout) so nothing draws under a button.
-    return {r.x + 4.0f, r.y + r.height - 13.0f,
-            std::max(20.0f, r.width - 84.0f), 4.0f};
+    return {r.x + 4.0f, r.y + r.height - 12.0f,
+            std::max(20.0f, r.width - 84.0f), 6.0f};
 }
 
 int ExportQueuePanelWidget::RowAt(
@@ -234,8 +237,8 @@ void ExportQueuePanelWidget::Render(
         return;
     }
 
-    // Text/progress/chip are drawn (not Label children) so row clicks
-    // hit the panel — Click events do not bubble up from children.
+    // Chip and bar are Badge/Progress children now — the panel draws
+    // the row wash, the two text lines, and the running % readout.
     for (std::size_t i = 0; i < jobs_.size(); ++i) {
         const Rect row = RowRect(static_cast<int>(i));
         if (row.y + row.height < rows_top_ || row.y > rows_bottom_) {
@@ -249,23 +252,13 @@ void ExportQueuePanelWidget::Render(
             renderer.FillRect(row, tokens.panel, tokens.radius_small);
         }
 
-        // Line 1: basename left, state chip just left of the button
-        // column (buttons live at row.Right()-62 .. -6).
+        // Line 1: basename left; the Badge child owns the chip slot
+        // just left of the button column (row.Right()-134 .. -70).
         renderer.DrawText(job.label,
                           {row.x + 8.0f, row.y + 5.0f,
-                           std::max(30.0f, row.width - 140.0f), 18.0f},
+                           std::max(30.0f, row.width - 150.0f), 18.0f},
                           XER::UI::Rendering::TextStyle{
                               tokens.foreground, tokens.font_body, 600});
-        Color chip_fill, chip_text;
-        StateColors(state, tokens, &chip_fill, &chip_text);
-        const char* chip = StateLabel(state);
-        const float chip_w = 58.0f;
-        const Rect chip_rect{row.Right() - 70.0f - chip_w, row.y + 6.0f,
-                             chip_w, 16.0f};
-        renderer.FillRect(chip_rect, chip_fill, tokens.radius_small);
-        renderer.DrawText(chip, chip_rect,
-                          XER::UI::Rendering::TextStyle{
-                              chip_text, tokens.font_small, 600});
 
         // Line 2: range + codec/bitrate detail (muted).
         renderer.DrawText(job.detail,
@@ -274,27 +267,18 @@ void ExportQueuePanelWidget::Render(
                           XER::UI::Rendering::TextStyle{
                               tokens.muted, tokens.font_small, 400});
 
-        // Progress bar: recessed track + accent fill (danger tint when
-        // the job failed so the bar doesn't read as completed work).
-        const Rect bar = ProgressRect(static_cast<int>(i));
-        renderer.FillRect(bar, tokens.input, bar.height * 0.5f);
-        const float frac =
-            std::clamp(std::isfinite(job.progress) ? job.progress : 0.0f,
-                       0.0f, 1.0f);
-        if (frac > 0.0f) {
-            const Color fill = state == ExportJobState::Failed
-                                   ? tokens.danger
-                                   : tokens.accent;
-            renderer.FillRect(
-                {bar.x, bar.y, bar.width * frac, bar.height}, fill,
-                bar.height * 0.5f);
-        }
+        // Running % readout at the progress bar's right edge (the bar
+        // itself is the row's Progress child).
         if (state == ExportJobState::Running) {
+            const Rect bar = ProgressRect(static_cast<int>(i));
+            const float frac = std::clamp(
+                std::isfinite(job.progress) ? job.progress : 0.0f,
+                0.0f, 1.0f);
             char pct[16];
             std::snprintf(pct, sizeof(pct), "%d%%",
                           static_cast<int>(frac * 100.0f + 0.5f));
             renderer.DrawText(pct,
-                              {bar.Right() - 40.0f, bar.y - 4.0f, 40.0f,
+                              {bar.Right() - 40.0f, bar.y - 3.0f, 40.0f,
                                12.0f},
                               XER::UI::Rendering::TextStyle{
                                   tokens.muted, tokens.font_small, 400});
@@ -318,6 +302,17 @@ void ExportQueuePanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     for (std::size_t i = 0; i < rows_.size(); ++i) {
         const Rect row = RowRect(static_cast<int>(i));
         Row& r = rows_[i];
+        // Hide children of rows scrolled outside the viewport — the
+        // panel clip covers the title/status bands too, so without
+        // this an off-viewport child would paint (and hit-test) over
+        // the chrome.
+        const bool visible =
+            row.y + row.height > rows_top_ && row.y < rows_bottom_;
+        // Badge chip just left of the button column.
+        r.badge->Layout({row.Right() - 134.0f, row.y + 5.0f, 64.0f,
+                         18.0f},
+                        tokens);
+        r.progress->Layout(ProgressRect(static_cast<int>(i)), tokens);
         // Button column at the row's right edge, vertically centered.
         r.cancel->Layout({row.Right() - 30.0f, row.y + 14.0f, 24.0f,
                           24.0f},
@@ -328,6 +323,17 @@ void ExportQueuePanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         r.retry->Layout({row.Right() - 62.0f, row.y + 14.0f, 28.0f,
                          24.0f},
                         tokens);
+        r.badge->SetVisible(visible);
+        r.progress->SetVisible(visible);
+        // Action buttons keep their state-driven visibility — a hidden
+        // (wrong-state) button stays hidden even in the viewport.
+        if (!visible) {
+            r.cancel->SetVisible(false);
+            r.reveal->SetVisible(false);
+            r.retry->SetVisible(false);
+        } else {
+            SyncRow(i);
+        }
     }
     status_->Layout({bounds.x + pad,
                      bounds.y + bounds.height - 28.0f,
@@ -345,7 +351,7 @@ bool ExportQueuePanelWidget::HandleEvent(
                 scroll_y_ - static_cast<float>(event.wheel_delta) * 0.5f,
                 0.0f, range);
             Invalidate();
-            RequestLayout();   // row buttons track the scroll offset
+            RequestLayout();   // row children track the scroll offset
             return true;
         }
         case XER::UI::Widgets::Event::Type::MouseMove: {

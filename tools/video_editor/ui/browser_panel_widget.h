@@ -13,6 +13,7 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class Label;
 class TextInput;
 }
 
@@ -69,6 +70,9 @@ private:
     std::shared_ptr<XER::UI::Widgets::Button> fwd_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> reload_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> url_input_;
+    // Bottom status strip ("Loading...", CEF-unavailable notices) —
+    // a child Label fed from status_ each Render().
+    std::shared_ptr<XER::UI::Widgets::Label> status_label_;
     std::unique_ptr<XER::Cef::CefHost> cef_;
     XER::UI::Layout::Rect view_rect_{};
     std::string status_;   // UI thread only

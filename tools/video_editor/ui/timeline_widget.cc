@@ -217,6 +217,17 @@ EditTool* TimelineWidget::ActiveToolImpl() const {
     return it != tools_.end() ? it->second.get() : nullptr;
 }
 
+double TimelineWidget::TimeAtDropPoint(
+    XER::UI::Layout::Point point) const {
+    return TimeAtX(point.x);
+}
+
+void TimelineWidget::SetExternalDropHover(bool active) {
+    if (external_drop_hover_ == active) return;
+    external_drop_hover_ = active;
+    Invalidate();
+}
+
 double TimelineWidget::TimeAtX(float x) const {
     const float local = x - (timeline_area_.x + kHeaderWidth);
     return std::max(0.0, scroll_seconds_ + local / px_per_second_);
@@ -1012,6 +1023,13 @@ void TimelineWidget::Render(
     renderer.FillRect(
         Rect{play_x - 5.0f, bounds.y + 1.0f, 10.0f, 12.0f},
         tokens.danger, 3.0f);
+
+    // Media-bin drag hovering this widget — accent frame marks the
+    // panel as a live drop target (SetExternalDropHover).
+    if (external_drop_hover_) {
+        renderer.StrokeRect(bounds, tokens.accent, 2.0f,
+                            tokens.radius_large);
+    }
 }
 
 void TimelineWidget::RenderMarkers(

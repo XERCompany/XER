@@ -10,15 +10,25 @@
 //                   xerFxTransition({ id, title, weight(progress, ctx) })
 //   frame = { data: Uint8ClampedArray(BGRA), width, height, stride }
 //   pcm   = Float32Array, interleaved stereo [-1, 1]
-//   ctx   = { time, rate | sample_rate, fps }
+//   ctx   = { time, sample_rate, clip_id }   // clip_id = owning clip
 // All buffer args are ZERO-COPY views over native memory — scripts
 // mutate them in place.
+//
+// STATE: one registered fn object is shared by every clip that uses
+// its id, so a script that keeps closure state (delay lines, filter
+// memory) MUST key it by ctx.clip_id or clips bleed into each other.
+//
+// BUDGET: every script invocation runs under a time watchdog
+// (shared helper thread -> Isolate::TerminateExecution). A script
+// that overruns returns failure and the caller falls back to
+// identity; the isolate stays usable for subsequent calls.
 //
 // THREADING: a JsFxRuntime owns a private JsEngine whose isolate is
 // strictly single-threaded — create, use and destroy the runtime on
 // ONE thread (compositor/mixer worker, export worker). The process-
 // wide catalog (VideoEffects()/AudioEffects()/ScriptTransitions())
-// is JSON-only and safe to read from anywhere after LoadCatalog.
+// is JSON-only; LoadCatalog publishes immutable snapshots under a
+// shared_mutex, so the accessors are safe to call from anywhere.
 #pragma once
 
 #include <cstdint>
@@ -73,19 +83,22 @@ public:
 
     // Runs apply() in place on a BGRA8 frame. `params` is positional —
     // index i maps to the manifest's params[i].id (defaults fill the
-    // tail). Returns false (frame untouched) on missing effect or a JS
-    // exception — callers warn-once.
+    // tail). `clip_id` is forwarded as ctx.clip_id so stateful
+    // scripts can keep per-clip state. Returns false (frame
+    // untouched) on missing effect, a JS exception or a watchdog
+    // termination — callers warn-once.
     bool ApplyVideo(const std::string& id, video::Frame* frame,
                     const std::vector<float>& params, double time_s,
-                    std::string* error);
+                    const std::string& clip_id, std::string* error);
 
     // Runs process() in place on interleaved stereo float samples.
     // `params` maps manifest-param ORDINAL -> value (ClipAudioFx
-    // positional convention).
+    // positional convention). `clip_id` -> ctx.clip_id.
     bool ProcessAudio(const std::string& id, float* interleaved,
                       int frames, int sample_rate,
                       const std::map<std::uint32_t, float>& params,
-                      double time_s, std::string* error);
+                      double time_s, const std::string& clip_id,
+                      std::string* error);
 
     // weight(progress) -> clamped [0,1]. Missing/failed script falls
     // back to linear progress — the transition still renders.

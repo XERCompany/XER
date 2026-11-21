@@ -81,7 +81,6 @@ private:
     void CycleBackground();
 
     XER::UI::Layout::Rect PanelRect() const;
-    std::vector<XER::UI::Layout::Rect> FpsChipRects() const;
     XER::UI::Layout::Rect BgSwatchRect() const;
 
     Hooks hooks_;
@@ -92,13 +91,9 @@ private:
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> name_label_;
-    std::shared_ptr<XER::UI::Widgets::Label> width_label_;
     std::shared_ptr<XER::UI::Widgets::TextInput> width_input_;
-    std::shared_ptr<XER::UI::Widgets::Label> height_label_;
     std::shared_ptr<XER::UI::Widgets::TextInput> height_input_;
-    std::shared_ptr<XER::UI::Widgets::Label> fps_num_label_;
     std::shared_ptr<XER::UI::Widgets::TextInput> fps_num_input_;
-    std::shared_ptr<XER::UI::Widgets::Label> fps_den_label_;
     std::shared_ptr<XER::UI::Widgets::TextInput> fps_den_input_;
     std::shared_ptr<XER::UI::Widgets::Button> ok_button_;
     std::shared_ptr<XER::UI::Widgets::Button> cancel_button_;

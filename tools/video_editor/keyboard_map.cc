@@ -33,6 +33,8 @@ const std::vector<ShortcutEntry>& EditorShortcuts() {
         // program monitor is active, or the source clip's in/out when
         // the source monitor is. M drops a named marker.
         {"Markers", "M", "Add marker at playhead"},
+        {"Markers", "Shift+M", "Go to next marker"},
+        {"Markers", "PageUp / PageDown", "Previous / next marker"},
         {"Markers", "I", "Set work-area in / source mark-in"},
         {"Markers", "O", "Set work-area out / source mark-out"},
         // Source monitor (Premiere): keys land on the last-used

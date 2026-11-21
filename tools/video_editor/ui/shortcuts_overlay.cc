@@ -2,38 +2,49 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
+#include <memory>
 #include <utility>
 
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
+#include "widgets/kbd.h"
 #include "widgets/label.h"
+#include "widgets/scroll_area.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
 using XER::UI::Layout::Rect;
 using XER::UI::Theme::Color;
+namespace Widgets = XER::UI::Widgets;
 
 constexpr float kCardWidth = 660.0f;
 constexpr float kCardHeight = 480.0f;
 constexpr float kCardPad = 22.0f;
-constexpr float kRowHeight = 21.0f;
-constexpr float kGroupHeaderHeight = 26.0f;
-constexpr float kGroupGap = 10.0f;
-constexpr float kColumnGap = 28.0f;
 
-Color WithAlpha(Color color, float alpha) {
-    color.a *= alpha;
-    return color;
-}
+// Row/section metrics come from the VeTheme scale — the list reads as
+// the inspector's sectioned list convention.
+constexpr float kGroupHeaderHeight = VeTheme::kControlHeight;
+constexpr float kGroupGap = VeTheme::kSpaceMd;
+constexpr float kColumnGap = VeTheme::kSpaceXl;
 
-}  // namespace
+// The shortcut table is display-only data owned by this file; the
+// overlay's private Groups() mirrors it for the member API.
+struct OverlayEntry {
+    const char* keys;
+    const char* action;
+};
+struct OverlayGroup {
+    const char* title;
+    std::vector<OverlayEntry> entries;
+};
 
-const std::vector<ShortcutsOverlay::Group>&
-ShortcutsOverlay::Groups() {
+const std::vector<OverlayGroup>& OverlayGroups() {
     // Display-only mirror of VideoEditorAppWidget::HandleEvent's
     // bindings (plus the menu shortcut labels); keep in sync there.
-    static const std::vector<Group> groups = {
+    static const std::vector<OverlayGroup> groups = {
         {"Tools",
          {{"V", "Selection tool"},
           {"C", "Razor tool"},
@@ -77,6 +88,184 @@ ShortcutsOverlay::Groups() {
     return groups;
 }
 
+// Finds the first direct child of `parent` of type T — the dialogs
+// reach their non-member children (ButtonGroup, Field, ScrollArea)
+// this way so headers stay unchanged.
+template <typename T>
+T* FindChild(XER::UI::Widgets::Widget* parent) {
+    if (parent == nullptr) return nullptr;
+    for (const auto& child : parent->GetChildren()) {
+        if (auto* typed = dynamic_cast<T*>(child.get())) {
+            return typed;
+        }
+    }
+    return nullptr;
+}
+
+// The scrollable body: Kbd chip children per shortcut entry, with
+// group captions and action descriptions drawn during Render from
+// rects computed in Layout (the panel's drawn-header convention).
+// Column balance comes from the overlay via SetColumns().
+class ShortcutListContent final : public XER::UI::Widgets::Widget {
+public:
+    ShortcutListContent() {
+        SetFocusable(false);
+        std::size_t start = 0;
+        for (const OverlayGroup& group : OverlayGroups()) {
+            group_kbd_start_.push_back(start);
+            for (const OverlayEntry& entry : group.entries) {
+                kbds_.push_back(
+                    std::make_shared<Widgets::Kbd>(entry.keys));
+                AddChild(kbds_.back());
+            }
+            start += group.entries.size();
+        }
+    }
+
+    // Greedy-balance result computed by the overlay (indices into
+    // OverlayGroups()); SetColumns triggers a re-layout.
+    void SetColumns(std::vector<int> column_a,
+                    std::vector<int> column_b) {
+        if (column_a_ == column_a && column_b_ == column_b) return;
+        column_a_ = std::move(column_a);
+        column_b_ = std::move(column_b);
+        Invalidate();
+    }
+
+    void Render(XER::UI::Rendering::Renderer& renderer,
+                const XER::UI::Theme::Tokens& tokens) override {
+        // Group captions — the drawn-header convention: muted, small,
+        // weight 600. Action text is the list's quiet body copy.
+        for (const DrawnLine& line : headers_) {
+            renderer.DrawText(
+                line.text, line.rect,
+                {tokens.muted, tokens.font_small, 600});
+        }
+        for (const DrawnLine& line : actions_) {
+            renderer.DrawText(
+                line.text, line.rect,
+                {tokens.muted, tokens.font_body, 400});
+        }
+    }
+
+    void Layout(const Rect& bounds) override {
+        SetBounds(bounds);
+        const float column_w =
+            (bounds.width - kColumnGap) * 0.5f;
+        headers_.clear();
+        actions_.clear();
+        const auto layout_column = [&](const std::vector<int>& column,
+                                       float x) {
+            float y = bounds.y;
+            const auto& groups = OverlayGroups();
+            for (int index : column) {
+                const std::size_t gi = static_cast<std::size_t>(index);
+                const OverlayGroup& group = groups[gi];
+                headers_.push_back(
+                    {{x, y + 6.0f, column_w, 18.0f}, group.title});
+                y += kGroupHeaderHeight;
+                std::size_t kbd_index = group_kbd_start_[gi];
+                for (const OverlayEntry& entry : group.entries) {
+                    const auto& kbd = kbds_[kbd_index++];
+                    // Chip hugs its text; the action sits one gap to
+                    // the right of the widest part of the chip.
+                    const auto pref = kbd->GetPreferredSize();
+                    const float chip_y =
+                        y + (VeTheme::kRowHeight - pref.height) * 0.5f;
+                    kbd->Layout({x, chip_y, pref.width, pref.height},
+                                CachedLayoutTokens());
+                    actions_.push_back(
+                        {{x + pref.width + VeTheme::kSpaceMd, y + 3.0f,
+                          column_w - pref.width - VeTheme::kSpaceMd,
+                          VeTheme::kRowHeight - 6.0f},
+                         entry.action});
+                    y += VeTheme::kRowHeight;
+                }
+                y += kGroupGap;
+            }
+            return y - bounds.y - kGroupGap;
+        };
+        const float height_a =
+            layout_column(column_a_, bounds.x);
+        const float height_b =
+            layout_column(column_b_, bounds.x + column_w + kColumnGap);
+        content_height_ = std::max(height_a, height_b);
+    }
+    using Widget::Layout;
+
+    bool HandleEvent(const XER::UI::Widgets::Event&) override {
+        return false;
+    }
+
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {0.0f, content_height_};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return {0.0f, content_height_ > 0.0f ? content_height_
+                                            : EstimatedHeight()};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {100000.0f, 100000.0f};
+    }
+    // ScrollArea reads this before the first Layout — report the
+    // unbalanced single-column height as a safe estimate.
+    float GetContentHeight() const override {
+        return content_height_ > 0.0f ? content_height_
+                                      : EstimatedHeight();
+    }
+
+private:
+    struct DrawnLine {
+        Rect rect;
+        const char* text;
+    };
+
+    static float EstimatedHeight() {
+        float height = 0.0f;
+        for (const OverlayGroup& group : OverlayGroups()) {
+            height += kGroupHeaderHeight +
+                      static_cast<float>(group.entries.size()) *
+                          VeTheme::kRowHeight +
+                      kGroupGap;
+        }
+        // Two roughly balanced columns.
+        return height * 0.55f;
+    }
+
+    std::vector<std::shared_ptr<Widgets::Kbd>> kbds_;
+    // Flat kbds_ index of each group's first entry (the layout walks
+    // groups in column order, not table order).
+    std::vector<std::size_t> group_kbd_start_;
+    std::vector<int> column_a_;
+    std::vector<int> column_b_;
+    std::vector<DrawnLine> headers_;
+    std::vector<DrawnLine> actions_;
+    float content_height_ = 0.0f;
+};
+
+}  // namespace
+
+const std::vector<ShortcutsOverlay::Group>&
+ShortcutsOverlay::Groups() {
+    // Conversion layer over the shared file-local table (kept so the
+    // private member API stays valid for the header's declaration).
+    static const std::vector<Group> groups = [] {
+        std::vector<Group> out;
+        out.reserve(OverlayGroups().size());
+        for (const OverlayGroup& source : OverlayGroups()) {
+            Group converted;
+            converted.title = source.title;
+            converted.entries.reserve(source.entries.size());
+            for (const OverlayEntry& entry : source.entries) {
+                converted.entries.push_back({entry.keys, entry.action});
+            }
+            out.push_back(std::move(converted));
+        }
+        return out;
+    }();
+    return groups;
+}
+
 ShortcutsOverlay::ShortcutsOverlay(Hooks hooks)
     : hooks_(std::move(hooks)) {
     SetFocusable(true);
@@ -92,6 +281,11 @@ void ShortcutsOverlay::EnsureChildren() {
         "? or Esc to close", true);
     AddChild(title_);
     AddChild(hint_);
+    // The scrollable list: ShortcutListContent inside a ScrollArea
+    // (clips children, owns the wheel + scrollbar). Reached later via
+    // FindChild — the header's member set is unchanged.
+    AddChild(std::make_shared<Widgets::ScrollArea>(
+        std::make_shared<ShortcutListContent>()));
 }
 
 void ShortcutsOverlay::Toggle() {
@@ -100,6 +294,9 @@ void ShortcutsOverlay::Toggle() {
         return;
     }
     scroll_y_ = 0.0f;
+    if (auto* scroll = FindChild<Widgets::ScrollArea>(this)) {
+        scroll->ScrollTo(0.0f);
+    }
     SetVisible(true);
     Invalidate();
 }
@@ -126,7 +323,7 @@ float ShortcutsOverlay::ColumnHeight(
         height += kGroupHeaderHeight +
                   static_cast<float>(groups[static_cast<std::size_t>(index)]
                                          .entries.size()) *
-                      kRowHeight +
+                      VeTheme::kRowHeight +
                   kGroupGap;
     }
     return height;
@@ -158,91 +355,16 @@ void ShortcutsOverlay::Render(
     const XER::UI::Theme::Tokens& tokens) {
     EnsureChildren();
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, {0.0f, 0.0f, 0.0f, 0.58f}, 0.0f);
+    renderer.FillRect(bounds, VeTheme::kScrim, 0.0f);
+    // Card chrome per the panel convention: surface fill + hairline
+    // border at the large radius, accent edge bar.
     const auto card = CardRect();
     renderer.FillRect(card, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(card, tokens.border, 1.0f, tokens.radius_large);
     renderer.FillRect({card.x, card.y, 4.0f, card.height}, tokens.accent,
                       tokens.radius_large);
-    if (list_top_ <= 0.0f) return;   // not yet laid out
-
-    const auto& groups = Groups();
-    const XER::UI::Rendering::TextStyle header_style{
-        tokens.muted, tokens.font_small, 700};
-    const XER::UI::Rendering::TextStyle key_style{
-        tokens.foreground, tokens.font_small, 600};
-    const XER::UI::Rendering::TextStyle action_style{
-        tokens.muted, tokens.font_body, 400};
-
-    const Rect viewport{card.x + kCardPad, list_top_,
-                        card.width - kCardPad * 2.0f,
-                        list_bottom_ - list_top_};
-    renderer.PushClip(viewport);
-
-    const auto draw_column = [&](const std::vector<int>& column,
-                                 float x) {
-        float y = list_top_ - scroll_y_;
-        for (int index : column) {
-            const Group& group =
-                groups[static_cast<std::size_t>(index)];
-            if (y + kGroupHeaderHeight > viewport.y &&
-                y < viewport.y + viewport.height) {
-                renderer.DrawText(
-                    group.title,
-                    {x, y + 4.0f, column_width_, 18.0f}, header_style);
-            }
-            y += kGroupHeaderHeight;
-            for (const Entry& entry : group.entries) {
-                if (y + kRowHeight > viewport.y &&
-                    y < viewport.y + viewport.height) {
-                    // Key chip sized to the shortcut text.
-                    const float text_w =
-                        renderer
-                            .MeasureText(entry.keys, key_style)
-                            .width;
-                    const float chip_w =
-                        std::max(26.0f, text_w + 14.0f);
-                    const Rect chip{x, y + 1.0f, chip_w,
-                                    kRowHeight - 3.0f};
-                    renderer.FillRect(chip, tokens.secondary,
-                                      tokens.radius_small);
-                    renderer.StrokeRect(chip,
-                                        WithAlpha(tokens.border, 0.8f),
-                                        1.0f, tokens.radius_small);
-                    renderer.DrawText(entry.keys,
-                                      {chip.x + 7.0f, chip.y + 2.0f,
-                                       chip.width - 14.0f,
-                                       chip.height - 4.0f},
-                                      key_style);
-                    renderer.DrawText(
-                        entry.action,
-                        {chip.Right() + 10.0f, y + 2.0f,
-                         column_width_ - chip_w - 10.0f,
-                         kRowHeight - 4.0f},
-                        action_style);
-                }
-                y += kRowHeight;
-            }
-            y += kGroupGap;
-        }
-    };
-    draw_column(column_a_, viewport.x);
-    draw_column(column_b_, viewport.x + column_width_ + kColumnGap);
-    renderer.PopClip();
-
-    // Scroll affordance: a thin track hint when content overflows.
-    const float range = ScrollRange();
-    if (range > 0.0f) {
-        const float track_h = viewport.height;
-        const float thumb_h =
-            std::max(24.0f, track_h * viewport.height /
-                                (viewport.height + range));
-        const float thumb_y =
-            viewport.y + (track_h - thumb_h) * (scroll_y_ / range);
-        renderer.FillRect({card.Right() - 6.0f, thumb_y, 3.0f,
-                           thumb_h},
-                          WithAlpha(tokens.muted, 0.5f), 1.5f);
-    }
+    // The ScrollArea child renders the list (clipped) and its own
+    // floating scrollbar.
 }
 
 void ShortcutsOverlay::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -262,6 +384,18 @@ void ShortcutsOverlay::Layout(const XER::UI::Layout::Rect& bounds) {
     column_width_ = (pw - kColumnGap) * 0.5f;
     LayoutColumns();
     scroll_y_ = std::clamp(scroll_y_, 0.0f, ScrollRange());
+
+    if (auto* scroll = FindChild<Widgets::ScrollArea>(this)) {
+        // Feed the column balance down to the content before laying
+        // the viewport out so its first pass lands correctly.
+        if (auto* content = dynamic_cast<ShortcutListContent*>(
+                scroll->GetContent().get())) {
+            content->SetColumns(column_a_, column_b_);
+        }
+        scroll->Layout({px, list_top_, column_width_ * 2.0f + kColumnGap,
+                        list_bottom_ - list_top_},
+                       tokens);
+    }
 }
 
 bool ShortcutsOverlay::HandleEvent(
@@ -274,18 +408,11 @@ bool ShortcutsOverlay::HandleEvent(
                 Close();
             }
             return true;   // modal: swallow every key
-        case Event::Type::MouseWheel: {
-            if (!CardRect().Contains(event.position)) return true;
-            const float range = ScrollRange();
-            if (range > 0.0f) {
-                scroll_y_ = std::clamp(
-                    scroll_y_ -
-                        static_cast<float>(event.wheel_delta) * 0.5f,
-                    0.0f, range);
-                Invalidate();
-            }
+        case Event::Type::MouseWheel:
+            // Wheel inside the list is handled by the ScrollArea
+            // child via event bubbling; anything that lands directly
+            // on the card/backdrop is still swallowed (modal).
             return true;
-        }
         case Event::Type::Click:
             if (event.mouse_button == MouseButton::Left &&
                 !CardRect().Contains(event.position)) {

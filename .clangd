@@ -1,45 +1,29 @@
+# XER3 — MSYS2 clang64 toolchain (supersedes the old vcpkg config).
+# The active preset's compile database already carries every -I/-D
+# per file; regenerate it with `cmake --preset windows-clang-msys2`.
 CompileFlags:
-  CompilationDatabase: out/build/default
+  CompilationDatabase: out/build/windows-clang-msys2
   Add:
-    - "-std=c++2c"
+    - "-std=c++23"
+    # System dep headers the compile db references via -isystem —
+    # clangd resolves them anyway, but listing key ones speeds up
+    # background indexing of headers included transitively.
     - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include"
+    - "C:/tools/msys64/clang64/include"
     - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/eigen3"
+    - "C:/tools/msys64/clang64/include/skia/include"
     - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/libxml2"
+    - "C:/tools/msys64/clang64/include/opencv5"
     - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/miniz"
+    - "D:/Developers/XER3/third_party/cef/cef_windows64/include"
     - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/openblas"
+    - "D:/Developers/XER3/third_party/fxdiv/include"
     - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/opencv4"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/openjpeg-2.5"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/opus"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/skia"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/srt"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/svt-av1"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/vma"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/vpl"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/webgpu_upstream"
-    - "-isystem"
-    - "C:/vcpkg/installed/x64-windows-release/include/webp"
-    - "-isystem"
-    - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.4/include"
-    - "-isystem"
-    - "C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.4/include/cccl"
-    - "-isystem"
-    - "C:/Program Files/NVIDIA/CUDNN/v9.26/include/12.9"
-  Remove: ["-external:*", "-std:c++latest"]
+    - "D:/Developers/XER3/third_party/pthreadpool/include"
+  Remove: ["-external:*"]
 ---
+# Sources outside src/ (tools/, tests/) — clang's builtin headers via
+# the real driver so <intrin.h>/libc++ resolve against clang64.
 If:
   PathMatch: [.*\.h, .*\.cc]
   PathExclude: src/.*
@@ -47,6 +31,4 @@ CompileFlags:
   BuiltinHeaders: QueryDriver
   Add:
     - "-ID:/Developers/XER3/src"
-    - "-I./package/module/node_modules/nan"
-  Remove: ["-W*"]
   Compiler: clang++

@@ -5,6 +5,6 @@ Window:
   MinSize:
     w: 1100
     h: 700
-  Title: "XER Studio"
+  Title: "VideoEditor - XER Creative Suite"
   OpenDevTools: "false"
   Maximized: "false"

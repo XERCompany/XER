@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -20,10 +21,12 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
+#include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
 #if defined(_MSC_VER)
 #pragma comment(lib, "shell32.lib")   // ShellExecuteW (media-bin reveal)
+#pragma comment(lib, "comctl32.lib")  // SetWindowSubclass (close guard)
 #endif
 #endif
 
@@ -41,6 +44,8 @@
 #include "ai/beat_markers.h"
 #include "ai/whisper_transcribe.h"
 #include "playback/audio_sink_factory.h"
+#include "smoke_checks.h"   // MediaImportExtensions/IsMediaImportPath
+#include "timecode.h"       // FormatTimecode (drop-hover status)
 #include "js_fx.h"
 #include "plugin_host.h"
 #include "project_store.h"
@@ -51,6 +56,7 @@
 #include "widgets/app_title_bar.h"
 #include "widgets/button.h"
 #include "widgets/label.h"
+#include "widgets/tabs.h"
 #include "widgets/widget_tree.h"
 
 namespace XER::VideoEditor::Ui {
@@ -138,6 +144,75 @@ std::wstring PickSaveFileW(HWND owner, const std::wstring& filter,
     if (!GetSaveFileNameW(&ofn)) return {};
     return file;
 }
+
+// "Media" picker pattern built from the shared extension list
+// (smoke_checks.h) so the file-dialog filter and the WM_DROPFILES
+// filter can never drift apart. Yields "*.mp4;*.m4v;…;*.ora".
+const std::wstring& MediaImportPattern() {
+    static const std::wstring pattern = [] {
+        std::wstring out;
+        bool need_glob = true;
+        for (char c : MediaImportExtensions()) {
+            if (need_glob) {
+                out += L"*.";   // first char of each ;-token
+                need_glob = false;
+            }
+            if (c == ';') {
+                out.push_back(L';');
+                need_glob = true;
+            } else {
+                out.push_back(static_cast<wchar_t>(c));
+            }
+        }
+        return out;
+    }();
+    return pattern;
+}
+
+// Subclass id + proc for the unsaved-changes close guard and the OS
+// file-drop import. WM_CLOSE arrives at subclass procs before the
+// window's own WindowProc — returning 0 vetoes the destroy so the
+// save/discard/cancel prompt (ConfirmDiscardChanges, reached through
+// the bound thunks ref_data points at) can cancel a close.
+// WM_DROPFILES (enabled via DragAcceptFiles in the ctor) is drained
+// here — DragQueryFileW paths -> the file_drop thunk — so the drop
+// never reaches the window's default handling. No WM_NCDESTROY work
+// is needed: comctl32 unwinds the subclass chain itself during
+// window teardown, and the widget dtor RemoveWindowSubclass's first
+// whenever the HWND outlives it (the thunk payload is a member, so a
+// late message can never reach dead state).
+constexpr UINT_PTR kCloseGuardSubclassId = 0x584552;   // 'XER'
+LRESULT CALLBACK CloseGuardSubclassProc(
+    HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam,
+    UINT_PTR /*subclass_id*/, DWORD_PTR ref_data) {
+    const auto* hooks =
+        reinterpret_cast<const WindowSubclassHooks*>(ref_data);
+    if (msg == WM_CLOSE && hooks != nullptr && hooks->close_guard &&
+        !hooks->close_guard()) {
+        return 0;
+    }
+    if (msg == WM_DROPFILES && hooks != nullptr && hooks->file_drop) {
+        HDROP drop = reinterpret_cast<HDROP>(wParam);
+        std::vector<std::wstring> paths;
+        const UINT count = DragQueryFileW(drop, 0xFFFFFFFF, nullptr, 0);
+        paths.reserve(count);
+        for (UINT i = 0; i < count; ++i) {
+            const UINT len = DragQueryFileW(drop, i, nullptr, 0);
+            if (len == 0) continue;
+            std::wstring buf(len + 1, L'\0');
+            DragQueryFileW(drop, i, buf.data(), len + 1);
+            buf.resize(len);
+            paths.push_back(std::move(buf));
+        }
+        DragFinish(drop);
+        // Runs on the UI thread — the window proc and the widget
+        // tree share the app.Run() message pump, so the thunk may
+        // touch widget state directly.
+        hooks->file_drop(paths);
+        return 0;
+    }
+    return DefSubclassProc(hwnd, msg, wParam, lParam);
+}
 #endif
 
 std::shared_ptr<Widgets::Button> MakeButton(
@@ -181,7 +256,130 @@ bool WriteWav16(const std::string& path, const float* samples,
     return true;
 }
 
+// Undoable project-settings edit (canvas size, fps, clear color) —
+// the five fields the dialog mutates snapshot before Apply and restore
+// verbatim on Revert, same contract as SetWorkAreaCommand in
+// timeline_history.cc. `next` arrives pre-clamped by
+// ApplyProjectSettings; history_.Execute() runs the first Apply.
+class SetProjectSettingsCommand : public Command {
+public:
+    explicit SetProjectSettingsCommand(ProjectSettings next)
+        : next_(std::move(next)) {}
+    bool Apply(Project& project) override {
+        before_.w = project.width;
+        before_.h = project.height;
+        before_.fps_num = project.fps_num;
+        before_.fps_den = project.fps_den;
+        before_.bg = project.bg_color;
+        ApplyTo(project, next_);
+        return true;
+    }
+    bool Revert(Project& project) override {
+        ApplyTo(project, before_);
+        return true;
+    }
+    std::string Label() const override { return "Project settings"; }
+
+private:
+    static void ApplyTo(Project& project, const ProjectSettings& s) {
+        project.width = s.w;
+        project.height = s.h;
+        project.fps_num = s.fps_num;
+        project.fps_den = s.fps_den;
+        project.bg_color = s.bg;
+    }
+    ProjectSettings before_;
+    ProjectSettings next_;
+};
+
 }  // namespace
+
+// Clip + horizontal wheel-scroll host for the right-panel tab strip.
+// Widgets::Tabs lays its cells out at natural text width, which can
+// exceed a narrow docked panel — the host clips the strip to the
+// panel's width (SetClipsChildren clips descendants for both
+// rendering and hit-testing) and translates it by a scroll offset so
+// every tab stays reachable. Wheel events the Tabs child doesn't
+// consume bubble up the parent chain to here (widget_tree.cc).
+class TabStripScroll final : public XER::UI::Widgets::Widget {
+public:
+    explicit TabStripScroll(
+        std::shared_ptr<XER::UI::Widgets::Widget> content)
+        : content_(std::move(content)) {
+        SetClipsChildren(true);
+        SetFocusable(false);
+        if (content_) AddChild(content_);
+    }
+
+    // Centers the content fraction f (0..1) in the viewport on the
+    // next layout — SetRightTab passes the active index so
+    // programmatic switches (View menu, extension UI opens) reveal
+    // the tab instead of selecting it off-screen.
+    void RevealFraction(float fraction) {
+        pending_reveal_ = std::clamp(fraction, 0.0f, 1.0f);
+        RequestLayout();
+        Invalidate();
+    }
+
+    void Render(XER::UI::Rendering::Renderer&,
+                const XER::UI::Theme::Tokens&) override {}
+
+    void Layout(const XER::UI::Layout::Rect& bounds) override {
+        Layout(bounds, CachedLayoutTokens());
+    }
+
+    void Layout(const XER::UI::Layout::Rect& bounds,
+                const XER::UI::Theme::Tokens& tokens) override {
+        SetBounds(bounds);
+        if (content_ == nullptr) return;
+        const float width =
+            std::max(bounds.width, content_->GetPreferredSize().width);
+        max_scroll_ = std::max(0.0f, width - bounds.width);
+        if (pending_reveal_ >= 0.0f) {
+            scroll_ = std::clamp(
+                pending_reveal_ * width - bounds.width * 0.5f, 0.0f,
+                max_scroll_);
+            pending_reveal_ = -1.0f;
+        }
+        scroll_ = std::clamp(scroll_, 0.0f, max_scroll_);
+        content_->Layout({bounds.x - scroll_, bounds.y, width,
+                          bounds.height},
+                         tokens);
+    }
+
+    bool HandleEvent(const XER::UI::Widgets::Event& event) override {
+        if (event.type == XER::UI::Widgets::Event::Type::MouseWheel &&
+            max_scroll_ > 0.0f &&
+            GetBounds().Contains(event.position)) {
+            scroll_ = std::clamp(
+                scroll_ - event.wheel_delta / 120.0f * kScrollStep,
+                0.0f, max_scroll_);
+            RequestLayout();
+            Invalidate();
+            return true;
+        }
+        return false;
+    }
+
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {0.0f, 30.0f};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return content_ != nullptr
+                   ? content_->GetPreferredSize()
+                   : XER::UI::Layout::Size{0.0f, 30.0f};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {100000.0f, 30.0f};
+    }
+
+private:
+    static constexpr float kScrollStep = 48.0f;
+    std::shared_ptr<XER::UI::Widgets::Widget> content_;
+    float scroll_ = 0.0f;
+    float max_scroll_ = 0.0f;
+    float pending_reveal_ = -1.0f;
+};
 
 // PreviewEngine callbacks fire on the engine worker — the sink only
 // stashes them into the app's pending slots; Tick marshals to widgets.
@@ -237,9 +435,47 @@ VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
     // One-shot crash-recovery offer: surfaces autosave slots without
     // auto-loading (status bar + File ▸ Recover Autosave).
     CheckAutosaveRecovery();
+#ifdef _WIN32
+    // Unsaved-changes close guard: the title-bar close button and
+    // Alt+F4 post WM_CLOSE straight at the window (main.cc), whose
+    // handler destroys it unconditionally — a comctl32 subclass lets
+    // the save/discard/cancel prompt veto that instead. The thunk
+    // member must be bound before install: the proc's ref_data points
+    // at it, not at `this`. The same proc drains WM_DROPFILES — the
+    // file_drop thunk converts+imports on the UI thread.
+    window_hooks_.close_guard = [this] { return ConfirmDiscardChanges(); };
+    window_hooks_.file_drop =
+        [this](const std::vector<std::wstring>& dropped) {
+            OnOsFilesDropped(dropped);
+        };
+    if (parent_hwnd_ != nullptr) {
+        SetWindowSubclass(
+            static_cast<HWND>(parent_hwnd_), &CloseGuardSubclassProc,
+            kCloseGuardSubclassId,
+            reinterpret_cast<DWORD_PTR>(&window_hooks_));
+        // OS file drops land as WM_DROPFILES on the top-level HWND —
+        // enabled once here, revoked in the dtor while the HWND is
+        // still valid.
+        DragAcceptFiles(static_cast<HWND>(parent_hwnd_), TRUE);
+    }
+#endif
 }
 
 VideoEditorAppWidget::~VideoEditorAppWidget() {
+#ifdef _WIN32
+    // Normal teardown destroys the HWND first (RemoveWindowSubclass
+    // then fails silently — the IsWindow guard just keeps it tidy).
+    // When the window outlives the widget instead, the subclass is
+    // removed AND drag-accept revoked so the HWND can't advertise a
+    // drop target nobody services.
+    if (parent_hwnd_ != nullptr &&
+        IsWindow(static_cast<HWND>(parent_hwnd_))) {
+        DragAcceptFiles(static_cast<HWND>(parent_hwnd_), FALSE);
+        RemoveWindowSubclass(static_cast<HWND>(parent_hwnd_),
+                             &CloseGuardSubclassProc,
+                             kCloseGuardSubclassId);
+    }
+#endif
     // The lab worker's on_run calls back into this widget — tear its
     // panel down (AsyncOp dtor cancels + joins) while lab_mutex_ and
     // friends are still valid, instead of letting ~Widget destroy it
@@ -389,6 +625,16 @@ void VideoEditorAppWidget::EnsureChildren() {
     media_hooks.on_audio_fx = [this](const std::string& path,
                                      const std::string& plugin_id) {
         BounceAudioFx(path, plugin_id);
+    };
+    // Bin->timeline drag: card drag released over the timeline adds
+    // the media at the drop time; hover drives the accent affordance.
+    media_hooks.on_drop = [this](const std::string& path,
+                                 XER::UI::Layout::Point position) {
+        OnBinMediaDrop(path, position);
+    };
+    media_hooks.on_drag_hover = [this](XER::UI::Layout::Point position,
+                                       bool active) {
+        OnBinDragHover(position, active);
     };
     // CapCut-style icon rail on the far left — switches the left panel
     // content and jumps to the matching right-side tab.
@@ -861,24 +1107,28 @@ void VideoEditorAppWidget::EnsureChildren() {
     // clicks fall through to the widgets beneath.
     status_toast_->SetEnabled(false);
 
-    auto tab = [this](const char* text, int index,
-                      const std::string& tooltip) {
-        return MakeButton(text, right_tab_ == index
-                                    ? Widgets::ButtonStyle::Secondary
-                                    : Widgets::ButtonStyle::Ghost,
-                          [this, index] { SetRightTab(index); }, tooltip);
-    };
-    tab_inspector_btn_ = tab("Insp", 0, "Inspector — clip properties");
-    tab_effects_btn_ = tab("FX", 1, "Effects — effect library");
-    tab_markers_btn_ = tab("Mkr", 2, "Markers — timeline markers");
-    tab_lab_btn_ = tab("Lab", 3, "Lab — object tools (MKL)");
-    tab_history_btn_ = tab("Hist", 4, "History — undo/redo");
-    tab_mixer_btn_ = tab("Mix", 5, "Mixer — audio tracks");
-    tab_queue_btn_ = tab("Q", 6, "Queue — export jobs");
-    tab_plugins_btn_ = tab("Plg", 7, "Plugins — loaded DLL effects");
-    tab_color_btn_ = tab("Color", 8, "Color — OCIO looks/transforms");
-    tab_browser_btn_ =
-        tab("Web", 9, "Browser — embedded Chromium (HTML views)");
+    // Right-panel tab strip: shadcn-style Widgets::Tabs in Underline
+    // mode — the sliding 2px indicator replaces the hand-rolled
+    // button row + drawn accent underline this strip used before.
+    // Natural-width cells can exceed a narrow docked panel, so the
+    // strip sits inside a clip/wheel-scroll host that keeps every
+    // tab reachable. SetOnChanged -> SetRightTab preserves the
+    // panel-visibility switch; programmatic SetRightTab drives
+    // SetActiveIndex (which never fires the callback — no recursion).
+    right_tabs_ = std::make_shared<Widgets::Tabs>();
+    right_tabs_->SetStyle(Widgets::Tabs::Style::Underline);
+    // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
+    // 8 Color, 9 Web — the right_tab_ indexing documented in the
+    // header.
+    for (const char* label :
+         {"Insp", "FX", "Mkr", "Lab", "Hist", "Mix", "Q", "Plg",
+          "Color", "Web"}) {
+        right_tabs_->AddTab(label);
+    }
+    right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 9));
+    right_tabs_->SetOnChanged(
+        [this](int index) { SetRightTab(index); });
+    tab_strip_ = std::make_shared<TabStripScroll>(right_tabs_);
 
     PluginsPanelWidget::Hooks plugin_hooks;
     plugin_hooks.on_add_effect = [this](const std::string& type) {
@@ -919,7 +1169,7 @@ void VideoEditorAppWidget::EnsureChildren() {
         });
     ExtHost::Shared().SetOpenUiFn([this](const std::string& url) {
         right_panel_visible_ = true;
-        right_tab_ = 9;
+        SetRightTab(9);
         if (browser_panel_) browser_panel_->OpenUrl(url);
         RequestLayout();
         Invalidate();
@@ -1095,16 +1345,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(browser_panel_);
     AddChild(waveform_panel_);
     AddChild(status_toast_);
-    AddChild(tab_inspector_btn_);
-    AddChild(tab_effects_btn_);
-    AddChild(tab_markers_btn_);
-    AddChild(tab_lab_btn_);
-    AddChild(tab_history_btn_);
-    AddChild(tab_mixer_btn_);
-    AddChild(tab_queue_btn_);
-    AddChild(tab_plugins_btn_);
-    AddChild(tab_color_btn_);
-    AddChild(tab_browser_btn_);
+    AddChild(tab_strip_);
     AddChild(timeline_);
 }
 
@@ -1338,6 +1579,7 @@ void VideoEditorAppWidget::NewProject() {
         SetStatus("Wait for export to finish", true);
         return;
     }
+    if (!ConfirmDiscardChanges()) return;
     history_.Clear();
     media_prep_.CancelAllQueued();   // project swap: drop stale decodes
     project_ = Project{};
@@ -1352,6 +1594,7 @@ void VideoEditorAppWidget::NewProject() {
     selected_clip_id_.clear();
     playhead_ = 0.0;
     NotifyProjectChanged();
+    project_dirty_ = false;   // fresh canvas — nothing to lose
     SetStatus("New project");
 }
 
@@ -1369,11 +1612,15 @@ bool VideoEditorAppWidget::LoadProject(const std::string& utf8_path) {
     selected_clip_id_.clear();
     playhead_ = 0.0;
     NotifyProjectChanged();
+    project_dirty_ = false;   // just loaded — matches the file on disk
     SetStatus("Opened " + Basename(project_path_));
     return true;
 }
 
 void VideoEditorAppWidget::OpenProject() {
+    // Confirm before the picker so a cancelled prompt never strands a
+    // file dialog for an action the user just aborted.
+    if (!ConfirmDiscardChanges()) return;
 #ifdef _WIN32
     const auto picked = PickOpenFileW(
         static_cast<HWND>(parent_hwnd_),
@@ -1406,8 +1653,34 @@ bool VideoEditorAppWidget::SaveProject(bool choose_path) {
     SetStatus("Saved " + Basename(project_path_));
     InitAutosave();   // bind to a first-saved (or renamed) path
     autosave_.ClearDirty();
+    project_dirty_ = false;
     if (title_bar_) title_bar_->SetCenterCommandValue(Basename(project_path_));
     return true;
+}
+
+// The one place the editor asks "discard work?" — New/Open/window-
+// close all funnel here so the prompt behaves identically.
+bool VideoEditorAppWidget::ConfirmDiscardChanges() {
+    if (!project_dirty_) return true;
+#ifdef _WIN32
+    const std::wstring name = Str::Utf8ToWide(
+        project_path_.empty() ? "Untitled.xerproj"
+                              : Basename(project_path_));
+    const int choice = MessageBoxW(
+        static_cast<HWND>(parent_hwnd_),
+        (L"Save changes to \"" + name + L"\"?").c_str(),
+        L"Unsaved changes", MB_YESNOCANCEL | MB_ICONWARNING);
+    if (choice == IDYES) {
+        // A cancelled or failed save aborts the destructive op too —
+        // otherwise "yes, save" would still lose the work.
+        return SaveProject(false);
+    }
+    return choice == IDNO;
+#else
+    // Native prompts are Windows-only (same gating as the file
+    // pickers) — proceed rather than trapping the user.
+    return true;
+#endif
 }
 
 void VideoEditorAppWidget::ImportMedia() {
@@ -1419,37 +1692,16 @@ void VideoEditorAppWidget::ImportMedia() {
     // still lands on the right track kind.
     const auto picked = PickOpenFileW(
         static_cast<HWND>(parent_hwnd_),
-        FilterSpec(
-            L"Media",
-            // video containers FFmpeg demuxes
-            L"*.mp4;*.m4v;*.mkv;*.mov;*.qt;*.avi;*.divx;*.wmv;*.asf;"
-            L"*.webm;*.mpg;*.mpeg;*.mpe;*.m1v;*.m2v;*.mpv;*.ts;*.mts;"
-            L"*.m2ts;*.vob;*.3gp;*.3g2;*.flv;*.f4v;*.mxf;*.dv;*.dif;"
-            L"*.ogv;*.rm;*.rmvb;*.y4m;*.nut;*.bik;*.amv;"
-            // audio-only containers
-            L"*.wav;*.mp3;*.m4a;*.m4b;*.aac;*.flac;*.ogg;*.oga;*.opus;"
-            L"*.wma;*.aif;*.aiff;*.aifc;*.mka;*.ac3;*.eac3;*.dts;*.amr;"
-            L"*.au;*.caf;*.wv;*.ape;*.tta;*.spx;*.voc;*.gsm;*.oma;"
-            // still images (FFmpeg image2 + OIIO set)
-            L"*.png;*.jpg;*.jpeg;*.jpe;*.bmp;*.dib;*.gif;*.tif;*.tiff;"
-            L"*.webp;*.tga;*.ppm;*.pgm;*.pbm;*.pam;*.xpm;*.avif;*.heic;"
-            L"*.exr;*.dpx;*.hdr;*.psd;*.pfm;*.raw;*.cr2;*.nef;*.arw;"
-            L"*.dng;*.ora"),
+        FilterSpec(L"Media", MediaImportPattern().c_str()),
         L"Import media");
     if (picked.empty()) return;
     const std::string path =
         Path::NormalizeUtf8Path(Str::WideToUtf8(picked));
-    std::int64_t id = 0;
     std::string error;
-    // extract_poster=false — the poster PNG decode lands on the
-    // media-prep worker; ConsumeCatalogDirty in Tick refreshes the bin
-    // once poster_path is written.
-    if (!catalog_.Open(&error) ||
-        !catalog_.Import(path, &id, false, &error)) {
+    if (!ImportMediaFile(path, &error)) {
         SetStatus("Import failed: " + error, true);
         return;
     }
-    selected_media_path_ = path;
     RefreshCatalog();
     const CatalogEntry* imported = FindCatalogEntry(path);
     media_prep_.RequestImportPoster(imported != nullptr ? imported->path
@@ -1460,11 +1712,108 @@ void VideoEditorAppWidget::ImportMedia() {
 #endif
 }
 
+bool VideoEditorAppWidget::ImportMediaFile(const std::string& path,
+                                           std::string* error) {
+    std::int64_t id = 0;
+    // extract_poster=false — the poster PNG decode lands on the
+    // media-prep worker; ConsumeCatalogDirty in Tick refreshes the bin
+    // once poster_path is written.
+    if (!catalog_.Open(error) ||
+        !catalog_.Import(path, &id, false, error)) {
+        return false;
+    }
+    selected_media_path_ = path;
+    return true;
+}
+
+void VideoEditorAppWidget::OnOsFilesDropped(
+    const std::vector<std::wstring>& wide_paths) {
+    // Expand top-level directory contents (non-recursive v1) and keep
+    // only paths matching the shared import extension list — the
+    // catalog probe would reject the rest anyway, but filtering here
+    // keeps junk drops (.txt/.exe/.xerproj) from queueing probe work.
+    std::vector<std::string> media;
+    int skipped = 0;
+    const auto add_path = [&](const std::filesystem::path& p) {
+        const std::string utf8 =
+            Path::NormalizeUtf8Path(Path::ToUtf8(p));
+        if (IsMediaImportPath(utf8)) {
+            media.push_back(utf8);
+        } else {
+            ++skipped;
+        }
+    };
+    for (const auto& wpath : wide_paths) {
+        if (wpath.empty()) continue;
+        std::error_code ec;
+        const std::filesystem::path p(wpath);
+        if (std::filesystem::is_directory(p, ec)) {
+            for (const auto& de :
+                 std::filesystem::directory_iterator(p, ec)) {
+                if (de.is_regular_file(ec)) add_path(de.path());
+            }
+        } else if (std::filesystem::is_regular_file(p, ec)) {
+            add_path(p);
+        } else {
+            ++skipped;
+        }
+    }
+    ImportDroppedPaths(media, skipped);
+}
+
+void VideoEditorAppWidget::ImportDroppedPaths(
+    const std::vector<std::string>& paths, int skipped) {
+    if (paths.empty()) {
+        SetStatus(skipped > 0 ? "Drop ignored — no importable media files"
+                              : "Drop ignored — nothing to import",
+                  true);
+        return;
+    }
+    if (paths.size() > 1) {
+        SetStatus("Importing " + std::to_string(paths.size()) +
+                  " files…");
+    }
+    int imported = 0;
+    std::string last_error;
+    for (const auto& path : paths) {
+        std::string error;
+        if (ImportMediaFile(path, &error)) {
+            ++imported;
+        } else {
+            ++skipped;
+            if (!error.empty()) last_error = error;
+        }
+    }
+    RefreshCatalog();
+    for (const auto& path : paths) {
+        const CatalogEntry* entry = FindCatalogEntry(path);
+        if (entry != nullptr) {
+            media_prep_.RequestImportPoster(entry->path);
+        }
+    }
+    if (paths.size() == 1 && imported == 1) {
+        SetStatus("Imported " + Basename(paths.front()));
+        return;
+    }
+    std::string msg =
+        "Imported " + std::to_string(imported) + ", skipped " +
+        std::to_string(skipped);
+    if (imported == 0 && !last_error.empty()) {
+        msg += " — " + last_error;
+    }
+    SetStatus(msg, imported == 0);
+}
+
 void VideoEditorAppWidget::AddSelectedToTimeline() {
     AddMediaToTimeline(selected_media_path_);
 }
 
 void VideoEditorAppWidget::AddMediaToTimeline(const std::string& path) {
+    AddMediaToTimelineAt(path, playhead_);
+}
+
+void VideoEditorAppWidget::AddMediaToTimelineAt(const std::string& path,
+                                              double at_seconds) {
     // The media-bin context menu passes the clicked row's path; the
     // toolbar Add button passes the selection. Fall back to the
     // selection only when the explicit path isn't in the catalog.
@@ -1533,12 +1882,12 @@ void VideoEditorAppWidget::AddMediaToTimeline(const std::string& path) {
             }
         }
     }
-    double clip_start = playhead_;
+    double clip_start = std::max(0.0, at_seconds);
     double clip_duration = 0.0;
     if (ok) {
         clip_start = snap_enabled_
-            ? SnapTime(project_, track_index, playhead_, 0.1, playhead_)
-            : playhead_;
+            ? SnapTime(project_, track_index, clip_start, 0.1, playhead_)
+            : clip_start;
         clip_duration = entry->duration_seconds > 0.0
             ? entry->duration_seconds
             : 5.0;
@@ -1595,6 +1944,33 @@ void VideoEditorAppWidget::AddMediaToTimeline(const std::string& path) {
     SelectClip(clip_id);
     NotifyProjectChanged();
     SetStatus("Added " + Basename(entry->path));
+}
+
+void VideoEditorAppWidget::OnBinMediaDrop(
+    const std::string& path, XER::UI::Layout::Point position) {
+    OnBinDragHover(position, false);   // always clear the affordance
+    if (timeline_ == nullptr ||
+        !timeline_->GetBounds().Contains(position)) {
+        return;   // released somewhere else — not a timeline drop
+    }
+    AddMediaToTimelineAt(path, timeline_->TimeAtDropPoint(position));
+}
+
+void VideoEditorAppWidget::OnBinDragHover(
+    XER::UI::Layout::Point position, bool active) {
+    const bool over = active && timeline_ != nullptr &&
+                      timeline_->GetBounds().Contains(position);
+    if (timeline_ != nullptr && over != bin_drop_hovering_) {
+        bin_drop_hovering_ = over;
+        timeline_->SetExternalDropHover(over);
+        if (over) {
+            SetStatus("Drop to add media at " +
+                      FormatTimecode(
+                          timeline_->TimeAtDropPoint(position),
+                          project_.fps_num, project_.fps_den));
+        }
+    }
+    if (!active) bin_drop_hovering_ = false;
 }
 
 void VideoEditorAppWidget::StartExport() {
@@ -1734,6 +2110,29 @@ void VideoEditorAppWidget::Seek(double seconds) {
     if (waveform_panel_ && waveform_panel_->IsVisible()) {
         waveform_panel_->SetPlayhead(playhead_);
     }
+}
+
+bool VideoEditorAppWidget::PrepareUiCapture(double seconds,
+                                            int timeout_ms) {
+    // Same lazy init the play path uses; a headless machine without
+    // an audio endpoint still inits (the sink is optional — chunks are
+    // mixed for the meters, just not written).
+    EnsurePreviewEngine();
+    if (!preview_ready_) {
+        return false;
+    }
+    Seek(seconds);                     // widget-level playhead fan-out
+    preview_engine_.Seek(playhead_);   // paused seek presents a frame
+    const auto deadline =
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(std::max(0, timeout_ms));
+    while (preview_engine_.FramesPresented() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        Tick(1.0 / 30.0);  // marshal worker callbacks into widgets
+        std::this_thread::sleep_for(std::chrono::milliseconds(16));
+    }
+    Tick(1.0 / 30.0);  // one last marshal for the just-presented frame
+    return preview_engine_.FramesPresented() > 0;
 }
 
 void VideoEditorAppWidget::StopProgramTransport() {
@@ -1887,16 +2286,72 @@ void VideoEditorAppWidget::MoveClip(const std::string& clip_id,
 }
 
 void VideoEditorAppWidget::SyncAudioClips() {
+    // The whole plan (project read + O(n·m) correlation + peak waits)
+    // runs on a worker thread; this thread polls progress and keeps
+    // the status line current. Peak decodes go through media_prep_
+    // — worker pool, subprocess isolation, disk cache — instead of a
+    // direct DecodeAudioPeaks call: LookupPeaks is lookup-or-enqueue,
+    // so the provider below is a bounded, cancel-aware wait that also
+    // gives repeat syncs instant disk-cache hits.
+    std::atomic<bool> cancel{false};
+    std::atomic<bool> finished{false};
+    std::atomic<int> progress_done{0};
+    std::atomic<int> progress_total{0};
     AudioSyncReport report;
     std::string error;
+    bool ok = false;
+
+    AudioSyncPlanOptions options;
+    options.cancel = &cancel;
+    options.progress = [&](int done, int total) {
+        progress_done.store(done, std::memory_order_relaxed);
+        progress_total.store(total, std::memory_order_relaxed);
+    };
+    options.peaks = [&](const std::string& path,
+                        AudioPeaks* out) -> bool {
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(120);
+        for (;;) {
+            const MediaPrep::Lookup state =
+                media_prep_.LookupPeaks(path, out);
+            if (state == MediaPrep::Lookup::kReady) return true;
+            if (state == MediaPrep::Lookup::kFailed) return false;
+            if (cancel.load(std::memory_order_relaxed) ||
+                std::chrono::steady_clock::now() >= deadline) {
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+    };
+
     // Selected clip is the reference when one is picked; otherwise the
     // earliest clip on the lowest track anchors the sync.
-    if (!ComputeAudioSyncPlan(project_, selected_clip_id_, &report,
-                              &error)) {
+    const std::string reference = selected_clip_id_;
+    std::thread worker([&] {
+        ok = ComputeAudioSyncPlan(project_, reference, &report, &error,
+                                  options);
+        finished.store(true, std::memory_order_release);
+    });
+    int shown = -1;
+    while (!finished.load(std::memory_order_acquire)) {
+        const int done = progress_done.load(std::memory_order_relaxed);
+        const int total =
+            progress_total.load(std::memory_order_relaxed);
+        if (total > 0 && done != shown) {
+            shown = done;
+            SetStatus("Syncing audio... " + std::to_string(done) + "/" +
+                      std::to_string(total) + " clips");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    worker.join();
+    if (!ok) {
         SetStatus("Audio sync: " + error, true);
         return;
     }
     int applied = 0;
+    // Every accepted move folds into ONE undo step ("Audio sync").
+    history_.BeginMacro("Audio sync");
     for (const auto& e : report.entries) {
         if (!e.matched) continue;
         const Clip* clip = FindClip(project_, e.clip_id);
@@ -1908,6 +2363,7 @@ void VideoEditorAppWidget::SyncAudioClips() {
             ++applied;
         }
     }
+    history_.EndMacro();
     SetStatus(report.status + " · " + std::to_string(applied) +
               " moved");
     if (applied > 0) NotifyProjectChanged();
@@ -3142,6 +3598,7 @@ void VideoEditorAppWidget::RecoverAutosave() {
         SetStatus("No autosave to recover", true);
         return;
     }
+    if (!ConfirmDiscardChanges()) return;
     Project restored;
     std::string error;
     if (!AutosaveManager::LoadLatest(autosave_offer_project_,
@@ -3404,6 +3861,40 @@ void VideoEditorAppWidget::RenameMarkerAt(double t,
     SetStatus("Renamed marker");
 }
 
+// PageUp/PageDown + Premiere's Shift+M: seek the playhead to the
+// previous/next marker. project_.markers stays sorted by time
+// (timeline_model.h); the search wraps so the keys always land.
+void VideoEditorAppWidget::JumpToMarker(bool next) {
+    if (project_.markers.empty()) {
+        SetStatus("No markers");
+        return;
+    }
+    constexpr double kEps = 1e-4;
+    const Marker* target = nullptr;
+    if (next) {
+        for (const Marker& marker : project_.markers) {
+            if (marker.time > playhead_ + kEps) {
+                target = &marker;
+                break;
+            }
+        }
+        if (target == nullptr) target = &project_.markers.front();
+    } else {
+        for (auto it = project_.markers.rbegin();
+             it != project_.markers.rend(); ++it) {
+            if (it->time < playhead_ - kEps) {
+                target = &*it;
+                break;
+            }
+        }
+        if (target == nullptr) target = &project_.markers.back();
+    }
+    Seek(target->time);
+    SetStatus("Marker" + (target->name.empty()
+                              ? std::string()
+                              : ": " + target->name));
+}
+
 void VideoEditorAppWidget::SetWorkAreaRange(double in_s, double out_s) {
     std::string error;
     if (!history_.SetWorkArea(in_s, out_s, &error)) {
@@ -3440,30 +3931,36 @@ void VideoEditorAppWidget::SetTrackFlag(int track, char which, bool on) {
 
 void VideoEditorAppWidget::SetRightTab(int tab) {
     right_tab_ = std::clamp(tab, 0, 9);   // 0 Insp .. 9 Web
-    const auto style_for = [this](int index) {
-        return right_tab_ == index ? Widgets::ButtonStyle::Secondary
-                                   : Widgets::ButtonStyle::Ghost;
-    };
-    if (tab_inspector_btn_) tab_inspector_btn_->SetStyle(style_for(0));
-    if (tab_effects_btn_) tab_effects_btn_->SetStyle(style_for(1));
-    if (tab_markers_btn_) tab_markers_btn_->SetStyle(style_for(2));
-    if (tab_lab_btn_) tab_lab_btn_->SetStyle(style_for(3));
-    if (tab_history_btn_) tab_history_btn_->SetStyle(style_for(4));
-    if (tab_mixer_btn_) tab_mixer_btn_->SetStyle(style_for(5));
-    if (tab_queue_btn_) tab_queue_btn_->SetStyle(style_for(6));
-    if (tab_plugins_btn_) tab_plugins_btn_->SetStyle(style_for(7));
-    if (tab_color_btn_) tab_color_btn_->SetStyle(style_for(8));
+    if (right_tabs_) {
+        // SetActiveIndex never fires on_changed_ (ActivateTab does),
+        // so user clicks and programmatic switches meet here safely.
+        right_tabs_->SetActiveIndex(right_tab_);
+    }
+    if (tab_strip_) {
+        // Scrolls the strip so a programmatically-activated tab (View
+        // menu, workspace preset, extension UI open) is visible too,
+        // not just selected.
+        tab_strip_->RevealFraction((right_tab_ + 0.5f) / 10.0f);
+    }
     RequestLayout();
     Invalidate();
 }
 
 void VideoEditorAppWidget::ApplyProjectSettings(
     const ProjectSettings& settings) {
-    project_.width = std::max(16, settings.w);
-    project_.height = std::max(16, settings.h);
-    project_.fps_num = std::max(1, settings.fps_num);
-    project_.fps_den = std::max(1, settings.fps_den);
-    project_.bg_color = settings.bg;
+    // Routed through history_ like every other project mutation so
+    // Ctrl+Z restores the previous canvas/fps/background — the command
+    // snapshots the five fields (SetProjectSettingsCommand).
+    ProjectSettings clamped = settings;
+    clamped.w = std::max(16, settings.w);
+    clamped.h = std::max(16, settings.h);
+    clamped.fps_num = std::max(1, settings.fps_num);
+    clamped.fps_den = std::max(1, settings.fps_den);
+    if (!history_.Execute(
+            std::make_unique<SetProjectSettingsCommand>(clamped))) {
+        SetStatus("Project settings failed", true);
+        return;
+    }
     NotifyProjectChanged();
     SetStatus("Project settings applied");
 }
@@ -3769,6 +4266,7 @@ void VideoEditorAppWidget::NotifyProjectChanged() {
     playhead_ = std::clamp(playhead_, 0.0, project_.duration());
     preview_dirty_ = true;   // engine snapshot is stale; rebuilt lazily
     autosave_.MarkDirty();
+    project_dirty_ = true;   // unsaved-changes flag (save/New/load clears)
     timeline_->SetProject(&project_);
     timeline_->SetPlayhead(playhead_);
     timeline_->SetSelectedClip(selected_clip_id_);
@@ -3908,9 +4406,10 @@ void VideoEditorAppWidget::Render(
     renderer.DrawLine({bounds.x, bounds.y + 82.0f},
                       {bounds.x + bounds.width, bounds.y + 82.0f},
                       tokens.border, 1.0f);
-    // Structural chrome cached by Layout(): the right-panel tab strip
-    // reads as a bar above the active panel, the status bar gets its
-    // own surface, and the timeline split gets a hairline divider.
+    // Structural chrome cached by Layout(): the status bar gets its
+    // own surface and the timeline split gets a hairline divider. The
+    // right-panel tab strip paints itself now (Widgets::Tabs draws
+    // the bar, hairline and animated underline indicator).
     if (status_bar_top_ > 0.0f) {
         renderer.FillRect({bounds.x, status_bar_top_, bounds.width,
                            bounds.height - status_bar_top_},
@@ -3918,24 +4417,6 @@ void VideoEditorAppWidget::Render(
         renderer.DrawLine({bounds.x, status_bar_top_},
                           {bounds.x + bounds.width, status_bar_top_},
                           tokens.border, 1.0f);
-    }
-    if (tab_strip_rect_.width > 0.0f) {
-        renderer.FillRect(tab_strip_rect_, tokens.panel, 0.0f);
-        renderer.DrawLine(
-            {tab_strip_rect_.x,
-             tab_strip_rect_.y + tab_strip_rect_.height},
-            {tab_strip_rect_.x + tab_strip_rect_.width,
-             tab_strip_rect_.y + tab_strip_rect_.height},
-            tokens.border, 1.0f);
-        // Active-tab indicator: a 2px accent underline centered under
-        // the tab button (cached rect from Layout).
-        if (active_tab_rect_.width > 0.0f) {
-            renderer.FillRect(
-                {active_tab_rect_.x + 6.0f,
-                 tab_strip_rect_.y + tab_strip_rect_.height - 2.0f,
-                 active_tab_rect_.width - 12.0f, 2.0f},
-                tokens.accent, 1.0f);
-        }
     }
     if (timeline_top_ > 0.0f) {
         renderer.DrawLine({bounds.x, timeline_top_},
@@ -4138,38 +4619,14 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     plugins_panel_->SetVisible(right_eff && right_tab_ == 7);
     color_panel_->SetVisible(right_eff && right_tab_ == 8);
     browser_panel_->SetVisible(right_eff && right_tab_ == 9);
-    tab_inspector_btn_->SetVisible(right_eff);
-    tab_effects_btn_->SetVisible(right_eff);
-    tab_markers_btn_->SetVisible(right_eff);
-    tab_lab_btn_->SetVisible(right_eff);
-    tab_history_btn_->SetVisible(right_eff);
-    tab_mixer_btn_->SetVisible(right_eff);
-    tab_queue_btn_->SetVisible(right_eff);
-    tab_plugins_btn_->SetVisible(right_eff);
-    tab_color_btn_->SetVisible(right_eff);
-    tab_browser_btn_->SetVisible(right_eff);
-    tab_strip_rect_ = {};
+    tab_strip_->SetVisible(right_eff);
     if (right_eff) {
         const float tab_h = 30.0f;
-        const float tab_w =
-            (right_w - gap - gap * 9.0f) / 10.0f;
-        tab_strip_rect_ = {inspector_x, panel_y, right_w - gap, tab_h};
-        std::shared_ptr<Widgets::Button> tabs[] = {
-            tab_inspector_btn_, tab_effects_btn_, tab_markers_btn_,
-            tab_lab_btn_, tab_history_btn_, tab_mixer_btn_,
-            tab_queue_btn_, tab_plugins_btn_, tab_color_btn_,
-            tab_browser_btn_};
-        float tx = inspector_x;
-        active_tab_rect_ = {};
-        for (std::size_t ti = 0; ti < 10; ++ti) {
-            const XER::UI::Layout::Rect tab_rect{
-                tx, panel_y + 3.0f, tab_w, tab_h - 6.0f};
-            tabs[ti]->Layout(tab_rect, tokens);
-            if (static_cast<int>(ti) == right_tab_) {
-                active_tab_rect_ = tab_rect;
-            }
-            tx += tab_w + gap;
-        }
+        // The scroll host clips/lays out the Tabs child at its
+        // natural width — see TabStripScroll.
+        tab_strip_->Layout({inspector_x, panel_y, right_w - gap,
+                            tab_h},
+                           tokens);
         std::shared_ptr<Widgets::Widget> panels[] = {
             inspector_,  effects_panel_, markers_panel_, lab_panel_,
             history_panel_, mixer_panel_, export_queue_,
@@ -4357,7 +4814,14 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         }
         switch (event.text.front()) {
             case 'm': case 'M':
-                AddMarkerAt(playhead_, "");
+                // Premiere: Shift+M jumps to the next marker; a bare M
+                // drops one. Caps Lock sends 'M' with is_shift=false —
+                // still adds.
+                if (event.is_shift) {
+                    JumpToMarker(true);
+                } else {
+                    AddMarkerAt(playhead_, "");
+                }
                 return true;
             case 'i': case 'I':
                 if (SourceActive()) {
@@ -4517,6 +4981,16 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         } else {
             Seek(project_.duration());
         }
+        return true;
+    }
+    // Marker nav — PageUp/PageDown jump the playhead to the
+    // previous/next timeline marker (Shift+M also goes forward).
+    if (!event.is_ctrl && event.key == KeyCode::PageDown) {
+        JumpToMarker(true);
+        return true;
+    }
+    if (!event.is_ctrl && event.key == KeyCode::PageUp) {
+        JumpToMarker(false);
         return true;
     }
     if (!event.is_ctrl && event.key == KeyCode::Delete) {

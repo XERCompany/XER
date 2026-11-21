@@ -11,6 +11,7 @@
 #include <windows.h>
 
 #include "helper/string_utils.h"
+#include "helper/win_job.h"
 
 namespace XER::UI::Core {
 namespace {
@@ -74,6 +75,10 @@ bool UiRenderHost::SpawnWorker(const std::wstring& cmd,
         }
         return false;
     }
+    // Group the render worker with this process: killing the editor
+    // must reap xer_engine_ui_render.exe instead of leaving orphans
+    // that keep bin/ locked or surfaces alive.
+    Helper::WinJobGroup::Shared().Assign(pi.hProcess);
     CloseHandle(pi.hThread);
     entry->worker_process = pi.hProcess;
     entry->worker_pid = pi.dwProcessId;

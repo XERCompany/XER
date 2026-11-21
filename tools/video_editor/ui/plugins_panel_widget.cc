@@ -1,58 +1,27 @@
 #include "plugins_panel_widget.h"
 
 #include <algorithm>
-#include <cmath>
-#include <cstdint>
 #include <utility>
 
-#include "app_runtime/icon_pack.h"
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
 #include "widgets/label.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
-using XER::UI::Theme::Color;
-
-constexpr float kRowHeight = 38.0f;
-constexpr float kHeaderHeight = 24.0f;
-constexpr float kHeaderIcon = 14.0f;
-constexpr float kRowIcon = 16.0f;
+// Two-line catalog row: body-size name over a caption-size vendor tag.
+constexpr float kRowHeight = VeTheme::kFontBody * 1.4f +
+                             VeTheme::kFontCaption * 1.4f +
+                             VeTheme::kSpaceXs;
+constexpr float kHeaderHeight = VeTheme::kRowHeight;
+constexpr float kHeaderIcon = VeTheme::kFontBody;
+constexpr float kRowIcon = VeTheme::kSpaceLg;
+constexpr float kActionWidth = 100.0f;   // "Add to Clip" button
 constexpr auto kDoubleClickWindow = std::chrono::milliseconds(450);
-
-Color WithAlpha(Color color, float alpha) {
-    color.a *= alpha;
-    return color;
-}
-
-// Theme float color → packed AARRGGBB tint for the icon pack.
-std::uint32_t ToArgb(Color color) {
-    const auto byte = [](float v) {
-        return static_cast<std::uint32_t>(
-            std::clamp(std::lround(v * 255.0f), 0L, 255L));
-    };
-    return (byte(color.a) << 24) | (byte(color.r) << 16) |
-           (byte(color.g) << 8) | byte(color.b);
-}
-
-// Rasterized SVG icon from the shared pack, drawn centered in `box`.
-// Returns false when the icon is missing or the renderer can't blit
-// it — the caller then keeps the text-only fallback layout.
-bool DrawIcon(XER::UI::Rendering::Renderer& renderer, const char* name,
-              int px, Color tint, const XER::UI::Layout::Rect& box) {
-    const auto* bmp =
-        AppRuntime::SharedIconPack().Get(name, px, ToArgb(tint));
-    if (bmp == nullptr) return false;
-    const XER::UI::Layout::Rect dst{
-        box.x + (box.width - bmp->width) * 0.5f,
-        box.y + (box.height - bmp->height) * 0.5f,
-        static_cast<float>(bmp->width),
-        static_cast<float>(bmp->height)};
-    return renderer.DrawFrameBgra(bmp->bgra.data(), bmp->width,
-                                  bmp->height, dst, 1.0f);
-}
 
 std::string TagFor(const PluginDesc& desc) {
     if (desc.vendor.empty()) return desc.file;
@@ -115,8 +84,9 @@ void PluginsPanelWidget::Reload() {
             ++effect_count;
         }
     };
-    append_kind(XER_PLUGIN_VIDEO_FX, "Video Effects", "nav.fx");
-    append_kind(XER_PLUGIN_AUDIO_FX, "Audio Effects", "nav.audio");
+    // Section labels uppercase — the inspector's drawn-header style.
+    append_kind(XER_PLUGIN_VIDEO_FX, "VIDEO EFFECTS", "nav.fx");
+    append_kind(XER_PLUGIN_AUDIO_FX, "AUDIO EFFECTS", "nav.audio");
 
     content_height_ = 0.0f;
     for (const Entry& entry : entries_) {
@@ -217,22 +187,32 @@ void PluginsPanelWidget::Render(
     if (entries_.empty()) {
         renderer.DrawText(
             "No plugins found in <exe>/plugins",
-            {bounds.x + 12.0f,
-             std::max(rows_top_, bounds.y + 40.0f) + 6.0f,
-             bounds.width - 24.0f, 20.0f},
+            {bounds.x + VeTheme::kSpaceMd,
+             std::max(rows_top_, bounds.y + VeTheme::kSpaceMd * 3.0f) +
+                 VeTheme::kSpaceXs,
+             bounds.width - VeTheme::kSpaceMd * 2.0f,
+             tokens.font_body * 1.4f},
             XER::UI::Rendering::TextStyle{tokens.muted, tokens.font_small,
                                           400});
         return;
     }
 
     // Rows are drawn (not child widgets) so clicks land on the panel —
-    // widget-tree Click events do not bubble up from Label children.
+    // verified: WidgetTree dispatches Click to the deepest hit target
+    // only (widget_tree.cc); child widgets do not bubble it up. The
+    // clip keeps a half-scrolled row from bleeding into the header or
+    // footer band (same PushClip convention the inspector uses).
     if (rows_top_ <= 0.0f) return;   // not yet laid out
-    const float width = bounds.width - 24.0f;
+    const float inset = VeTheme::kSpaceSm;
+    const float width = bounds.width - inset * 2.0f;
+    const float title_h = tokens.font_body * 1.4f;
+    const float sub_h = tokens.font_small * 1.4f;
     float y = rows_top_ - scroll_y_;
     // Icon of the section currently being walked — headers carry it in
     // `tag`; rows reuse it so a group and its items share a glyph.
     const char* section_icon = nullptr;
+    renderer.PushClip({bounds.x, rows_top_, bounds.width,
+                       rows_bottom_ - rows_top_});
     for (std::size_t i = 0; i < entries_.size(); ++i) {
         const Entry& entry = entries_[i];
         const float h = EntryHeight(static_cast<int>(i));
@@ -245,59 +225,70 @@ void PluginsPanelWidget::Render(
             continue;
         }
         if (entry.header) {
-            float label_x = bounds.x + 12.0f;
+            // Section header — the inspector's drawn-label convention:
+            // muted, small, weight 600, vertically centered.
+            float label_x = bounds.x + VeTheme::kSpaceMd;
             if (!entry.tag.empty()) {
                 section_icon = entry.tag.c_str();
-                if (DrawIcon(renderer, section_icon,
+                if (VeIcons::DrawIcon(renderer, section_icon,
                              static_cast<int>(kHeaderIcon), tokens.muted,
                              {label_x,
                               y + (kHeaderHeight - kHeaderIcon) * 0.5f,
                               kHeaderIcon, kHeaderIcon})) {
-                    label_x += kHeaderIcon + 6.0f;
+                    label_x += kHeaderIcon + VeTheme::kSpaceXs;
                 }
             }
             renderer.DrawText(entry.text,
-                              {label_x, y + 7.0f,
-                               bounds.x + bounds.width - label_x - 12.0f,
-                               14.0f},
+                              {label_x,
+                               y + (kHeaderHeight - sub_h) * 0.5f,
+                               bounds.x + bounds.width - label_x -
+                                   VeTheme::kSpaceMd,
+                               sub_h},
                               XER::UI::Rendering::TextStyle{
                                   tokens.muted, tokens.font_small, 600});
         } else {
             const int idx = static_cast<int>(i);
-            const XER::UI::Layout::Rect row{bounds.x + 8.0f, y, width,
-                                            kRowHeight - 3.0f};
+            const XER::UI::Layout::Rect row{
+                bounds.x + inset, y + VeTheme::kSpaceXxs, width,
+                kRowHeight - VeTheme::kSpaceXs};
             if (idx == selected_) {
-                renderer.FillRect(row, WithAlpha(tokens.accent, 0.16f),
+                renderer.FillRect(row, tokens.selection,
                                   tokens.radius_small);
-                renderer.StrokeRect(row, WithAlpha(tokens.accent, 0.5f),
-                                    1.0f, tokens.radius_small);
+                renderer.StrokeRect(
+                    row, VeTheme::WithAlpha(tokens.accent, 0.5f), 1.0f,
+                    tokens.radius_small);
             } else if (idx == hovered_) {
                 renderer.FillRect(row, tokens.hover, tokens.radius_small);
             }
-            float text_x = row.x + 8.0f;
+            float text_x = row.x + VeTheme::kSpaceSm;
             const char* row_icon =
                 section_icon != nullptr ? section_icon : "tab.plugins";
-            if (DrawIcon(renderer, row_icon, static_cast<int>(kRowIcon),
+            if (VeIcons::DrawIcon(renderer, row_icon, static_cast<int>(kRowIcon),
                          tokens.foreground,
-                         {row.x + 6.0f,
+                         {row.x + VeTheme::kSpaceXs,
                           row.y + (row.height - kRowIcon) * 0.5f,
                           kRowIcon, kRowIcon})) {
-                text_x = row.x + 6.0f + kRowIcon + 8.0f;
+                text_x = row.x + VeTheme::kSpaceXs + kRowIcon +
+                         VeTheme::kSpaceSm;
             }
+            const float text_w =
+                row.x + row.width - text_x - VeTheme::kSpaceSm;
             renderer.DrawText(entry.text,
-                              {text_x, row.y + 3.0f,
-                               row.x + row.width - text_x - 8.0f, 16.0f},
+                              {text_x, row.y + VeTheme::kSpaceXxs, text_w,
+                               title_h},
                               XER::UI::Rendering::TextStyle{
                                   tokens.foreground, tokens.font_body,
                                   500});
             renderer.DrawText(entry.tag,
-                              {text_x, row.y + 20.0f,
-                               row.x + row.width - text_x - 8.0f, 14.0f},
+                              {text_x,
+                               row.y + VeTheme::kSpaceXxs + title_h,
+                               text_w, sub_h},
                               XER::UI::Rendering::TextStyle{
                                   tokens.muted, tokens.font_small, 400});
         }
         y += h;
     }
+    renderer.PopClip();
 }
 
 void PluginsPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -306,18 +297,24 @@ void PluginsPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
     const float gap = tokens.spacing_small;
+    const float inner_x = bounds.x + pad;
+    const float inner_w = bounds.width - pad * 2.0f;
+    float y = bounds.y + pad * 0.6f;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f},
-                   tokens);
-    rows_top_ = bounds.y + 34.0f + gap;
-    const float footer_y = bounds.y + bounds.height - 30.0f;
+    title_->Layout({inner_x, y, inner_w, VeTheme::kRowHeight}, tokens);
+    y += VeTheme::kRowHeight + gap;
+    rows_top_ = y;
+
+    const float footer_h = VeTheme::kControlHeight;
+    const float footer_y =
+        bounds.y + bounds.height - footer_h - VeTheme::kSpaceXs;
     rows_bottom_ = footer_y - gap;
-    add_btn_->Layout({bounds.x + pad, footer_y, 100.0f, 26.0f}, tokens);
-    status_->Layout({bounds.x + pad + 108.0f, footer_y + 2.0f,
-                     std::max(40.0f, bounds.width - pad * 2.0f - 108.0f),
-                     22.0f},
-                    tokens);
+    add_btn_->Layout({inner_x, footer_y, kActionWidth, footer_h}, tokens);
+    status_->Layout(
+        {inner_x + kActionWidth + gap, footer_y + VeTheme::kSpaceXxs,
+         std::max(40.0f, inner_w - kActionWidth - gap),
+         footer_h - VeTheme::kSpaceXs},
+        tokens);
     // Keep the list viewport out of the footer.
     const float view_h = footer_y - rows_top_ - gap;
     scroll_y_ = std::clamp(

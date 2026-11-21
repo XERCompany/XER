@@ -15,6 +15,7 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class ButtonGroup;
 class Label;
 class Table;
 }
@@ -44,6 +45,17 @@ public:
         // Lists loaded audio-plugin ids for the context menu.
         std::function<std::vector<std::pair<std::string, std::string>>()>
             audio_fx_list;
+        // Bin->timeline drag (grid mode): a card's left-press drag
+        // that releases OUTSIDE the bin reports the entry path + the
+        // absolute-space release point — the shell hit-tests its own
+        // drop targets. on_drag_hover tracks the cursor while a drag
+        // is active (active=false once, at the end) so the shell can
+        // light a drop-target affordance; both are absolute coords.
+        std::function<void(const std::string&,
+                           XER::UI::Layout::Point)>
+            on_drop;
+        std::function<void(XER::UI::Layout::Point, bool)>
+            on_drag_hover;
     };
 
     explicit MediaBinWidget(void* parent_hwnd, Hooks hooks = {});
@@ -86,11 +98,13 @@ private:
     // when the point is outside the thumbnail grid.
     int ItemAtPoint(const XER::UI::Layout::Point& p) const;
     XER::UI::Layout::Rect GridRect() const;
-    XER::UI::Layout::Rect ChipRect(int index) const;
     void DrawGrid(XER::UI::Rendering::Renderer& renderer,
                   const XER::UI::Theme::Tokens& tokens);
-    void DrawChips(XER::UI::Rendering::Renderer& renderer,
-                   const XER::UI::Theme::Tokens& tokens);
+    // Kind filter strip (All/Video/Audio): SetFilter is the buttons'
+    // OnClick target; SyncFilterButtons mirrors filter_ onto the
+    // Primary/Secondary styles (lab_panel mode-strip convention).
+    void SetFilter(int filter);
+    void SyncFilterButtons();
 
     Hooks hooks_;
     std::function<void(const std::string&)> on_remove_entry_;
@@ -104,11 +118,10 @@ private:
     float grid_scroll_ = 0.0f;
     int grid_hovered_ = -1;
     XER::UI::Layout::Rect grid_rect_{};
-    // Kind filter chips above the content ("All | Video | Audio") —
+    // Kind filter strip above the content ("All | Video | Audio") —
     // `visible_` maps a displayed row/card to its entries_ index.
     int filter_ = 0;
     std::vector<int> visible_;
-    int chip_hovered_ = -1;
     void RebuildVisible();
     // Double-click detection (there's no DoubleClick event type — two
     // Click events on the same entry within the threshold count).
@@ -116,11 +129,22 @@ private:
     void MaybeOpenSource(int entry_index);
     int last_click_entry_ = -1;
     std::chrono::steady_clock::time_point last_click_at_{};
+    // Grid card drag-out (bin->timeline drop): armed on a card's left
+    // MouseDown, promoted once the cursor travels past the threshold —
+    // the tree's left-button mouse capture keeps moves/releases routed
+    // here even outside the bounds. drag_entry_ indexes entries_.
+    int drag_entry_ = -1;
+    bool drag_active_ = false;
+    XER::UI::Layout::Point drag_press_{};
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Button> import_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> view_btn_;
+    std::shared_ptr<XER::UI::Widgets::ButtonGroup> filter_group_;
+    std::shared_ptr<XER::UI::Widgets::Button> filter_all_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> filter_video_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> filter_audio_btn_;
     std::shared_ptr<XER::UI::Widgets::Table> table_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
 };

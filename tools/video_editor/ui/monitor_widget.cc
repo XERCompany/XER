@@ -8,13 +8,15 @@
 #include <vector>
 
 #include "app_runtime/app_runtime.h"
-#include "app_runtime/icon_pack.h"
 #include "app_runtime/ui_manifest.h"
 #include "color/ocio_transform.h"
 #include "helper/path_utils.h"
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "scopes_widget.h"
 #include "theme/tokens.h"
+#include "widgets/badge.h"
+#include "widgets/button.h"
 #include "widgets/context_menu.h"
 
 namespace XER::VideoEditor::Ui {
@@ -89,32 +91,6 @@ Color MeterRed() { return {0.93f, 0.26f, 0.22f, 1.0f}; }
 Color WithAlpha(Color c, float alpha) {
     c.a = alpha;
     return c;
-}
-
-// Theme float color → packed AARRGGBB tint for the icon pack.
-std::uint32_t ToArgb(Color color) {
-    const auto byte = [](float v) {
-        return static_cast<std::uint32_t>(
-            std::clamp(std::lround(v * 255.0f), 0L, 255L));
-    };
-    return (byte(color.a) << 24) | (byte(color.r) << 16) |
-           (byte(color.g) << 8) | byte(color.b);
-}
-
-// Rasterized SVG icon from the shared pack, drawn centered in `box`.
-// Returns false when the icon is missing or the renderer can't blit
-// it — the caller then falls back to the drawn glyph/label.
-bool DrawIcon(Rendering::Renderer& renderer, const char* name, int px,
-              Color tint, const Layout::Rect& box) {
-    const auto* bmp =
-        AppRuntime::SharedIconPack().Get(name, px, ToArgb(tint));
-    if (bmp == nullptr) return false;
-    const Layout::Rect dst{box.x + (box.width - bmp->width) * 0.5f,
-                           box.y + (box.height - bmp->height) * 0.5f,
-                           static_cast<float>(bmp->width),
-                           static_cast<float>(bmp->height)};
-    return renderer.DrawFrameBgra(bmp->bgra.data(), bmp->width,
-                                  bmp->height, dst, 1.0f);
 }
 
 Color MarkerColor(const Marker& marker) {
@@ -218,6 +194,99 @@ MonitorWidget::~MonitorWidget() {
     ScopesTable().erase(this);
     compositor_.Cancel();
     compositor_.Shutdown();
+}
+
+void MonitorWidget::EnsureChildren() {
+    if (transport_children_) return;
+    transport_children_ = true;
+    namespace Widgets = XER::UI::Widgets;
+    // Icon-capable buttons resolve through the pack (idempotent).
+    VeIcons::InstallButtonIconResolver();
+
+    const auto make = [this](const char* icon, const char* tooltip) {
+        auto button = std::make_shared<Widgets::Button>(
+            "", Widgets::ButtonStyle::Secondary);
+        // Transport keys must keep routing to the monitor / global
+        // shortcuts — the row's buttons take pointer input only.
+        button->SetFocusable(false);
+        if (icon != nullptr) button->SetIcon(icon);
+        button->SetTooltip(tooltip);
+        AddChild(button);
+        return button;
+    };
+
+    play_btn_ = make("transport.play", "Play / pause (Space)");
+    play_btn_->SetOnClick([this] {
+        if (on_play_toggle_) {
+            on_play_toggle_();
+        } else {
+            SetPlaying(!playing_);
+        }
+    });
+    const auto step = [this](int dir) {
+        if (on_frame_step_) {
+            on_frame_step_(dir);
+            return;
+        }
+        const double frame_dt =
+            project_.fps_num > 0
+                ? static_cast<double>(project_.fps_den) /
+                      project_.fps_num
+                : 1.0 / 30.0;
+        SetPlaying(false);
+        SetTime(std::clamp(time_ + dir * frame_dt, 0.0,
+                           project_.duration()),
+                true);
+        EmitTime(time_);
+    };
+    prev_btn_ = make("transport.prev", "Previous frame");
+    prev_btn_->SetOnClick([step] { step(-1); });
+    next_btn_ = make("transport.next", "Next frame");
+    next_btn_->SetOnClick([step] { step(1); });
+    safe_btn_ = make("transport.safe", "Safe margins");
+    safe_btn_->SetOnClick([this] { SetSafeMargins(!safe_margins_); });
+    grid_btn_ = make("transport.grid", "Rule-of-thirds grid");
+    grid_btn_->SetOnClick([this] { SetGrid(!grid_); });
+    loop_btn_ = make("transport.loop", "Loop playback");
+    loop_btn_->SetOnClick([this] { SetLoop(!loop_); });
+    focus_btn_ = make("transport.fullscreen", "Monitor focus");
+    focus_btn_->SetOnClick([this] {
+        if (hooks_.on_toggle_focus) hooks_.on_toggle_focus();
+    });
+    // No scopes icon ships in the pack — text chip like before.
+    scopes_btn_ = std::make_shared<Widgets::Button>(
+        "SCOPES", Widgets::ButtonStyle::Secondary);
+    scopes_btn_->SetFocusable(false);
+    scopes_btn_->SetTooltip("Toggle scopes overlay");
+    scopes_btn_->SetOnClick([this] {
+        MonitorScopes& s = ScopesState(this);
+        s.visible = !s.visible;
+        Invalidate();
+    });
+    AddChild(scopes_btn_);
+
+    quality_badge_ = std::make_shared<Widgets::Badge>(
+        quality_tag_, Widgets::BadgeVariant::Secondary);
+    quality_badge_->SetTooltip(
+        "Preview playback quality (right-click to change)");
+    quality_badge_->SetVisible(!quality_tag_.empty());
+    AddChild(quality_badge_);
+}
+
+void MonitorWidget::SyncTransportChildren() {
+    if (!transport_children_) return;
+    namespace Widgets = XER::UI::Widgets;
+    const auto style = [](bool active) {
+        return active ? Widgets::ButtonStyle::Primary
+                      : Widgets::ButtonStyle::Secondary;
+    };
+    play_btn_->SetIcon(TransportPlaying() ? "transport.pause"
+                                          : "transport.play");
+    play_btn_->SetStyle(style(TransportPlaying()));
+    safe_btn_->SetStyle(style(safe_margins_));
+    grid_btn_->SetStyle(style(grid_));
+    loop_btn_->SetStyle(style(loop_));
+    scopes_btn_->SetStyle(style(ScopesState(this).visible));
 }
 
 void MonitorWidget::SetProject(const Project& project) {
@@ -331,6 +400,10 @@ void MonitorWidget::SetLoopRange(double in_seconds, double out_seconds) {
 void MonitorWidget::SetQualityTag(const std::string& tag) {
     if (quality_tag_ == tag) return;
     quality_tag_ = tag;
+    if (quality_badge_) {
+        quality_badge_->SetText(tag);
+        quality_badge_->SetVisible(!tag.empty());
+    }
     Invalidate();
 }
 
@@ -542,6 +615,8 @@ double MonitorWidget::RulerTimeAtX(float x) const {
 void MonitorWidget::Render(
     Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens) {
+    EnsureChildren();
+    SyncTransportChildren();
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
@@ -553,18 +628,8 @@ void MonitorWidget::Render(
     renderer.DrawText(
         AppRuntime::SharedUiStrings().Get("program_title", "PROGRAM"),
         header, {tokens.muted, tokens.font_small, 700});
-
-    // Preview-quality badge ("Full"/"1/2"/"1/4"...) top-right.
-    if (!quality_tag_.empty()) {
-        const Rendering::TextStyle tag_style{tokens.accent_foreground,
-                                             tokens.font_small, 600};
-        const auto tag_size = renderer.MeasureText(quality_tag_, tag_style);
-        const float tag_w = tag_size.width + 14.0f;
-        const Layout::Rect tag{bounds.x + bounds.width - pad - tag_w,
-                               bounds.y + pad * 0.6f + 1.0f, tag_w, 20.0f};
-        renderer.FillRect(tag, tokens.accent, tokens.radius_small);
-        renderer.DrawText(quality_tag_, tag, tag_style);
-    }
+    // The preview-quality chip ("Full"/"1/2"/"1/4"...) is a Badge
+    // child top-right — it renders itself after this pass.
 
     const auto video_area = VideoAreaRect();
     renderer.FillRect(video_area, tokens.background, tokens.radius_medium);
@@ -817,43 +882,8 @@ void MonitorWidget::DrawRuler(Rendering::Renderer& renderer,
 void MonitorWidget::DrawTransport(Rendering::Renderer& renderer,
                                   const XER::UI::Theme::Tokens& tokens,
                                   const Layout::Rect& row) {
-    DrawOverlayButton(renderer, tokens, OverlayButton::Play, nullptr,
-                      TransportPlaying());
-    DrawOverlayButton(renderer, tokens, OverlayButton::PrevFrame,
-                      nullptr, false);
-    DrawOverlayButton(renderer, tokens, OverlayButton::NextFrame,
-                      nullptr, false);
-    DrawOverlayButton(renderer, tokens, OverlayButton::SafeMargins,
-                      "SAFE", safe_margins_);
-    DrawOverlayButton(renderer, tokens, OverlayButton::Grid, "GRID",
-                      grid_);
-    DrawOverlayButton(renderer, tokens, OverlayButton::Loop, "LOOP",
-                      loop_);
-    DrawOverlayButton(renderer, tokens, OverlayButton::Focus, nullptr,
-                      false);
-
-    // 8th button, appended after Focus: scopes overlay toggle. Drawn
-    // inline (OverlayButton is a closed enum in the header); the icon
-    // name misses the pack on purpose and falls back to the label.
-    {
-        const auto rect = ScopesButtonRect(row);
-        const bool active = ScopesState(this).visible;
-        const Color fill = active ? tokens.accent : tokens.secondary;
-        const Color text_color =
-            active ? tokens.accent_foreground : tokens.muted;
-        renderer.FillRect(rect, fill, tokens.radius_small);
-        if (active) {
-            renderer.StrokeRect(rect, tokens.accent, 1.0f,
-                                tokens.radius_small);
-        }
-        if (!DrawIcon(renderer, "transport.scopes", 16, text_color,
-                      rect)) {
-            renderer.DrawText("SCOPES", rect,
-                              {text_color, tokens.font_small, 600});
-        }
-    }
-
-    // "current / duration" small readout, right-aligned.
+    // The row's buttons are Widgets::Button children now — only the
+    // right-aligned "current / duration" readout stays drawn here.
     const std::string time_text =
         FormatTime(time_) + "  /  " + FormatTime(project_.duration());
     const Rendering::TextStyle style{tokens.muted, tokens.font_small, 500};
@@ -863,113 +893,6 @@ void MonitorWidget::DrawTransport(Rendering::Renderer& renderer,
         {row.x + row.width - size.width, row.y + 4.0f, size.width,
          row.height},
         style);
-}
-
-void MonitorWidget::DrawOverlayButton(Rendering::Renderer& renderer,
-                                      const XER::UI::Theme::Tokens& tokens,
-                                      OverlayButton button,
-                                      const char* label, bool active) {
-    const auto rect = OverlayButtonRect(button);
-    const Color fill = active ? tokens.accent : tokens.secondary;
-    const Color text_color =
-        active ? tokens.accent_foreground : tokens.muted;
-    renderer.FillRect(rect, fill, tokens.radius_small);
-    if (active) {
-        renderer.StrokeRect(rect, tokens.accent, 1.0f,
-                            tokens.radius_small);
-    }
-    // Prefer SVG icons from the shared pack (assets/icons.yaml), tinted
-    // with the same state color as the drawn mark; the vector
-    // glyphs/labels below stay as the fallback when an icon is missing.
-    const char* icon_name = nullptr;
-    switch (button) {
-        case OverlayButton::Play:
-            // No pause asset in the pack — "transport.pause" misses and
-            // falls back to the vector pause bars below.
-            icon_name = TransportPlaying() ? "transport.pause"
-                                           : "transport.play";
-            break;
-        case OverlayButton::PrevFrame:
-            icon_name = "transport.prev";
-            break;
-        case OverlayButton::NextFrame:
-            icon_name = "transport.next";
-            break;
-        case OverlayButton::SafeMargins:
-            icon_name = "transport.safe";
-            break;
-        case OverlayButton::Grid:
-            icon_name = "transport.grid";
-            break;
-        case OverlayButton::Loop:
-            icon_name = "transport.loop";
-            break;
-        case OverlayButton::Focus:
-            icon_name = "transport.fullscreen";
-            break;
-    }
-    if (icon_name != nullptr &&
-        DrawIcon(renderer, icon_name, 16, text_color, rect)) {
-        return;
-    }
-    if (button == OverlayButton::Play) {
-        // Vector play/pause glyph.
-        const float cx = rect.x + rect.width * 0.5f;
-        const float cy = rect.y + rect.height * 0.5f;
-        if (TransportPlaying()) {
-            renderer.FillRect({cx - 5.0f, cy - 5.0f, 3.5f, 10.0f},
-                              text_color, 0.5f);
-            renderer.FillRect({cx + 1.5f, cy - 5.0f, 3.5f, 10.0f},
-                              text_color, 0.5f);
-        } else {
-            renderer.DrawLine({cx - 4.0f, cy - 6.0f}, {cx + 5.0f, cy},
-                              text_color, 1.6f);
-            renderer.DrawLine({cx + 5.0f, cy}, {cx - 4.0f, cy + 6.0f},
-                              text_color, 1.6f);
-            renderer.DrawLine({cx - 4.0f, cy + 6.0f},
-                              {cx - 4.0f, cy - 6.0f}, text_color, 1.6f);
-        }
-        return;
-    }
-    if (button == OverlayButton::PrevFrame ||
-        button == OverlayButton::NextFrame) {
-        // Step glyph: triangle plus an edge bar (|◀ / ▶|).
-        const float cx = rect.x + rect.width * 0.5f;
-        const float cy = rect.y + rect.height * 0.5f;
-        const int dir =
-            button == OverlayButton::NextFrame ? 1 : -1;
-        const float bar_x = cx - dir * 5.5f;
-        renderer.FillRect({bar_x, cy - 6.0f, 1.8f, 12.0f}, text_color,
-                          0.5f);
-        renderer.DrawLine({cx + dir * 4.0f, cy - 5.5f},
-                          {cx - dir * 3.0f, cy}, text_color, 1.5f);
-        renderer.DrawLine({cx - dir * 3.0f, cy},
-                          {cx + dir * 4.0f, cy + 5.5f}, text_color,
-                          1.5f);
-        renderer.DrawLine({cx + dir * 4.0f, cy + 5.5f},
-                          {cx + dir * 4.0f, cy - 5.5f}, text_color,
-                          1.5f);
-        return;
-    }
-    if (button == OverlayButton::Focus) {
-        // Fullscreen corners — four L-shaped brackets.
-        const float x0 = rect.x + 7.0f, x1 = rect.x + rect.width - 7.0f;
-        const float y0 = rect.y + 6.0f, y1 = rect.y + rect.height - 6.0f;
-        const float a = 4.0f;
-        renderer.DrawLine({x0, y0 + a}, {x0, y0}, text_color, 1.5f);
-        renderer.DrawLine({x0, y0}, {x0 + a, y0}, text_color, 1.5f);
-        renderer.DrawLine({x1 - a, y0}, {x1, y0}, text_color, 1.5f);
-        renderer.DrawLine({x1, y0}, {x1, y0 + a}, text_color, 1.5f);
-        renderer.DrawLine({x0, y1 - a}, {x0, y1}, text_color, 1.5f);
-        renderer.DrawLine({x0, y1}, {x0 + a, y1}, text_color, 1.5f);
-        renderer.DrawLine({x1 - a, y1}, {x1, y1}, text_color, 1.5f);
-        renderer.DrawLine({x1, y1}, {x1, y1 - a}, text_color, 1.5f);
-        return;
-    }
-    if (label != nullptr) {
-        renderer.DrawText(label, rect,
-                          {text_color, tokens.font_small, 600});
-    }
 }
 
 bool MonitorWidget::ShowContextMenu(const Layout::Point p) {
@@ -1062,68 +985,41 @@ bool MonitorWidget::ShowContextMenu(const Layout::Point p) {
 }
 
 void MonitorWidget::Layout(const Layout::Rect& bounds) {
+    EnsureChildren();
     SetBounds(bounds);
+    const auto& tokens = CachedLayoutTokens();
+    play_btn_->Layout(OverlayButtonRect(OverlayButton::Play), tokens);
+    prev_btn_->Layout(OverlayButtonRect(OverlayButton::PrevFrame),
+                      tokens);
+    next_btn_->Layout(OverlayButtonRect(OverlayButton::NextFrame),
+                      tokens);
+    safe_btn_->Layout(OverlayButtonRect(OverlayButton::SafeMargins),
+                      tokens);
+    grid_btn_->Layout(OverlayButtonRect(OverlayButton::Grid), tokens);
+    loop_btn_->Layout(OverlayButtonRect(OverlayButton::Loop), tokens);
+    focus_btn_->Layout(OverlayButtonRect(OverlayButton::Focus), tokens);
+    scopes_btn_->Layout(ScopesButtonRect(TransportRect()), tokens);
+    if (!quality_tag_.empty()) {
+        // The chip hugs the top-right of the header band, mirroring
+        // where the drawn tag used to sit.
+        const float w = quality_badge_->GetPreferredSize().width;
+        const float pad = tokens.spacing_medium;
+        quality_badge_->Layout(
+            {bounds.x + bounds.width - pad - w,
+             bounds.y + pad * 0.6f + 1.0f, w, 20.0f},
+            tokens);
+    }
 }
 
 bool MonitorWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     using XER::UI::Widgets::Event;
     using XER::UI::Widgets::MouseButton;
+    EnsureChildren();
     if (event.type == Event::Type::Click &&
         event.mouse_button == MouseButton::Left) {
         const auto p = event.position;
-        // Transport buttons first.
-        if (OverlayButtonRect(OverlayButton::Play).Contains(p)) {
-            if (on_play_toggle_) {
-                on_play_toggle_();
-            } else {
-                SetPlaying(!playing_);
-            }
-            return true;
-        }
-        if (OverlayButtonRect(OverlayButton::PrevFrame).Contains(p) ||
-            OverlayButtonRect(OverlayButton::NextFrame).Contains(p)) {
-            const int dir = OverlayButtonRect(OverlayButton::NextFrame)
-                                .Contains(p)
-                ? 1
-                : -1;
-            if (on_frame_step_) {
-                on_frame_step_(dir);
-                return true;
-            }
-            const double frame_dt =
-                project_.fps_num > 0
-                    ? static_cast<double>(project_.fps_den) /
-                          project_.fps_num
-                    : 1.0 / 30.0;
-            SetPlaying(false);
-            SetTime(std::clamp(time_ + dir * frame_dt, 0.0,
-                               project_.duration()),
-                    true);
-            EmitTime(time_);
-            return true;
-        }
-        if (OverlayButtonRect(OverlayButton::SafeMargins).Contains(p)) {
-            SetSafeMargins(!safe_margins_);
-            return true;
-        }
-        if (OverlayButtonRect(OverlayButton::Grid).Contains(p)) {
-            SetGrid(!grid_);
-            return true;
-        }
-        if (OverlayButtonRect(OverlayButton::Loop).Contains(p)) {
-            SetLoop(!loop_);
-            return true;
-        }
-        if (OverlayButtonRect(OverlayButton::Focus).Contains(p)) {
-            if (hooks_.on_toggle_focus) hooks_.on_toggle_focus();
-            return true;
-        }
-        if (ScopesButtonRect(TransportRect()).Contains(p)) {
-            MonitorScopes& scopes = ScopesState(this);
-            scopes.visible = !scopes.visible;
-            Invalidate();
-            return true;
-        }
+        // The transport row's Buttons own their clicks (hit-tested as
+        // children before the monitor sees the event).
         // Scopes overlay: mode tabs get first pick via the widget's own
         // hit test; any other click inside the overlay is swallowed so
         // it doesn't toggle playback on the frame underneath.

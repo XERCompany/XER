@@ -17,8 +17,11 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class ButtonGroup;
+class Field;
 class Label;
 class Progress;
+class Separator;
 class Slider;
 class TextInput;
 }
@@ -93,17 +96,22 @@ public:
     void Tick(double dt_seconds) override;
 
     XER::UI::Layout::Size GetMinSize() const override {
-        return {230.0f, 300.0f};
+        return {230.0f, 380.0f};
     }
     XER::UI::Layout::Size GetPreferredSize() const override {
-        return {320.0f, 430.0f};
+        return {320.0f, 440.0f};
     }
     XER::UI::Layout::Size GetMaxSize() const override {
         return {100000.0f, 100000.0f};
     }
 
 private:
-    enum class Field { X, Y, W, H, Feather };
+    // Section header drawn by the panel itself — same convention as
+    // InspectorWidget's muted font_small weight-600 labels.
+    struct DrawnLine {
+        XER::UI::Layout::Rect rect;
+        std::string text;
+    };
 
     void EnsureChildren();
     bool CollectParams(RunParams* params);
@@ -125,21 +133,31 @@ private:
     bool syncing_ = false;
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
+    std::shared_ptr<XER::UI::Widgets::ButtonGroup> mode_group_;
     std::shared_ptr<XER::UI::Widgets::Button> cutout_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> remove_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> layer_btn_;
+    std::shared_ptr<XER::UI::Widgets::Separator> sep_mode_;
+    std::shared_ptr<XER::UI::Widgets::Field> x_field_;
+    std::shared_ptr<XER::UI::Widgets::Field> y_field_;
+    std::shared_ptr<XER::UI::Widgets::Field> w_field_;
+    std::shared_ptr<XER::UI::Widgets::Field> h_field_;
+    std::shared_ptr<XER::UI::Widgets::Field> feather_field_;
     std::shared_ptr<XER::UI::Widgets::TextInput> x_input_;
     std::shared_ptr<XER::UI::Widgets::TextInput> y_input_;
     std::shared_ptr<XER::UI::Widgets::TextInput> w_input_;
     std::shared_ptr<XER::UI::Widgets::TextInput> h_input_;
     std::shared_ptr<XER::UI::Widgets::TextInput> feather_input_;
     std::shared_ptr<XER::UI::Widgets::Label> lasso_label_;
+    std::shared_ptr<XER::UI::Widgets::Separator> sep_region_;
+    std::shared_ptr<XER::UI::Widgets::Field> radius_field_;
     std::shared_ptr<XER::UI::Widgets::Slider> radius_slider_;
-    std::shared_ptr<XER::UI::Widgets::Label> radius_label_;
+    std::shared_ptr<XER::UI::Widgets::Separator> sep_run_;
     std::shared_ptr<XER::UI::Widgets::Button> run_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> cancel_btn_;
     std::shared_ptr<XER::UI::Widgets::Progress> progress_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
+    std::vector<DrawnLine> drawn_;
 };
 
 }  // namespace XER::VideoEditor::Ui

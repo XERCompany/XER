@@ -7,6 +7,7 @@
 
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "widgets/button.h"
 #include "widgets/label.h"
 
 namespace XER::VideoEditor::Ui {
@@ -164,6 +165,50 @@ void MixerPanelWidget::RebuildStrips(const Project* project) {
         drag_mode_ = DragMode::None;
     }
     scroll_x_ = std::clamp(scroll_x_, 0.0f, ScrollRange());
+
+    // Rebuild the mute-chip buttons to match: one child Button per
+    // track strip (Destructive while muted), none on the master.
+    namespace Widgets = XER::UI::Widgets;
+    for (const auto& button : mute_buttons_) {
+        if (button) RemoveChild(button);
+    }
+    mute_buttons_.clear();
+    mute_buttons_.reserve(strips_.size());
+    for (std::size_t i = 0; i < strips_.size(); ++i) {
+        const Strip& s = strips_[i];
+        if (s.master) {
+            mute_buttons_.push_back(nullptr);
+            continue;
+        }
+        auto button = std::make_shared<Widgets::Button>(
+            "M", s.muted ? Widgets::ButtonStyle::Destructive
+                         : Widgets::ButtonStyle::Secondary);
+        // Panel keys/shortcuts stay on the mixer — the chips take
+        // pointer input only.
+        button->SetFocusable(false);
+        const int track_index = s.track_index;
+        button->SetOnClick([this, track_index, button] {
+            for (Strip& strip : strips_) {
+                if (!strip.master && strip.track_index == track_index) {
+                    strip.muted = !strip.muted;
+                    button->SetStyle(
+                        strip.muted ? Widgets::ButtonStyle::Destructive
+                                    : Widgets::ButtonStyle::Secondary);
+                    button->SetTooltip(strip.muted ? "Unmute track"
+                                                   : "Mute track");
+                    if (hooks_.on_track_mute) {
+                        hooks_.on_track_mute(strip.track_index,
+                                             strip.muted);
+                    }
+                    Invalidate();
+                    break;
+                }
+            }
+        });
+        button->SetTooltip(s.muted ? "Unmute track" : "Mute track");
+        AddChild(button);
+        mute_buttons_.push_back(std::move(button));
+    }
 }
 
 void MixerPanelWidget::SetProject(const Project* project) {
@@ -333,19 +378,6 @@ void MixerPanelWidget::DrawStrip(
     const XER::UI::Rendering::TextStyle dim_style{
         tokens.muted, tokens.font_small, 400};
 
-    // Mute chip (track strips only — master mutes via the host).
-    if (!s.master) {
-        const Rect chip = MuteRect(strip);
-        renderer.FillRect(chip,
-                          s.muted ? tokens.danger : tokens.secondary,
-                          tokens.radius_small);
-        renderer.DrawText("M", {chip.x, chip.y + 2.0f, chip.width,
-                                chip.height - 4.0f},
-                          {s.muted ? tokens.danger_foreground
-                                   : tokens.muted,
-                           tokens.font_small, 700});
-    }
-
     // Pan knob (track strips only): ring + indicator swept from top,
     // -1 = hard left .. +1 = hard right.
     if (!s.master) {
@@ -513,6 +545,21 @@ void MixerPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     strips_top_ = bounds.y + 34.0f + tokens.spacing_small;
     strips_bottom_ = bounds.y + bounds.height - 10.0f;
     scroll_x_ = std::clamp(scroll_x_, 0.0f, ScrollRange());
+
+    // Mute chips ride their strips — hidden once the strip scrolls
+    // fully out of the viewport.
+    const Rect viewport{bounds.x + 2.0f, strips_top_,
+                        bounds.width - 4.0f,
+                        strips_bottom_ - strips_top_};
+    for (std::size_t i = 0;
+         i < strips_.size() && i < mute_buttons_.size(); ++i) {
+        const auto& button = mute_buttons_[i];
+        if (!button) continue;
+        const Rect chip = MuteRect(StripRect(static_cast<int>(i)));
+        button->SetVisible(chip.x + chip.width >= viewport.x &&
+                           chip.x <= viewport.x + viewport.width);
+        button->Layout(chip, tokens);
+    }
 }
 
 bool MixerPanelWidget::HandleEvent(
@@ -608,15 +655,7 @@ bool MixerPanelWidget::HandleEvent(
             if (strip < 0) return false;
             const Rect rect = StripRect(strip);
             Strip& s = strips_[static_cast<std::size_t>(strip)];
-            // Mute chip toggles on click.
-            if (!s.master && MuteRect(rect).Contains(event.position)) {
-                s.muted = !s.muted;
-                if (hooks_.on_track_mute) {
-                    hooks_.on_track_mute(s.track_index, s.muted);
-                }
-                Invalidate();
-                return true;
-            }
+            // The mute chip is a Button child now — it owns its click.
             // Double-click on fader / pan knob resets the control.
             const auto now = std::chrono::steady_clock::now();
             DragMode mode = DragMode::None;

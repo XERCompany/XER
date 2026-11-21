@@ -1,13 +1,19 @@
-// Markers panel: table of project timeline markers.
+// Markers panel: design-system list of project timeline markers.
 //
-//   [swatch] HH:MM:SS.mmm   name            [Go] [x]
+//   [swatch] name                       [Go] [x]
+//            HH:MM:SS.mmm
 //
-// Single-click a row seeks the playhead to the marker; [Go] does the
-// same; [x] removes it; double-click a row opens an inline rename
-// TextInput (Enter commits through on_rename_marker — the model has no
-// dedicated rename op, so the app implements it as RemoveMarker +
-// AddMarker under one history macro). "Add @ playhead" emits
-// on_add_marker(playhead, "Marker").
+// Each row is a Widgets::Item child (title = marker name, description
+// = formatted time) with a drawn color swatch widget at its leading
+// edge and Ghost jump/remove Buttons trailing. The Item and swatch
+// are DISABLED — disabled widgets are skipped by hit-testing, so row
+// clicks still land on the panel (Click events do not bubble up from
+// children): single-click a row seeks the playhead to the marker,
+// [Go] does the same, [x] removes it, and double-click a row opens an
+// inline rename TextInput over the Item's title band (Enter commits
+// through on_rename_marker — the model has no dedicated rename op, so
+// the app implements it as RemoveMarker + AddMarker under one history
+// macro). "Add @ playhead" emits on_add_marker(playhead, "Marker").
 //
 // The panel mirrors Project::markers (already sorted by time); call
 // SetProject again after any marker mutation to refresh.
@@ -24,6 +30,7 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class Item;
 class Label;
 class TextInput;
 }
@@ -68,6 +75,10 @@ public:
 
 private:
     struct Row {
+        // Decorative leading color swatch (custom widget, disabled).
+        std::shared_ptr<XER::UI::Widgets::Widget> swatch;
+        // Name + time text (disabled so row clicks reach the panel).
+        std::shared_ptr<XER::UI::Widgets::Item> item;
         std::shared_ptr<XER::UI::Widgets::Button> jump;
         std::shared_ptr<XER::UI::Widgets::Button> remove;
     };
@@ -76,7 +87,9 @@ private:
     void RebuildRows();
     int RowAt(const XER::UI::Layout::Point& position) const;
     XER::UI::Layout::Rect RowRect(int row) const;
+    // Title band inside the row's Item — the rename TextInput's home.
     XER::UI::Layout::Rect NameRect(int row) const;
+    float RowsViewportBottom() const;
     void BeginRename(int row);
     void CommitRename();
     void CancelRename();
@@ -89,7 +102,7 @@ private:
     int rename_row_ = -1;           // row being renamed (-1 = none)
     float scroll_y_ = 0.0f;
     float rows_top_ = 0.0f;         // layout: y where the list begins
-    float row_height_ = 30.0f;
+    float row_height_ = 44.0f;      // Item title + description lines
     bool children_attached_ = false;
     // Double-click detection (two Clicks on the same row < window).
     int last_click_row_ = -1;
@@ -99,7 +112,7 @@ private:
     // Mark-and-sweep graveyard: RebuildRows can fire from inside a row
     // button's own OnClick (remove -> hook -> SetProject -> rebuild),
     // which would destroy the very widget mid-dispatch. Retired
-    // buttons are disabled + unparented but kept alive here until the
+    // widgets are disabled + unparented but kept alive here until the
     // NEXT rebuild, so a firing button can never be freed under its
     // own event regardless of how dispatch holds refs.
     std::vector<std::shared_ptr<XER::UI::Widgets::Widget>> retired_rows_;

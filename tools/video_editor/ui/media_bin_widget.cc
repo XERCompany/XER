@@ -16,7 +16,9 @@
 #include "io/oiio_image.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/button_group.h"
 #include "widgets/context_menu.h"
 #include "widgets/label.h"
 #include "widgets/table.h"
@@ -153,14 +155,40 @@ void MediaBinWidget::EnsureChildren() {
         view_btn_->SetText(grid_mode_ ? "Grid" : "List");
         Invalidate();
     });
+
+    // Kind filter as a segmented strip — the lab_panel mode-strip
+    // pattern: ButtonGroup joins the three buttons edge-to-edge, the
+    // active filter keeps the Primary fill while the rest fall back
+    // to Secondary (SyncFilterButtons).
+    filter_group_ = std::make_shared<Widgets::ButtonGroup>(
+        Widgets::ButtonGroup::Orientation::Horizontal);
+    filter_all_btn_ = std::make_shared<Widgets::Button>(
+        "All", Widgets::ButtonStyle::Primary);
+    filter_all_btn_->SetTooltip("Show every catalog entry");
+    filter_all_btn_->SetOnClick([this] { SetFilter(0); });
+    filter_video_btn_ = std::make_shared<Widgets::Button>(
+        "Video", Widgets::ButtonStyle::Secondary);
+    filter_video_btn_->SetTooltip("Show only entries with video");
+    filter_video_btn_->SetOnClick([this] { SetFilter(1); });
+    filter_audio_btn_ = std::make_shared<Widgets::Button>(
+        "Audio", Widgets::ButtonStyle::Secondary);
+    filter_audio_btn_->SetTooltip("Show only audio entries");
+    filter_audio_btn_->SetOnClick([this] { SetFilter(2); });
+    filter_group_->AddChild(filter_all_btn_);
+    filter_group_->AddChild(filter_video_btn_);
+    filter_group_->AddChild(filter_audio_btn_);
+
     status_ = std::make_shared<Widgets::Label>("Import via button or File menu", true);
 
     AddChild(title_);
     AddChild(import_btn_);
     AddChild(add_btn_);
     AddChild(view_btn_);
+    AddChild(filter_group_);
     AddChild(table_);
     AddChild(status_);
+
+    SyncFilterButtons();
 }
 
 void MediaBinWidget::SetEntries(std::vector<CatalogEntry> entries) {
@@ -240,6 +268,26 @@ void MediaBinWidget::MaybeOpenSource(int entry_index) {
         hooks_.on_open_source(
             entries_[static_cast<std::size_t>(entry_index)].path);
     }
+}
+
+void MediaBinWidget::SetFilter(int filter) {
+    if (filter_ == filter) return;
+    filter_ = filter;
+    grid_scroll_ = 0.0f;
+    if (children_attached_) SyncFilterButtons();
+    RefreshRows();
+}
+
+void MediaBinWidget::SyncFilterButtons() {
+    if (!children_attached_) return;
+    namespace Widgets = XER::UI::Widgets;
+    const auto style = [this](int index) {
+        return filter_ == index ? Widgets::ButtonStyle::Primary
+                                : Widgets::ButtonStyle::Secondary;
+    };
+    filter_all_btn_->SetStyle(style(0));
+    filter_video_btn_->SetStyle(style(1));
+    filter_audio_btn_->SetStyle(style(2));
 }
 
 std::string MediaBinWidget::SelectedPath() const {
@@ -337,14 +385,12 @@ void MediaBinWidget::DrawGrid(
         }
         if (hovered && !selected) {
             renderer.FillRect(
-                thumb, {tokens.hover.r, tokens.hover.g, tokens.hover.b,
-                        0.25f},
+                thumb, VeTheme::WithAlpha(tokens.hover, 0.25f),
                 tokens.radius_medium);
         }
         if (selected) {
             renderer.FillRect(thumb,
-                              {tokens.accent.r, tokens.accent.g,
-                               tokens.accent.b, 0.12f},
+                              VeTheme::WithAlpha(tokens.accent, 0.12f),
                               tokens.radius_medium);
             renderer.StrokeRect(thumb, tokens.accent, 1.5f,
                                 tokens.radius_medium);
@@ -397,7 +443,6 @@ void MediaBinWidget::Render(
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
-    DrawChips(renderer, tokens);
     if (grid_mode_) DrawGrid(renderer, tokens);
 }
 
@@ -431,9 +476,12 @@ void MediaBinWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         status_->Layout({status_x, button_y, status_w, row_h}, tokens);
     }
     const float content_top = button_y + row_h + gap;
-    // Filter chips row sits between the buttons and the content.
-    const float chip_h = 24.0f;
-    const float list_top = content_top + chip_h + gap;
+    // Filter strip row sits between the buttons and the content.
+    const float filter_h = 26.0f;
+    filter_group_->Layout({bounds.x + pad, content_top,
+                           bounds.width - pad * 2.0f, filter_h},
+                          tokens);
+    const float list_top = content_top + filter_h + gap;
     const float content_h =
         std::max(0.0f, bounds.y + bounds.height - pad - list_top);
     // The content area belongs to the list/grid entirely — the bin
@@ -450,52 +498,6 @@ void MediaBinWidget::Layout(const XER::UI::Layout::Rect& bounds) {
 
 XER::UI::Layout::Rect MediaBinWidget::GridRect() const {
     return grid_rect_;
-}
-
-namespace {
-constexpr const char* kChipLabels[] = {"All", "Video", "Audio"};
-}
-
-XER::UI::Layout::Rect MediaBinWidget::ChipRect(int index) const {
-    const auto& tokens = CachedLayoutTokens();
-    const float pad = tokens.spacing_medium;
-    const float gap = 6.0f;
-    const float widths[] = {44.0f, 52.0f, 52.0f};
-    const auto bounds = GetBounds();
-    float x = bounds.x + pad;
-    const float y = bounds.y + 34.0f + 30.0f + tokens.spacing_small;
-    for (int i = 0; i < index; ++i) x += widths[i] + gap;
-    return {x, y, widths[index], 24.0f};
-}
-
-void MediaBinWidget::DrawChips(
-    XER::UI::Rendering::Renderer& renderer,
-    const XER::UI::Theme::Tokens& tokens) {
-    for (int i = 0; i < 3; ++i) {
-        const auto rect = ChipRect(i);
-        const bool active = filter_ == i;
-        const bool hovered = chip_hovered_ == i;
-        if (active || hovered) {
-            renderer.FillRect(
-                rect,
-                active
-                    ? XER::UI::Theme::Color{tokens.accent.r,
-                                            tokens.accent.g,
-                                            tokens.accent.b, 0.22f}
-                    : XER::UI::Theme::Color{tokens.hover.r,
-                                            tokens.hover.g,
-                                            tokens.hover.b, 0.6f},
-                rect.height * 0.5f);   // pill
-        } else {
-            renderer.StrokeRect(rect, tokens.border, 1.0f,
-                                rect.height * 0.5f);
-        }
-        renderer.DrawText(kChipLabels[i],
-                          {rect.x, rect.y + 1.0f, rect.width,
-                           rect.height},
-                          {active ? tokens.accent : tokens.muted,
-                           tokens.font_small, active ? 600 : 400});
-    }
 }
 
 int MediaBinWidget::ItemAtPoint(
@@ -642,38 +644,33 @@ bool MediaBinWidget::ShowContextMenu(
 
 bool MediaBinWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     using Type = XER::UI::Widgets::Event::Type;
-    // Filter chips work in both grid and list modes.
-    if (event.type == Type::Click) {
-        for (int i = 0; i < 3; ++i) {
-            if (ChipRect(i).Contains(event.position)) {
-                filter_ = i;
-                grid_scroll_ = 0.0f;
-                RefreshRows();
-                Invalidate();
-                return true;
-            }
-        }
-    }
-    if (event.type == Type::MouseMove) {
-        int chip = -1;
-        for (int i = 0; i < 3; ++i) {
-            if (ChipRect(i).Contains(event.position)) chip = i;
-        }
-        if (chip != chip_hovered_) {
-            chip_hovered_ = chip;
-            Invalidate();
-        }
-    }
     if (!grid_mode_) return false;
     const bool inside = grid_rect_.Contains(event.position);
     switch (event.type) {
         case Type::MouseMove: {
+            // Drag promotion: past a small dead-zone the press becomes
+            // a drag and the shell's hover hook starts tracking the
+            // cursor (mouse capture keeps moves routed here even
+            // outside the bin's bounds).
+            if (drag_entry_ >= 0) {
+                constexpr float kDragDeadZone = 6.0f;
+                const float dx = event.position.x - drag_press_.x;
+                const float dy = event.position.y - drag_press_.y;
+                if (!drag_active_ &&
+                    dx * dx + dy * dy >
+                        kDragDeadZone * kDragDeadZone) {
+                    drag_active_ = true;
+                }
+                if (drag_active_ && hooks_.on_drag_hover) {
+                    hooks_.on_drag_hover(event.position, true);
+                }
+            }
             const int h = inside ? ItemAtPoint(event.position) : -1;
             if (h != grid_hovered_) {
                 grid_hovered_ = h;
                 Invalidate();
             }
-            return inside || chip_hovered_ >= 0;
+            return inside || drag_entry_ >= 0;
         }
         case Type::MouseWheel: {
             if (!inside) return false;
@@ -705,7 +702,39 @@ bool MediaBinWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 XER::UI::Widgets::MouseButton::Right) {
                 return false;
             }
+            // Arm a possible card drag-out — promoted on the first
+            // MouseMove past the dead-zone (see MouseMove above).
+            drag_entry_ = inside ? ItemAtPoint(event.position) : -1;
+            drag_press_ = event.position;
+            drag_active_ = false;
             return inside;
+        case Type::MouseUp: {
+            if (event.mouse_button ==
+                    XER::UI::Widgets::MouseButton::Left &&
+                drag_entry_ >= 0) {
+                const int entry = drag_entry_;
+                const bool was_dragging = drag_active_;
+                drag_entry_ = -1;
+                drag_active_ = false;
+                if (was_dragging) {
+                    if (hooks_.on_drag_hover) {
+                        hooks_.on_drag_hover(event.position, false);
+                    }
+                    // Released outside the bin = a drop offer; the
+                    // shell decides what (if anything) sits under it.
+                    if (!GetBounds().Contains(event.position) &&
+                        hooks_.on_drop &&
+                        entry < static_cast<int>(entries_.size())) {
+                        hooks_.on_drop(
+                            entries_[static_cast<std::size_t>(entry)]
+                                .path,
+                            event.position);
+                    }
+                }
+                return true;
+            }
+            return inside;
+        }
         default:
             return inside;
     }

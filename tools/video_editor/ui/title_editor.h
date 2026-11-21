@@ -83,7 +83,6 @@ private:
     void SelectAlign(int index);
 
     XER::UI::Layout::Rect PanelRect() const;
-    std::vector<XER::UI::Layout::Rect> AlignChipRects() const;
     XER::UI::Layout::Rect FillSwatchRect() const;
     XER::UI::Layout::Rect OutlineSwatchRect() const;
 

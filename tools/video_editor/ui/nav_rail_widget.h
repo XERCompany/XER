@@ -1,14 +1,21 @@
-// CapCut-style left icon rail: a slim vertical strip of tool glyphs
+// CapCut-style left icon rail: a slim vertical strip of tool buttons
 // (media, audio, text, fx, transitions) with settings pinned to the
-// bottom. Pure-draw widget — no child controls; icons are vector
-// glyphs rendered from theme tokens and hit-tested in HandleEvent.
+// bottom. Each slot is a Widgets::Button — Ghost style, icon-only via
+// SetIcon with the pack's nav.* names — while the rail itself draws
+// the panel chrome and owns the slot geometry. The active slot's
+// button flips to Primary (accent) through Item::is_active.
 #pragma once
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <vector>
 
 #include "widgets/widget.h"
+
+namespace XER::UI::Widgets {
+class Button;
+}
 
 namespace XER::VideoEditor::Ui {
 
@@ -20,8 +27,8 @@ public:
         Glyph glyph = Glyph::Media;
         std::string tooltip;
         std::function<void()> action;
-        // Optional toggle state — the item renders accent-tinted when
-        // the provider returns true (e.g. "media bin open").
+        // Optional toggle state — the slot's button renders Primary
+        // when the provider returns true (e.g. "media bin open").
         std::function<bool()> is_active;
     };
 
@@ -47,19 +54,11 @@ public:
 private:
     struct Slot {
         Item item;
-        XER::UI::Layout::Rect rect;
+        std::shared_ptr<XER::UI::Widgets::Button> button;
     };
-
-    // Glyph painters — small geometric marks inside `r`.
-    void DrawGlyph(XER::UI::Rendering::Renderer& renderer,
-                   const XER::UI::Theme::Tokens& tokens, Glyph glyph,
-                   const XER::UI::Layout::Rect& r,
-                   XER::UI::Theme::Color color) const;
 
     std::vector<Slot> top_;
     std::vector<Slot> bottom_;
-    int hovered_ = -1;      // >=0 top_ index, <=-2 bottom index, -1 none
-    int pressed_ = -1;
 };
 
 }  // namespace XER::VideoEditor::Ui
