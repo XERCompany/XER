@@ -60,22 +60,16 @@ constexpr double kFallbackSampleRate = 48000.0;  // when bounds are unknown
 
 // ---- timeline palette literals ----
 // Reference-Premiere colors with no Theme::Tokens equivalent yet —
-// candidates for new tokens once the theme pass lands:
-//   accent_cyan      (playhead, ruler marks, snap-on, selection)
-//   clip_video_fill  (desaturated blue clip body)
-//   clip_audio_fill  (dark teal clip body)
-//   waveform_teal    (bright in-clip waveform stroke)
-//   badge_video/audio(track-id chips on the headers)
-//   fx_amber         ("fx" effect chips)
+// candidates for new tokens (semantic tokens already adopted: timecode,
+// playhead, waveform, track_video/track_audio, warning_chip):
+//   accent_cyan      (active states: tool chip, snap-on, expanded chevron)
+//   clip_video_fill  (desaturated blue clip body + _alt hue flip)
+//   clip_audio_fill  (dark teal clip body + _alt hue flip)
 constexpr Color kAccentCyan{0.13f, 0.83f, 0.93f, 1.0f};      // #22d3ee
 constexpr Color kClipVideoFill{0.28f, 0.42f, 0.55f, 1.0f};   // desat. blue
 constexpr Color kClipVideoFillAlt{0.33f, 0.41f, 0.60f, 1.0f};
 constexpr Color kClipAudioFill{0.10f, 0.35f, 0.33f, 1.0f};   // dark teal
 constexpr Color kClipAudioFillAlt{0.10f, 0.32f, 0.40f, 1.0f};
-constexpr Color kWaveformTeal{0.37f, 0.86f, 0.71f, 1.0f};    // in-clip wave
-constexpr Color kBadgeVideo{0.21f, 0.47f, 0.80f, 1.0f};      // "V1" chip
-constexpr Color kBadgeAudio{0.07f, 0.55f, 0.51f, 1.0f};      // "A1" chip
-constexpr Color kFxAmber{0.96f, 0.62f, 0.05f, 1.0f};         // "fx" chip
 
 Color WithAlpha(Color color, float alpha) {
     color.a = alpha;
@@ -154,8 +148,8 @@ Color ClipBaseFor(const Track& track, int index) {
 }
 
 // Track-kind badge accent (header kind bar, badge chip, row wash).
-Color KindColor(bool video_track) {
-    return video_track ? kBadgeVideo : kBadgeAudio;
+Color KindColor(const XER::UI::Theme::Tokens& tokens, bool video_track) {
+    return video_track ? tokens.track_video : tokens.track_audio;
 }
 
 // Header affordance ids (see TimelineWidget::HeaderHit):
@@ -983,7 +977,7 @@ void TimelineWidget::Render(
         const float x = XAtTime(tick);
         renderer.DrawLine({x, ruler_bottom - 8.0f},
                           {x, ruler_bottom - 1.0f},
-                          WithAlpha(kAccentCyan, 0.7f), 1.0f);
+                          WithAlpha(tokens.timecode, 0.7f), 1.0f);
         // Monospaced cyan timecode marks (reference ruler style),
         // 4px right of the tick.
         char label[32];
@@ -999,7 +993,7 @@ void TimelineWidget::Render(
                           Rect{x + 4.0f, lane_bottom + kWorkBarHeight +
                                               1.0f,
                                56.0f, 14.0f},
-                          {kAccentCyan, tokens.font_small, 500, true});
+                          {tokens.timecode, tokens.font_small, 500, true});
     }
 
     // Header-column divider spanning marker lane + tracks.
@@ -1022,7 +1016,7 @@ void TimelineWidget::Render(
     for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
         const Track& track = project_->tracks[i];
         const bool is_video = track.kind == TrackKind::Video;
-        const Color kind = KindColor(is_video);
+        const Color kind = KindColor(tokens, is_video);
         const Rect row = TrackRect(static_cast<int>(i));
         const Rect label_rect = HeaderRect(static_cast<int>(i));
 
@@ -1231,7 +1225,7 @@ void TimelineWidget::Render(
             // Amber "fx" chip — clip carries an effect/audio-fx chain.
             const Rect fx{right_cursor - 18.0f, rect.y + 3.0f, 18.0f,
                           12.0f};
-            renderer.FillRect(fx, WithAlpha(kFxAmber, 0.92f), 3.0f);
+            renderer.FillRect(fx, WithAlpha(tokens.warning_chip, 0.92f), 3.0f);
             DrawCenteredText(
                 renderer, "fx",
                 Rect{fx.x, fx.y + 0.5f, fx.width, fx.height},
@@ -1322,9 +1316,9 @@ void TimelineWidget::Render(
     const float play_x = XAtTime(playhead_);
     renderer.FillRect(
         Rect{play_x - 7.0f, bounds.y + 1.0f, 14.0f, 14.0f},
-        kAccentCyan, 7.0f);
+        tokens.playhead, 7.0f);
     renderer.DrawLine({play_x, bounds.y + 5.0f},
-                      {play_x, bounds.y + bounds.height}, kAccentCyan,
+                      {play_x, bounds.y + bounds.height}, tokens.playhead,
                       2.0f);
 
     // Media-bin drag hovering this widget — accent frame marks the
@@ -1405,7 +1399,7 @@ void TimelineWidget::RenderHeaderButtons(
             default: return false;
         }
     };
-    const Color kind = KindColor(track.kind == TrackKind::Video);
+    const Color kind = KindColor(tokens, track.kind == TrackKind::Video);
     const int count = HeaderButtonCount(track);
     for (int slot = 0; slot < count; ++slot) {
         const int button = HeaderButtonIdFor(track, slot);
@@ -1499,7 +1493,7 @@ void TimelineWidget::RenderToolbar(
             case 3: {
                 // fx badge chip — amber, matching the per-clip chips.
                 const Rect chip{r.x, r.y + 4.0f, r.width, 12.0f};
-                renderer.FillRect(chip, WithAlpha(kFxAmber,
+                renderer.FillRect(chip, WithAlpha(tokens.warning_chip,
                                                   hot ? 1.0f : 0.8f),
                                   3.0f);
                 DrawCenteredText(
@@ -1520,7 +1514,6 @@ void TimelineWidget::RenderWaveform(
     const XER::UI::Theme::Tokens& tokens,
     const Clip& clip,
     const Rect& rect) {
-    (void)tokens;
     if (!hooks_.get_audio_peaks || clip.source_path.empty() ||
         clip.source.kind != SourceKind::Media) {
         return;
@@ -1536,9 +1529,9 @@ void TimelineWidget::RenderWaveform(
     const float half = rect.height * 0.38f;
     // Bright teal min/max strokes on the dark-teal clip body (the
     // reference's in-clip waveform read).
-    const Color color = WithAlpha(kWaveformTeal, 0.85f);
+    const Color color = WithAlpha(tokens.waveform, 0.85f);
     renderer.DrawLine({rect.x, mid}, {rect.x + rect.width, mid},
-                      WithAlpha(kWaveformTeal, 0.25f), 1.0f);
+                      WithAlpha(tokens.waveform, 0.25f), 1.0f);
     for (int px = 0; px < columns; ++px) {
         const double t0 = src0 + (src1 - src0) * px / columns;
         const double t1 = src0 + (src1 - src0) * (px + 1) / columns;

@@ -92,6 +92,9 @@ Goal started: 2026-11-15. Design doc:
   fix, check_all.ps1, wave-2/3 queue.
 
 - [2026-11-21-lens-sync-icons.md](progress/2026-11-21-lens-sync-icons.md)
+- [2026-11-21-nle-redesign.md](progress/2026-11-21-nle-redesign.md) —
+  Premiere-style visual redesign (4 waves): new theme tokens,
+  monitor/transport, timeline chrome, right-dock panels (2026-11-21).
   — lens/glass FX + waveform sync + curves, exe icons/metadata,
   GUI-subsystem console rules
 

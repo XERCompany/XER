@@ -147,3 +147,4 @@ host_call round trip).
   (`_WIN32` paths), headless tokenizer/formatter work everywhere.
 - JS `xer_ext.ve()` can't be exercised headless — needs the running
   editor; smoke proves the identical dispatcher on the native side.
+

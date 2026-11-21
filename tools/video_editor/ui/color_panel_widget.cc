@@ -717,7 +717,7 @@ void ColorPanelWidget::Render(
             renderer.StrokeRect(
                 dot,
                 wheel_drag_ ? tokens.accent
-                            : Color{1.0f, 1.0f, 1.0f, 0.9f},
+                            : VeTheme::WithAlpha(tokens.foreground, 0.9f),
                 wheel_drag_ ? 2.0f : 1.5f, kDot * 0.5f);
         }
 

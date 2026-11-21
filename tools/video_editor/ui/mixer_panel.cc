@@ -50,11 +50,9 @@ float ClampGain(float db) {
     return std::clamp(db, kGainMinDb, kGainMaxDb);
 }
 
-// Meter palette: the reference's teal program-meter fill (#2dd4a0);
-// the over-zone above -3 dB still reads danger. The teal literal is a
-// candidate theme token once the token set gains a semantic for it.
-Color MeterTeal() { return {0.18f, 0.83f, 0.63f, 1.0f}; }
-Color MeterRed() { return {0.93f, 0.26f, 0.22f, 1.0f}; }
+// Meter palette comes from tokens: tokens.waveform is the reference's
+// teal program-meter fill (#2dd4a0); the over-zone above -3 dB reads
+// tokens.danger.
 
 Color WithAlpha(Color color, float alpha) {
     color.a *= alpha;
@@ -453,22 +451,23 @@ void MixerPanelWidget::DrawStrip(
                 renderer.FillRect(
                     {x, level_y, kBarW,
                      meter.y + bars_h - level_y},
-                    MeterTeal(), 0.0f);
+                    tokens.waveform, 0.0f);
                 // Over-zone: the portion above -3 dB reads danger.
                 if (level_db > kMeterRedDb) {
                     const float over_y = y_for_db(kMeterRedDb);
                     renderer.FillRect(
                         {x, level_y, kBarW,
                          std::max(0.0f, over_y - level_y)},
-                        MeterRed(), 0.0f);
+                        tokens.danger, 0.0f);
                 }
             }
             if (hold_db > kMeterMinDb + 0.5f) {
                 const float y_peak = y_for_db(std::min(hold_db, 0.0f));
                 renderer.DrawLine({x, y_peak}, {x + kBarW, y_peak},
                                   hold_db > kMeterRedDb
-                                      ? MeterRed()
-                                      : Color{1, 1, 1, 0.9f},
+                                      ? tokens.danger
+                                      : WithAlpha(tokens.foreground,
+                                                  0.9f),
                                   1.5f);
             }
         };
