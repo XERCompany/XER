@@ -15,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -852,6 +853,15 @@ private:
     void Paint(HWND hwnd, HDC hdc, const RECT& paint_rect) {
         (void)hdc;  // presentation goes through the DXGI swapchain, not GDI
         try {
+            if (!perf_env_checked_) {
+                perf_env_checked_ = true;
+                if (const char* v = std::getenv("XER_UI_PERF")) {
+                    perf_hud_ =
+                        v[0] != '\0' &&
+                        !(v[0] == '0' && v[1] == '\0') &&
+                        !(v[0] == 'o' && v[1] == 'f' && v[2] == 'f');
+                }
+            }
             const auto frame_start = std::chrono::steady_clock::now();
             float damage_pct = 100.0f;
             const auto background = theme_.GetTokens().background;
@@ -888,6 +898,23 @@ private:
                 }
                 renderer_->SetDpi(dpi_);
                 renderer_->SetClearColor(background);
+                // XER_UI_PERF=1: push last frame's stats so the renderer
+                // can overlay them (HUD reads always describe the
+                // previously completed frame).
+                if (perf_env_checked_ && perf_hud_) {
+                    hud_info_.frame_ms = render_stats_.last_frame_ms;
+                    hud_info_.avg_frame_ms = render_stats_.avg_frame_ms;
+                    hud_info_.damage_pct = render_stats_.last_damage_pct;
+                    hud_info_.draw_calls = last_counters_.draw_calls;
+                    hud_info_.text_calls = last_counters_.text_calls;
+                    hud_info_.image_calls = last_counters_.image_calls;
+                    hud_info_.widgets_painted =
+                        last_widget_stats_.painted;
+                    hud_info_.widgets_culled = last_widget_stats_.culled;
+                    renderer_->SetPerfHud(&hud_info_);
+                } else if (perf_env_checked_) {
+                    renderer_->SetPerfHud(nullptr);
+                }
                 // rcPaint (px) -> widget coords (DIP): the retained canvas
                 // keeps last frame's pixels outside this region.
                 const float px_to_dip = 96.0f / static_cast<float>(dpi_);
@@ -910,6 +937,8 @@ private:
                         UiEventBus::RenderPhase::kBeforeFrame, frame);
                 }
                 widget_tree_.Render(*renderer_, theme_.GetTokens(), &damage);
+                last_counters_ = renderer_->TakeFrameCounters();
+                last_widget_stats_ = widget_tree_.LastFrameWidgetStats();
                 if (event_bus_ != nullptr) {
                     UiRenderFrame frame{};
                     frame.bounds = root_widget_->GetBounds();
@@ -957,6 +986,23 @@ private:
             render_stats_.last_frame_ms = frame_ms;
             render_stats_.last_damage_pct = damage_pct;
             render_stats_.last_frame_full = damage_pct >= 99.5f;
+            // Perf log line every 300 frames — lets harnesses verify frame
+            // cost from stderr without reading pixels off the HUD.
+            if (perf_hud_ && render_stats_.frames % 300 == 0) {
+                std::fprintf(
+                    stderr,
+                    "[XER UI perf] frames=%llu last=%.1fms avg=%.1fms "
+                    "dmg=%.0f%% draws=%u txt=%u img=%u widgets=%u(cull %u)\n",
+                    static_cast<unsigned long long>(render_stats_.frames),
+                    render_stats_.last_frame_ms,
+                    render_stats_.avg_frame_ms,
+                    static_cast<double>(damage_pct),
+                    last_counters_.draw_calls,
+                    last_counters_.text_calls,
+                    last_counters_.image_calls,
+                    last_widget_stats_.painted,
+                    last_widget_stats_.culled);
+            }
             last_render_error_.clear();
         } catch (const std::exception& error) {
             renderer_.reset();
@@ -999,6 +1045,12 @@ private:
     std::shared_ptr<UiEventBus> event_bus_;
     std::string last_render_error_;
     RenderStats render_stats_;
+    // XER_UI_PERF diagnostics state (env read lazily on the first paint).
+    bool perf_env_checked_ = false;
+    bool perf_hud_ = false;
+    Rendering::Renderer::PerfHudInfo hud_info_{};
+    Rendering::Renderer::FrameCounters last_counters_{};
+    Widgets::WidgetTree::FrameWidgetStats last_widget_stats_{};
 
     bool custom_title_bar_ = false;
     float title_bar_height_dip_ = 38.0f;

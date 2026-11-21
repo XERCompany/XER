@@ -1,6 +1,7 @@
 #ifndef XER_UI_WIDGETS_WIDGET_TREE_H
 #define XER_UI_WIDGETS_WIDGET_TREE_H
 
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -54,6 +55,17 @@ public:
     // fully outside it; nullptr means full repaint.
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
                 const Layout::Rect* damage = nullptr) const;
+
+    // Diagnostics for the last Render() pass (perf HUD / profiling):
+    // `painted` = widgets whose Render() ran, `culled` = widgets skipped
+    // entirely by the damage cull. Zeroed at the start of every Render.
+    struct FrameWidgetStats {
+        std::uint32_t painted = 0;
+        std::uint32_t culled = 0;
+    };
+    FrameWidgetStats LastFrameWidgetStats() const {
+        return frame_widget_stats_;
+    }
     bool HandleEvent(const Event& event);
 
     // Event bus shared with the owning Window. When set, every incoming
@@ -192,6 +204,9 @@ private:
     // mutable: Render() is const but style resolution is internal
     // bookkeeping — it writes ComputedStyle onto widgets.
     mutable std::shared_ptr<CSS::WidgetStyleHost> style_host_;
+    // mutable for the same reason: Render() is const but per-frame
+    // counters are bookkeeping, reset at the top of every Render().
+    mutable FrameWidgetStats frame_widget_stats_;
 };
 
 } // namespace XER::UI::Widgets

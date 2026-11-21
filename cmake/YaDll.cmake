@@ -247,6 +247,30 @@ function(xer_collect_delayload_dlls out_var)
                     set(_matched TRUE)
                 endif()
             endif()
+            if(NOT _matched AND _stem MATCHES "^lib(.+)$")
+                # MSYS2 convention: the implib keeps the lib prefix but
+                # the runtime DLL drops it — libonnxruntime.dll.a is
+                # onnxruntime.dll, libggml.dll.a is ggml-1.dll. Retry
+                # with the de-libbed stem (exact, then a major-version
+                # -N suffix glob restricted to numeric suffixes so the
+                # backend modules (ggml-cpu-*.dll) are not matched).
+                set(_stem_nl "${CMAKE_MATCH_1}")
+                if(EXISTS "${_bindir}/${_stem_nl}.dll")
+                    list(APPEND _dlls "${_stem_nl}.dll")
+                    set(_matched TRUE)
+                else()
+                    file(GLOB _vg "${_bindir}/${_stem_nl}-*.dll")
+                    list(FILTER _vg INCLUDE REGEX
+                        "/${_stem_nl}-[0-9][^/]*\\.dll$")
+                    if(_vg)
+                        foreach(_v IN LISTS _vg)
+                            get_filename_component(_v "${_v}" NAME)
+                            list(APPEND _dlls "${_v}")
+                        endforeach()
+                        set(_matched TRUE)
+                    endif()
+                endif()
+            endif()
             if(NOT _matched)
                 list(APPEND _dlls "${_stem}.dll")
             endif()

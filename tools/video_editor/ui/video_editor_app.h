@@ -41,6 +41,7 @@
 #include "nav_rail_widget.h"
 #include "new_layer_dialog.h"
 #include "plugins_panel_widget.h"
+#include "project_manager.h"
 #include "font_manager.h"
 #include "settings_dialog.h"
 #include "shortcuts_overlay.h"
@@ -137,7 +138,28 @@ private:
     // Shared "Project Settings…" presenter (center pill, nav rail,
     // File menu, avatar menu all land here).
     void ShowProjectSettingsDialog();
-    void NewProject();
+    // ---- Home start screen (project_manager.h) --------------------
+    // Non-modal full-window child shown at launch when no project
+    // path was supplied and via File ▸ Home. Escape/close dismisses
+    // into the editor.
+    void ShowStartScreen();
+    void HideStartScreen();
+    // Records-store touch for the current project_path_ — called by
+    // LoadProject/SaveProject so opens AND first saves land in
+    // recents with name/duration/poster metadata.
+    void TrackRecentProject();
+    // PM "Create project": unique "<name>.xerproj" under `directory`
+    // at the chosen sequence preset — NewProject() reset (discard
+    // guard inside) + ProjectStore::Save through SaveProject().
+    bool CreateProjectFromStartScreen(
+        const ProjectManagerScreen::NewProjectRequest& req);
+    // PM template entry: an unsaved fully-generated sequence (bars +
+    // matte + title) so users can explore without importing media.
+    void CreateDemoProject();
+    // Initial value for the PM location field: "<user-data>/XER/
+    // VideoEditor/Projects" — a sibling of records.db/catalog.db.
+    std::string DefaultProjectDirectory() const;
+    bool NewProject();
     void OpenProject();
     bool LoadProject(const std::string& utf8_path);
     bool SaveProject(bool choose_path = false);
@@ -408,6 +430,10 @@ private:
     Project project_;
     TimelineHistory history_;
     MediaCatalog catalog_;
+    // Recent-projects records store (records_store.h) — app-owned, UI
+    // thread. Opened next to the catalog in the ctor; an open failure
+    // degrades the start screen to "no recents" instead of blocking.
+    Records::RecentProjectsStore records_;
     // Media-prep worker pool (media_prep.h): poster/peaks decodes +
     // import-poster extraction off the UI thread. Declared right after
     // the catalog it borrows so the dtor joins its workers before the
@@ -549,6 +575,9 @@ private:
     std::shared_ptr<ExportQueuePanelWidget> export_queue_;
     std::shared_ptr<WaveformPanelWidget> waveform_panel_;
     std::shared_ptr<StatusToastWidget> status_toast_;
+    // Home start screen — the LAST child so it paints/hit-tests above
+    // the workspace (title bar stays on top of it in layout).
+    std::shared_ptr<ProjectManagerScreen> project_manager_;
     // Right-panel tab strip: Widgets::Tabs in Underline mode inside
     // the clip/wheel-scroll host — see TabStripScroll above.
     std::shared_ptr<XER::UI::Widgets::Tabs> right_tabs_;

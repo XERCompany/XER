@@ -226,6 +226,7 @@ void WidgetTree::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
 
 void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
                         const Layout::Rect* damage) const {
+    frame_widget_stats_ = {};
     if (style_host_) style_host_->Update(root_);
     if (root_ == nullptr || !root_->IsVisible()) {
         return;
@@ -538,6 +539,7 @@ void WidgetTree::RenderSubtree(
             b.x > cull->x + cull->width + kCullPad ||
             b.y + b.height < cull->y - kCullPad ||
             b.y > cull->y + cull->height + kCullPad) {
+            ++frame_widget_stats_.culled;
             return;
         }
     }
@@ -588,6 +590,7 @@ void WidgetTree::RenderSubtree(
 
     try {
         widget->Render(renderer, tokens);
+        ++frame_widget_stats_.painted;
     } catch (const std::exception& error) {
         // Tag the failure with the widget so render errors are
         // self-diagnosing (type, bounds, debug text).

@@ -13,6 +13,7 @@
 #include <dwrite.h>
 #include <wrl/client.h>
 
+#include <list>
 #include <string>
 #include <unordered_map>
 
@@ -34,9 +35,12 @@ public:
 
     void SetClearColor(Theme::Color color) override;
     void SetDpi(unsigned dpi) override;
+    void SetFrameDamage(Layout::Rect damage) override;
     void BeginFrame(Layout::Rect bounds) override;
     void EndFrame() override;
     bool TakeTargetsRecreated() override { return targets_recreated_; }
+    FrameCounters TakeFrameCounters() override;
+    void SetPerfHud(const PerfHudInfo* info) override;
     void FillRect(Layout::Rect rect, Theme::Color color, float radius) override;
     void StrokeRect(Layout::Rect rect, Theme::Color color, float width, float radius) override;
     void DrawLine(
@@ -79,6 +83,10 @@ private:
     Microsoft::WRL::ComPtr<IDWriteTextFormat> CreateTextFormat(TextStyle style) const;
     Microsoft::WRL::ComPtr<ID2D1Bitmap> LoadImageBitmap(const std::string& path);
     D2D1_COLOR_F ToColor(Theme::Color color) const;
+    // Draws the perf overlay onto the current target (the swapchain back
+    // buffer); returns the box it painted in DIP coords (for the dirty
+    // rect list) or nullptr when nothing was drawn.
+    bool DrawPerfHud(Layout::Rect* box_out);
 
     HWND hwnd_;
     UINT dpi_;
@@ -112,8 +120,46 @@ private:
     // works on any of its targets.
     Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush_;
     mutable std::unordered_map<std::string, Microsoft::WRL::ComPtr<IDWriteTextFormat>> text_formats_;
-    mutable std::unordered_map<std::string, Microsoft::WRL::ComPtr<IDWriteTextLayout>> text_layouts_;
-    mutable std::unordered_map<std::string, Layout::Size> measure_cache_;
+    // Text caches are true LRU maps (order list front = most recent):
+    // the previous "clear everything at N entries" eviction dropped the
+    // whole working set whenever a changing string (timecode, meters)
+    // filled the map, causing a visible hitch every few seconds.
+    template <typename T>
+    struct LruEntry {
+        using value_type = T;
+        T value;
+        std::list<std::string>::iterator lru_it;
+    };
+    mutable std::list<std::string> text_layout_lru_;
+    mutable std::unordered_map<
+        std::string, LruEntry<Microsoft::WRL::ComPtr<IDWriteTextLayout>>>
+        text_layouts_;
+    mutable std::list<std::string> measure_lru_;
+    mutable std::unordered_map<std::string, LruEntry<Layout::Size>>
+        measure_cache_;
+    // Scratch key buffer reused by DrawText/MeasureText — avoids the
+    // per-call std::to_string temporaries on the hot path.
+    mutable std::string key_scratch_;
+
+    // Damage rect for the frame in progress (DIP). SetFrameDamage records
+    // it before BeginFrame; BeginFrame snapshots it into
+    // `active_damage_` so frames started without a damage hint default to
+    // a full present.
+    Layout::Rect pending_damage_{};
+    bool pending_damage_valid_ = false;
+    Layout::Rect active_damage_{};
+    bool active_damage_valid_ = false;
+
+    // XER_UI_PERF diagnostics: counters incremented by each draw call,
+    // consumed via TakeFrameCounters(); `perf_hud_` holds the stats the
+    // host wants overlaid on the presented frame.
+    FrameCounters counters_;
+    PerfHudInfo hud_{};
+    bool hud_enabled_ = false;
+    Microsoft::WRL::ComPtr<IDWriteTextFormat> hud_format_;
+    // XER_UI_PRESENT_FULL=1 forces the legacy whole-canvas blit + plain
+    // Present for A/B comparison of the dirty-rect path.
+    bool force_full_present_ = false;
     // Cached bitmap reused by DrawBackdropBlur (recreated on size change).
     Microsoft::WRL::ComPtr<ID2D1Bitmap> blur_bitmap_;
     D2D1_SIZE_U blur_bitmap_size_{0, 0};

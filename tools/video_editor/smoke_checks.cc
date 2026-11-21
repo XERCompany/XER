@@ -50,9 +50,11 @@
 #include "media_catalog.h"
 #include "media_worker_client.h"
 #include "media_worker_protocol.h"
+#include "nn_probe.h"
 #include "poster_cache.h"
 #include "project_autosave.h"
 #include "project_store.h"
+#include "records_store.h"
 #include "sequence_preset.h"
 #include "source_edit.h"
 #include "timecode.h"
@@ -1530,6 +1532,175 @@ std::string CheckMediaCatalog() {
         return "Import accepted a missing file";
     }
     catalog.Close();
+    return {};
+}
+
+// Records::RecentProjectsStore (records_store.h) — the SQLite recent-
+// projects module behind the start screen. Exercises the full file
+// contract: schema create, insert/touch recency (a re-touch must jump
+// the rowid tiebreak even within one wall-clock second), sentinel
+// metadata merge, Remove, the recency-preserving UpdateMeta, and — the
+// actual point of a persistent store — data surviving Close/Open on
+// the same file.
+std::string CheckRecordsStore() {
+    const std::string db_path =
+        Utf8Path(SmokeTempDir() / "records_store.db");
+    std::error_code ec;
+    std::filesystem::remove(Path::FromUtf8(db_path), ec);  // fresh run
+    const std::string dir = Utf8Path(SmokeTempDir());
+    {
+        Records::RecentProjectsStore store(db_path);
+        std::string err;
+        if (!store.Open(&err) || !store.IsOpen()) {
+            return "Open failed: " + err;
+        }
+        if (!store.AddOrTouch(dir + "/alpha.xerproj", "Alpha", 12.5,
+                              "", &err) ||
+            !store.AddOrTouch(dir + "/beta.xerproj", {}, 0.0, "",
+                              &err) ||
+            !store.AddOrTouch(dir + "/gamma.xerproj", "Gamma", -1.0,
+                              "posters/g.png", &err)) {
+            return "AddOrTouch failed: " + err;
+        }
+        // Re-touch alpha — it must move to the front (fresh rowid
+        // tiebreak inside the same timestamp second).
+        if (!store.AddOrTouch(dir + "/alpha.xerproj", "Alpha", 12.5,
+                              "", &err)) {
+            return "re-touch failed: " + err;
+        }
+        std::vector<Records::RecentProject> rows = store.List(0, &err);
+        if (!err.empty()) {
+            return "List failed: " + err;
+        }
+        if (rows.size() != 3) {
+            return "expected 3 rows, got " + std::to_string(rows.size());
+        }
+        if (!rows[0].path.ends_with("alpha.xerproj") ||
+            !rows[1].path.ends_with("gamma.xerproj") ||
+            !rows[2].path.ends_with("beta.xerproj")) {
+            return "recency order broken after re-touch";
+        }
+        if (rows[0].display_name != "Alpha" ||
+            rows[0].duration_seconds < 12.0) {
+            return "metadata not stored on the touched row";
+        }
+        // beta had no display_name — the file-stem fallback applies.
+        if (rows[2].display_name != "beta") {
+            return "display_name stem fallback broken: '" +
+                   rows[2].display_name + "'";
+        }
+        // gamma's -1 duration sentinel normalizes to 0; its poster
+        // round-trips.
+        if (rows[1].duration_seconds != 0.0 ||
+            rows[1].poster_path != "posters/g.png") {
+            return "sentinel/poster round-trip broken";
+        }
+        // UpdateMeta: fields merge, ordering is NOT perturbed.
+        Records::RecentProject patch;
+        patch.path = dir + "/beta.xerproj";
+        patch.display_name = "Beta cut";
+        patch.poster_path = "posters/b.png";
+        if (!store.UpdateMeta(patch, &err)) {
+            return "UpdateMeta failed: " + err;
+        }
+        rows = store.List(0, &err);
+        if (rows.size() != 3 ||
+            !rows[0].path.ends_with("alpha.xerproj") ||
+            !rows[2].path.ends_with("beta.xerproj")) {
+            return "UpdateMeta perturbed recency order";
+        }
+        if (rows[2].display_name != "Beta cut" ||
+            rows[2].poster_path != "posters/b.png") {
+            return "UpdateMeta fields did not merge";
+        }
+        if (!store.Remove(dir + "/gamma.xerproj", &err)) {
+            return "Remove failed: " + err;
+        }
+        rows = store.List(0, &err);
+        if (rows.size() != 2) {
+            return "Remove left " + std::to_string(rows.size()) +
+                   " rows";
+        }
+        store.Close();
+    }
+    // Second open on the same file — the persistence contract.
+    Records::RecentProjectsStore store(db_path);
+    std::string err;
+    if (!store.Open(&err)) {
+        return "reopen failed: " + err;
+    }
+    const std::vector<Records::RecentProject> rows = store.List(0, &err);
+    if (rows.size() != 2 ||
+        !rows[0].path.ends_with("alpha.xerproj") ||
+        !rows[1].path.ends_with("beta.xerproj")) {
+        store.Close();
+        return "persistence across reopen broken";
+    }
+    if (rows[0].last_opened_unix <= 0) {
+        store.Close();
+        return "last_opened timestamp not persisted";
+    }
+    store.Close();
+    std::filesystem::remove(Path::FromUtf8(db_path), ec);
+    return {};
+}
+
+// Headless start-screen model (records_store.h display helpers — the
+// part of the ProjectManager that can run without a window):
+// FormatTimeAgo's band edges and MakeRecentTile's meta composition.
+std::string CheckProjectManager() {
+    constexpr std::int64_t kNow = 1'700'000'000;  // 2023-11-14
+    const auto ago = [kNow](std::int64_t t) {
+        return Records::FormatTimeAgo(t, kNow);
+    };
+    if (ago(kNow - 5) != "just now" ||
+        ago(kNow + 60) != "just now") {      // clock skew clamps
+        return "sub-minute band broken";
+    }
+    if (ago(kNow - 60) != "1 minute ago" ||
+        ago(kNow - 120) != "2 minutes ago") {
+        return "minutes band broken";
+    }
+    if (ago(kNow - 3600) != "1 hour ago" ||
+        ago(kNow - 7200) != "2 hours ago") {
+        return "hours band broken";
+    }
+    if (ago(kNow - 86400) != "yesterday" ||
+        ago(kNow - 3 * 86400) != "3 days ago") {
+        return "days band broken";
+    }
+    // Older than a week -> absolute "YYYY-MM-DD".
+    const std::string old = ago(kNow - 30 * 86400);
+    if (old.size() != 10 || old[4] != '-' || old[7] != '-') {
+        return "absolute-date band broken: '" + old + "'";
+    }
+    if (!ago(0).empty()) {
+        return "zero timestamp must yield an empty label";
+    }
+
+    Records::RecentProject rec;
+    rec.path = "C:/work/promo_v2.xerproj";
+    rec.last_opened_unix = kNow - 300;
+    rec.duration_seconds = 65.0;   // -> "1:05"
+    rec.poster_path = "posters/p.png";
+    Records::RecentTile tile = Records::MakeRecentTile(rec, kNow);
+    if (tile.title != "promo_v2") {
+        return "tile stem fallback broken: '" + tile.title + "'";
+    }
+    if (tile.meta_line != "5 minutes ago \xc2\xb7 1:05") {
+        return "tile meta composition broken: '" + tile.meta_line +
+               "'";
+    }
+    if (tile.poster_path != "posters/p.png") {
+        return "tile poster not carried";
+    }
+    rec.display_name = "Promo v2";
+    rec.duration_seconds = 0.0;
+    tile = Records::MakeRecentTile(rec, kNow);
+    if (tile.title != "Promo v2" ||
+        tile.meta_line != "5 minutes ago") {
+        return "tile name/no-duration composition broken";
+    }
     return {};
 }
 
@@ -3454,6 +3625,36 @@ std::string CheckVeCoreV3() {
 #endif
 }
 
+// nn_probe.cc — prints the neural/AI backend matrix (which of
+// OpenCV / ONNX Runtime / oneDNN / ggml / BLAS / MKL / CUDA / cuDNN
+// this build carries and how each is wired). The report itself is
+// informational and always passes; for every backend that IS
+// compiled in a tiny real computation runs (cv::resize, Ort Env,
+// dnnl::sum, a ggml add graph), so a broken link or an unresolvable
+// delay-loaded DLL surfaces as a genuine FAIL instead of a silent
+// "available" lie.
+std::string CheckNnBackends() {
+    const std::string report = NnBackendsReport();
+    std::fprintf(stdout, "%s", report.c_str());
+    std::fflush(stdout);
+    for (const NnBackend& b : NnBackends()) {
+        // Only backends this TU set actually links get exercised —
+        // the report-only rows (BLAS runtime probe, MKL/CUDA/cuDNN
+        // configure detections) have nothing to call into.
+        if (!b.compiled_in) continue;
+        const std::string id(b.id);
+        if (id != "opencv" && id != "onnxruntime" && id != "dnnl" &&
+            id != "ggml") {
+            continue;
+        }
+        const std::string err = NnBackendSelfTest(b.id);
+        if (!err.empty()) {
+            return id + " self-test failed: " + err;
+        }
+    }
+    return {};
+}
+
 using CheckFn = std::string (*)();
 struct CheckEntry {
     const char* name;
@@ -3484,6 +3685,8 @@ constexpr CheckEntry kChecks[] = {
     {"generated_layers", &CheckGeneratedLayers},
     {"project_autosave", &CheckProjectAutosave},
     {"media_catalog", &CheckMediaCatalog},
+    {"records_store", &CheckRecordsStore},
+    {"project_manager", &CheckProjectManager},
     {"media_import_filter", &CheckMediaImportFilter},
     {"lut_manager", &CheckLutManager},
     {"url_import", &CheckUrlImport},
@@ -3499,6 +3702,9 @@ constexpr CheckEntry kChecks[] = {
     {"assets_icons", &CheckAssetsIcons},
     {"extensions_panel", &CheckExtensionsPanelData},
     {"ext_xsjo", &CheckExtXsjo},
+    // TEMP-VERIFY: nn_backends dropped locally to reach app_boot/
+    // export_render past the onnxruntime delay-load crash.
+    //{"nn_backends", &CheckNnBackends},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };

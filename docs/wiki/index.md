@@ -37,6 +37,10 @@ Goal started: 2026-11-15. Design doc:
 - [2026-11-20-bug-audit-ui.md](reports/2026-11-20-bug-audit-ui.md) —
   32 UI findings: CEF-callback UAF, lab-worker unsync reads,
   OOB in peaks/nav_rail, SortDedupeKeys data-loss.
+- [2026-11-21-graphics-editor-stack.md](research/2026-11-21-graphics-editor-stack.md)
+  — Photoshop-class editor stack research: existing Skia/image/lab
+  assets, Krita tile engine blueprint, GEGL/libmypaint/PhotoshopAPI
+  verdicts, M1–M5 build order (2026-11-21).
 - [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
   pass-2 review of session's own changes: seqlock ordering bug in
   RenderStore, channel/worker leak in UiRenderHost, nested-transform

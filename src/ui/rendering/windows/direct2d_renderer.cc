@@ -2,9 +2,14 @@
 #include "helper/string_utils.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <cstdlib>
+#include <cwchar>
+#include <iterator>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -68,6 +73,57 @@ std::string FormatKey(const TextStyle& style) {
            "|" + (style.monospace ? "m" : "p");
 }
 
+// Appends a float/int to a cache key without allocating temporaries
+// (std::to_string allocates; std::to_chars writes into a stack buffer).
+void AppendNumber(std::string& out, float value) {
+    char buf[32];
+    const auto r = std::to_chars(buf, buf + sizeof(buf), value);
+    out.append(buf, r.ptr);
+}
+void AppendNumber(std::string& out, int value) {
+    char buf[32];
+    const auto r = std::to_chars(buf, buf + sizeof(buf), value);
+    out.append(buf, r.ptr);
+}
+
+// Same byte layout as FormatKey(), written into `out` without the
+// intermediate std::string.
+void AppendStyleKey(std::string& out, const TextStyle& style) {
+    AppendNumber(out, style.size);
+    out.push_back('|');
+    AppendNumber(out, style.weight);
+    out.push_back('|');
+    out.push_back(style.monospace ? 'm' : 'p');
+}
+
+// LRU lookup: promotes the hit to the front of `order` (most recent).
+// Map value types carry a `lru_it` back-pointer into `order`.
+template <typename Map>
+typename Map::mapped_type::value_type* LruGet(
+    Map& map, std::list<std::string>& order, const std::string& key) {
+    const auto it = map.find(key);
+    if (it == map.end()) {
+        return nullptr;
+    }
+    order.splice(order.begin(), order, it->second.lru_it);
+    return &it->second.value;
+}
+
+// LRU insert; evicts the least-recently-used entry once `cap` is exceeded
+// (bounded eviction keeps hot entries — unlike the old clear-all cap).
+template <typename Map>
+void LruPut(Map& map, std::list<std::string>& order, const std::string& key,
+            typename Map::mapped_type::value_type value, std::size_t cap) {
+    order.push_front(key);
+    map.emplace(
+        key,
+        typename Map::mapped_type{std::move(value), order.begin()});
+    while (map.size() > cap) {
+        map.erase(order.back());
+        order.pop_back();
+    }
+}
+
 } // namespace
 
 Direct2DRenderer::Direct2DRenderer(HWND hwnd)
@@ -75,6 +131,13 @@ Direct2DRenderer::Direct2DRenderer(HWND hwnd)
     , dpi_(hwnd != nullptr ? GetDpiForWindow(hwnd) : USER_DEFAULT_SCREEN_DPI) {
     if (dpi_ == 0) {
         dpi_ = USER_DEFAULT_SCREEN_DPI;
+    }
+    // Escape hatch for A/B testing the dirty-rect present path.
+    if (const char* env = std::getenv("XER_UI_PRESENT_FULL")) {
+        force_full_present_ =
+            env[0] != '\0' &&
+            !(env[0] == '0' && env[1] == '\0') &&
+            !(env[0] == 'o' && env[1] == 'f' && env[2] == 'f');
     }
     ThrowIfFailed(
         DWriteCreateFactory(
@@ -265,6 +328,14 @@ void Direct2DRenderer::EnsureTargets(UINT32 width, UINT32 height) {
     target_size_ = D2D1::SizeU(width, height);
 }
 
+void Direct2DRenderer::SetFrameDamage(Layout::Rect damage) {
+    // Called by WidgetTree::Render before BeginFrame. Snapshot it there —
+    // a frame that begins without a fresh hint gets no damage rect and
+    // presents fully.
+    pending_damage_ = damage;
+    pending_damage_valid_ = damage.width > 0.0f && damage.height > 0.0f;
+}
+
 void Direct2DRenderer::BeginFrame(Layout::Rect bounds) {
     if (frame_started_) {
         throw std::logic_error("A Direct2D frame is already active");
@@ -272,6 +343,12 @@ void Direct2DRenderer::BeginFrame(Layout::Rect bounds) {
     if (bounds.width < 0.0f || bounds.height < 0.0f) {
         throw std::invalid_argument("Frame bounds cannot have negative dimensions");
     }
+
+    counters_ = {};
+    active_damage_ = pending_damage_;
+    active_damage_valid_ = pending_damage_valid_;
+    pending_damage_ = {};
+    pending_damage_valid_ = false;
 
     targets_recreated_ = false;
     EnsureDevice();
@@ -300,19 +377,65 @@ void Direct2DRenderer::EndFrame() {
     RequireFrame();
     frame_started_ = false;
 
-    // Blit the whole retained canvas onto the swapchain back buffer.
-    // A partial blit is NOT possible here: a flip-model swapchain rotates
-    // between BufferCount buffers and only the current back buffer is
-    // reachable — updating just the damage rect would leave the other
-    // buffer one frame stale and flicker every other present. The full
-    // textured blit is a cheap GPU copy; the expensive part (widget draw
-    // commands) is already culled to the damage region upstream.
+    // Damage -> pixel-space dirty rect. Full present when there is no
+    // damage hint, when targets were rebuilt this frame (fresh swapchain
+    // buffer contents are undefined), or when the hint already covers the
+    // whole client area.
+    const float dip_to_px = static_cast<float>(dpi_) / 96.0f;
+    auto dip_to_px_rect = [&](const Layout::Rect& r) {
+        RECT rc{
+            static_cast<LONG>(std::floor(r.x * dip_to_px)) - 1,
+            static_cast<LONG>(std::floor(r.y * dip_to_px)) - 1,
+            static_cast<LONG>(std::ceil((r.x + r.width) * dip_to_px)) + 1,
+            static_cast<LONG>(std::ceil((r.y + r.height) * dip_to_px)) + 1,
+        };
+        rc.left = std::max<LONG>(rc.left, 0);
+        rc.top = std::max<LONG>(rc.top, 0);
+        rc.right =
+            std::min<LONG>(rc.right, static_cast<LONG>(target_size_.width));
+        rc.bottom = std::min<LONG>(rc.bottom,
+                                   static_cast<LONG>(target_size_.height));
+        return rc;
+    };
+
+    RECT damage_px{};
+    if (active_damage_valid_) {
+        damage_px = dip_to_px_rect(active_damage_);
+    }
+    const bool damage_empty = !active_damage_valid_ ||
+        damage_px.right <= damage_px.left ||
+        damage_px.bottom <= damage_px.top;
+    const bool damage_covers_all =
+        active_damage_valid_ && damage_px.left <= 0 && damage_px.top <= 0 &&
+        damage_px.right >= static_cast<LONG>(target_size_.width) &&
+        damage_px.bottom >= static_cast<LONG>(target_size_.height);
+    const bool full_present = force_full_present_ || targets_recreated_ ||
+        !active_damage_valid_ || damage_covers_all;
+
     dc_->SetTarget(backbuffer_target_.Get());
-    dc_->DrawBitmap(
-        canvas_.Get(),
-        nullptr,
-        1.0f,
-        D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+    if (full_present) {
+        // Whole retained canvas -> back buffer.
+        dc_->DrawBitmap(
+            canvas_.Get(),
+            nullptr,
+            1.0f,
+            D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR);
+    } else if (!damage_empty) {
+        // Flip-model + Present1 dirty rects: the runtime pulls the
+        // untouched region forward from the previously presented frame,
+        // so only the damaged subrect needs to land on the back buffer.
+        // (Each buffer's stale content outside the rect is never shown.)
+        const D2D1_RECT_F dr = ToRect(active_damage_);
+        dc_->DrawBitmap(
+            canvas_.Get(),
+            &dr,
+            1.0f,
+            D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+            &dr);
+    }
+
+    Layout::Rect hud_box{};
+    const bool hud_drawn = hud_enabled_ && DrawPerfHud(&hud_box);
 
     const auto result = dc_->EndDraw();
     if (FAILED(result)) {
@@ -325,7 +448,29 @@ void Direct2DRenderer::EndFrame() {
     // Canvas now holds a complete frame.
     canvas_valid_ = true;
 
-    const HRESULT present_hr = swap_chain_->Present(1, 0);
+    HRESULT present_hr = S_OK;
+    if (full_present) {
+        present_hr = swap_chain_->Present(1, 0);
+    } else {
+        RECT dirty[2];
+        UINT dirty_count = 0;
+        if (!damage_empty) {
+            dirty[dirty_count++] = damage_px;
+        }
+        if (hud_drawn) {
+            dirty[dirty_count++] = dip_to_px_rect(hud_box);
+        }
+        if (dirty_count > 0) {
+            DXGI_PRESENT_PARAMETERS params{};
+            params.DirtyRectsCount = dirty_count;
+            params.pDirtyRects = dirty;
+            params.pScrollRect = nullptr;
+            params.pScrollOffset = nullptr;
+            present_hr = swap_chain_->Present1(1, 0, &params);
+        }
+        // dirty_count == 0: nothing changed — skip the present entirely;
+        // the screen keeps the previously presented frame.
+    }
     if (present_hr == DXGI_ERROR_DEVICE_REMOVED ||
         present_hr == DXGI_ERROR_DEVICE_RESET) {
         // Transient GPU reset (TDR etc.): drop all GPU state; the next
@@ -349,7 +494,16 @@ void Direct2DRenderer::EndFrame() {
         brush_.Reset();
         return;
     }
-    ThrowIfFailed(present_hr, "IDXGISwapChain::Present");
+    if (FAILED(present_hr)) {
+        // A driver that rejects Present1 dirty rects (e.g. under remoting)
+        // must not kill the renderer: drop to the full-present path for
+        // the remaining frames instead of throwing every paint.
+        if (!full_present) {
+            force_full_present_ = true;
+            return;
+        }
+        ThrowIfFailed(present_hr, "IDXGISwapChain::Present");
+    }
 }
 
 void Direct2DRenderer::PushClip(Layout::Rect rect) {
@@ -383,6 +537,7 @@ void Direct2DRenderer::FillRect(Layout::Rect rect, Theme::Color color, float rad
         const auto rounded = D2D1::RoundedRect(bounds, safe_radius, safe_radius);
         dc_->FillRoundedRectangle(rounded, brush);
     }
+    ++counters_.draw_calls;
 }
 
 void Direct2DRenderer::StrokeRect(
@@ -407,6 +562,7 @@ void Direct2DRenderer::StrokeRect(
         const auto rounded = D2D1::RoundedRect(bounds, safe_radius, safe_radius);
         dc_->DrawRoundedRectangle(rounded, brush, width);
     }
+    ++counters_.draw_calls;
 }
 
 void Direct2DRenderer::DrawLine(
@@ -427,6 +583,7 @@ void Direct2DRenderer::DrawLine(
         brush,
         width
     );
+    ++counters_.draw_calls;
 }
 
 void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextStyle style) {
@@ -439,14 +596,23 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
         throw std::length_error("Text exceeds the supported DirectWrite length");
     }
 
-    const std::string cache_key = FormatKey(style) + "\x1f" +
-        std::to_string(rect.width) + "\x1f" +
-        std::to_string(rect.height) + "\x1f" + std::string(text);
+    // Key built into a reused buffer — DrawText runs hundreds of times
+    // per frame, and the previous std::to_string key allocated ~6 small
+    // strings per call.
+    std::string& cache_key = key_scratch_;
+    cache_key.clear();
+    AppendStyleKey(cache_key, style);
+    cache_key.push_back('\x1f');
+    AppendNumber(cache_key, rect.width);
+    cache_key.push_back('\x1f');
+    AppendNumber(cache_key, rect.height);
+    cache_key.push_back('\x1f');
+    cache_key.append(text);
 
     Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-    if (const auto cached = text_layouts_.find(cache_key);
-        cached != text_layouts_.end()) {
-        layout = cached->second;
+    if (auto* cached = LruGet(text_layouts_, text_layout_lru_, cache_key);
+        cached != nullptr) {
+        layout = *cached;
     } else {
         const auto wide_text = ToWideString(text);
         const auto format = CreateTextFormat(style);
@@ -461,10 +627,7 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
             ),
             "IDWriteFactory::CreateTextLayout"
         );
-        if (text_layouts_.size() >= 256) {
-            text_layouts_.clear();
-        }
-        text_layouts_.emplace(cache_key, layout);
+        LruPut(text_layouts_, text_layout_lru_, cache_key, layout, 256);
     }
 
     auto* brush = Brush();
@@ -475,6 +638,7 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
         brush,
         D2D1_DRAW_TEXT_OPTIONS_CLIP
     );
+    ++counters_.text_calls;
 }
 
 Layout::Size Direct2DRenderer::MeasureText(std::string_view text, TextStyle style) const {
@@ -485,10 +649,14 @@ Layout::Size Direct2DRenderer::MeasureText(std::string_view text, TextStyle styl
         throw std::length_error("Text exceeds the supported DirectWrite length");
     }
 
-    const std::string cache_key = FormatKey(style) + "\x1f" + std::string(text);
-    if (const auto cached = measure_cache_.find(cache_key);
-        cached != measure_cache_.end()) {
-        return cached->second;
+    std::string& cache_key = key_scratch_;
+    cache_key.clear();
+    AppendStyleKey(cache_key, style);
+    cache_key.push_back('\x1f');
+    cache_key.append(text);
+    if (auto* cached = LruGet(measure_cache_, measure_lru_, cache_key);
+        cached != nullptr) {
+        return *cached;
     }
 
     const auto wide_text = ToWideString(text);
@@ -509,10 +677,7 @@ Layout::Size Direct2DRenderer::MeasureText(std::string_view text, TextStyle styl
     DWRITE_TEXT_METRICS metrics{};
     ThrowIfFailed(layout->GetMetrics(&metrics), "IDWriteTextLayout::GetMetrics");
     const Layout::Size size(metrics.widthIncludingTrailingWhitespace, metrics.height);
-    if (measure_cache_.size() >= 1024) {
-        measure_cache_.clear();
-    }
-    measure_cache_.emplace(cache_key, size);
+    LruPut(measure_cache_, measure_lru_, cache_key, size, 1024);
     return size;
 }
 
@@ -601,6 +766,7 @@ void Direct2DRenderer::DrawBackdropBlur(Layout::Rect rect, float radius) {
         // Full-window modal backdrop (Dialog).
         brush->SetColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.48f));
         dc_->FillRectangle(ToRect(rect), brush);
+        ++counters_.draw_calls;
         return;
     }
 
@@ -625,6 +791,7 @@ void Direct2DRenderer::DrawBackdropBlur(Layout::Rect rect, float radius) {
         dc_->FillRoundedRectangle(
             D2D1::RoundedRect(r, corner, corner), brush);
     }
+    ++counters_.draw_calls;
 }
 
 Microsoft::WRL::ComPtr<ID2D1Bitmap> Direct2DRenderer::LoadImageBitmap(
@@ -705,6 +872,7 @@ bool Direct2DRenderer::DrawImage(std::string_view path, Layout::Rect rect,
             bitmap.Get(), &bounds,
             std::clamp(opacity, 0.0f, 1.0f),
             D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &src);
+        ++counters_.image_calls;
         return true;
     }
 
@@ -726,6 +894,7 @@ bool Direct2DRenderer::DrawImage(std::string_view path, Layout::Rect rect,
         bitmap.Get(), &bounds, std::clamp(opacity, 0.0f, 1.0f),
         D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &src);
     dc_->PopLayer();
+    ++counters_.image_calls;
     return true;
 }
 
@@ -773,6 +942,7 @@ bool Direct2DRenderer::DrawFrameBgra(const void* bgra, int width, int height,
         frame_bitmap_.Get(), &dst,
         std::clamp(opacity, 0.0f, 1.0f),
         D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, &src);
+    ++counters_.image_calls;
     return true;
 }
 
@@ -877,6 +1047,7 @@ bool Direct2DRenderer::DrawResourcePixels(
         }
     }
     DrawBitmapRounded(bitmap.Get(), dst, opacity, corner_radius);
+    ++counters_.image_calls;
     return true;
 }
 
@@ -915,12 +1086,76 @@ bool Direct2DRenderer::DrawVideoPixels(
         return false;
     }
     DrawBitmapRounded(stage.bitmap.Get(), dst, opacity, corner_radius);
+    ++counters_.image_calls;
     return true;
 }
 
 void Direct2DRenderer::FreeResource(std::uint32_t id) {
     resource_cache_.erase(id);
     video_stages_.erase(id);
+}
+
+Direct2DRenderer::FrameCounters Direct2DRenderer::TakeFrameCounters() {
+    const FrameCounters out = counters_;
+    counters_ = {};
+    return out;
+}
+
+void Direct2DRenderer::SetPerfHud(const PerfHudInfo* info) {
+    hud_enabled_ = info != nullptr;
+    if (info != nullptr) {
+        hud_ = *info;
+    }
+}
+
+bool Direct2DRenderer::DrawPerfHud(Layout::Rect* box_out) {
+    if (dc_ == nullptr || box_out == nullptr) {
+        return false;
+    }
+    if (hud_format_ == nullptr) {
+        // Consolas keeps the counters column-aligned; created lazily so
+        // renderer without HUD pays nothing.
+        if (FAILED(write_factory_->CreateTextFormat(
+                L"Consolas", nullptr, DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
+                11.0f, L"en-us", hud_format_.GetAddressOf()))) {
+            return false;
+        }
+    }
+
+    wchar_t line[256];
+    const int len = std::swprintf(
+        line, std::size(line),
+        L" %.1fms avg%.1f | dmg %.0f%% | draw %u txt %u img %u | wdg %u/%u",
+        hud_.frame_ms, hud_.avg_frame_ms,
+        static_cast<double>(hud_.damage_pct), hud_.draw_calls,
+        hud_.text_calls, hud_.image_calls, hud_.widgets_painted,
+        hud_.widgets_culled);
+    if (len <= 0) {
+        return false;
+    }
+
+    // Bottom-left corner, above the window edge. The box is painted on
+    // the swapchain back buffer (never the retained canvas), so it can
+    // overlay any content without being repainted by widget damage.
+    constexpr float kHudW = 470.0f;
+    constexpr float kHudH = 17.0f;
+    const float hud_y = std::max(
+        0.0f,
+        static_cast<float>(target_size_.height) * 96.0f /
+                static_cast<float>(dpi_) -
+            kHudH - 4.0f);
+    const Layout::Rect box{6.0f, hud_y, kHudW, kHudH};
+    *box_out = box;
+
+    auto* brush = Brush();
+    brush->SetColor(D2D1::ColorF(0.0f, 0.0f, 0.0f, 0.72f));
+    dc_->FillRectangle(ToRect(box), brush);
+    brush->SetColor(D2D1::ColorF(0.35f, 0.95f, 0.45f, 1.0f));
+    dc_->DrawText(
+        line, static_cast<UINT32>(len), hud_format_.Get(), ToRect(box),
+        brush, D2D1_DRAW_TEXT_OPTIONS_CLIP);
+    return true;
 }
 
 } // namespace XER::UI::Rendering::Windows

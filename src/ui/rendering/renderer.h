@@ -1,6 +1,7 @@
 #ifndef XER_UI_RENDERING_RENDERER_H
 #define XER_UI_RENDERING_RENDERER_H
 
+#include <cstdint>
 #include <string_view>
 
 #include "layout/geometry.h"
@@ -51,6 +52,34 @@ public:
     // culling and repaint everything — otherwise undrawn regions keep the
     // clear color until they happen to be invalidated again.
     virtual bool TakeTargetsRecreated() { return false; }
+
+    // ---- Diagnostics (XER_UI_PERF) ------------------------------------
+    // Per-frame primitive counters, reset when read — the host calls this
+    // right after Render() so the numbers describe the frame that just
+    // ended. Renderers without counters return the zero struct.
+    struct FrameCounters {
+        std::uint32_t draw_calls = 0;   // fills/strokes/lines issued
+        std::uint32_t text_calls = 0;   // DrawText calls
+        std::uint32_t image_calls = 0;  // bitmap/video/resource draws
+    };
+    virtual FrameCounters TakeFrameCounters() { return {}; }
+
+    // Snapshot pushed by the host once per frame (before BeginFrame) when
+    // the perf HUD is enabled (XER_UI_PERF=1); nullptr disables it. The
+    // renderer draws it on the swapchain back buffer during EndFrame so it
+    // never lands in the retained canvas. Data always describes the
+    // *previous* completed frame.
+    struct PerfHudInfo {
+        double frame_ms = 0.0;
+        double avg_frame_ms = 0.0;
+        float damage_pct = 100.0f;
+        std::uint32_t draw_calls = 0;
+        std::uint32_t text_calls = 0;
+        std::uint32_t image_calls = 0;
+        std::uint32_t widgets_painted = 0;
+        std::uint32_t widgets_culled = 0;
+    };
+    virtual void SetPerfHud(const PerfHudInfo* info) { (void)info; }
     virtual void FillRect(Layout::Rect rect, Theme::Color color, float radius) = 0;
     virtual void StrokeRect(Layout::Rect rect, Theme::Color color, float width, float radius) = 0;
     virtual void DrawLine(

@@ -28,6 +28,12 @@ list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX "/main\\.cc$")
 # core lib must stay LLVM-free.
 list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX
     "/extensions/(xsjo_jit|ext_runtime_server)\\.cc$")
+# records_store.cc (recent-projects SQLite store) is kept OUT of the
+# core glob so it can ship as its own branded module — YA.Records.dll —
+# under XER_YA_DLLS. The static path appends it back below, so the TU
+# builds exactly once either way.
+list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX
+    "/records_store\\.cc$")
 
 set(_ve_core_deps
     XER_Video          # video::Frame / FrameExporter (clip_poster)
@@ -50,9 +56,17 @@ if(XER_YA_DLLS)
     # color/decoder/poster while catalog/ai call back into them), so
     # YA.VideoEditor-Core carries the whole module set; the specialized
     # names ship as reserved extension modules.
+    # YA.Records is a REAL module (not a reserved shell): the recent-
+    # projects records store lives here so persistence ships as its own
+    # YA.* binary. It deliberately has no dependency on the editor core
+    # (records_store.cc keeps its own duration formatter) — the core
+    # links it instead, since smoke_checks.cc exercises the API.
+    xer_ya_module(YA_Records EXPORT_NAME YA.Records
+        SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/records_store.cc
+        DEPS XER_SQL XER_Helper)
     xer_ya_module(YA_VideoEditor_Core EXPORT_NAME YA.VideoEditor-Core
         SOURCES ${VIDEO_EDITOR_CORE_SOURCES}
-        DEPS ${_ve_core_deps})
+        DEPS ${_ve_core_deps} YA_Records)
     foreach(_ya_ve_ext IN ITEMS
             "YA_VideoEditor_OCIO|YA.VideoEditor-OCIO"
             "YA_VideoEditor_Engine|YA.VideoEditor-Engine"
@@ -64,17 +78,22 @@ if(XER_YA_DLLS)
         xer_ya_module(${CMAKE_MATCH_1} EXPORT_NAME ${CMAKE_MATCH_2}
             DEPS ${_ve_core_deps} YA_VideoEditor_Core)
     endforeach()
+    # YA_Records rides the bundle too: the exe's UI sources call the
+    # store API directly, so they need its import library — not just the
+    # transitive runtime dep YA.VideoEditor-Core carries.
     xer_ya_bundle(XER_VideoEditor_Core
         MODULES YA_VideoEditor_Core YA_VideoEditor_Engine
                 YA_VideoEditor_OCIO YA_VideoEditor_FrameVideo
                 YA_VideoEditor_ToolsDesgin YA_Extenstions
-                YA_ProjectStoreSQL_VE
+                YA_ProjectStoreSQL_VE YA_Records
         DEPS ${_ve_core_deps}
         INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}
                  ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
     set(_xer_ve_scope INTERFACE)
 else()
-    add_library(XER_VideoEditor_Core STATIC ${VIDEO_EDITOR_CORE_SOURCES})
+    add_library(XER_VideoEditor_Core STATIC
+        ${VIDEO_EDITOR_CORE_SOURCES}
+        ${CMAKE_CURRENT_SOURCE_DIR}/records_store.cc)
 
     target_include_directories(XER_VideoEditor_Core
         PUBLIC
@@ -242,6 +261,203 @@ if(TARGET unofficial::skia::skia)
     # XER_VE_HAS_OCIO/XER_VE_HAS_RSVG above.
     target_compile_definitions(XER_VideoEditor_Core ${_xer_ve_scope}
         XER_VE_HAS_SKIA=1)
+endif()
+
+# ---------------------------------------------------------------------------
+# Neural/AI backends (seam for upscale / object-detect / auto-caption
+# features). Each XER_WITH_<name> option auto-defaults ON when the
+# package is found and can be forced OFF on the configure line; the
+# compiled-in set lands in nn_probe.cc as XER_VE_NN_<NAME>=1 defines
+# (plus a *_VERSION string when the package config reports one) and is
+# printed by the "nn_backends" smoke check.
+#
+# MSYS2 clang64 provides opencv / ggml / onnxruntime / onednn natively —
+# their lib/cmake/ configs resolve via the toolchain prefix, no shims.
+# What MSYS2 cannot provide stays runtime-probed or absent:
+#   * MKL / OpenBLAS — lab/mkl_accel.cc LoadLibrary-probes mkl_rt /
+#     libopenblas at run time (the MKL shim also picks up a manual
+#     Intel oneAPI install); never import-linked here.
+#   * CUDA / cuDNN — NVIDIA SDKs only (no MSYS2 package). The
+#     CUDAToolkit module + cmake/deps/configs/CUDNN shim probe the
+#     standard NVIDIA install dirs and report found/not-found for the
+#     report matrix; src/wrapper/{cuda,cudnn} carry the real bridges.
+# ---------------------------------------------------------------------------
+
+find_package(OpenCV QUIET)
+option(XER_WITH_OPENCV "VideoEditor: OpenCV backend (dnn / dnn_superres / imgproc)"
+    ${OpenCV_FOUND})
+
+# MSYS2/vcpkg export onnxruntime::onnxruntime; a couple of older
+# packagings used bare "onnxruntime" or ONNX::onnxruntime.
+find_package(onnxruntime QUIET)
+set(_ve_ort_target "")
+foreach(_ve_t onnxruntime::onnxruntime onnxruntime ONNX::onnxruntime)
+    if(TARGET ${_ve_t} AND NOT _ve_ort_target)
+        set(_ve_ort_target "${_ve_t}")
+    endif()
+endforeach()
+if(_ve_ort_target)
+    set(_ve_ort_default ON)
+else()
+    set(_ve_ort_default OFF)
+endif()
+option(XER_WITH_ONNX "VideoEditor: ONNX Runtime inference backend"
+    ${_ve_ort_default})
+
+find_package(DNNL QUIET)   # MSYS2 dnnl-config.cmake -> DNNL::dnnl
+if(TARGET DNNL::dnnl)
+    set(_ve_dnnl_default ON)
+else()
+    set(_ve_dnnl_default OFF)
+endif()
+option(XER_WITH_DNNL "VideoEditor: oneDNN primitives backend"
+    ${_ve_dnnl_default})
+
+find_package(ggml CONFIG QUIET)
+if(TARGET ggml::ggml)
+    set(_ve_ggml_default ON)
+else()
+    set(_ve_ggml_default OFF)
+endif()
+option(XER_WITH_GGML "VideoEditor: ggml tensor runtime backend"
+    ${_ve_ggml_default})
+
+# Report-only probes for the matrix — never linked into the editor.
+find_package(CUDAToolkit QUIET)
+find_package(CUDNN QUIET)   # cmake/deps/configs/CUDNN shim (NVIDIA dirs)
+
+set(_ve_nn_libs "")   # link items for the core lib (bundle scope)
+set(_ve_nn_defs "")   # XER_VE_NN_* compile definitions
+
+if(XER_WITH_OPENCV)
+    if(OpenCV_FOUND)
+        list(APPEND _ve_nn_libs ${OpenCV_LIBS})
+        set(_ve_v "${OpenCV_VERSION}")
+        if(NOT _ve_v)
+            set(_ve_v "unknown")
+        endif()
+        list(APPEND _ve_nn_defs XER_VE_NN_OPENCV=1
+            "XER_VE_NN_OPENCV_VERSION=\"${_ve_v}\"")
+    else()
+        message(STATUS "video_editor: XER_WITH_OPENCV=ON but OpenCV not found")
+    endif()
+endif()
+if(XER_WITH_ONNX)
+    if(_ve_ort_target)
+        list(APPEND _ve_nn_libs ${_ve_ort_target})
+        set(_ve_v "${onnxruntime_VERSION}")
+        if(NOT _ve_v)
+            set(_ve_v "unknown")
+        endif()
+        list(APPEND _ve_nn_defs XER_VE_NN_ONNXRUNTIME=1
+            "XER_VE_NN_ONNXRUNTIME_VERSION=\"${_ve_v}\"")
+    else()
+        message(STATUS "video_editor: XER_WITH_ONNX=ON but onnxruntime not found")
+    endif()
+endif()
+if(XER_WITH_DNNL)
+    if(TARGET DNNL::dnnl)
+        list(APPEND _ve_nn_libs DNNL::dnnl)
+        set(_ve_v "${DNNL_VERSION}")
+        if(NOT _ve_v)
+            set(_ve_v "unknown")
+        endif()
+        list(APPEND _ve_nn_defs XER_VE_NN_DNNL=1
+            "XER_VE_NN_DNNL_VERSION=\"${_ve_v}\"")
+    else()
+        message(STATUS "video_editor: XER_WITH_DNNL=ON but oneDNN not found")
+    endif()
+endif()
+if(XER_WITH_GGML)
+    if(TARGET ggml::ggml)
+        list(APPEND _ve_nn_libs ggml::ggml)
+        set(_ve_v "${ggml_VERSION}")
+        if(NOT _ve_v)
+            set(_ve_v "unknown")
+        endif()
+        list(APPEND _ve_nn_defs XER_VE_NN_GGML=1
+            "XER_VE_NN_GGML_VERSION=\"${_ve_v}\"")
+    else()
+        message(STATUS "video_editor: XER_WITH_GGML=ON but ggml not found")
+    endif()
+endif()
+
+# Report-matrix defines for SDKs that are never import-linked here.
+if(CUDAToolkit_FOUND)
+    list(APPEND _ve_nn_defs XER_VE_NN_CUDA=1
+        "XER_VE_NN_CUDA_VERSION=\"${CUDAToolkit_VERSION}\"")
+endif()
+if(CUDNN_FOUND)
+    list(APPEND _ve_nn_defs XER_VE_NN_CUDNN=1)
+endif()
+if(TARGET MKL::MKL)
+    list(APPEND _ve_nn_defs XER_VE_NN_MKL=1)
+endif()
+
+if(_ve_nn_defs)
+    target_compile_definitions(XER_VideoEditor_Core ${_xer_ve_scope}
+        ${_ve_nn_defs})
+endif()
+if(_ve_nn_libs)
+    target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope}
+        ${_ve_nn_libs})
+    if(XER_YA_DLLS)
+        # Same objects/module split as OCIO/OIIO above: nn_probe.cc is
+        # compiled into the module's object set, so it needs the usage
+        # requirements there; the module itself carries the link.
+        target_link_libraries(YA_VideoEditor_Core_objs PRIVATE
+            ${_ve_nn_libs})
+        target_link_libraries(YA_VideoEditor_Core PRIVATE
+            ${_ve_nn_libs})
+        target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE
+            ${_ve_nn_defs})
+    endif()
+endif()
+
+if(MINGW AND _ve_nn_libs)
+    # MSYS2 ships shared-only builds (.dll.a implibs). Delay-load every
+    # runtime DLL so video_editor.exe and the worker exes start without
+    # the clang64 bin dir on PATH; the staged runtime closure next to
+    # the binaries is what lets the delay-load actually resolve. Same
+    # contract as the OCIO/OIIO block: an absent runtime must degrade,
+    # never kill the process — nn_probe self-tests run first calls.
+    xer_collect_delayload_dlls(_ve_nn_dlls ${_ve_nn_libs})
+    xer_delayload(XER_VideoEditor_Core ${_ve_nn_dlls})
+    if(TARGET YA_VideoEditor_Core)
+        xer_delayload(YA_VideoEditor_Core ${_ve_nn_dlls})
+    endif()
+    get_filename_component(_ve_toolchain_bin "${CMAKE_CXX_COMPILER}"
+        DIRECTORY)
+    # ggml backend modules (ggml-cpu-*.dll, ggml-blas.dll, ...) are
+    # dlopen'd by ggml_backend_load_all(), and ORT resolves its
+    # onnxruntime_providers_shared.dll provider host at run time —
+    # neither appears in an import table, so seed the staging walk
+    # with them explicitly.
+    file(GLOB _ve_nn_runtime "${_ve_toolchain_bin}/ggml-*.dll"
+                             "${_ve_toolchain_bin}/onnxruntime*.dll")
+    set(_ve_nn_extra "")
+    foreach(_f IN LISTS _ve_nn_runtime)
+        get_filename_component(_n "${_f}" NAME)
+        list(APPEND _ve_nn_extra "${_n}")
+    endforeach()
+    xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin" "${_ve_toolchain_bin}"
+        ${_ve_nn_dlls} ${_ve_nn_extra})
+    # MKL (manual oneAPI install, detected by the configs/MKL shim): the
+    # mkl_rt*.dll import is delay-loaded via MKL::MKL's own link options;
+    # stage the dispatcher + its mkl_core/mkl_def/mkl_avx* siblings from
+    # the oneAPI bin dir so first call actually resolves.
+    if(DEFINED MKL_BIN_DIR AND IS_DIRECTORY "${MKL_BIN_DIR}")
+        file(GLOB _ve_mkl_rt "${MKL_BIN_DIR}/mkl_rt*.dll")
+        set(_ve_mkl_names "")
+        foreach(_f IN LISTS _ve_mkl_rt)
+            get_filename_component(_n "${_f}" NAME)
+            list(APPEND _ve_mkl_names "${_n}")
+        endforeach()
+        if(_ve_mkl_names)
+            xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin"
+                "${MKL_BIN_DIR}" ${_ve_mkl_names})
+        endif()
+    endif()
 endif()
 
 if(NOT XER_YA_DLLS)

@@ -27,6 +27,7 @@
 #include <commctrl.h>
 #include <commdlg.h>
 #include <shellapi.h>
+#include <shlobj.h>
 #if defined(_MSC_VER)
 #pragma comment(lib, "shell32.lib")   // ShellExecuteW (media-bin reveal)
 #pragma comment(lib, "comctl32.lib")  // SetWindowSubclass (close guard)
@@ -56,6 +57,7 @@
 #include "plugin_host.h"
 #include "project_store.h"
 #include "export_preset.h"
+#include "sequence_preset.h"
 #include "extensions/ext_host.h"
 #include "cef/cef_ext_scheme.h"
 #include "rendering/renderer.h"
@@ -185,6 +187,24 @@ std::wstring PickSaveFileW(HWND owner, const std::wstring& filter,
     ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
     if (!GetSaveFileNameW(&ofn)) return {};
     return file;
+}
+
+// Directory picker for the start screen's Location field
+// (SHBrowseForFolderW — modern style, filesystem dirs only).
+std::wstring PickFolderW(HWND owner, const wchar_t* title) {
+    wchar_t path[MAX_PATH] = L"";
+    BROWSEINFOW bi{};
+    bi.hwndOwner = owner;
+    bi.lpszTitle = title;
+    bi.ulFlags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE;
+    LPITEMIDLIST pidl = SHBrowseForFolderW(&bi);
+    if (pidl == nullptr) return {};
+    std::wstring out;
+    if (SHGetPathFromIDListW(pidl, path)) {
+        out = path;
+    }
+    CoTaskMemFree(pidl);
+    return out;
 }
 
 // "Media" picker pattern built from the shared extension list
@@ -499,6 +519,11 @@ VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
     if (!catalog_.Open(&error)) {
         SetStatus("Media catalog unavailable: " + error, true);
     }
+    // Recent-projects store sits beside catalog.db — a failed open is
+    // non-fatal: the start screen just shows an empty recents grid.
+    if (!records_.Open(&error)) {
+        SetStatus("Recents unavailable: " + error, true);
+    }
     RefreshCatalog();
     if (!project_path_.empty()) {
         LoadProject(project_path_);
@@ -508,6 +533,11 @@ VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
     // One-shot crash-recovery offer: surfaces autosave slots without
     // auto-loading (status bar + File ▸ Recover Autosave).
     CheckAutosaveRecovery();
+    // No explicit project → the empty workspace NewProject() built
+    // stays under the Home start screen instead of greeting the user.
+    if (project_path_.empty()) {
+        ShowStartScreen();
+    }
 #ifdef _WIN32
     // Unsaved-changes close guard: the title-bar close button and
     // Alt+F4 post WM_CLOSE straight at the window (main.cc), whose
@@ -1600,6 +1630,59 @@ void VideoEditorAppWidget::EnsureChildren() {
     settings_dialog_ =
         std::make_shared<SettingsDialog>(settings_hooks);
 
+    // Home start screen — a plain child (not ShowOverlay): the tree
+    // keeps routing input to it normally and the title bar above stays
+    // live, which is what makes the screen non-modal in practice.
+    ProjectManagerScreen::Hooks pm_hooks;
+    pm_hooks.list_recents = [this] {
+        if (!records_.IsOpen()) {
+            return std::vector<Records::RecentProject>{};
+        }
+        return records_.List(
+            Records::RecentProjectsStore::kDefaultLimit);
+    };
+    pm_hooks.on_open_recent = [this](const std::string& path) {
+        // Same guarded path as File ▸ Open — a successful load hides
+        // the screen via LoadProject itself.
+        if (!ConfirmDiscardChanges()) return;
+        if (!LoadProject(path) && project_manager_) {
+            project_manager_->SetStatus(
+                "Couldn't open — the file may be moved or deleted",
+                true);
+        }
+    };
+    pm_hooks.on_open_browse = [this] { OpenProject(); };
+    pm_hooks.on_remove_recent = [this](const std::string& path) {
+        std::string error;
+        if (!records_.Remove(path, &error)) {
+            SetStatus("Remove failed: " + error, true);
+        }
+    };
+    pm_hooks.on_create_project =
+        [this](const ProjectManagerScreen::NewProjectRequest& req) {
+            return CreateProjectFromStartScreen(req);
+        };
+    pm_hooks.default_location =
+        [this] { return DefaultProjectDirectory(); };
+    pm_hooks.pick_location = [this]() -> std::string {
+#ifdef _WIN32
+        const std::wstring picked = PickFolderW(
+            static_cast<HWND>(parent_hwnd_), L"Choose project folder");
+        return picked.empty()
+                   ? std::string{}
+                   : Path::NormalizeUtf8Path(Str::WideToUtf8(picked));
+#else
+        return {};
+#endif
+    };
+    pm_hooks.on_open_demo = [this] { CreateDemoProject(); };
+    pm_hooks.on_dismiss = [this] { HideStartScreen(); };
+    pm_hooks.on_status = [this](const std::string& text, bool err) {
+        SetStatus(text, err);
+    };
+    project_manager_ =
+        std::make_shared<ProjectManagerScreen>(pm_hooks);
+
     AddChild(title_bar_);
     AddChild(import_btn_);
     AddChild(add_btn_);
@@ -1632,6 +1715,9 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(status_toast_);
     AddChild(tab_strip_);
     AddChild(timeline_);
+    // Last child: hit-test and paint order put the start screen above
+    // the whole workspace when it's visible.
+    AddChild(project_manager_);
 }
 
 bool VideoEditorAppWidget::OnContextMenu(
@@ -1724,6 +1810,7 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
     file.items = {
         item("New Project", "Ctrl+N", [this] { NewProject(); }),
         item("Open Project…", "Ctrl+O", [this] { OpenProject(); }),
+        item("Home", "", [this] { ShowStartScreen(); }),
         item("Recover Autosave", "", [this] { RecoverAutosave(); },
              autosave_offer_),
         item("Save", "Ctrl+S", [this] { SaveProject(false); }),
@@ -1917,12 +2004,12 @@ void VideoEditorAppWidget::ShowProjectSettingsDialog() {
     ShowOverlay(settings_dialog_);
 }
 
-void VideoEditorAppWidget::NewProject() {
+bool VideoEditorAppWidget::NewProject() {
     if (export_engine_.IsRunning()) {
         SetStatus("Wait for export to finish", true);
-        return;
+        return false;
     }
-    if (!ConfirmDiscardChanges()) return;
+    if (!ConfirmDiscardChanges()) return false;
     history_.Clear();
     media_prep_.CancelAllQueued();   // project swap: drop stale decodes
     project_ = Project{};
@@ -1942,7 +2029,9 @@ void VideoEditorAppWidget::NewProject() {
     if (color_panel_) color_panel_->Refresh();
     NotifyProjectChanged();
     project_dirty_ = false;   // fresh canvas — nothing to lose
+    HideStartScreen();
     SetStatus("New project");
+    return true;
 }
 
 bool VideoEditorAppWidget::LoadProject(const std::string& utf8_path) {
@@ -1966,6 +2055,8 @@ bool VideoEditorAppWidget::LoadProject(const std::string& utf8_path) {
     if (color_panel_) color_panel_->Refresh();
     NotifyProjectChanged();
     project_dirty_ = false;   // just loaded — matches the file on disk
+    TrackRecentProject();
+    HideStartScreen();
     SetStatus("Opened " + Basename(project_path_));
     return true;
 }
@@ -2015,6 +2106,7 @@ bool VideoEditorAppWidget::SaveProject(bool choose_path) {
     if (title_bar_) title_bar_->SetCenterCommandValue(Basename(project_path_));
     // Rename landed without a project change — sync the monitor card.
     if (monitor_) monitor_->SetTitle(Basename(project_path_));
+    TrackRecentProject();
     return true;
 }
 
@@ -2041,6 +2133,175 @@ bool VideoEditorAppWidget::ConfirmDiscardChanges() {
     // pickers) — proceed rather than trapping the user.
     return true;
 #endif
+}
+
+// ---- Home start screen --------------------------------------------
+
+void VideoEditorAppWidget::ShowStartScreen() {
+    EnsureChildren();
+    if (project_manager_ == nullptr) return;
+    project_manager_->Open();
+    Invalidate();
+}
+
+void VideoEditorAppWidget::HideStartScreen() {
+    if (project_manager_ != nullptr && project_manager_->IsOpen()) {
+        project_manager_->Dismiss();
+        Invalidate();
+    }
+}
+
+void VideoEditorAppWidget::TrackRecentProject() {
+    if (project_path_.empty() || !records_.IsOpen()) return;
+    // Poster: the first catalog-listed media clip's poster — the
+    // project's own content. Nothing resolvable (generated-only or
+    // uncataloged projects) stores "" and the tile draws its styled
+    // placeholder.
+    std::string poster;
+    for (const Clip& clip : project_.clips) {
+        if (clip.source.kind != SourceKind::Media ||
+            clip.source_path.empty()) {
+            continue;
+        }
+        if (const CatalogEntry* entry =
+                FindCatalogEntry(clip.source_path);
+            entry != nullptr && !entry->poster_path.empty()) {
+            poster = entry->poster_path;
+            break;
+        }
+    }
+    std::string stem = Basename(project_path_);
+    const std::size_t dot = stem.find_last_of('.');
+    if (dot != std::string::npos) stem.resize(dot);
+    std::string error;
+    if (!records_.AddOrTouch(project_path_, stem, project_.duration(),
+                             poster, &error)) {
+        // Non-fatal, but never silent (AGENTS.md): the status strip
+        // carries the store's reason once.
+        SetStatus("Recents update failed: " + error, true);
+        return;
+    }
+    if (project_manager_ != nullptr && project_manager_->IsOpen()) {
+        project_manager_->Refresh();
+    }
+}
+
+std::string VideoEditorAppWidget::DefaultProjectDirectory() const {
+    // Sibling of records.db/catalog.db under the same per-user base —
+    // "<base>/XER/VideoEditor/Projects".
+    const std::string db =
+        Records::RecentProjectsStore::DefaultDbPath();
+    return Path::ToUtf8(Path::FromUtf8(db).parent_path() / "Projects");
+}
+
+bool VideoEditorAppWidget::CreateProjectFromStartScreen(
+    const ProjectManagerScreen::NewProjectRequest& req) {
+    if (export_engine_.IsRunning()) {
+        if (project_manager_) {
+            project_manager_->SetStatus("Wait for export to finish",
+                                        true);
+        }
+        return false;
+    }
+    // Display name -> file stem: trim, then replace filename-hostile
+    // characters with '-' (keep letters/digits/space/_/-/.).
+    std::string name;
+    for (const char c : req.name) {
+        if (!std::isspace(static_cast<unsigned char>(c)) || !name.empty()) {
+            name.push_back(c);
+        }
+    }
+    while (!name.empty() &&
+           std::isspace(static_cast<unsigned char>(name.back()))) {
+        name.pop_back();
+    }
+    if (name.empty()) name = "Untitled";
+    std::string stem;
+    stem.reserve(name.size());
+    for (const unsigned char c : name) {
+        if (std::isalnum(c) || c == ' ' || c == '_' || c == '-' ||
+            c == '.') {
+            stem.push_back(static_cast<char>(c));
+        } else {
+            stem.push_back('-');
+        }
+    }
+    if (stem.empty()) stem = "project";
+
+    const std::string dir =
+        req.directory.empty()
+            ? DefaultProjectDirectory()
+            : Path::NormalizeUtf8Path(req.directory);
+    std::error_code ec;
+    std::filesystem::create_directories(Path::FromUtf8(dir), ec);
+    if (ec) {
+        if (project_manager_) {
+            project_manager_->SetStatus(
+                "Couldn't create the project folder", true);
+        }
+        return false;
+    }
+    // Unique target: "<stem>.xerproj", "<stem>-2.xerproj", ... — a
+    // second "Untitled" must never clobber the first one's file.
+    std::filesystem::path target =
+        Path::FromUtf8(dir) / (stem + ".xerproj");
+    for (int n = 2;
+         std::filesystem::exists(target, ec) && n < 1000; ++n) {
+        target = Path::FromUtf8(dir) /
+                 (stem + "-" + std::to_string(n) + ".xerproj");
+    }
+    ec.clear();
+
+    const std::vector<SequencePreset> presets = BuiltinSequencePresets();
+    const int preset_index =
+        (req.preset_index >= 0 &&
+         req.preset_index < static_cast<int>(presets.size()))
+            ? req.preset_index
+            : 0;
+
+    if (!NewProject()) return false;   // discard guard inside
+    if (!presets.empty()) {
+        ApplySequencePreset(presets[static_cast<std::size_t>(
+                                preset_index)],
+                            &project_);
+    }
+    project_path_ =
+        Path::NormalizeUtf8Path(Path::ToUtf8(target));
+    if (!SaveProject(false)) {
+        // Keep the fresh project unsaved rather than pretending the
+        // write landed — the user can retry from File ▸ Save As.
+        project_path_.clear();
+        if (project_manager_) {
+            project_manager_->SetStatus(
+                "Couldn't write the project file", true);
+        }
+        return false;
+    }
+    // The preset landed before the save — broadcast it now and settle
+    // back to the clean "just loaded" state LoadProject leaves.
+    NotifyProjectChanged();
+    project_dirty_ = false;
+    autosave_.ClearDirty();
+    HideStartScreen();
+    SetStatus("Created " + Basename(project_path_));
+    return true;
+}
+
+void VideoEditorAppWidget::CreateDemoProject() {
+    if (!NewProject()) return;   // discard guard inside
+    // Fully generated — no media imports needed: bars + matte + title
+    // give the timeline, monitor and inspector something to show.
+    AddGeneratedClipAt(SourceKind::ColorBars, -1, 0.0, "Color bars",
+                       "smpte75", 6.0);
+    AddGeneratedClipAt(SourceKind::ColorMatte, -1, 6.0, "Matte",
+                       "#22d3ee", 5.0);
+    AddGeneratedClipAt(SourceKind::Text, -1, 1.5, "Title",
+                       "Welcome to XER Studio | size=72", 8.0);
+    if (!selected_clip_id_.empty()) {
+        SelectClip({});
+    }
+    HideStartScreen();
+    SetStatus("Demo sequence — unsaved; File ▸ Save to keep it");
 }
 
 void VideoEditorAppWidget::ImportMedia() {
@@ -6685,11 +6946,36 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
              80.0f, 22.0f},
             tokens);
     }
+    // Home start screen: everything below the title bar. The title bar
+    // stays uncovered on purpose — its File ▸ Home/New/Open affordances
+    // keep working while the screen is up (non-modal, in spirit too).
+    if (project_manager_ != nullptr && project_manager_->IsOpen()) {
+        project_manager_->Layout(
+            {bounds.x, bounds.y + 38.0f, bounds.width,
+             std::max(0.0f, bounds.height - 38.0f)},
+            tokens);
+    }
 }
 
 bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     using Widgets::Event;
     using Widgets::KeyCode;
+    // Home start screen owns the workspace band: while it's up, global
+    // shortcuts must not fire behind it (m/n/s/etc. would edit the
+    // project the user hasn't entered yet). Its own children get input
+    // through the normal hit/focus paths before this handler runs.
+    if (project_manager_ != nullptr && project_manager_->IsOpen()) {
+        if (event.type == Event::Type::KeyDown &&
+            event.key == KeyCode::Escape) {
+            HideStartScreen();
+            return true;
+        }
+        if (event.type == Event::Type::KeyDown ||
+            event.type == Event::Type::KeyUp ||
+            event.type == Event::Type::TextInput) {
+            return true;
+        }
+    }
     // Panel splitters: hit-rects are cached by Layout() inside the gap
     // strips between children, so presses land on this widget and the
     // tree's left-button capture routes the whole drag here.

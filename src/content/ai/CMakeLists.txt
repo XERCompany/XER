@@ -92,7 +92,13 @@ elseif(TARGET ONNX::onnx)
 endif()
 
 find_package(onnxruntime QUIET)
-if(TARGET onnxruntime)
+# Target names differ by provider: MSYS2 clang64 and the vcpkg port both
+# export onnxruntime::onnxruntime; older packages used a bare
+# "onnxruntime" or ONNX::onnxruntime name.
+if(TARGET onnxruntime::onnxruntime)
+    target_link_libraries(XER_ContentAI PUBLIC onnxruntime::onnxruntime)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
+elseif(TARGET onnxruntime)
     target_link_libraries(XER_ContentAI PUBLIC onnxruntime)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
 elseif(TARGET ONNX::onnxruntime)
