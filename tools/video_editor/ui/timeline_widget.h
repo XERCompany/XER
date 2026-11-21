@@ -140,6 +140,11 @@ public:
         // — the shell flips its flag and calls SetSnapEnabled back.
         // Unset -> the widget toggles snap_enabled_ itself.
         std::function<void(bool)> on_snap_toggle;
+        // Clip context menu "AI: Find Objects" — the shell runs the
+        // async scan (ai_tags.h) and lands ClipTag ranges on the clip.
+        // "AI: Clear Tags" empties Clip::tags again.
+        std::function<void(const std::string&)> on_ai_find_objects;
+        std::function<void(const std::string&)> on_ai_clear_tags;
     };
 
     explicit TimelineWidget(Hooks hooks = {});

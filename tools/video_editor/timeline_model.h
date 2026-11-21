@@ -100,6 +100,18 @@ struct ClipAudioFx {
     std::map<std::uint32_t, float> params;
 };
 
+// AI object-detection tag on a clip — produced by "AI: Find Objects"
+// (ai_tags.h / YA.AIFindObject). Times are SOURCE seconds (same domain
+// as in_point), so tags survive re-trims and rate changes: the tag is
+// visible on the timeline while its source range intersects the clip's
+// consumed span [in_point, in_point + duration * playback_rate).
+struct ClipTag {
+    double start = 0.0;      // source seconds
+    double end = 0.0;        // source seconds, >= start
+    std::string label;       // detected class ("person", "car", ...)
+    float confidence = 0.0f; // max confidence observed across the range
+};
+
 struct Clip {
     std::string id;             // uuid (NewClipId)
     std::string source_path;    // UTF-8
@@ -129,6 +141,7 @@ struct Clip {
     // through its transform rect. `source` is ignored.
     bool is_adjustment = false;
     std::string link_group;     // non-empty: clips in a group move together
+    std::vector<ClipTag> tags;  // AI find-objects result (source seconds)
 };
 struct Transition {
     std::string from_clip, to_clip;     // adjacent on same VIDEO track

@@ -39,6 +39,8 @@ set(_ve_core_deps
     XER_Video          # video::Frame / FrameExporter (clip_poster)
     XER_ContentVideo   # XER::Content::Video::ProbeVideo (catalog)
     XER_FFmpeg         # Bridge::FFmpeg::VideoDecoder (clip_poster)
+    XER_GpuVideo       # YA.CUDADecode/YA.CUDAEncode — runtime-probed GPU paths
+    XER_FrameRender    # YA.FrameRender — frame->surface transport seam
     XER_SQL            # SQLiteDatabase (media_catalog)
     XER_Cache          # atomic export temp/commit helpers
     XER_NetClient      # app_super_net fetch/download (native_modules)
@@ -48,6 +50,14 @@ set(_ve_core_deps
     XER_JsonCpp        # project_store (.xerproj)
     XER_AudioCore      # VST3 host (plugin_wrappers) + DSP
 )
+
+# AI object detection (ai_tags.cc -> src/content/ai/find_object). The
+# YA.AIFindObject module is delay-load-friendly: it probes its own
+# backend DLLs before first call, so it reports unavailable rather
+# than crashing when the ORT/OpenCV runtimes are absent.
+if(TARGET XER_AIFindObject)
+    list(APPEND _ve_core_deps XER_AIFindObject)
+endif()
 
 if(XER_YA_DLLS)
     # Branded YA.VideoEditor-* modules — XER_VideoEditor_Core stays as

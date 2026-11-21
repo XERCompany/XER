@@ -16,6 +16,7 @@
 #include "cache/cache_utils.h"
 #include "content/video/video_info.h"
 #include "generated_source.h"
+#include "gpu_video/cuda_encode.h"   // YA.CUDAEncode — nvenc resolver
 #include "helper/path_utils.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
@@ -504,7 +505,21 @@ void ExportEngine::RunImpl() {
 
     FFmpeg::EncodeVideoParams video_params;
     video_params.output_path = temp_utf8;
-    video_params.codec_name = options_.video_codec;
+    // NVENC delegation (YA.CUDAEncode): an "nvenc" preset name — or an
+    // explicit *_nvenc — resolves to the concrete encoder that can run
+    // here. When NVENC is unusable (no GPU/driver) the resolver returns
+    // "libx264" with an explanatory note instead of failing the export;
+    // the note is kept so a later encode error can say the fallback was
+    // already in play.
+    std::string codec_note;
+    video_params.codec_name = XER::GpuVideo::ResolveVideoCodecName(
+        options_.video_codec, &codec_note);
+    if (video_params.codec_name.empty()) {
+        FinishError("unresolvable video codec '" +
+                    options_.video_codec + "'" +
+                    (codec_note.empty() ? "" : ": " + codec_note));
+        return;
+    }
     video_params.width = project_.width;
     video_params.height = project_.height;
     video_params.pixel_format = "bgra";
@@ -546,7 +561,14 @@ void ExportEngine::RunImpl() {
         if (cancel_requested_.load(std::memory_order_acquire)) {
             FinishCancelled();
         } else {
-            FinishError(error.empty() ? "export encode failed" : error);
+            // codec_note (set when a requested nvenc encoder was
+            // unavailable and the export already fell back to
+            // software) explains which codec actually ran.
+            const std::string detail =
+                error.empty() ? "export encode failed" : error;
+            FinishError(codec_note.empty()
+                            ? detail
+                            : detail + " [" + codec_note + "]");
         }
         return;
     }

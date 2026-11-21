@@ -1270,6 +1270,51 @@ void TimelineWidget::Render(
                        label_color.a * 0.75f),
              tokens.font_small, 400});
 
+        // AI tag ticks — ClipTag ranges are SOURCE seconds; the
+        // visible window is [in_point, in_point + duration*rate)
+        // mapped onto the clip rect, so the ticks follow trims and
+        // rate changes like the thumbnails do. One thin colored run
+        // per tag along the clip's bottom edge.
+        if (!clip.tags.empty() && rect.height > 22.0f) {
+            const double rate =
+                clip.playback_rate > 0.0 ? clip.playback_rate : 1.0;
+            const double src_end =
+                clip.in_point + clip.duration * rate;
+            const double inv =
+                rect.width / (clip.duration > 0.0 ? clip.duration : 1.0);
+            for (const ClipTag& tag : clip.tags) {
+                const double lo = std::max(tag.start, clip.in_point);
+                const double hi = std::min(tag.end, src_end);
+                if (hi <= lo) continue;
+                const float x0 =
+                    rect.x + static_cast<float>((lo - clip.in_point) /
+                                                rate * inv);
+                const float x1 =
+                    rect.x + static_cast<float>((hi - clip.in_point) /
+                                                rate * inv);
+                if (x1 - x0 < 1.5f) continue;
+                // Stable per-label hue from a small palette so the
+                // same class keeps its color across the strip.
+                static constexpr Color kTagPalette[] = {
+                    {0.95f, 0.75f, 0.10f, 1.0f},
+                    {0.35f, 0.85f, 0.55f, 1.0f},
+                    {0.45f, 0.65f, 0.95f, 1.0f},
+                    {0.90f, 0.50f, 0.80f, 1.0f},
+                    {0.95f, 0.55f, 0.30f, 1.0f},
+                };
+                std::uint32_t h = 5381u;
+                for (const unsigned char c : tag.label) {
+                    h = h * 33u + c;
+                }
+                const Color tick =
+                    kTagPalette[h % std::size(kTagPalette)];
+                renderer.FillRect(
+                    Rect{x0, rect.y + rect.height - 4.0f,
+                         x1 - x0, 3.0f},
+                    WithAlpha(tick, alpha * 0.85f), 1.5f);
+            }
+        }
+
         // Trim affordances — subtle bright grips hugging both edges.
         renderer.FillRect(
             Rect{rect.x + 1.0f, rect.y + 4.0f, 3.0f,
@@ -2253,6 +2298,39 @@ bool TimelineWidget::ShowContextMenu(
                     };
                     if (rate == 0.5) speed.separator_before = true;
                     items.push_back(std::move(speed));
+                }
+            }
+
+            // AI object scan — media clips only (generated sources and
+            // adjustment layers have no source file to decode). The
+            // shell runs it on its background AI job and reports the
+            // "model not installed" case via the status line.
+            if (hooks_.on_ai_find_objects != nullptr ||
+                hooks_.on_ai_clear_tags != nullptr) {
+                Widgets::ContextMenu::Item find;
+                find.label = "AI: Find Objects";
+                find.separator_before = true;
+                find.enabled = hooks_.on_ai_find_objects != nullptr &&
+                               clip.source.kind == SourceKind::Media &&
+                               !clip.source_path.empty() &&
+                               !clip.is_adjustment;
+                find.action = [this, id] {
+                    if (hooks_.on_ai_find_objects) {
+                        hooks_.on_ai_find_objects(id);
+                    }
+                };
+                items.push_back(std::move(find));
+                if (!clip.tags.empty()) {
+                    Widgets::ContextMenu::Item clear;
+                    clear.label = "AI: Clear Tags";
+                    clear.enabled =
+                        hooks_.on_ai_clear_tags != nullptr;
+                    clear.action = [this, id] {
+                        if (hooks_.on_ai_clear_tags) {
+                            hooks_.on_ai_clear_tags(id);
+                        }
+                    };
+                    items.push_back(std::move(clear));
                 }
             }
 

@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "compositor.h"
+#include "frame_render/frame_render.h"   // YA.FrameRender seam
 #include "layout/geometry.h"
 #include "timeline_model.h"
 #include "widgets/widget.h"
@@ -119,6 +120,11 @@ public:
     void SetOnQualityChange(std::function<void(float scale)> cb);
     // App reports engine playing state for button/context-menu labels.
     void SetEnginePlaying(bool playing);
+
+    // Overrides the RenderStore slot id used by the frame-render seam
+    // when a render-worker pool is live — give every concurrent frame
+    // source a distinct id (default 240) or their store writes race.
+    void SetFrameRenderSlot(std::uint32_t slot);
 
     // Right-click overlay menu (playback + display toggles). Called by
     // the shell's tree context-menu handler. Returns true when shown.
@@ -226,6 +232,15 @@ private:
     std::vector<std::uint8_t> frame_;
     int frame_width_ = 0;
     int frame_height_ = 0;
+    // YA.FrameRender seam — the single "frame on screen" transport:
+    // RenderStore upload when a render-worker pool is live, in-process
+    // pixel draw otherwise. Lazily Init'ed on first Render. The slot
+    // is per-widget: a second frame source (source monitor, fullscreen
+    // preview) MUST SetFrameRenderSlot() to a different id so their
+    // store writes do not clobber each other mid-paint.
+    XER::FrameRender::Service frame_render_;
+    bool frame_render_ready_ = false;
+    std::uint32_t frame_render_slot_ = 240;
     std::string status_text_ = "No timeline frame";
     bool status_error_ = false;
 

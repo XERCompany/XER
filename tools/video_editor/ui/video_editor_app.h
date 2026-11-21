@@ -247,6 +247,13 @@ private:
     // a sibling WAV -> catalog import lands via the AI result poll.
     void BounceAudioFx(const std::string& path,
                        const std::string& plugin_id);
+    // AI "Find Objects" (ai_tags.h / YA.AIFindObject): scans the
+    // clip's consumed source span on the shared AI job; detected
+    // ClipTag ranges land on the clip via ReplaceClip in Tick().
+    // With no model installed the status line carries the install
+    // hint instead of failing silently.
+    void FindObjectsForClip(const std::string& clip_id);
+    void ClearClipTags(const std::string& clip_id);
     void MoveClip(const std::string& clip_id, double start);
     // One-click waveform sync (audio_sync.h): correlate every
     // audio-bearing clip's envelope against the selected/first clip
@@ -489,6 +496,10 @@ private:
         std::vector<std::pair<double, std::string>> markers;
         std::string detail;
         std::string bounce_path;   // audio-plugin bounce output (WAV)
+        // AI find-objects payload: the target clip + its new tag set.
+        // tags_clip_id non-empty selects this path in Tick().
+        std::string tags_clip_id;
+        std::vector<ClipTag> tags;
     };
     std::mutex ai_result_mutex_;
     AiResult ai_result_;

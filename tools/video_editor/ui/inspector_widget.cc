@@ -256,6 +256,26 @@ void InspectorWidget::EnsureChildren() {
     transition_btn_->SetTooltip(
         "Add the picked transition to the next clip");
     transition_btn_->SetOnClick([this] { CommitTransition(); });
+    // AI tag scan: runs the shell's background object-detection job
+    // (ai_tags.h); tags land on the clip via ReplaceClip when done.
+    ai_find_btn_ = std::make_shared<Widgets::Button>(
+        "Find Objects", Widgets::ButtonStyle::Secondary);
+    ai_find_btn_->SetTooltip(
+        "Run AI object detection over this clip (needs a model in "
+        "assets/models/)");
+    ai_find_btn_->SetOnClick([this] {
+        if (has_clip_ && hooks_.on_ai_find_objects) {
+            hooks_.on_ai_find_objects(clip_.id);
+        }
+    });
+    ai_clear_btn_ = std::make_shared<Widgets::Button>(
+        "Clear", Widgets::ButtonStyle::Ghost);
+    ai_clear_btn_->SetTooltip("Remove this clip's AI tags");
+    ai_clear_btn_->SetOnClick([this] {
+        if (has_clip_ && hooks_.on_ai_clear_tags) {
+            hooks_.on_ai_clear_tags(clip_.id);
+        }
+    });
     delete_btn_ = std::make_shared<Widgets::Button>(
         "Delete", Widgets::ButtonStyle::Destructive);
     delete_btn_->SetOnClick([this] {
@@ -408,6 +428,8 @@ void InspectorWidget::EnsureChildren() {
     AddChild(transition_combo_);
     AddChild(transition_duration_input_);
     AddChild(transition_btn_);
+    AddChild(ai_find_btn_);
+    AddChild(ai_clear_btn_);
     AddChild(delete_btn_);
     AddChild(status_);
     SetClip(has_clip_ ? &clip_ : nullptr);
@@ -723,6 +745,8 @@ void InspectorWidget::SetClip(const Clip* clip) {
         transition_combo_->SetEnabled(has_clip_);
         transition_duration_input_->SetEnabled(has_clip_);
         transition_btn_->SetEnabled(has_clip_);
+        ai_find_btn_->SetEnabled(has_clip_);
+        ai_clear_btn_->SetEnabled(has_clip_);
         delete_btn_->SetEnabled(has_clip_);
         for (Row& row : rows_) row.input->SetEnabled(has_clip_);
         muted_->SetEnabled(has_clip_);
@@ -1381,6 +1405,56 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
                                 nullptr);
             }
             y += 24.0f;
+        }
+        gap(10.0f);
+    }
+
+    // ---- AI tags (object detection results — read-only list) ----
+    if (has_clip_ &&
+        (!clip_.tags.empty() || hooks_.on_ai_find_objects != nullptr)) {
+        section("AI TAGS");
+        const bool scannable =
+            clip_.source.kind == SourceKind::Media &&
+            !clip_.source_path.empty() && !clip_.is_adjustment;
+        ai_find_btn_->Layout(
+            {inner_x, y, std::max(60.0f, inner_w - 68.0f), 26.0f},
+            tokens);
+        ai_find_btn_->SetEnabled(
+            scannable && hooks_.on_ai_find_objects != nullptr);
+        ai_clear_btn_->Layout(
+            {inner_x + inner_w - 62.0f, y, 62.0f, 26.0f}, tokens);
+        ai_clear_btn_->SetEnabled(!clip_.tags.empty() &&
+                                  hooks_.on_ai_clear_tags != nullptr);
+        y += 32.0f;
+        if (clip_.tags.empty()) {
+            label(scannable
+                      ? "no tags — run Find Objects (needs a model "
+                        "in assets/models/)"
+                      : "no tags — generated clips have nothing to "
+                        "scan",
+                  18.0f);
+        } else {
+            // Source-second ranges (ClipTag contract); shown sorted
+            // by start. Cap the list — long scans can carry hundreds
+            // of ranges and the panel would scroll for days.
+            constexpr std::size_t kMaxShown = 10;
+            for (std::size_t i = 0;
+                 i < clip_.tags.size() && i < kMaxShown; ++i) {
+                const ClipTag& tag = clip_.tags[i];
+                char line[128];
+                std::snprintf(
+                    line, sizeof(line), "%.1f–%.1fs  %s  %.0f%%",
+                    tag.start, tag.end, tag.label.c_str(),
+                    static_cast<double>(tag.confidence) * 100.0);
+                label(line, 18.0f);
+            }
+            if (clip_.tags.size() > kMaxShown) {
+                char more[48];
+                std::snprintf(more, sizeof(more), "… +%d more",
+                              static_cast<int>(clip_.tags.size() -
+                                               kMaxShown));
+                label(more, 18.0f);
+            }
         }
         gap(10.0f);
     }

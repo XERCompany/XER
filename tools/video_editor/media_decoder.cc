@@ -9,8 +9,10 @@
 
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"  // AudioFrameInfo def
 #include "wrapper/ffmpeg/ffmpeg_video_decoder.h"
+#include "gpu_video/cuda_decode.h"  // YA.CUDADecode — runtime-probed hwaccel
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 
 #include "io/oiio_image.h"
@@ -34,6 +36,31 @@ namespace FFmpeg = XER::Bridge::FFmpeg;
 constexpr double kStillDurationSeconds = 5.0;
 constexpr double kStillFps = 25.0;
 
+// OIIO still-image fallback shared by both decoder adapters — kept as
+// a free helper so BridgeVideoDecoder and GpuVideoDecoder stay
+// behavior-identical on non-video inputs.
+bool TryOpenStill(const std::string& utf8_path,
+                  std::vector<std::uint8_t>* bgra, int* w, int* h,
+                  std::string* error_out) {
+    const std::filesystem::path path = Path::FromUtf8(utf8_path);
+    std::string ext = path.extension().string();
+    for (auto& c : ext) c = static_cast<char>(std::tolower(c));
+    if (!Io::OiioHandlesExtension(ext)) {
+        return false;
+    }
+    const Io::Image image = Io::ReadImage(path);
+    if (!image.ok || image.bgra.empty() || image.width <= 0 ||
+        image.height <= 0) {
+        if (error_out) *error_out = "still image decode failed";
+        return false;
+    }
+    *bgra = image.bgra;
+    *w = image.width;
+    *h = image.height;
+    if (error_out) error_out->clear();
+    return true;
+}
+
 class BridgeVideoDecoder final : public IMediaDecoder {
 public:
     bool Open(const std::string& utf8_path,
@@ -47,24 +74,11 @@ public:
         // FFmpeg couldn't parse it — try still-image formats OIIO
         // handles (EXR/DPX/TIFF/RAW/PSD/HDR). The still is a constant
         // frame: every NextFrame returns the same picture.
-        const std::filesystem::path path =
-            Path::FromUtf8(utf8_path);
-        std::string ext = path.extension().string();
-        for (auto& c : ext) c = static_cast<char>(std::tolower(c));
-        if (!Io::OiioHandlesExtension(ext)) {
-            return false;
-        }
-        const Io::Image image = Io::ReadImage(path);
-        if (!image.ok || image.bgra.empty() || image.width <= 0 ||
-            image.height <= 0) {
-            if (error_out) *error_out = "still image decode failed";
+        if (!TryOpenStill(utf8_path, &still_bgra_, &still_w_,
+                          &still_h_, error_out)) {
             return false;
         }
         still_ = true;
-        still_bgra_ = image.bgra;
-        still_w_ = image.width;
-        still_h_ = image.height;
-        if (error_out) error_out->clear();
         return true;
     }
 
@@ -165,14 +179,157 @@ private:
     double still_pos_ = 0.0;
 };
 
+// GPU-backed IMediaDecoder over GpuVideo::CudaVideoDecoder
+// (YA.CUDADecode). Same contract as BridgeVideoDecoder — the wrapped
+// decoder degrades to software decode internally when the CUDA hwaccel
+// cannot run, so delegation never does worse than the CPU path. Only
+// created when ProbeCudaDecode().Available() — see the factory below.
+class GpuVideoDecoder final : public IMediaDecoder {
+public:
+    bool Open(const std::string& utf8_path,
+              std::string* error_out) override {
+        still_ = false;
+        still_bgra_.clear();
+        still_pos_ = 0.0;
+        if (decoder_.Open(utf8_path, error_out)) {
+            return true;
+        }
+        if (!TryOpenStill(utf8_path, &still_bgra_, &still_w_,
+                          &still_h_, error_out)) {
+            return false;
+        }
+        still_ = true;
+        if (error_out) error_out->clear();
+        return true;
+    }
+
+    void Close() override {
+        decoder_.Close();
+        still_ = false;
+        still_bgra_.clear();
+        still_pos_ = 0.0;
+    }
+
+    bool IsOpen() const override { return still_ || decoder_.IsOpen(); }
+
+    bool NextFrame(std::vector<std::uint8_t>* bgra,
+                   int* width, int* height) override {
+        if (bgra == nullptr || width == nullptr || height == nullptr) {
+            return false;
+        }
+        if (still_) {
+            *bgra = still_bgra_;
+            *width = still_w_;
+            *height = still_h_;
+            return true;
+        }
+        // The module produces video::Frame (BGRA8); the IMediaDecoder
+        // contract speaks in a borrowed vector — swap the payload
+        // instead of copying a second time.
+        video::Frame frame;
+        if (!decoder_.NextFrame(&frame)) {
+            return false;
+        }
+        *width = frame.Width();
+        *height = frame.Height();
+        bgra->assign(frame.Data(),
+                     frame.Data() + frame.DataSize());
+        return true;
+    }
+
+    bool Seek(double seconds) override {
+        if (still_) {
+            still_pos_ = std::clamp(seconds, 0.0, kStillDurationSeconds);
+            return true;
+        }
+        return decoder_.Seek(seconds);
+    }
+
+    double GetPositionSeconds() const override {
+        return still_ ? still_pos_ : decoder_.GetPositionSeconds();
+    }
+
+    double GetFps() const override {
+        return still_ ? kStillFps : decoder_.GetFps();
+    }
+
+    double GetDurationSeconds() const override {
+        return still_ ? kStillDurationSeconds
+                      : decoder_.GetDurationSeconds();
+    }
+
+    int GetWidth() const override {
+        return still_ ? still_w_ : decoder_.GetWidth();
+    }
+
+    int GetHeight() const override {
+        return still_ ? still_h_ : decoder_.GetHeight();
+    }
+
+    void EnableAudioTap(bool enable) override {
+        decoder_.EnableAudioTap(enable);
+    }
+
+    bool HasAudio() const override { return decoder_.HasAudio(); }
+
+    double GetAudioStartSeconds() const override {
+        return decoder_.GetAudioStartSeconds();
+    }
+
+    double GetAudioTimeBase() const override {
+        return decoder_.GetAudioTimeBase();
+    }
+
+    bool ReadAudioFrames(
+        std::vector<FFmpeg::AudioFrameInfo>* out,
+        int max_frames) override {
+        return decoder_.ReadAudioFrames(out, max_frames);
+    }
+
+    bool AudioDrained() const override { return decoder_.AudioDrained(); }
+
+    std::uint64_t GetAudioEpoch() const override {
+        return decoder_.GetAudioEpoch();
+    }
+
+private:
+    XER::GpuVideo::CudaVideoDecoder decoder_;
+    bool still_ = false;
+    std::vector<std::uint8_t> still_bgra_;
+    int still_w_ = 0;
+    int still_h_ = 0;
+    double still_pos_ = 0.0;
+};
+
 }  // namespace
 
 MediaDecoderPtr MakeBridgeDecoder() {
     return std::make_unique<BridgeVideoDecoder>();
 }
 
+MediaDecoderPtr MakeGpuDecoder() {
+    return std::make_unique<GpuVideoDecoder>();
+}
+
 MediaDecoderFactory DefaultDecoderFactory() {
-    return MediaDecoderFactory{[] { return MakeBridgeDecoder(); }};
+    return MediaDecoderFactory{[] {
+        // Decoder backend selection — XER_VE_DECODER=cpu pins the plain
+        // FFmpeg bridge; =cuda forces the YA.CUDADecode session (which
+        // still degrades per-file to software decode); unset = auto:
+        // delegate to the GPU path only when the runtime probe reports
+        // a usable CUDA hwaccel, else stay on the proven CPU path.
+        const char* mode = std::getenv("XER_VE_DECODER");
+        if (mode != nullptr && std::string(mode) == "cpu") {
+            return MakeBridgeDecoder();
+        }
+        if (mode != nullptr && std::string(mode) == "cuda") {
+            return MakeGpuDecoder();
+        }
+        if (XER::GpuVideo::ProbeCudaDecode().Available()) {
+            return MakeGpuDecoder();
+        }
+        return MakeBridgeDecoder();
+    }};
 }
 
 }  // namespace XER::VideoEditor

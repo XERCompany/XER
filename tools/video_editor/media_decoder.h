@@ -83,6 +83,12 @@ using MediaDecoderFactory = std::function<MediaDecoderPtr()>;
 
 // Production factory — BridgeVideoDecoder (defined in media_decoder.cc).
 MediaDecoderPtr MakeBridgeDecoder();
+// GPU-backed decoder over YA.CUDADecode (CudaVideoDecoder) — internally
+// degrades to software decode per file, but only worth creating when
+// XER::GpuVideo::ProbeCudaDecode().Available(). DefaultDecoderFactory
+// picks between the two: XER_VE_DECODER=cpu pins the bridge, =cuda
+// pins this one, unset delegates to the GPU path only when probed.
+MediaDecoderPtr MakeGpuDecoder();
 MediaDecoderFactory DefaultDecoderFactory();
 
 }  // namespace XER::VideoEditor

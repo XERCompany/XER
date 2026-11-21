@@ -11,6 +11,7 @@
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/ui_manifest.h"
 #include "color/ocio_transform.h"
+#include "core/render_host.h"   // UiRenderHost — store attach when live
 #include "helper/path_utils.h"
 #include "icon_helpers.h"
 #include "rendering/renderer.h"
@@ -499,6 +500,16 @@ void MonitorWidget::SetEnginePlaying(bool playing) {
     Invalidate();
 }
 
+void MonitorWidget::SetFrameRenderSlot(std::uint32_t slot) {
+    // Slot applies at the lazy Init on first Render — after that the
+    // service keeps the id it was configured with.
+    frame_render_slot_ = slot;
+    if (frame_render_ready_) {
+        frame_render_ready_ = false;   // re-init on next Render
+    }
+    Invalidate();
+}
+
 void MonitorWidget::EmitTime(double t) {
     if (hooks_.on_time_changed) {
         hooks_.on_time_changed(t);
@@ -741,8 +752,23 @@ void MonitorWidget::Render(
 
     if (!frame_.empty() && frame_width_ > 0 && frame_height_ > 0) {
         const auto dest = FrameDestRect();
-        renderer.DrawFrameBgra(frame_.data(), frame_width_, frame_height_,
-                               dest, 1.0f);
+        if (!frame_render_ready_) {
+            frame_render_ready_ = true;
+            XER::FrameRender::Options fr_opts;
+            fr_opts.video_slot = frame_render_slot_;
+            // Store transport only when the render-worker pool is
+            // live — UiRenderHost::Store() creates the shared segment
+            // workers attach to via kAttachStore. Local renderers
+            // (the default) take the in-process pixel path instead.
+            if (XER::UI::Core::UiRenderHost::Instance().WorkerCount() >
+                0) {
+                fr_opts.store =
+                    XER::UI::Core::UiRenderHost::Instance().Store();
+            }
+            frame_render_.Init(fr_opts);
+        }
+        frame_render_.PresentBgra(renderer, frame_.data(), frame_width_,
+                                  frame_height_, dest, 1.0f);
         renderer.StrokeRect(dest, tokens.border, 1.0f, 0.0f);
         DrawOverlays(renderer, tokens, dest);
     } else {

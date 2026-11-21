@@ -21,6 +21,13 @@ file(GLOB_RECURSE AI_HEADERS
     "${CMAKE_CURRENT_SOURCE_DIR}/*.h"
 )
 
+# find_object/ ships as its own module — YA.AIFindObject under
+# XER_YA_DLLS, the XER_AIFindObject static lib otherwise — because the
+# detection feature must load/report-degraded independently of the
+# heavy XER_ContentAI archive. Keep it out of the catch-all glob.
+list(FILTER AI_SOURCES EXCLUDE REGEX "/find_object/")
+list(FILTER AI_HEADERS EXCLUDE REGEX "/find_object/")
+
 # CUDA kernels need the CUDA toolkit; keep them out otherwise.
 if(NOT ENABLE_CUDA)
     list(FILTER AI_SOURCES EXCLUDE REGEX "/ai/ml/cuda_ops/")
@@ -463,4 +470,148 @@ endif()
 
 if(WIN32)
     target_link_libraries(XER_ContentAI PRIVATE ws2_32 crypt32 bcrypt)
+endif()
+
+# ---------------------------------------------------------------------------
+# YA.AIFindObject — object detection over BGRA video frames
+# (find_object/find_object.{h,cc}).
+#
+# Kept OUT of XER_ContentAI on purpose: the video editor consumes it as
+# a small standalone module whose own delay-loaded runtime deps
+# (onnxruntime.dll / libopencv_*-*.dll) are LoadLibrary-probed before
+# first call, so a missing or unloadable backend reports
+# available:false instead of killing the process at the delay-load
+# binder.
+#
+# Backends (both optional, discovered above in this file):
+#   * onnxruntime::onnxruntime -> XER_AI_FO_ONNXRUNTIME (ORT C API,
+#     CPU EP — MSYS2 ORT carries no DirectML provider)
+#   * opencv_dnn + opencv_imgproc + opencv_core -> XER_AI_FO_OPENCV
+#     (cv::dnn::readNetFromONNX fallback, needs no ORT)
+# With neither, the module still builds and reports every backend
+# unavailable.
+# ---------------------------------------------------------------------------
+set(_fo_libs "")
+set(_fo_defs "")
+if(TARGET onnxruntime::onnxruntime)
+    list(APPEND _fo_libs onnxruntime::onnxruntime)
+    list(APPEND _fo_defs XER_AI_FO_ONNXRUNTIME=1)
+elseif(TARGET onnxruntime)
+    list(APPEND _fo_libs onnxruntime)
+    list(APPEND _fo_defs XER_AI_FO_ONNXRUNTIME=1)
+elseif(TARGET ONNX::onnxruntime)
+    list(APPEND _fo_libs ONNX::onnxruntime)
+    list(APPEND _fo_defs XER_AI_FO_ONNXRUNTIME=1)
+endif()
+# Only the modules find_object.cc actually includes — the imported
+# targets still pull their own dependency chain transitively.
+foreach(_fo_cv IN ITEMS opencv_dnn opencv_imgproc opencv_core)
+    if(TARGET ${_fo_cv})
+        list(APPEND _fo_libs ${_fo_cv})
+    endif()
+endforeach()
+if(TARGET opencv_dnn)
+    list(APPEND _fo_defs XER_AI_FO_OPENCV=1)
+endif()
+
+if(XER_YA_DLLS)
+    xer_ya_module(YA_AIFindObject EXPORT_NAME YA.AIFindObject
+        SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/find_object/find_object.cc
+        DEPS ${_fo_libs})
+    target_include_directories(YA_AIFindObject_objs PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/find_object
+        ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+    if(_fo_defs)
+        target_compile_definitions(YA_AIFindObject_objs PRIVATE
+            ${_fo_defs})
+    endif()
+    # Uniform consumer name: XER_AIFindObject works identically in
+    # both build modes (bundle over the YA module here).
+    xer_ya_bundle(XER_AIFindObject
+        MODULES YA_AIFindObject
+        INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+    set(_fo_link_target YA_AIFindObject)
+    set(_fo_defs_target YA_AIFindObject_objs)
+else()
+    add_library(XER_AIFindObject STATIC
+        find_object/find_object.cc find_object/find_object.h)
+    target_include_directories(XER_AIFindObject PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/find_object
+        ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+    if(_fo_libs)
+        target_link_libraries(XER_AIFindObject PRIVATE ${_fo_libs})
+    endif()
+    if(_fo_defs)
+        target_compile_definitions(XER_AIFindObject PRIVATE ${_fo_defs})
+    endif()
+    target_compile_features(XER_AIFindObject PUBLIC cxx_std_23)
+    if(MSVC)
+        target_compile_options(XER_AIFindObject PRIVATE /W4 /WX- /O2)
+    else()
+        target_compile_options(XER_AIFindObject PRIVATE
+            -Wall -Wextra -Wpedantic -O3)
+    endif()
+    set(_fo_link_target XER_AIFindObject)
+    set(_fo_defs_target XER_AIFindObject)
+endif()
+
+if(MINGW AND _fo_libs)
+    # Delay-load every runtime DLL the backend link items pull in, and
+    # hand find_object.cc the resolved names so its LoadLibrary probes
+    # run before the first delay-import call — an absent/unloadable
+    # runtime then reports "linked, unloadable" instead of killing the
+    # host process at first Detect. The toolchain closure is staged
+    # next to the binaries like the video_editor NN block does.
+    xer_collect_delayload_dlls(_fo_ort_dlls onnxruntime::onnxruntime)
+    if(NOT _fo_ort_dlls)
+        foreach(_t onnxruntime ONNX::onnxruntime)
+            if(TARGET ${_t} AND NOT _fo_ort_dlls)
+                xer_collect_delayload_dlls(_fo_ort_dlls ${_t})
+            endif()
+        endforeach()
+    endif()
+    set(_fo_cv_probe "")
+    foreach(_fo_cv IN ITEMS opencv_dnn opencv_imgproc opencv_core)
+        if(TARGET ${_fo_cv})
+            xer_collect_delayload_dlls(_d ${_fo_cv})
+            list(APPEND _fo_cv_probe ${_d})
+        endif()
+    endforeach()
+    if(_fo_ort_dlls)
+        list(JOIN _fo_ort_dlls "|" _fo_ort_s)
+        target_compile_definitions(${_fo_defs_target} PRIVATE
+            "XER_AI_FO_ORT_DLLS=\"${_fo_ort_s}\"")
+        if(NOT XER_YA_DLLS)
+            target_compile_definitions(XER_AIFindObject PUBLIC
+                "XER_AI_FO_ORT_DLLS=\"${_fo_ort_s}\"")
+        endif()
+    endif()
+    if(_fo_cv_probe)
+        list(REMOVE_DUPLICATES _fo_cv_probe)
+        list(JOIN _fo_cv_probe "|" _fo_cv_s)
+        target_compile_definitions(${_fo_defs_target} PRIVATE
+            "XER_AI_FO_OPENCV_DLLS=\"${_fo_cv_s}\"")
+        if(NOT XER_YA_DLLS)
+            target_compile_definitions(XER_AIFindObject PUBLIC
+                "XER_AI_FO_OPENCV_DLLS=\"${_fo_cv_s}\"")
+        endif()
+    endif()
+    set(_fo_dl ${_fo_ort_dlls} ${_fo_cv_probe})
+    if(_fo_dl)
+        list(REMOVE_DUPLICATES _fo_dl)
+        xer_delayload(${_fo_link_target} ${_fo_dl})
+        get_filename_component(_fo_toolchain_bin
+            "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        # ORT resolves onnxruntime_providers_shared.dll at run time
+        # (not an import-table entry) — seed the staging walk with the
+        # onnxruntime* glob so the provider host lands beside the exes.
+        file(GLOB _fo_extra "${_fo_toolchain_bin}/onnxruntime*.dll")
+        set(_fo_extra_names "")
+        foreach(_f IN LISTS _fo_extra)
+            get_filename_component(_n "${_f}" NAME)
+            list(APPEND _fo_extra_names "${_n}")
+        endforeach()
+        xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin"
+            "${_fo_toolchain_bin}" ${_fo_dl} ${_fo_extra_names})
+    endif()
 endif()

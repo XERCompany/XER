@@ -592,6 +592,12 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
     if (text.empty() || rect.width <= 0.0f || rect.height <= 0.0f) {
         return;
     }
+    // TEMP-DIAG entry marker: separates "crashed before DrawTextLayout"
+    // from "crashed inside it" in the launch log.
+    std::fprintf(stderr, "[DTIN] rect=(%g %g %g %g) size=%g w=%d text=%.40s\n",
+                 rect.x, rect.y, rect.width, rect.height, style.size,
+                 style.weight, std::string(text).c_str());
+    std::fflush(stderr);
     if (text.size() > std::numeric_limits<UINT32>::max()) {
         throw std::length_error("Text exceeds the supported DirectWrite length");
     }
@@ -632,6 +638,19 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
 
     auto* brush = Brush();
     brush->SetColor(ToColor(style.color));
+    // TEMP-DIAG: isolate the d2d1 AV — log call params before the crash.
+    {
+        D2D1_MATRIX_3X2_F m{};
+        dc_->GetTransform(&m);
+        std::fprintf(stderr,
+                     "[DTDBG] xform=(%g %g %g %g %g %g) origin=(%g %g) "
+                     "rect=(%g %g) size=%g w=%d text=%.40s\n",
+                     m._11, m._12, m._21, m._22, m._31, m._32,
+                     rect.x, rect.y, rect.width, rect.height,
+                     style.size, style.weight,
+                     std::string(text).c_str());
+        std::fflush(stderr);
+    }
     dc_->DrawTextLayout(
         D2D1::Point2F(rect.x, rect.y),
         layout.Get(),

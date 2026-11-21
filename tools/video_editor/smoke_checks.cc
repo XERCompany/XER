@@ -28,12 +28,14 @@
 
 #include <json/json.h>
 
+#include "ai_tags.h"
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
 #include "audio_sync.h"
 #include "cef/cef_ext_scheme.h"
 #include "compositor.h"
+#include "content/ai/find_object/find_object.h"  // YA.AIFindObject
 #include "content/video/video_info.h"
 #include "export_engine.h"
 #include "export_preset.h"
@@ -41,13 +43,17 @@
 #include "font_catalog.h"
 #include "frame.h"
 #include "frame_exporter.h"
+#include "frame_render/frame_render.h"   // YA.FrameRender
 #include "generated_source.h"
+#include "gpu_video/cuda_decode.h"       // YA.CUDADecode
+#include "gpu_video/cuda_encode.h"       // YA.CUDAEncode
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
 #include "js_fx.h"
 #include "keyboard_map.h"
 #include "lut_manager.h"
 #include "media_catalog.h"
+#include "media_decoder.h"               // MakeGpuDecoder / IMediaDecoder
 #include "media_worker_client.h"
 #include "media_worker_protocol.h"
 #include "nn_probe.h"
@@ -55,6 +61,8 @@
 #include "project_autosave.h"
 #include "project_store.h"
 #include "records_store.h"
+#include "rendering/renderer.h"          // Renderer seam for FrameRender check
+#include "rendering/render_store.h"      // store-transport smoke path
 #include "sequence_preset.h"
 #include "source_edit.h"
 #include "timecode.h"
@@ -3655,6 +3663,407 @@ std::string CheckNnBackends() {
     return {};
 }
 
+// ---- YA.* GPU-pipeline modules -------------------------------------
+
+// YA.CUDADecode (src/gpu_video): prints the layered availability
+// matrix, then proves the module end-to-end on whatever decode path
+// this machine supports — CUDA hwaccel when the probe says yes, the
+// internal software fallback otherwise. Passing on a GPU-less box IS
+// the graceful-degradation contract: the module must stay loadable,
+// probe honestly, and still decode.
+std::string CheckCudaDecode() {
+    const auto& probe = XER::GpuVideo::ProbeCudaDecode();
+    std::fprintf(stdout, "%s", probe.Report().c_str());
+    if (!FFmpeg::IsAvailable()) {
+        return "ffmpeg bridge unavailable";
+    }
+    // Encode a tiny h264 clip with the software encoder, then decode
+    // it back through CudaVideoDecoder — the same Open/NextFrame path
+    // a delegated media_decoder would drive.
+    const auto clip = SmokeTempDir() / "smoke_cuda_decode.mp4";
+    {
+        std::error_code ec;
+        std::filesystem::remove(clip, ec);
+    }
+    FFmpeg::EncodeVideoParams params;
+    params.output_path = Utf8Path(clip);
+    params.codec_name = "libx264";
+    params.width = 64;
+    params.height = 36;
+    params.pixel_format = "bgra";
+    params.fps_num = 15;
+    std::string err;
+    const auto provider = [](std::size_t index,
+                             FFmpeg::VideoFrameInfo* f,
+                             std::string*) -> bool {
+        f->width = 64;
+        f->height = 36;
+        f->pixel_format = "bgra";
+        f->pts = f->best_effort_timestamp =
+            static_cast<std::int64_t>(index);
+        f->line_sizes = {64 * 4, 0, 0, 0};
+        f->data.assign(64 * 36 * 4,
+                       static_cast<std::uint8_t>(index));
+        return true;
+    };
+    if (!FFmpeg::EncodeVideoFrameStream(params, 8, provider, &err)) {
+        return "could not encode fixture clip: " + err;
+    }
+    XER::GpuVideo::CudaVideoDecoder decoder;
+    if (!decoder.Open(Utf8Path(clip), &err)) {
+        return "CudaVideoDecoder.Open failed: " + err;
+    }
+    video::Frame frame;
+    if (!decoder.NextFrame(&frame) || !frame.IsValid() ||
+        frame.Width() != 64 || frame.Height() != 36) {
+        return "CudaVideoDecoder produced no frame";
+    }
+    // The IMediaDecoder adapter (MakeGpuDecoder) must honor the same
+    // contract — decode through it once to prove the delegation seam,
+    // not just the module.
+    MediaDecoderPtr delegated = MakeGpuDecoder();
+    if (delegated == nullptr ||
+        !delegated->Open(Utf8Path(clip), &err)) {
+        return "MakeGpuDecoder delegation open failed: " + err;
+    }
+    std::vector<std::uint8_t> out_bgra;
+    int out_w = 0, out_h = 0;
+    if (!delegated->NextFrame(&out_bgra, &out_w, &out_h) ||
+        out_w != 64 || out_h != 36 || out_bgra.empty()) {
+        return "delegated decoder produced no frame";
+    }
+    std::fprintf(
+        stdout,
+        "  decode session: hwaccel=%s first_frame_surface=%s\n",
+        decoder.ActiveHwaccelName().empty()
+            ? "(software)"
+            : decoder.ActiveHwaccelName().c_str(),
+        decoder.LastFrameSurface() == XER::GpuVideo::FrameSurface::kCuda
+            ? "cuda"
+            : "cpu");
+    return {};
+}
+
+// YA.CUDAEncode (src/gpu_video): availability matrix + the codec-name
+// resolver contract export_engine relies on — software names pass
+// through, "nvenc" aliases resolve to a concrete encoder when the
+// device is usable, else fall back to libx264 with a note. Always
+// passes (informational + graceful-degradation proof).
+std::string CheckCudaEncode() {
+    const auto& probe = XER::GpuVideo::ProbeCudaEncode();
+    std::fprintf(stdout, "%s", probe.Report().c_str());
+    const std::string passthrough =
+        XER::GpuVideo::ResolveVideoCodecName("libx264");
+    if (passthrough != "libx264") {
+        return "software codec name was rewritten";
+    }
+    std::string note;
+    const std::string resolved =
+        XER::GpuVideo::ResolveVideoCodecName("nvenc", &note);
+    if (resolved.empty()) {
+        return "nvenc resolution returned empty";
+    }
+    if (!probe.Available() && resolved != "libx264") {
+        return "nvenc resolved to '" + resolved +
+               "' without a usable device";
+    }
+    std::fprintf(stdout, "  resolve: nvenc -> '%s' (%s)\n",
+                 resolved.c_str(),
+                 note.empty() ? "device usable" : note.c_str());
+    return {};
+}
+
+// Recording fake Renderer — proves the YA.FrameRender transport seam:
+// which draw call the service issues depends on the attached backend,
+// and the pixel payload must arrive intact either way.
+class RecordingRenderer final : public XER::UI::Rendering::Renderer {
+public:
+    int video_id_calls = 0;
+    int video_pixels_calls = 0;
+    int bgra_calls = 0;
+    const void* last_pixels = nullptr;
+    bool accept_id_draw = false;   // emulate a store-aware renderer
+
+    void BeginFrame(XER::UI::Layout::Rect) override {}
+    void EndFrame() override {}
+    void FillRect(XER::UI::Layout::Rect, XER::UI::Theme::Color,
+                  float) override {}
+    void StrokeRect(XER::UI::Layout::Rect, XER::UI::Theme::Color,
+                    float, float) override {}
+    void DrawLine(XER::UI::Layout::Point, XER::UI::Layout::Point,
+                  XER::UI::Theme::Color, float) override {}
+    void DrawText(std::string_view, XER::UI::Layout::Rect,
+                  XER::UI::Rendering::TextStyle) override {}
+    XER::UI::Layout::Size MeasureText(
+        std::string_view,
+        XER::UI::Rendering::TextStyle) const override {
+        return {};
+    }
+    bool DrawVideoFrame(std::uint32_t, XER::UI::Layout::Rect, float,
+                        float) override {
+        ++video_id_calls;
+        return accept_id_draw;
+    }
+    bool DrawVideoPixels(const void* bgra, std::uint32_t, int, int,
+                         XER::UI::Layout::Rect, float,
+                         float) override {
+        ++video_pixels_calls;
+        last_pixels = bgra;
+        return true;
+    }
+    bool DrawFrameBgra(const void* bgra, int, int,
+                       XER::UI::Layout::Rect, float) override {
+        ++bgra_calls;
+        last_pixels = bgra;
+        return true;
+    }
+};
+
+// YA.FrameRender (src/frame_render): availability matrix + a REAL
+// CPU-path render test (BGRA/RGBA/NV12 normalize + Present through a
+// recording renderer), plus the RenderStore seam when this build
+// carries it. Always passes on the availability side.
+std::string CheckFrameRender() {
+    const auto probe = XER::FrameRender::ProbeFrameRender();
+    std::fprintf(stdout, "%s", probe.Report().c_str());
+
+    video::Frame bgra(4, 2, video::PixelFormat::BGRA8);
+    std::memset(bgra.Data(), 0, bgra.DataSize());
+    bgra.Data()[0] = 10;
+    bgra.Data()[1] = 20;
+    bgra.Data()[2] = 30;
+    bgra.Data()[3] = 255;
+    std::vector<std::uint8_t> out;
+    int w = 0, h = 0;
+    if (!XER::FrameRender::Service::Normalize(bgra, &out, &w, &h) ||
+        w != 4 || h != 2 || out.size() != 32 || out[0] != 10 ||
+        out[1] != 20 || out[2] != 30) {
+        return "BGRA normalize failed";
+    }
+    video::Frame rgba(2, 2, video::PixelFormat::RGBA8);
+    rgba.Data()[0] = 30;
+    rgba.Data()[1] = 20;
+    rgba.Data()[2] = 10;
+    rgba.Data()[3] = 255;
+    if (!XER::FrameRender::Service::Normalize(rgba, &out, &w, &h) ||
+        out[0] != 10 || out[2] != 30) {
+        return "RGBA swizzle failed";
+    }
+    // Neutral NV12 (Y=U=V=128) must land as mid-gray in BGRA.
+    video::Frame nv12(4, 4, video::PixelFormat::NV12);
+    std::memset(nv12.Data(), 128, nv12.DataSize());
+    if (!XER::FrameRender::Service::Normalize(nv12, &out, &w, &h) ||
+        out.empty()) {
+        return "NV12 normalize failed";
+    }
+    if (std::abs(static_cast<int>(out[2]) - 128) > 4 ||
+        std::abs(static_cast<int>(out[1]) - 128) > 4 ||
+        std::abs(static_cast<int>(out[0]) - 128) > 4) {
+        return "NV12 neutral gray drifted";
+    }
+
+    // Transport seam: with no store attached the pixel path must be
+    // chosen; the same call routes through the store slot when one is
+    // attached and the renderer accepts the id draw.
+    XER::FrameRender::Service service;
+    if (!service.Init({})) {
+        return "frame-render service init failed";
+    }
+    RecordingRenderer rec;
+    const XER::UI::Layout::Rect dst{0.0f, 0.0f, 4.0f, 2.0f};
+    if (!service.Present(rec, bgra, dst, 1.0f) ||
+        service.LastBackend() != XER::FrameRender::Backend::kCpu ||
+        rec.video_pixels_calls + rec.bgra_calls == 0) {
+        return "CPU present path not taken";
+    }
+
+    // Store seam — a throwaway segment proves the write+id-draw path
+    // (production attaches the UI host's xer.ui.res.<pid> store).
+    // render_store_compiled is a runtime flag because the compile-time
+    // define lives on the module's objects, not its consumers.
+    if (probe.render_store_compiled) {
+        auto store = XER::UI::Rendering::RenderStore::Create(
+            "xer.ve.smoke.frame_render", 4u * 1024u * 1024u);
+        if (store != nullptr) {
+            XER::FrameRender::Service stored;
+            XER::FrameRender::Options opts;
+            opts.store = store.get();
+            if (!stored.Init(opts)) {
+                return "store-backed init failed";
+            }
+            RecordingRenderer rec2;
+            rec2.accept_id_draw = true;
+            if (!stored.Present(rec2, bgra, dst, 1.0f) ||
+                stored.LastBackend() !=
+                    XER::FrameRender::Backend::kRenderStore ||
+                rec2.video_id_calls != 1) {
+                return "render_store path not taken";
+            }
+            const auto view = store->Read(stored.VideoSlot());
+            if (view.data == nullptr || view.info.width != 4 ||
+                view.info.height != 2 || view.info.payload < 32) {
+                return "store slot did not receive the frame";
+            }
+        }
+    }
+    std::fprintf(stdout,
+                 "  frame_render: cpu path verified%s\n",
+                 probe.render_store_compiled ? " (+ store seam)"
+                                             : "");
+    return {};
+}
+
+// YA.AIFindObject (src/content/ai/find_object) — the "AI: Find
+// Objects" backend matrix. Informational like nn_backends: prints
+// whether ONNX Runtime / OpenCV DNN are linked+loadable and whether a
+// detection model is installed. What MUST hold regardless of the
+// environment: both backend rows are reported, a missing model path
+// fails Load() with a reason instead of crashing, and Detect() on an
+// unloaded detector returns empty. When a model IS installed the
+// check goes one step further and Detect()s a synthetic BGRA frame —
+// a real inference path exercised end to end.
+std::string CheckAiFindObject() {
+    namespace FindObj = XER::AI::FindObject;
+
+    // ---- availability matrix (always printed) ----
+    const std::vector<FindObj::BackendInfo> backends =
+        FindObj::Backends();
+    std::fprintf(stdout, "  ai_find_object backends:\n%s",
+                 FindObj::BackendReport().c_str());
+    const std::string model = Ai::FindObjectModel();
+    std::fprintf(stdout, "  ai_find_object model: %s\n",
+                 model.empty() ? "<none>" : model.c_str());
+    std::fflush(stdout);
+    if (backends.size() != 2) {
+        return "Backends() must report both rows (onnxruntime, "
+               "opencv_dnn)";
+    }
+
+    // ---- unavailable paths must degrade, never crash ----
+    FindObj::Detector detector;
+    if (detector.IsLoaded() || !detector.BackendId().empty()) {
+        return "fresh Detector reports loaded";
+    }
+    std::string err;
+    if (detector.Load("definitely/missing/model.onnx", "", "", &err)) {
+        return "Load() accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "Load() failed a missing model without a reason";
+    }
+    // Synthetic BGRA8 frame (160x120 opaque gray) — Detect on an
+    // unloaded detector is a documented empty result.
+    std::vector<std::uint8_t> bgra(160 * 120 * 4, 0x80);
+    for (std::size_t p = 3; p < bgra.size(); p += 4) bgra[p] = 0xFF;
+    if (!detector.Detect(bgra.data(), 160, 120, 160 * 4).empty()) {
+        return "unloaded Detector returned detections";
+    }
+
+    // ---- real-model path: only when the user installed one ----
+    if (model.empty() || FindObj::ActiveBackendId().empty()) {
+        return {};   // nothing to run inference on — graceful skip
+    }
+    if (!detector.Load(model, Ai::FindObjectLabels(model), "", &err)) {
+        return "installed model failed to load: " + err;
+    }
+    // A uniform frame may legitimately produce zero detections — the
+    // contract is "returns a vector, does not crash".
+    static_cast<void>(detector.Detect(bgra.data(), 160, 120, 160 * 4));
+    std::fprintf(stdout,
+                 "  ai_find_object inference ran on backend '%s'\n",
+                 detector.BackendId().c_str());
+    std::fflush(stdout);
+    return {};
+}
+
+// AI tag layer (ai_tags.h + Clip::tags persistence). Verifies the
+// graceful-degradation calls (no model / un-decodable clip fail with
+// reasons, never crash) and the project-store round trip that keeps
+// ClipTag ranges on the clip.
+std::string CheckAiTags() {
+    // ---- graceful-degradation contract ----
+    Clip clip;
+    clip.id = "tag-scan";
+    clip.source_path = "definitely/missing/media.mp4";
+    clip.duration = 5.0;
+    clip.in_point = 0.0;
+    std::vector<ClipTag> tags;
+    std::string err;
+    if (Ai::ScanClipForObjects(clip, "", "", Ai::TagScanParams{},
+                               nullptr, nullptr, &tags, &err)) {
+        return "ScanClipForObjects succeeded with no model";
+    }
+    if (err.empty() || !tags.empty()) {
+        return "no-model scan did not report a reason / left tags";
+    }
+    Clip generated = MakeGeneratedClip("gen", 0, 0.0, 1.0,
+                                       SourceKind::ColorBars,
+                                       "smpte75");
+    if (Ai::ScanClipForObjects(generated, "x.onnx", "",
+                               Ai::TagScanParams{}, nullptr, nullptr,
+                               &tags, &err)) {
+        return "ScanClipForObjects scanned a generated clip";
+    }
+
+    // ---- Clip::tags serialization round trip ----
+    Project project;
+    project.tracks.push_back(Track{TrackKind::Video, "V1"});
+    Clip tagged;
+    tagged.id = "tagged";
+    tagged.source_path = "tagged.mp4";   // need not exist for the store
+    tagged.track = 0;
+    tagged.timeline_start = 0.0;
+    tagged.in_point = 4.0;
+    tagged.duration = 8.0;
+    ClipTag t0;
+    t0.start = 5.0;
+    t0.end = 7.5;
+    t0.label = "person";
+    t0.confidence = 0.83f;
+    ClipTag t1;
+    t1.start = 9.0;
+    t1.end = 10.25;
+    t1.label = "car";
+    t1.confidence = 0.42f;
+    tagged.tags = {t0, t1};
+    project.clips.push_back(tagged);
+
+    const std::string path =
+        Utf8Path(SmokeTempDir() / "smoke_ai_tags.xerproj");
+    if (!ProjectStore::Save(project, path, &err)) {
+        return "Save failed: " + err;
+    }
+    Project loaded;
+    if (!ProjectStore::Load(path, &loaded, &err)) {
+        return "Load failed: " + err;
+    }
+    const Clip* back = FindClip(loaded, "tagged");
+    if (back == nullptr || back->tags.size() != 2) {
+        return "clip tags did not survive the round trip";
+    }
+    const ClipTag& a = back->tags[0];
+    const ClipTag& b = back->tags[1];
+    if (a.start != 5.0 || a.end != 7.5 || a.label != "person" ||
+        std::abs(a.confidence - 0.83f) > 1e-6f ||
+        b.start != 9.0 || b.end != 10.25 || b.label != "car" ||
+        std::abs(b.confidence - 0.42f) > 1e-6f) {
+        return "tag fields did not survive the round trip";
+    }
+    // And the inverse: a tag-free clip stays tag-free.
+    Clip plain = MakeGeneratedClip("plain", 0, 20.0, 1.0,
+                                   SourceKind::ColorMatte, "#112233");
+    project.clips.push_back(plain);
+    if (!ProjectStore::Save(project, path, &err) ||
+        !ProjectStore::Load(path, &loaded, &err)) {
+        return "second round trip failed: " + err;
+    }
+    if (const Clip* p = FindClip(loaded, "plain");
+        p == nullptr || !p->tags.empty()) {
+        return "tag-free clip gained tags in the round trip";
+    }
+    return {};
+}
+
 using CheckFn = std::string (*)();
 struct CheckEntry {
     const char* name;
@@ -3702,9 +4111,12 @@ constexpr CheckEntry kChecks[] = {
     {"assets_icons", &CheckAssetsIcons},
     {"extensions_panel", &CheckExtensionsPanelData},
     {"ext_xsjo", &CheckExtXsjo},
-    // TEMP-VERIFY: nn_backends dropped locally to reach app_boot/
-    // export_render past the onnxruntime delay-load crash.
-    //{"nn_backends", &CheckNnBackends},
+    {"nn_backends", &CheckNnBackends},
+    {"ai_find_object", &CheckAiFindObject},
+    {"ai_tags", &CheckAiTags},
+    {"cuda_decode", &CheckCudaDecode},
+    {"cuda_encode", &CheckCudaEncode},
+    {"frame_render", &CheckFrameRender},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };

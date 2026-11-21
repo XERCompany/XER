@@ -41,6 +41,10 @@ Goal started: 2026-11-15. Design doc:
   — Photoshop-class editor stack research: existing Skia/image/lab
   assets, Krita tile engine blueprint, GEGL/libmypaint/PhotoshopAPI
   verdicts, M1–M5 build order (2026-11-21).
+- [2026-11-21-nle-architectures.md](research/2026-11-21-nle-architectures.md)
+  — NLE engine survey: MLT/Kdenlive/Shotcut, Olive node+render cache,
+  Blender VSE proxies, OFX/Frei0r/libplacebo/VapourSynth matrix,
+  render-cache + proxy blueprints, top-3 calls (2026-11-21).
 - [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
   pass-2 review of session's own changes: seqlock ordering bug in
   RenderStore, channel/worker leak in UiRenderHost, nested-transform

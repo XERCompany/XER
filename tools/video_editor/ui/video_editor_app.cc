@@ -50,6 +50,7 @@
 #include "ai/audio_pcm.h"
 #include "ai/beat_markers.h"
 #include "ai/whisper_transcribe.h"
+#include "ai_tags.h"
 #include "playback/audio_sink_factory.h"
 #include "smoke_checks.h"   // MediaImportExtensions/IsMediaImportPath
 #include "timecode.h"       // FormatTimecode (drop-hover status)
@@ -1033,6 +1034,10 @@ void VideoEditorAppWidget::EnsureChildren() {
         [this](const std::string& id, std::size_t index) {
             OpenVst3FxEditor(id, static_cast<int>(index));
         };
+    inspector_hooks.on_ai_find_objects =
+        [this](const std::string& id) { FindObjectsForClip(id); };
+    inspector_hooks.on_ai_clear_tags =
+        [this](const std::string& id) { ClearClipTags(id); };
     inspector_ = std::make_shared<InspectorWidget>(inspector_hooks);
 
     EffectsPanelWidget::Hooks effects_hooks;
@@ -1598,6 +1603,13 @@ void VideoEditorAppWidget::EnsureChildren() {
     timeline_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
     };
+    // Clip context menu "AI: Find Objects" / "AI: Clear Tags" — the
+    // async scan lands ClipTag ranges on the clip via the shared AI
+    // job (same Tick() marshal as beats/transcribe).
+    timeline_hooks.on_ai_find_objects =
+        [this](const std::string& id) { FindObjectsForClip(id); };
+    timeline_hooks.on_ai_clear_tags =
+        [this](const std::string& id) { ClearClipTags(id); };
     // Timeline corner-toolbar magnet — same flip as the main-toolbar
     // Snap button / S shortcut so all three stay in sync.
     timeline_hooks.on_snap_toggle = [this](bool on) {
@@ -4545,6 +4557,78 @@ void VideoEditorAppWidget::BounceAudioFx(
     if (!started) SetStatus("A task is already running", true);
 }
 
+void VideoEditorAppWidget::FindObjectsForClip(
+    const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("No clip selected for AI scan", true);
+        return;
+    }
+    if (clip->source.kind != SourceKind::Media ||
+        clip->source_path.empty() || clip->is_adjustment) {
+        SetStatus("AI scan needs a media clip on the timeline", true);
+        return;
+    }
+    if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+        SetStatus("An AI task is already running", true);
+        return;
+    }
+    // Resolve the model up front so a missing file reports the install
+    // hint immediately instead of failing deep in the worker.
+    const std::string model = Ai::FindObjectModel();
+    if (model.empty()) {
+        SetStatus(Ai::FindObjectModelHint(), true);
+        return;
+    }
+    const std::string labels = Ai::FindObjectLabels(model);
+    // The worker scans the clip's consumed source span — capture the
+    // whole Clip so in_point/duration/rate travels safely.
+    const Clip clip_copy = *clip;
+    SetStatus("AI find objects: " + Basename(clip->source_path) + "…");
+    ai_progress_shown_ = -1.0f;
+    const bool started = ai_op_.Start(
+        [this, clip_copy, model, labels](const Lab::JobControl& ctl) {
+            std::vector<ClipTag> tags;
+            std::string error;
+            Ai::TagScanParams params;
+            if (!Ai::ScanClipForObjects(
+                    clip_copy, model, labels, params,
+                    [&ctl](float p) { ctl.ReportProgress(p); },
+                    [&ctl] { return ctl.ShouldCancel(); }, &tags,
+                    &error)) {
+                ctl.Fail(std::move(error));
+                return false;
+            }
+            {
+                std::lock_guard lock(ai_result_mutex_);
+                ai_result_.markers.clear();
+                ai_result_.tags_clip_id = clip_copy.id;
+                ai_result_.tags = std::move(tags);
+                ai_result_.detail.clear();
+            }
+            return true;
+        });
+    if (!started) SetStatus("An AI task is already running", true);
+}
+
+void VideoEditorAppWidget::ClearClipTags(const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr || clip->tags.empty()) {
+        SetStatus("Clip has no AI tags");
+        return;
+    }
+    Clip next = *clip;
+    next.tags.clear();
+    std::string error;
+    if (!history_.ReplaceClip(clip_id, next, &error)) {
+        SetStatus("Clear tags failed: " + error, true);
+        return;
+    }
+    inspector_->SetClip(FindClip(project_, clip_id));
+    NotifyProjectChanged();
+    SetStatus("AI tags cleared");
+}
+
 void VideoEditorAppWidget::AddMarkerAt(double t,
                                        const std::string& name) {
     Marker marker;
@@ -7364,7 +7448,31 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 result = std::move(ai_result_);
                 ai_result_ = AiResult{};
             }
-            if (ok && !result.bounce_path.empty()) {
+            if (ok && !result.tags_clip_id.empty()) {
+                // Find-objects payload: ReplaceClip so the tag ranges
+                // are undoable + validated; the clip may have been
+                // deleted while the worker scanned.
+                if (const Clip* clip =
+                        FindClip(project_, result.tags_clip_id);
+                    clip != nullptr) {
+                    Clip next = *clip;
+                    const std::size_t count = result.tags.size();
+                    next.tags = std::move(result.tags);
+                    std::string rep_error;
+                    if (history_.ReplaceClip(result.tags_clip_id, next,
+                                             &rep_error)) {
+                        inspector_->SetClip(
+                            FindClip(project_, result.tags_clip_id));
+                        NotifyProjectChanged();
+                        SetStatus("AI: " + std::to_string(count) +
+                                  " object tag range(s)");
+                    } else {
+                        SetStatus("AI tags failed: " + rep_error, true);
+                    }
+                } else {
+                    SetStatus("AI tags: clip no longer exists", true);
+                }
+            } else if (ok && !result.bounce_path.empty()) {
                 std::int64_t id = 0;
                 std::string imp_err;
                 // Poster decode goes to the media-prep worker — same

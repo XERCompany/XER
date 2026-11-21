@@ -539,6 +539,12 @@ add_subdirectory(src/ecosystem)
 add_subdirectory(src/image)
 add_subdirectory(src/video)
 add_subdirectory(src/media)
+# GPU video seams (CUDA hwaccel decode / NVENC encode / frame-render
+# transport). Runtime-probed — no CUDA toolkit needed, GPU-less
+# machines report "unavailable". Needs YA.VideoFrame (src/video) and
+# YA.UIRenderIPC (src/ui) targets defined above.
+add_subdirectory(src/gpu_video)
+add_subdirectory(src/frame_render)
 add_subdirectory(src/native)
 add_subdirectory(src/lunca)
 add_subdirectory(src/watch)

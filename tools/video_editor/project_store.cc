@@ -764,6 +764,45 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                 }
             }
 
+            // tags: optional array of AI find-objects ranges
+            // {start, end, label, confidence} in SOURCE seconds
+            // (ClipTag contract — timeline_model.h). Wrong types are
+            // hard errors like the rest of primary clip data; a
+            // reversed range self-heals to a point tag, non-finite
+            // numbers drop the entry.
+            if (cj.isMember("tags")) {
+                const Json::Value& tj = cj["tags"];
+                if (!tj.isArray()) {
+                    return Fail(error_out,
+                                where + ".tags: expected array");
+                }
+                for (Json::ArrayIndex j = 0; j < tj.size(); ++j) {
+                    const Json::Value& tt = tj[j];
+                    const std::string twhere =
+                        where + ".tags[" + std::to_string(j) + "]";
+                    if (!tt.isObject()) {
+                        return Fail(error_out,
+                                    twhere + ": expected object");
+                    }
+                    Reader tr{tt, twhere, error_out};
+                    ClipTag tag;
+                    if (!tr.GetF64("start", tag.start, &tag.start) ||
+                        !tr.GetF64("end", tag.end, &tag.end) ||
+                        !tr.GetStr("label", tag.label, &tag.label) ||
+                        !tr.GetF32("confidence", tag.confidence,
+                                   &tag.confidence)) {
+                        return false;
+                    }
+                    if (!std::isfinite(tag.start) ||
+                        !std::isfinite(tag.end) ||
+                        !std::isfinite(tag.confidence)) {
+                        continue;   // corrupt entry — drop, keep loading
+                    }
+                    if (tag.end < tag.start) tag.end = tag.start;
+                    clip.tags.push_back(std::move(tag));
+                }
+            }
+
             project.clips.push_back(clip);
         }
     }
@@ -1000,6 +1039,19 @@ Json::Value ClipToJson(const Clip& clip) {
             audio_fx.append(fj);
         }
         out["audio_fx"] = audio_fx;
+    }
+
+    if (!clip.tags.empty()) {
+        Json::Value tags(Json::arrayValue);
+        for (const ClipTag& tag : clip.tags) {
+            Json::Value tj(Json::objectValue);
+            tj["start"] = tag.start;
+            tj["end"] = tag.end;
+            tj["label"] = tag.label;
+            tj["confidence"] = static_cast<double>(tag.confidence);
+            tags.append(tj);
+        }
+        out["tags"] = tags;
     }
 
     if (!clip.masks.empty()) {

@@ -65,6 +65,12 @@ public:
         // native editor for clip.audio_fx[fx_index].
         std::function<void(const std::string& clip_id,
                            std::size_t fx_index)> on_open_audio_fx_editor;
+        // AI TAGS section: "Find Objects" starts the async detection
+        // scan (tags land on the clip when it finishes); "Clear"
+        // empties Clip::tags.
+        std::function<void(const std::string& clip_id)>
+            on_ai_find_objects;
+        std::function<void(const std::string& clip_id)> on_ai_clear_tags;
     };
 
     explicit InspectorWidget(Hooks hooks = {});
@@ -213,6 +219,8 @@ private:
         afx_edit_btns_;
     std::shared_ptr<XER::UI::Widgets::Checkbox> muted_;
     std::shared_ptr<XER::UI::Widgets::Button> apply_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> ai_find_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> ai_clear_btn_;
     std::shared_ptr<XER::UI::Widgets::Combobox> transition_combo_;
     std::shared_ptr<XER::UI::Widgets::TextInput>
         transition_duration_input_;
