@@ -230,9 +230,12 @@ if(TARGET unofficial::skia::skia)
     else()
         target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope}
             unofficial::skia::skia)
-        target_compile_definitions(XER_VideoEditor_Core PRIVATE
-            XER_VE_HAS_SKIA=1)
     endif()
+    # Bundle/interface scope so dependents (the test suite) can tell
+    # which text rasterizer RenderClipText will use — same pattern as
+    # XER_VE_HAS_OCIO/XER_VE_HAS_RSVG above.
+    target_compile_definitions(XER_VideoEditor_Core ${_xer_ve_scope}
+        XER_VE_HAS_SKIA=1)
 endif()
 
 if(NOT XER_YA_DLLS)

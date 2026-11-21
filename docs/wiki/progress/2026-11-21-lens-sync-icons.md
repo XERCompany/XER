@@ -219,3 +219,22 @@ Smoke **32/32 OK** (new checks: `generated_layers`, `text_style_ext`,
 - **MediaBrowser**: search box, grid/list toggle, Select sort,
   kind chips on tiles, real min/max waveform strips on audio tiles
   (MediaPrep peaks, LRU'd), footer counters.
+
+
+## Perf + live-verify + test-fix batch (same day, uncommitted)
+
+Smoke 32/32 + XER_VideoEditor_Tests 20 fails -> 0.
+
+- **Preview-quality**: Compositor::SetPreviewQuality threaded
+  monitor quality menu -> PreviewEngine worker. Heavy fx render on
+  downscaled frame + upscale; bokeh_dof 1912 -> 124ms at quarter.
+  Full path also micro-optimized (Vogel tables, row early-out) and
+  stays PIXEL-IDENTICAL (smoke asserts). Hidden --bench-effects flag.
+- **URL import live-verified**: real HTTP+HTTPS+redirects+CD headers
+  + real YouTube yt-dlp download all pass. Bugs fixed: effective-URL
+  naming (URLRequestJob gained effective_url out-param),
+  `-f best` -> `bv*+ba/b` (modern YT has no merged formats), .cube
+  CRLF stripping (all shipped LUTs are CRLF).
+- **Test suite**: stale bitmap-font expectations branched on
+  XER_VE_HAS_SKIA (propagated to test target); stale "XER Studio"
+  title expectation updated.
