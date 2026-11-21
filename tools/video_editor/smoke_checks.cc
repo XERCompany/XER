@@ -33,6 +33,7 @@
 #include "content/video/video_info.h"
 #include "export_engine.h"
 #include "export_preset.h"
+#include "font_catalog.h"
 #include "frame.h"
 #include "frame_exporter.h"
 #include "generated_source.h"
@@ -40,6 +41,7 @@
 #include "helper/string_utils.h"
 #include "js_fx.h"
 #include "keyboard_map.h"
+#include "lut_manager.h"
 #include "media_catalog.h"
 #include "media_worker_client.h"
 #include "media_worker_protocol.h"
@@ -51,6 +53,7 @@
 #include "timecode.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "url_import.h"
 #include "worker_pipe.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
@@ -567,6 +570,91 @@ std::string CheckGeneratedSource() {
         !text_frame.IsValid()) {
         return "Text frame generation failed";
     }
+    return {};
+}
+
+// Extended text-effect style set (text_style.h): a fully styled text
+// clip must render non-empty pixels, the param serializer must round
+// trip through the parser, and — when the build links Skia — the
+// system font catalog must enumerate at least one family.
+std::string CheckTextStyleExt() {
+    Clip styled = MakeGeneratedClip(
+        "styled", 0, 0.0, 1.0, SourceKind::Text,
+        "Smoke Extended | font=Arial weight=700 italic=1 underline=1 "
+        "size=28 tracking=1.5 align=center valign=middle x=4 y=2 "
+        "w=300 h=80 radius=8 color=#FF8800FF opacity=0.95 outline=1 "
+        "outline_color=#000000FF bg=#20202080 shadow=1 shadow_x=3 "
+        "shadow_y=3 shadow_blur=2 shadow_color=#000000AA baseline=0");
+    video::Frame styled_frame;
+    if (!GenerateSourceFrame(styled, 0.0, 320, 180, &styled_frame) ||
+        !styled_frame.IsValid()) {
+        return "extended text clip failed to generate";
+    }
+    const bool any_pixels =
+        std::any_of(styled_frame.Data(),
+                    styled_frame.Data() + styled_frame.DataSize(),
+                    [](std::uint8_t byte) { return byte != 0; });
+    if (!any_pixels) {
+        return "extended text clip rendered fully transparent";
+    }
+    // ...versus an empty text clip, which stays a 1x1 zero frame.
+    Clip empty = MakeGeneratedClip("empty", 0, 0.0, 1.0,
+                                   SourceKind::Text, "");
+    video::Frame empty_frame;
+    if (!GenerateSourceFrame(empty, 0.0, 320, 180, &empty_frame) ||
+        !empty_frame.IsValid()) {
+        return "empty text clip failed to generate";
+    }
+    if (empty_frame.DataSize() == styled_frame.DataSize() &&
+        std::memcmp(empty_frame.Data(), styled_frame.Data(),
+                    empty_frame.DataSize()) == 0) {
+        return "styled text renders identically to empty text";
+    }
+
+    // Parse -> Serialize -> Parse round trip on every new field.
+    const ClipTextStyle a = ParseClipTextStyle(styled.source.param);
+    const ClipTextStyle b =
+        ParseClipTextStyle(SerializeClipTextStyle(a));
+    if (b.text != a.text || b.font_family != a.font_family ||
+        b.font_weight != a.font_weight || b.italic != a.italic ||
+        b.underline != a.underline || b.strike != a.strike ||
+        b.size_px != a.size_px ||
+        std::fabs(b.letter_spacing - a.letter_spacing) > 0.01f ||
+        std::fabs(b.line_spacing - a.line_spacing) > 0.01f ||
+        b.align != a.align || b.valign != a.valign ||
+        std::fabs(b.pos_x - a.pos_x) > 0.01f ||
+        std::fabs(b.pos_y - a.pos_y) > 0.01f ||
+        std::fabs(b.box_w - a.box_w) > 0.01f ||
+        std::fabs(b.box_h - a.box_h) > 0.01f ||
+        std::fabs(b.corner_radius - a.corner_radius) > 0.01f ||
+        std::fabs(b.rotate_deg - a.rotate_deg) > 0.01f ||
+        std::fabs(b.baseline_px - a.baseline_px) > 0.01f ||
+        b.color != a.color ||
+        std::fabs(b.fill_opacity - a.fill_opacity) > 0.01f ||
+        std::fabs(b.outline_px - a.outline_px) > 0.01f ||
+        b.outline_color != a.outline_color || b.bg_color != a.bg_color ||
+        b.shadow_explicit != a.shadow_explicit ||
+        std::fabs(b.shadow_x - a.shadow_x) > 0.01f ||
+        std::fabs(b.shadow_y - a.shadow_y) > 0.01f ||
+        std::fabs(b.shadow_blur - a.shadow_blur) > 0.01f ||
+        b.shadow_color != a.shadow_color) {
+        return "text style round trip mismatch: " +
+               SerializeClipTextStyle(b);
+    }
+    // A family name with spaces must survive the token grammar.
+    const ClipTextStyle spaced = ParseClipTextStyle(
+        "T | font=Segoe%20UI weight=400");
+    if (spaced.font_family != "Segoe UI") {
+        return "percent-encoded font family mis-decoded: " +
+               spaced.font_family;
+    }
+
+    if (FontCatalog::Available() && FontCatalog::FamilyCount() <= 0) {
+        return "font catalog enumerated zero families";
+    }
+    std::fprintf(stderr, "  font catalog: %d families (skia %s)\n",
+                 FontCatalog::FamilyCount(),
+                 FontCatalog::Available() ? "on" : "off");
     return {};
 }
 
@@ -1896,6 +1984,132 @@ std::string CheckFxScriptWorker() {
 #endif
 }
 
+// `generated_layers` — the "Add Color Matte / Color Bars / Text"
+// flow headless end to end: clips are created through the MODEL ops
+// (AddTrack + AddClip with unbounded video bounds — the same calls
+// the app's AddGeneratedClipAt issues through TimelineHistory),
+// composited through the real Compositor (each kind must produce its
+// signature pixels — proving no clip took a decoder path), then the
+// project round-trips through ProjectStore so source.kind +
+// source.param + the Clip::name layer label all survive save/load.
+std::string CheckGeneratedLayers() {
+    Project project;
+    project.width = 160;
+    project.height = 90;
+    project.fps_num = 30;
+    project.fps_den = 1;
+    std::string err;
+    if (AddTrack(project, TrackKind::Video, "V1") != 0 ||
+        AddTrack(project, TrackKind::Video, "V2") != 1) {
+        return "AddTrack failed";
+    }
+
+    const MediaBounds gen_bounds{0.0, true};   // unbounded, has video
+    Clip matte = MakeGeneratedClip("matte", 0, 0.0, 6.0,
+                                   SourceKind::ColorMatte, "#3366CC");
+    matte.name = "Backdrop";
+    Clip bars = MakeGeneratedClip("bars", 1, 0.0, 3.0,
+                                  SourceKind::ColorBars, "smpte75");
+    Clip text = MakeGeneratedClip("title", 1, 3.0, 3.0,
+                                  SourceKind::Text, "Smoke | size=24");
+    text.name = "Smoke Title";
+    for (const Clip* clip : {&matte, &bars, &text}) {
+        if (!AddClip(project, *clip, gen_bounds, &err)) {
+            return "AddClip rejected a generated clip: " + err;
+        }
+    }
+
+    Compositor compositor;
+    if (!compositor.Init(project, {}, &err)) {
+        return "Compositor::Init failed: " + err;
+    }
+    std::vector<std::uint8_t> bgra;
+    const auto pixel = [](const std::vector<std::uint8_t>& buf,
+                          int x, int y) {
+        const auto* p =
+            buf.data() + (static_cast<std::size_t>(y) * 160 + x) * 4u;
+        return std::array<std::uint8_t, 4>{p[0], p[1], p[2], p[3]};
+    };
+
+    // t=1.5: V2 SMPTE-75 bars composite over the V1 matte — the first
+    // column is 191 gray, the last is blue (BGRA byte order).
+    if (!compositor.RenderFrameAt(1.5, &bgra, &err)) {
+        compositor.Shutdown();
+        return "RenderFrameAt(bars) failed: " + err;
+    }
+    if (bgra.size() != static_cast<std::size_t>(160) * 90 * 4) {
+        compositor.Shutdown();
+        return "rendered buffer has the wrong size";
+    }
+    if (pixel(bgra, 10, 45) !=
+            std::array<std::uint8_t, 4>{191, 191, 191, 255} ||
+        pixel(bgra, 159, 45) !=
+            std::array<std::uint8_t, 4>{191, 0, 0, 255}) {
+        compositor.Shutdown();
+        return "ColorBars pixels wrong at t=1.5";
+    }
+
+    // t=4.5: V2 text composites over the matte — a bottom-right pixel
+    // is the matte color (#3366CC -> BGRA CC,66,33 — hex parse proven
+    // end to end) while a bright glyph pixel must exist somewhere
+    // (the text actually drew).
+    if (!compositor.RenderFrameAt(4.5, &bgra, &err)) {
+        compositor.Shutdown();
+        return "RenderFrameAt(text) failed: " + err;
+    }
+    compositor.Shutdown();
+    if (pixel(bgra, 159, 89) !=
+        std::array<std::uint8_t, 4>{0xCC, 0x66, 0x33, 0xFF}) {
+        return "matte underlay pixel wrong at t=4.5";
+    }
+    const bool any_glyph = std::any_of(
+        bgra.begin(), bgra.end(),
+        [](std::uint8_t byte) { return byte >= 200; });
+    if (!any_glyph) {
+        return "text layer produced no glyph pixels";
+    }
+
+    // Persistence: kind + param + name + placement all survive a
+    // .xerproj round trip — the LAYERS panel reads Clip::name, so a
+    // silent drop would strip every user-facing label on reload.
+    const std::string path =
+        Utf8Path(SmokeTempDir() / "generated_layers.xerproj");
+    if (!ProjectStore::Save(project, path, &err)) {
+        return "Save failed: " + err;
+    }
+    Project loaded;
+    if (!ProjectStore::Load(path, &loaded, &err)) {
+        return "Load failed: " + err;
+    }
+    const struct {
+        const char* id;
+        SourceKind kind;
+        const char* param;
+        const char* name;
+        int track;
+        double start;
+        double duration;
+    } kExpect[] = {
+        {"matte", SourceKind::ColorMatte, "#3366CC", "Backdrop",
+         0, 0.0, 6.0},
+        {"bars", SourceKind::ColorBars, "smpte75", "", 1, 0.0, 3.0},
+        {"title", SourceKind::Text, "Smoke | size=24", "Smoke Title",
+         1, 3.0, 3.0},
+    };
+    for (const auto& expect : kExpect) {
+        const Clip* clip = FindClip(loaded, expect.id);
+        if (clip == nullptr || clip->source.kind != expect.kind ||
+            clip->source.param != expect.param ||
+            clip->name != expect.name || clip->track != expect.track ||
+            clip->timeline_start != expect.start ||
+            clip->duration != expect.duration) {
+            return "generated clip did not survive the round trip: " +
+                   std::string(expect.id);
+        }
+    }
+    return {};
+}
+
 // Shared import filter (smoke_checks.h) — the same predicate the
 // file dialog's pattern list and the OS file-drop filter are built
 // from: common video/audio/still extensions accept (any case),
@@ -1914,6 +2128,136 @@ std::string CheckMediaImportFilter() {
           "dir.name/file", "archive.mp4x", "xmp4"}) {
         if (IsMediaImportPath(path)) {
             return std::string("accepted non-media path: ") + path;
+        }
+    }
+    return {};
+}
+
+// LUT .cube parser (lut_manager.h) — synthetic strings only; no file
+// system or OCIO needed. TITLE/size/data extraction on a well-formed
+// 3D cube, tolerant-but-warned short bodies, hard reject on cubes with
+// no declared size or no data rows, and the 1D variant.
+std::string CheckLutManager() {
+    const std::string cube =
+        "# leading comment\n"
+        "TITLE \"Smoky Two\"\n"
+        "LUT_3D_SIZE 2\n"
+        "DOMAIN_MIN 0 0 0\n"
+        "DOMAIN_MAX 1 1 1\n"
+        "0 0 0\n1 0 0\n0 1 0\n0 0 1\n"
+        "1 1 0\n1 0 1\n0 1 1\n1 1 1 # trailing comment\n";
+    Lut::CubeData data;
+    std::string error;
+    if (!Lut::ParseCubeText(cube, &data, &error)) {
+        return "ParseCubeText rejected a valid cube: " + error;
+    }
+    if (data.title != "Smoky Two" || !data.is_3d || data.size != 2 ||
+        data.data.size() != 24) {
+        return "ParseCubeText produced wrong title/size/data";
+    }
+    // Short body: parse succeeds but surfaces the row-count warning.
+    error.clear();
+    if (!Lut::ParseCubeText("LUT_3D_SIZE 2\n0 0 0\n", &data, &error) ||
+        error.empty()) {
+        return "short cube body missed its warning";
+    }
+    // No declared size / no data rows are hard failures.
+    if (Lut::ParseCubeText("TITLE \"x\"\n0 0 0\n", &data, nullptr)) {
+        return "size-less cube accepted";
+    }
+    if (Lut::ParseCubeText("LUT_3D_SIZE 2\n", &data, nullptr)) {
+        return "empty-body cube accepted";
+    }
+    // 1D variant: size rows, not size^3.
+    error.clear();
+    if (!Lut::ParseCubeText("LUT_1D_SIZE 2\n0 0 0\n1 1 1\n", &data,
+                            &error) ||
+        data.is_3d || data.size != 2 || data.data.size() != 6) {
+        return "1D cube parse failed";
+    }
+    return {};
+}
+
+// URL import helpers (url_import.h) — table-driven classification
+// (platform host / direct / invalid) plus the filename machinery:
+// Content-Disposition extraction, URL basename, percent-decoding and
+// Windows filename sanitizing. No network — Download() itself is
+// exercised live, never in smoke.
+std::string CheckUrlImport() {
+    using UrlKind = UrlImport::UrlKind;
+    const struct {
+        const char* url;
+        UrlKind kind;
+    } cases[] = {
+        {"https://www.youtube.com/watch?v=abc", UrlKind::kPlatform},
+        {"https://youtu.be/abc", UrlKind::kPlatform},
+        {"https://m.youtube.com/watch?v=x", UrlKind::kPlatform},
+        {"https://vimeo.com/12345", UrlKind::kPlatform},
+        {"https://www.tiktok.com/@u/video/1", UrlKind::kPlatform},
+        {"https://www.instagram.com/reel/x/", UrlKind::kPlatform},
+        {"https://clips.twitch.tv/x", UrlKind::kPlatform},
+        {"HTTPS://YOUTUBE.COM/watch?v=x", UrlKind::kPlatform},
+        // Suffix lookalikes must NOT classify as the platform.
+        {"https://notyoutube.com/x", UrlKind::kDirect},
+        {"https://youtube.com.evil.com/x", UrlKind::kDirect},
+        {"https://cdn.example.com/clip.mp4", UrlKind::kDirect},
+        {"http://files.host/a.wav?dl=1", UrlKind::kDirect},
+        {"https://user@h.example.com/m.mkv", UrlKind::kDirect},
+        {"ftp://h/f.mp4", UrlKind::kInvalid},
+        {"file:///c:/a.mp4", UrlKind::kInvalid},
+        {"C:/media/a.mp4", UrlKind::kInvalid},
+        {"youtube.com/watch?v=x", UrlKind::kInvalid},
+        {"https:///x", UrlKind::kInvalid},
+        {"", UrlKind::kInvalid},
+    };
+    for (const auto& c : cases) {
+        if (UrlImport::ClassifyUrl(c.url) != c.kind) {
+            return std::string("ClassifyUrl(\"") + c.url +
+                   "\") wrong kind";
+        }
+    }
+    // Host extraction (used for status text + platform match).
+    if (UrlImport::HostOf("https://YouTube.COM:443/watch") !=
+        "youtube.com") {
+        return "HostOf failed port/case handling";
+    }
+    // Filename machinery.
+    if (UrlImport::FilenameFromContentDisposition(
+            "attachment; filename=\"clip final.mp4\"") !=
+        "clip final.mp4") {
+        return "Content-Disposition quoted filename failed";
+    }
+    if (UrlImport::FilenameFromContentDisposition(
+            "attachment; filename*=UTF-8''%E2%82%AC%20clip.mp4") !=
+        "\xE2\x82\xAC clip.mp4") {
+        return "Content-Disposition RFC5987 filename failed";
+    }
+    if (!UrlImport::FilenameFromContentDisposition("inline").empty()) {
+        return "Content-Disposition phantom filename";
+    }
+    if (UrlImport::UrlBasename(
+            "https://h/a/b/my%20clip.mp4?dl=1#f") != "my clip.mp4" ||
+        !UrlImport::UrlBasename("https://h/a/").empty() ||
+        !UrlImport::UrlBasename("https://h").empty()) {
+        return "UrlBasename failed";
+    }
+    if (UrlImport::PercentDecode("%41%42") != "AB") {
+        return "PercentDecode failed";
+    }
+    struct {
+        const char* in;
+        const char* want;
+    } sanitize[] = {
+        {"a<b>c:d\"e/f\\g|h?i*j", "a_b_c_d_e_f_g_h_i_j"},
+        {"clip.mp4", "clip.mp4"},
+        {"name.", "name"},
+        {"...", "download"},
+        {"", "download"},
+    };
+    for (const auto& c : sanitize) {
+        if (UrlImport::SanitizeFilename(c.in) != c.want) {
+            return std::string("SanitizeFilename(\"") + c.in +
+                   "\") wrong";
         }
     }
     return {};
@@ -1938,6 +2282,7 @@ constexpr CheckEntry kChecks[] = {
     {"keyboard_map", &CheckKeyboardMap},
     {"export_presets", &CheckExportPresets},
     {"generated_source", &CheckGeneratedSource},
+    {"text_style_ext", &CheckTextStyleExt},
     {"compositor_render", &CheckCompositorRender},
     {"screenshot_png", &CheckScreenshotPng},
     {"ui_screenshot_diff", &CheckUiScreenshotDiff},
@@ -1946,9 +2291,12 @@ constexpr CheckEntry kChecks[] = {
     {"audio_mixer", &CheckAudioMixer},
     {"audio_sync", &CheckAudioSync},
     {"project_store", &CheckProjectStore},
+    {"generated_layers", &CheckGeneratedLayers},
     {"project_autosave", &CheckProjectAutosave},
     {"media_catalog", &CheckMediaCatalog},
     {"media_import_filter", &CheckMediaImportFilter},
+    {"lut_manager", &CheckLutManager},
+    {"url_import", &CheckUrlImport},
     {"probe_classification", &CheckProbeClassification},
     {"poster_cache_lru", &CheckPosterCacheLru},
     {"media_worker", &CheckMediaWorker},

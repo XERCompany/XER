@@ -174,3 +174,48 @@ Smoke **26/26 OK** (new checks: `media_worker`, `sync_worker`, `fx_worker`).
   transitions in-process in editor; fx_validate unused by UI yet.
 - All workers under WinJobGroup (die with editor); FileDescriptions
   registered in xer_target_desc.
+
+
+## Bubbling + cancel + diff-batch (same day; partially committed in 281d465)
+
+Smoke **27/27** (new: `ui_screenshot_diff`).
+
+- `widget_tree.cc`: Click now bubbles up GetParent() when the hit
+  target returns false (MouseMove stays target-only, deliberate).
+  `Item` gained SetOnClick/SetOnDoubleClick; effects/plugins/color
+  panels converted to ScrollArea + Item rows.
+- Audio-sync Cancel: SyncAudioClips moved off the UI thread onto a
+  Lab::AsyncOp (blocking poll removed — the old cancel flag was dead
+  code); status-strip Cancel button + Esc -> cancel flag +
+  AsyncOp::RequestCancel + SyncMediaPipe().KillWorker(); late plans
+  dropped, live-project re-resolve.
+- `ui_screenshot_diff` check: program-frame baseline PNG
+  (tools/video_editor/tests/baselines/) with mean-abs/hot-pixel
+  tolerances; full-UI baseline rejected (font rasterization too
+  machine-dependent); XER_VE_UPDATE_BASELINE=1 refreshes.
+
+
+## Layers/Text/LUT/URL/MediaBrowser batch (same day, uncommitted)
+
+Smoke **32/32 OK** (new checks: `generated_layers`, `text_style_ext`,
+`lut_manager`, `url_import`).
+
+- **Generated layers**: Clip::name added; timeline empty-lane context
+  menu (Add Color Matte/Text/Bars/Media Here at lane+time), New Layer
+  dialog, LAYERS dock panel, TrackAtDropPoint -> bin drops land on
+  target lane; serialization round-trips verified.
+- **Text FX**: `text_style.{h,cc}` full ClipTextStyle (family/weight/
+  slant, letter+line spacing, 9-way align, box+radius, stroke, shadow,
+  underline/strike, opacity); title_editor rebuilt as classic text
+  inspector on DS widgets; `font_catalog` enumerates 132 families via
+  SkFontMgr; `font_manager` dialog (search/styles/live preview).
+- **LUT**: `lut_manager` scans luts/ dirs, parses .cube, publishes
+  into shared OCIO profile table (new mutex'd Mutate/FindCopy API in
+  color/ocio_transform — fill-once-at-boot was racy).
+- **URL import**: `url_import` uses Url::URLRequestJob for direct
+  http(s); yt-dlp (installed via pacman, clang64) handles platform
+  URLs w/ progress + WinJobGroup; File-menu + bin-menu entries;
+  dialog is Field/TextInput modal.
+- **MediaBrowser**: search box, grid/list toggle, Select sort,
+  kind chips on tiles, real min/max waveform strips on audio tiles
+  (MediaPrep peaks, LRU'd), footer counters.

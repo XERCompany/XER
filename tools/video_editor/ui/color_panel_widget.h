@@ -5,16 +5,17 @@
 // profile name plus a small subtitle — the LUT file name or the
 // effective "src → display/view" chain.
 //
-// Click selects a row; the "Add to Clip" button (Enter or a
-// double-click does the same) emits the on_add_effect callback with
-// the ClipEffect type string "ocio:<name>" — the app wraps the
-// mutation in TimelineHistory and applies it to the current
-// selection. A read-only header line reports whether the monitor
-// display transform (OcioConfig.enabled) is on. Refresh() re-reads
+// Rows are real Widgets::Item children inside a ScrollArea (section
+// headers stay drawn, per the drawn-header convention): a click
+// selects (Item on_click), a double-click or the "Add to Clip" button
+// (Enter works too) emits the on_add_effect callback with the
+// ClipEffect type string "ocio:<name>" — the app wraps the mutation
+// in TimelineHistory and applies it to the current selection. A
+// read-only header line reports whether the monitor display
+// transform (OcioConfig.enabled) is on. Refresh() re-reads
 // SharedOcioProfiles() after color.yaml has been (re)loaded.
 #pragma once
 
-#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -25,7 +26,9 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class Item;
 class Label;
+class ScrollArea;
 }
 
 namespace XER::VideoEditor::Ui {
@@ -33,6 +36,7 @@ namespace XER::VideoEditor::Ui {
 class ColorPanelWidget final : public XER::UI::Widgets::Widget {
 public:
     static std::shared_ptr<ColorPanelWidget> Create();
+    ~ColorPanelWidget() override;
 
     // Emitted by "Add to Clip" with the profile effect type string
     // "ocio:<name>" — the app adds a ClipEffect to the selection.
@@ -76,12 +80,21 @@ private:
         std::string name;   // profile name (rows only)
     };
 
+    // ScrollArea content mixing drawn section headers with Item rows —
+    // defined in the .cc (incomplete type is fine: the destructor is
+    // out-of-line there).
+    class RowList;
+
     void EnsureChildren();
+    // (Re)builds the RowList lines from entries_ — Items keep their
+    // entry index through a rebuild via SetOnClick's capture.
+    void RebuildList();
     void UpdateAddEnabled();
     void EmitSelection();
     float EntryHeight(int index) const;
     float EntryTop(int index) const;   // content-space y of the line
-    int RowAt(const XER::UI::Layout::Point& position) const;
+    void SelectRow(int entry_index);
+    void EnsureSelectionVisible();
     void AddSelected();
     void SetStatus(const std::string& text);
 
@@ -89,21 +102,15 @@ private:
     std::function<void(const std::string&)> on_selection_changed_;
     std::vector<Entry> entries_;    // headers interleaved with rows
     int selected_ = -1;             // index into entries_ (rows only)
-    int hovered_ = -1;
-    float scroll_y_ = 0.0f;
-    float content_height_ = 0.0f;
-    float rows_top_ = 0.0f;         // y where the list begins (layout)
-    float rows_bottom_ = 0.0f;      // y where the list viewport ends
     bool children_attached_ = false;
     bool ocio_enabled_ = false;     // OcioConfig.enabled at Refresh()
-    // Double-click detection: second click on the same row adds it.
-    int last_click_row_ = -1;
-    std::chrono::steady_clock::time_point last_click_time_{};
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> ocio_state_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
+    std::shared_ptr<XER::UI::Widgets::ScrollArea> scroll_area_;
+    std::shared_ptr<RowList> list_;
 };
 
 }  // namespace XER::VideoEditor::Ui

@@ -22,6 +22,7 @@
 #include "source_edit.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "url_import.h"
 #include "lab/async_op.h"
 #include "playback/preview_engine.h"
 #include "browser_panel_widget.h"
@@ -32,12 +33,15 @@
 #include "history_panel.h"
 #include "inspector_widget.h"
 #include "lab_panel.h"
+#include "layers_panel.h"
 #include "markers_panel.h"
 #include "media_bin_widget.h"
 #include "mixer_panel.h"
 #include "monitor_widget.h"
 #include "nav_rail_widget.h"
+#include "new_layer_dialog.h"
 #include "plugins_panel_widget.h"
+#include "font_manager.h"
 #include "settings_dialog.h"
 #include "shortcuts_overlay.h"
 #include "source_monitor_widget.h"
@@ -45,6 +49,7 @@
 #include "status_toast.h"
 #include "timeline_widget.h"
 #include "title_editor.h"
+#include "url_import_dialog.h"
 #include "waveform_panel.h"
 #include "workspace_layout.h"
 #include "vst3_editor.h"
@@ -135,6 +140,11 @@ private:
     bool LoadProject(const std::string& utf8_path);
     bool SaveProject(bool choose_path = false);
     void ImportMedia();
+    // Media-bin/File "Import from URL…" — shows the URL dialog;
+    // StartUrlImport runs the download on url_op_ and Tick() lands
+    // the file through the shared catalog-import path.
+    void ImportFromUrl();
+    void StartUrlImport(const std::string& url);
     // Per-file catalog import shared by the file dialog and OS drops:
     // Open + Import + selection update. No status-bar writes, no
     // RefreshCatalog/poster requests — callers batch those and own
@@ -156,8 +166,12 @@ private:
     // Same placement rules as AddMediaToTimeline but at an explicit
     // timeline position — the media-bin drag->drop path lands the
     // clip under the cursor instead of at the playhead.
+    // preferred_track >= 0 wins when its kind matches the media and
+    // it is unlocked (bin drop on an empty lane); a mismatched or
+    // locked target falls back to the first free track of the kind.
     void AddMediaToTimelineAt(const std::string& path,
-                              double at_seconds);
+                              double at_seconds,
+                              int preferred_track = -1);
     // Media-bin drag hooks: on_drop fires when a card drag releases
     // over the timeline bounds (clip lands at the drop time);
     // on_drag_hover drives the timeline's drop-target affordance.
@@ -269,9 +283,29 @@ private:
     void RenameMarkerAt(double t, const std::string& name);
     void SetWorkAreaRange(double in_s, double out_s);
     void SetTrackFlag(int track, char which, bool on);  // 'm','h','l'
-    void SetRightTab(int tab);                          // 0..9
+    void SetRightTab(int tab);                          // 0..10
     void ApplyProjectSettings(const ProjectSettings& settings);
+    // "New Item" placements: a generated clip on the target video
+    // track at the playhead (menu) or an explicit lane+time (timeline
+    // context menu). track < 0 picks TargetVideoTrack(); t < 0 the
+    // playhead; empty name/param fall back to the kind defaults.
     void AddGeneratedClip(SourceKind kind);
+    void AddGeneratedClipAt(SourceKind kind, int track, double at_seconds,
+                            const std::string& name,
+                            const std::string& param, double duration);
+    // Track for "New Item" inserts: the selected clip's track when it
+    // is an unlocked video lane, else the first unlocked video track,
+    // else -1 (caller creates one). Same rule for the LAYERS panel's
+    // active-track display.
+    int TargetVideoTrack() const;
+    // Color matte modal (new_layer_dialog.h): pending_layer_*
+    // captures the context-menu insert point so Apply lands on the
+    // lane/time that opened the dialog.
+    void ShowNewLayerDialog(int track, double at_seconds);
+    // "Add Media…" picker: imports the file then places it on
+    // `preferred_track` at `at_seconds` (the AddMediaToTimelineAt
+    // fallback rules apply).
+    void ShowAddMediaDialog(int preferred_track, double at_seconds);
     void AddVst3FxToSelectedClip();
     // Open clip.audio_fx[fx_index]'s native editor; fx_index < 0
     // picks the first enabled fx (menu path). The popup session is
@@ -301,6 +335,9 @@ private:
     void RecoverAutosave();
     void OpenSpeedDialog();
     void OpenTitleEditor();
+    // System font browser (Tools > Fonts…); applies the chosen face
+    // to the selected Text clip's style param.
+    void OpenFontManager();
     void ApplyClipSpeed(const std::string& clip_id, double rate,
                         bool ripple);
     void AddAdjustmentClip();
@@ -386,6 +423,17 @@ private:
     AiResult ai_result_;
     float ai_progress_shown_ = -1.0f;
 
+    // URL-download background job — same AsyncOp/marshal pattern as
+    // ai_op_: the worker only writes url_result_/url_status_ under the
+    // mutex; Tick() pops the result and runs the catalog import on this
+    // thread (ImportMediaFile is not thread-safe — it touches
+    // selected_media_path_ and status).
+    Lab::AsyncOp url_op_;
+    std::mutex url_result_mutex_;
+    UrlImport::Result url_result_;
+    std::string url_status_;          // last worker status line
+    float url_progress_shown_ = -1.0f;
+
     // Audio-sync background job — the same AsyncOp/marshal pattern as
     // ai_op_ but a dedicated slot so a sync never evicts an AI task.
     // The worker reads a project snapshot (UI edits keep flowing
@@ -441,7 +489,16 @@ private:
     std::shared_ptr<MixerPanelWidget> mixer_panel_;
     std::shared_ptr<ShortcutsOverlay> shortcuts_overlay_;
     std::shared_ptr<SpeedDialog> speed_dialog_;
+    std::shared_ptr<UrlImportDialog> url_dialog_;
     std::shared_ptr<TitleEditor> title_editor_;
+    std::shared_ptr<FontManager> font_manager_;
+    std::shared_ptr<NewLayerDialog> new_layer_dialog_;
+    std::shared_ptr<LayersPanelWidget> layers_panel_;
+    // Context-menu insert point the matte dialog applies to —
+    // track < 0 / time < 0 means the default (TargetVideoTrack /
+    // playhead) was in effect when the dialog opened.
+    int pending_layer_track_ = -1;
+    double pending_layer_time_ = -1.0;
     std::shared_ptr<ExportQueuePanelWidget> export_queue_;
     std::shared_ptr<WaveformPanelWidget> waveform_panel_;
     std::shared_ptr<StatusToastWidget> status_toast_;
@@ -450,7 +507,7 @@ private:
     std::shared_ptr<XER::UI::Widgets::Tabs> right_tabs_;
     std::shared_ptr<TabStripScroll> tab_strip_;
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Web
+    // 8 Color, 9 Web, 10 Lyr
     int right_tab_ = 0;
     double timeline_fraction_ = 0.32;  // workspace layout knob
     std::vector<ExportJobRow> export_jobs_;

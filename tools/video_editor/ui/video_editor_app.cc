@@ -41,6 +41,8 @@
 #include "io/oiio_image.h"
 #include "lab/async_op.h"
 #include "lab/object_ops.h"
+#include "lut_manager.h"
+#include "lut_manager.h"
 #include "ai/audio_pcm.h"
 #include "ai/beat_markers.h"
 #include "ai/whisper_transcribe.h"
@@ -602,6 +604,7 @@ void VideoEditorAppWidget::EnsureChildren() {
 
     MediaBinWidget::Hooks media_hooks;
     media_hooks.on_import = [this] { ImportMedia(); };
+    media_hooks.on_import_url = [this] { ImportFromUrl(); };
     media_hooks.on_add_to_timeline = [this](const std::string& path) {
         AddMediaToTimeline(path);
     };
@@ -646,6 +649,13 @@ void VideoEditorAppWidget::EnsureChildren() {
                                        bool active) {
         OnBinDragHover(position, active);
     };
+    // Bin tile waveforms read the same non-blocking media-prep cache
+    // as the timeline's (PeaksLookup mirrors Lookup's order).
+    media_hooks.get_audio_peaks =
+        [this](const std::string& path, AudioPeaks* out) {
+            return static_cast<MediaBinWidget::PeaksLookup>(
+                media_prep_.LookupPeaks(path, out));
+        };
     // CapCut-style icon rail on the far left — switches the left panel
     // content and jumps to the matching right-side tab.
     nav_rail_ = std::make_shared<NavRailWidget>();
@@ -1047,6 +1057,14 @@ void VideoEditorAppWidget::EnsureChildren() {
     speed_hooks.on_cancel = [this] { HideOverlay(); };
     speed_dialog_ = std::make_shared<SpeedDialog>(speed_hooks);
 
+    UrlImportDialog::Hooks url_hooks;
+    url_hooks.on_apply = [this](const std::string& url) {
+        HideOverlay();
+        StartUrlImport(url);
+    };
+    url_hooks.on_cancel = [this] { HideOverlay(); };
+    url_dialog_ = std::make_shared<UrlImportDialog>(url_hooks);
+
     TitleEditor::Hooks title_hooks;
     title_hooks.on_apply = [this](const TitleStyle& style) {
         HideOverlay();
@@ -1054,20 +1072,9 @@ void VideoEditorAppWidget::EnsureChildren() {
         if (clip == nullptr || clip->source.kind != SourceKind::Text) {
             return;
         }
-        auto hex = [](const std::array<std::uint8_t, 4>& rgba) {
-            char buf[16];
-            std::snprintf(buf, sizeof(buf), "#%02X%02X%02X%02X",
-                          rgba[0], rgba[1], rgba[2], rgba[3]);
-            return std::string(buf);
-        };
-        static const char* kAlign[] = {"left", "center", "right"};
         Clip updated = *clip;
         updated.source.param =
-            style.text + " | size=" + std::to_string(style.size_px) +
-            " color=" + hex(style.color) +
-            " outline=" + std::to_string(style.outline_px) +
-            " outline_color=" + hex(style.outline_color) +
-            " align=" + kAlign[std::clamp(style.align, 0, 2)];
+            SerializeClipTextStyle(TitleStyleToClipStyle(style));
         std::string error;
         if (!history_.ReplaceClip(updated.id, updated,
                                   BoundsForPath(updated.source_path),
@@ -1080,6 +1087,63 @@ void VideoEditorAppWidget::EnsureChildren() {
     };
     title_hooks.on_cancel = [this] { HideOverlay(); };
     title_editor_ = std::make_shared<TitleEditor>(title_hooks);
+
+    FontManager::Hooks font_hooks;
+    font_hooks.on_apply =
+        [this](const std::string& family, int weight, bool italic) {
+            HideOverlay();
+            Clip* clip = FindClip(project_, selected_clip_id_);
+            if (clip == nullptr ||
+                clip->source.kind != SourceKind::Text) {
+                SetStatus("Select a title clip first", true);
+                return;
+            }
+            Clip updated = *clip;
+            ClipTextStyle style =
+                ParseClipTextStyle(updated.source.param);
+            style.font_family = family;
+            style.font_weight = weight;
+            style.italic = italic;
+            updated.source.param = SerializeClipTextStyle(style);
+            std::string error;
+            if (!history_.ReplaceClip(
+                    updated.id, updated,
+                    BoundsForPath(updated.source_path), &error)) {
+                SetStatus("Font update failed: " + error, true);
+                return;
+            }
+            NotifyProjectChanged();
+            SetStatus("Font set to " + family);
+        };
+    font_hooks.on_cancel = [this] { HideOverlay(); };
+    font_manager_ = std::make_shared<FontManager>(font_hooks);
+
+    NewLayerDialog::Hooks layer_hooks;
+    layer_hooks.on_apply = [this](const NewLayerSpec& spec) {
+        HideOverlay();
+        AddGeneratedClipAt(SourceKind::ColorMatte,
+                           pending_layer_track_, pending_layer_time_,
+                           spec.name, spec.color_hex,
+                           spec.duration_seconds);
+        pending_layer_track_ = -1;
+        pending_layer_time_ = -1.0;
+    };
+    layer_hooks.on_cancel = [this] {
+        pending_layer_track_ = -1;
+        pending_layer_time_ = -1.0;
+        HideOverlay();
+    };
+    new_layer_dialog_ = std::make_shared<NewLayerDialog>(layer_hooks);
+
+    LayersPanelWidget::Hooks layers_hooks;
+    layers_hooks.on_select_clip = [this](const std::string& id) {
+        SelectClip(id);
+    };
+    layers_hooks.on_seek = [this](double t) { Seek(t); };
+    layers_hooks.on_status = [this](const std::string& text, bool err) {
+        SetStatus(text, err);
+    };
+    layers_panel_ = std::make_shared<LayersPanelWidget>(layers_hooks);
 
     ExportQueuePanelWidget::Hooks queue_hooks;
     queue_hooks.on_cancel = [this](int) { export_engine_.Cancel(); };
@@ -1128,14 +1192,14 @@ void VideoEditorAppWidget::EnsureChildren() {
     right_tabs_ = std::make_shared<Widgets::Tabs>();
     right_tabs_->SetStyle(Widgets::Tabs::Style::Underline);
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Web — the right_tab_ indexing documented in the
-    // header.
+    // 8 Color, 9 Web, 10 Lyr — the right_tab_ indexing documented in
+    // the header.
     for (const char* label :
          {"Insp", "FX", "Mkr", "Lab", "Hist", "Mix", "Q", "Plg",
-          "Color", "Web"}) {
+          "Color", "Web", "Lyr"}) {
         right_tabs_->AddTab(label);
     }
-    right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 9));
+    right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 10));
     right_tabs_->SetOnChanged(
         [this](int index) { SetRightTab(index); });
     tab_strip_ = std::make_shared<TabStripScroll>(right_tabs_);
@@ -1149,10 +1213,28 @@ void VideoEditorAppWidget::EnsureChildren() {
     plugins_panel_ = std::make_shared<PluginsPanelWidget>(plugin_hooks);
     plugins_panel_->Reload();
 
+    // LUT manager: scan the search dirs (project/assets/exe/user
+    // luts) and register each file as a LUT-backed OcioProfile — the
+    // color panel's LOOKS section and ocio:<name> clip effects share
+    // that one table. Runs before the panel's Create() so its first
+    // Refresh() already sees the scanned looks.
+    {
+        if (!project_path_.empty()) {
+            Lut::Manager::Shared().SetProjectDir(
+                Path::FromUtf8(project_path_).parent_path());
+        }
+        const std::size_t luts = Lut::Manager::Shared().Rescan();
+        if (luts > 0) {
+            SetStatus("LUT manager: found " + std::to_string(luts) +
+                      " LUT(s)");
+        }
+    }
+
     // OCIO looks/transforms browser (ui/color_panel_widget.h): "Add
     // to Clip" emits "ocio:<name>" which lands as a ClipEffect on the
     // current selection — same path as the plugins panel. Refresh()
-    // re-reads the profiles Boot() loaded from assets/color.yaml.
+    // re-reads the profiles Boot() loaded from assets/color.yaml plus
+    // the LUT manager's scanned looks.
     color_panel_ = ColorPanelWidget::Create();
     color_panel_->SetOnAddEffect([this](const std::string& type) {
         ClipEffect fx;
@@ -1283,6 +1365,32 @@ void VideoEditorAppWidget::EnsureChildren() {
     timeline_hooks.on_track_locked = [this](int track, bool on) {
         SetTrackFlag(track, 'l', on);
     };
+    // Empty-lane "Add … Here" context-menu items: mattes configure
+    // through the New Layer dialog first (the lane/time rides
+    // pending_layer_*); bars/text land immediately.
+    timeline_hooks.on_add_generated =
+        [this](int track, SourceKind kind, double at_seconds) {
+            if (kind == SourceKind::ColorMatte) {
+                ShowNewLayerDialog(track, at_seconds);
+            } else {
+                AddGeneratedClipAt(kind, track, at_seconds, "", "",
+                                   5.0);
+                // Same flow as the menu: a new title opens the
+                // existing title editor on the just-selected clip.
+                if (kind == SourceKind::Text) OpenTitleEditor();
+            }
+        };
+    timeline_hooks.on_add_media = [this](int track, double at_seconds) {
+        // Bin-entry insertion at click time: a selected bin item
+        // lands directly on the clicked lane/time; nothing selected
+        // falls back to the disk picker.
+        if (FindCatalogEntry(selected_media_path_) != nullptr) {
+            AddMediaToTimelineAt(selected_media_path_, at_seconds,
+                                 track);
+        } else {
+            ShowAddMediaDialog(track, at_seconds);
+        }
+    };
     // Non-blocking lookups into the media-prep worker — a cold decode
     // answers kPending and lands on a later frame (ConsumeRenderDirty
     // in Tick drives the repaint).
@@ -1354,6 +1462,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(plugins_panel_);
     AddChild(color_panel_);
     AddChild(browser_panel_);
+    AddChild(layers_panel_);
     AddChild(waveform_panel_);
     AddChild(status_toast_);
     AddChild(tab_strip_);
@@ -1457,6 +1566,7 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
              [this] { SaveProject(true); }),
         item("Import Media…", "", [this] { ImportMedia(); }, true, false,
              false, true),
+        item("Import from URL…", "", [this] { ImportFromUrl(); }),
         item("Project Settings…", "",
              [this] { ShowProjectSettingsDialog(); }, true, false,
              false, true),
@@ -1489,19 +1599,28 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             item("Add JS FX: " + d.title, "",
                  [this, id] { AddScriptAudioFxToSelectedClip(id); }));
     }
+    Menu tools;
+    tools.label = "Tools";
+    tools.items = {
+        item("Fonts\u2026", "", [this] { OpenFontManager(); }),
+    };
     Menu timeline;
     timeline.label = "Timeline";
     const Clip* menu_sel_clip = FindClip(project_, selected_clip_id_);
     timeline.items = {
         item("Add Video Track", "", [this] { AddTrack(TrackKind::Video); }),
         item("Add Audio Track", "", [this] { AddTrack(TrackKind::Audio); }),
-        item("New Color Matte", "",
-             [this] { AddGeneratedClip(SourceKind::ColorMatte); }, true,
-             false, false, true),
-        item("New Color Bars", "",
+        item("Add Color Matte…", "",
+             [this] { ShowNewLayerDialog(-1, -1.0); }, true, false,
+             false, true),
+        item("Add Color Bars", "",
              [this] { AddGeneratedClip(SourceKind::ColorBars); }),
-        item("New Title", "",
-             [this] { AddGeneratedClip(SourceKind::Text); }),
+        item("Add Text…", "", [this] {
+            AddGeneratedClip(SourceKind::Text);
+            OpenTitleEditor();
+        }),
+        item("Add Media…", "",
+             [this] { ShowAddMediaDialog(-1, playhead_); }),
         item("New Adjustment Layer", "",
              [this] { AddAdjustmentClip(); }),
         item("Edit Title…", "", [this] { OpenTitleEditor(); },
@@ -1559,6 +1678,10 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             right_panel_visible_ = true;
             SetRightTab(9);
         }, true, right_tab_ == 9),
+        item("Layers", "", [this] {
+            right_panel_visible_ = true;
+            SetRightTab(10);
+        }, true, right_tab_ == 10),
         item("Keyboard Shortcuts", "?", [this] {
             ToggleShortcutsOverlay();
         }),
@@ -1568,7 +1691,7 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             item("Workspace: " + ws.name, "",
                  [this, ws] { ApplyWorkspace(ws); }));
     }
-    title_bar_->SetMenus({file, edit, timeline, view});
+    title_bar_->SetMenus({file, edit, tools, timeline, view});
 }
 
 void VideoEditorAppWidget::ShowProjectSettingsDialog() {
@@ -1604,6 +1727,10 @@ void VideoEditorAppWidget::NewProject() {
     project_path_.clear();
     selected_clip_id_.clear();
     playhead_ = 0.0;
+    // No project dir → drop that LUT search dir and re-scan.
+    Lut::Manager::Shared().SetProjectDir({});
+    Lut::Manager::Shared().Rescan();
+    if (color_panel_) color_panel_->Refresh();
     NotifyProjectChanged();
     project_dirty_ = false;   // fresh canvas — nothing to lose
     SetStatus("New project");
@@ -1622,6 +1749,12 @@ bool VideoEditorAppWidget::LoadProject(const std::string& utf8_path) {
     InitAutosave();
     selected_clip_id_.clear();
     playhead_ = 0.0;
+    // <project>/luts joins the LUT search dirs — re-scan so project
+    // LUTs resolve their ocio:<name> effects.
+    Lut::Manager::Shared().SetProjectDir(
+        Path::FromUtf8(project_path_).parent_path());
+    Lut::Manager::Shared().Rescan();
+    if (color_panel_) color_panel_->Refresh();
     NotifyProjectChanged();
     project_dirty_ = false;   // just loaded — matches the file on disk
     SetStatus("Opened " + Basename(project_path_));
@@ -1662,6 +1795,11 @@ bool VideoEditorAppWidget::SaveProject(bool choose_path) {
         return false;
     }
     SetStatus("Saved " + Basename(project_path_));
+    // A save/rename moves the project dir — re-scan its luts dir.
+    Lut::Manager::Shared().SetProjectDir(
+        Path::FromUtf8(project_path_).parent_path());
+    Lut::Manager::Shared().Rescan();
+    if (color_panel_) color_panel_->Refresh();
     InitAutosave();   // bind to a first-saved (or renamed) path
     autosave_.ClearDirty();
     project_dirty_ = false;
@@ -1815,6 +1953,52 @@ void VideoEditorAppWidget::ImportDroppedPaths(
     SetStatus(msg, imported == 0);
 }
 
+void VideoEditorAppWidget::ImportFromUrl() {
+    if (url_dialog_ == nullptr) return;
+    url_dialog_->Reset();
+    ShowOverlay(url_dialog_);
+}
+
+void VideoEditorAppWidget::StartUrlImport(const std::string& url) {
+    if (url_op_.IsRunning() || url_op_.HasResult()) {
+        SetStatus("A URL import is already running", true);
+        return;
+    }
+    {
+        std::lock_guard lock(url_result_mutex_);
+        url_result_ = UrlImport::Result{};
+        url_status_.clear();
+    }
+    url_progress_shown_ = -1.0f;
+    SetStatus("Downloading " + url + "…");
+    const bool started = url_op_.Start(
+        [this, url](const Lab::JobControl& ctl) {
+            const auto progress =
+                [this, &ctl](float fraction,
+                             const std::string& status) {
+                    {
+                        std::lock_guard lock(url_result_mutex_);
+                        url_status_ = status;
+                    }
+                    if (fraction >= 0.0f) ctl.ReportProgress(fraction);
+                };
+            UrlImport::Result result = UrlImport::Download(
+                url, /*dest_dir*/ "", progress,
+                [&ctl] { return ctl.ShouldCancel(); });
+            {
+                std::lock_guard lock(url_result_mutex_);
+                url_result_ = result;
+            }
+            if (!result.ok) {
+                ctl.Fail(result.cancelled ? "cancelled" : result.error);
+            }
+            return result.ok;
+        });
+    if (!started) {
+        SetStatus("A URL import is already running", true);
+    }
+}
+
 void VideoEditorAppWidget::AddSelectedToTimeline() {
     AddMediaToTimeline(selected_media_path_);
 }
@@ -1824,7 +2008,8 @@ void VideoEditorAppWidget::AddMediaToTimeline(const std::string& path) {
 }
 
 void VideoEditorAppWidget::AddMediaToTimelineAt(const std::string& path,
-                                              double at_seconds) {
+                                              double at_seconds,
+                                              int preferred_track) {
     // The media-bin context menu passes the clicked row's path; the
     // toolbar Add button passes the selection. Fall back to the
     // selection only when the explicit path isn't in the catalog.
@@ -1871,7 +2056,18 @@ void VideoEditorAppWidget::AddMediaToTimelineAt(const std::string& path,
     std::string clip_id;
     std::string link_group;
 
-    int track_index = first_unlocked(wanted);
+    // A bin drop on an empty lane names its track explicitly; honor
+    // it when kind+lock allow, else fall back to the first free lane
+    // of the wanted kind (the historical behavior).
+    int track_index = -1;
+    if (preferred_track >= 0 &&
+        preferred_track < static_cast<int>(project_.tracks.size()) &&
+        project_.tracks[preferred_track].kind == wanted &&
+        !project_.tracks[preferred_track].locked) {
+        track_index = preferred_track;
+    } else {
+        track_index = first_unlocked(wanted);
+    }
     if (track_index < 0) {
         track_index = history_.AddTrack(
             wanted, wanted == TrackKind::Video ? "Video" : "Audio");
@@ -1964,7 +2160,8 @@ void VideoEditorAppWidget::OnBinMediaDrop(
         !timeline_->GetBounds().Contains(position)) {
         return;   // released somewhere else — not a timeline drop
     }
-    AddMediaToTimelineAt(path, timeline_->TimeAtDropPoint(position));
+    AddMediaToTimelineAt(path, timeline_->TimeAtDropPoint(position),
+                         timeline_->TrackAtDropPoint(position));
 }
 
 void VideoEditorAppWidget::OnBinDragHover(
@@ -2095,6 +2292,12 @@ void VideoEditorAppWidget::SelectClip(const std::string& clip_id) {
     selected_clip_id_ = clip_id;
     timeline_->SetSelectedClip(clip_id);
     inspector_->SetClip(FindClip(project_, clip_id));
+    if (layers_panel_) {
+        // Selecting a clip switches the panel's active track to the
+        // clip's own lane, mirroring the inspector.
+        layers_panel_->SetActiveTrack(TargetVideoTrack());
+        layers_panel_->SetSelectedClip(clip_id);
+    }
     // Timeline menu items ("Edit Title…", "Speed/Duration…") snapshot
     // the selection at build time — refresh so they track it.
     RebuildTitleBarMenus();
@@ -3456,26 +3659,30 @@ void VideoEditorAppWidget::OpenTitleEditor() {
         SetStatus("Select a title clip first", true);
         return;
     }
-    const ClipTextStyle parsed =
-        ParseClipTextStyle(clip->source.param);
-    TitleStyle style;
-    style.text = parsed.text;
-    style.size_px = parsed.size_px > 0 ? parsed.size_px : 64;
-    // ClipTextStyle colors are BGRA; TitleStyle uses RGBA.
-    style.color = {parsed.color[2], parsed.color[1], parsed.color[0],
-                   parsed.color[3]};
-    style.outline_color = {parsed.outline_color[2],
-                           parsed.outline_color[1],
-                           parsed.outline_color[0],
-                           parsed.outline_color[3]};
-    style.outline_px = static_cast<int>(parsed.outline_px + 0.5f);
-    style.align = parsed.align == ClipTextStyle::Align::Left
-                      ? 0
-                      : parsed.align == ClipTextStyle::Align::Right
-                            ? 2
-                            : 1;
+    TitleStyle style =
+        TitleStyleFromClipStyle(ParseClipTextStyle(clip->source.param));
+    if (style.size_px <= 0) {
+        style.size_px = 64;
+    }
     title_editor_->SetStyle(style);
     ShowOverlay(title_editor_);
+}
+
+void VideoEditorAppWidget::OpenFontManager() {
+    if (!font_manager_) {
+        return;
+    }
+    // Pre-select the face of the selected text clip when there is one.
+    const Clip* clip = FindClip(project_, selected_clip_id_);
+    if (clip != nullptr && clip->source.kind == SourceKind::Text) {
+        const ClipTextStyle parsed =
+            ParseClipTextStyle(clip->source.param);
+        font_manager_->SetSelection(parsed.font_family,
+                                    parsed.font_weight, parsed.italic);
+    } else {
+        font_manager_->SetSelection("", 400, false);
+    }
+    ShowOverlay(font_manager_);
 }
 
 void VideoEditorAppWidget::AddAdjustmentClip() {
@@ -3979,7 +4186,7 @@ void VideoEditorAppWidget::SetTrackFlag(int track, char which, bool on) {
 }
 
 void VideoEditorAppWidget::SetRightTab(int tab) {
-    right_tab_ = std::clamp(tab, 0, 9);   // 0 Insp .. 9 Web
+    right_tab_ = std::clamp(tab, 0, 10);   // 0 Insp .. 10 Lyr
     if (right_tabs_) {
         // SetActiveIndex never fires on_changed_ (ActivateTab does),
         // so user clicks and programmatic switches meet here safely.
@@ -3989,7 +4196,7 @@ void VideoEditorAppWidget::SetRightTab(int tab) {
         // Scrolls the strip so a programmatically-activated tab (View
         // menu, workspace preset, extension UI open) is visible too,
         // not just selected.
-        tab_strip_->RevealFraction((right_tab_ + 0.5f) / 10.0f);
+        tab_strip_->RevealFraction((right_tab_ + 0.5f) / 11.0f);
     }
     RequestLayout();
     Invalidate();
@@ -4014,13 +4221,43 @@ void VideoEditorAppWidget::ApplyProjectSettings(
     SetStatus("Project settings applied");
 }
 
-void VideoEditorAppWidget::AddGeneratedClip(SourceKind kind) {
-    int track_index = -1;
+int VideoEditorAppWidget::TargetVideoTrack() const {
+    // The selected clip's track first — "add a layer above the
+    // current one" is the common intent.
+    if (const Clip* sel = FindClip(project_, selected_clip_id_);
+        sel != nullptr && sel->track >= 0 &&
+        sel->track < static_cast<int>(project_.tracks.size()) &&
+        project_.tracks[sel->track].kind == TrackKind::Video &&
+        !project_.tracks[sel->track].locked) {
+        return sel->track;
+    }
     for (std::size_t i = 0; i < project_.tracks.size(); ++i) {
-        if (project_.tracks[i].kind == TrackKind::Video) {
-            track_index = static_cast<int>(i);
-            break;
+        if (project_.tracks[i].kind == TrackKind::Video &&
+            !project_.tracks[i].locked) {
+            return static_cast<int>(i);
         }
+    }
+    return -1;   // caller creates a fresh video track
+}
+
+void VideoEditorAppWidget::AddGeneratedClip(SourceKind kind) {
+    AddGeneratedClipAt(kind, -1, -1.0, "", "", 5.0);
+}
+
+void VideoEditorAppWidget::AddGeneratedClipAt(
+    SourceKind kind, int track, double at_seconds,
+    const std::string& name, const std::string& param,
+    double duration) {
+    int track_index = track;
+    if (track_index < 0) {
+        track_index = TargetVideoTrack();
+    } else if (track_index >=
+                   static_cast<int>(project_.tracks.size()) ||
+               project_.tracks[track_index].kind != TrackKind::Video ||
+               project_.tracks[track_index].locked) {
+        // A context-menu lane that no longer qualifies (kind flipped,
+        // locked since the click) falls back like the menu path.
+        track_index = TargetVideoTrack();
     }
     if (track_index < 0) {
         track_index = history_.AddTrack(TrackKind::Video, "Video");
@@ -4031,13 +4268,17 @@ void VideoEditorAppWidget::AddGeneratedClip(SourceKind kind) {
     }
     Clip clip;
     clip.id = NewClipId();
+    clip.name = name;
     clip.source.kind = kind;
     clip.track = track_index;
+    const double start = at_seconds >= 0.0 ? at_seconds : playhead_;
     clip.timeline_start = snap_enabled_
-        ? SnapTime(project_, track_index, playhead_, 0.1, playhead_)
-        : playhead_;
-    clip.duration = 5.0;
-    if (kind == SourceKind::ColorMatte) {
+        ? SnapTime(project_, track_index, start, 0.1, playhead_)
+        : start;
+    clip.duration = duration > 0.0 ? duration : 5.0;
+    if (!param.empty()) {
+        clip.source.param = param;
+    } else if (kind == SourceKind::ColorMatte) {
         clip.source.param = "#3a5fd9";
     } else if (kind == SourceKind::ColorBars) {
         clip.source.param = "smpte75";
@@ -4057,6 +4298,43 @@ void VideoEditorAppWidget::AddGeneratedClip(SourceKind kind) {
     SelectClip(clip_id);
     NotifyProjectChanged();
     SetStatus("Added generated clip");
+}
+
+void VideoEditorAppWidget::ShowNewLayerDialog(int track,
+                                            double at_seconds) {
+    pending_layer_track_ = track;
+    pending_layer_time_ = at_seconds;
+    new_layer_dialog_->SetDefaults("", "#3a5fd9", 5.0);
+    ShowOverlay(new_layer_dialog_);
+}
+
+void VideoEditorAppWidget::ShowAddMediaDialog(int preferred_track,
+                                            double at_seconds) {
+#ifdef _WIN32
+    const auto picked = PickOpenFileW(
+        static_cast<HWND>(parent_hwnd_),
+        FilterSpec(L"Media", MediaImportPattern().c_str()),
+        L"Add media to timeline");
+    if (picked.empty()) return;
+    const std::string path =
+        Path::NormalizeUtf8Path(Str::WideToUtf8(picked));
+    std::string error;
+    if (!ImportMediaFile(path, &error)) {
+        SetStatus("Import failed: " + error, true);
+        return;
+    }
+    RefreshCatalog();
+    const CatalogEntry* imported = FindCatalogEntry(path);
+    media_prep_.RequestImportPoster(imported != nullptr ? imported->path
+                                                        : path);
+    AddMediaToTimelineAt(
+        path, at_seconds >= 0.0 ? at_seconds : playhead_,
+        preferred_track);
+#else
+    (void)preferred_track;
+    (void)at_seconds;
+    SetStatus("Import dialog is Windows-only", true);
+#endif
 }
 
 void VideoEditorAppWidget::AddVst3FxToSelectedClip() {
@@ -4335,6 +4613,11 @@ void VideoEditorAppWidget::NotifyProjectChanged() {
     if (mixer_panel_) {
         mixer_panel_->SetProject(&project_);
         mixer_panel_->SetMasterGainDb(project_.master_gain_db);
+    }
+    if (layers_panel_) {
+        layers_panel_->SetProject(&project_);
+        layers_panel_->SetActiveTrack(TargetVideoTrack());
+        layers_panel_->SetSelectedClip(selected_clip_id_);
     }
     RefreshWaveformPanel();
     monitor_->SetProject(project_);
@@ -4668,6 +4951,9 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     plugins_panel_->SetVisible(right_eff && right_tab_ == 7);
     color_panel_->SetVisible(right_eff && right_tab_ == 8);
     browser_panel_->SetVisible(right_eff && right_tab_ == 9);
+    if (layers_panel_) {
+        layers_panel_->SetVisible(right_eff && right_tab_ == 10);
+    }
     tab_strip_->SetVisible(right_eff);
     if (right_eff) {
         const float tab_h = 30.0f;
@@ -4679,8 +4965,9 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         std::shared_ptr<Widgets::Widget> panels[] = {
             inspector_,  effects_panel_, markers_panel_, lab_panel_,
             history_panel_, mixer_panel_, export_queue_,
-            plugins_panel_, color_panel_, browser_panel_};
-        panels[right_tab_]->Layout(
+            plugins_panel_, color_panel_, browser_panel_,
+            layers_panel_};
+        panels[std::clamp(right_tab_, 0, 10)]->Layout(
             {inspector_x, panel_y + tab_h, right_w - gap,
              std::max(60.0f, central_h - tab_h)}, tokens);
     }
@@ -5091,6 +5378,12 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             timeline_->NotifyMediaChanged();
             timeline_->Invalidate();
         }
+        // Bin tiles draw peaks too — let their cached misses re-probe
+        // and repaint once waveforms land.
+        if (media_bin_) {
+            media_bin_->NotifyMediaChanged();
+            media_bin_->Invalidate();
+        }
         RefreshWaveformPanel();
     }
     if (media_prep_.ConsumeCatalogDirty()) {
@@ -5170,6 +5463,66 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 SetStatus("AI running: " +
                           std::to_string(static_cast<int>(p * 100.0f)) +
                           "%");
+            }
+        }
+    }
+    // URL-import job: the worker only downloads; the produced file is
+    // imported + postered here on the UI thread — the same fast-import
+    // pattern as ImportMedia() (extract_poster=false, media-prep picks
+    // up the poster via ConsumeCatalogDirty).
+    {
+        bool ok = false, cancelled = false;
+        std::string url_error;
+        if (url_op_.PopResult(&ok, &cancelled, &url_error)) {
+            url_progress_shown_ = -1.0f;
+            UrlImport::Result result;
+            {
+                std::lock_guard lock(url_result_mutex_);
+                result = std::move(url_result_);
+                url_result_ = UrlImport::Result{};
+                url_status_.clear();
+            }
+            if (ok && !result.path.empty()) {
+                std::string import_error;
+                if (ImportMediaFile(result.path, &import_error)) {
+                    RefreshCatalog();
+                    const CatalogEntry* imported =
+                        FindCatalogEntry(result.path);
+                    media_prep_.RequestImportPoster(
+                        imported != nullptr ? imported->path
+                                            : result.path);
+                    SetStatus("Imported " + Basename(result.path) +
+                              (result.used_ytdlp ? " (yt-dlp)" : ""));
+                } else {
+                    SetStatus("URL import failed: " + import_error,
+                              true);
+                }
+            } else {
+                SetStatus(cancelled ? "URL import cancelled"
+                                    : "URL import failed: " + url_error,
+                          !cancelled);
+            }
+        } else if (url_op_.IsRunning()) {
+            // Stage text comes from the worker (resolving/downloading/
+            // yt-dlp %); fold the fraction in when it reports one.
+            std::string stage;
+            {
+                std::lock_guard lock(url_result_mutex_);
+                stage = url_status_;
+            }
+            const float p = url_op_.Progress();
+            if (p > 0.0f) {
+                const int pct =
+                    static_cast<int>(p * 100.0f + 0.5f);
+                if (p != url_progress_shown_) {
+                    url_progress_shown_ = p;
+                    SetStatus("Downloading… " +
+                              std::to_string(pct) + "%");
+                }
+            } else if (!stage.empty() &&
+                       url_progress_shown_ != -2.0f) {
+                url_progress_shown_ = -2.0f;
+                SetStatus(stage);
             }
         }
     }

@@ -60,8 +60,9 @@ public:
 
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override {
-        VeIcons::DrawIcon(renderer, name_, static_cast<int>(kRowIcon),
-                          tokens.foreground, GetBounds());
+        VeIcons::DrawIcon(renderer, name_.c_str(),
+                          static_cast<int>(kRowIcon), tokens.foreground,
+                          GetBounds());
     }
     void Layout(const XER::UI::Layout::Rect& bounds) override {
         SetBounds(bounds);

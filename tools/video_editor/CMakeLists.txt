@@ -213,6 +213,28 @@ if(WIN32)
     target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope} ole32)
 endif()
 
+# Skia powers the Text-clip rasterizer (text_style.cc) and the system
+# font catalog (font_catalog.cc). Optional: without the port the same
+# sources compile against the BitmapFont fallback that renders the
+# legacy style subset, and FontCatalog::Available() reports false.
+find_package(unofficial-skia CONFIG QUIET)
+if(TARGET unofficial::skia::skia)
+    if(XER_YA_DLLS)
+        # objects: usage requirements (include dirs); module: the link.
+        target_link_libraries(YA_VideoEditor_Core_objs PRIVATE
+            unofficial::skia::skia)
+        target_link_libraries(YA_VideoEditor_Core PRIVATE
+            unofficial::skia::skia)
+        target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE
+            XER_VE_HAS_SKIA=1)
+    else()
+        target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope}
+            unofficial::skia::skia)
+        target_compile_definitions(XER_VideoEditor_Core PRIVATE
+            XER_VE_HAS_SKIA=1)
+    endif()
+endif()
+
 if(NOT XER_YA_DLLS)
     target_compile_features(XER_VideoEditor_Core PUBLIC cxx_std_23)
     if(MSVC)

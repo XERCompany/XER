@@ -21,6 +21,7 @@
 #include <string>
 
 #include "frame.h"
+#include "text_style.h"
 #include "timeline_model.h"
 
 namespace XER::VideoEditor {
@@ -46,33 +47,12 @@ const std::array<std::array<std::uint8_t, 4>, 7>& Smpte75Bars();
 int TextClipGlyphScale(int canvas_h);
 
 // ---- text clip styling ----
-
-// Inline style for Text clips, parsed out of Clip::source.param:
-//   "<text> | size=<px> color=#RRGGBB[AA] outline=<px>
-//            outline_color=#RRGGBB[AA] align=left|center|right"
-// The FIRST '|' separates the text payload from whitespace-separated
-// key=value tokens — a literal '|' cannot appear inside the text.
-// Unknown keys and malformed values are ignored (a style typo must
-// never kill the title). With no '|' the whole param is the text and
-// ClipTextStyle{} applies — which is exactly the pre-style look
-// (white face + soft drop shadow at the canvas-proportional scale),
-// so old projects render unchanged.
-struct ClipTextStyle {
-    enum class Align { Left, Center, Right };
-    std::string text;           // payload before '|', r-trimmed
-    int size_px = 0;            // 0 -> canvas-proportional default;
-                                // else nominal glyph height in px —
-                                // cell scale = round(size_px /
-                                // BitmapFont::kGlyphHeight), [1,64]
-    std::array<std::uint8_t, 4> color{255, 255, 255, 255};        // BGRA face
-    float outline_px = 0.0f;    // >0 -> stroke replaces the drop shadow
-    std::array<std::uint8_t, 4> outline_color{0, 0, 0, 255};      // BGRA
-    Align align = Align::Left;  // per-line, inside the measured block
-};
-
-// Parses Clip::source.param for a Text clip (see above). Never fails —
-// the result always carries a usable text payload and defaults.
-ClipTextStyle ParseClipTextStyle(const std::string& param);
+//
+// ClipTextStyle, ParseClipTextStyle, SerializeClipTextStyle and the
+// text rasterizer (RenderClipText) live in text_style.h — included
+// above so existing callers of this header keep working. The grammar
+// stays "text | key=value ..."; the extended token set (font, weight,
+// decorations, box geometry, shadow, ...) is documented there.
 
 // Produces the clip's intrinsic frame at clip-local time
 // `clip_local_t` (currently every generated kind is time-invariant —

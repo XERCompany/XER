@@ -103,6 +103,10 @@ struct ClipAudioFx {
 struct Clip {
     std::string id;             // uuid (NewClipId)
     std::string source_path;    // UTF-8
+    // Optional user label shown on the clip instead of the source
+    // basename — the only way generated sources (matte/bars/title,
+    // which keep source_path empty) can carry a custom name.
+    std::string name;
     int track = 0;              // index into Project::tracks
     double timeline_start = 0;  // seconds
     double in_point = 0;        // source seconds

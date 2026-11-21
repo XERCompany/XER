@@ -22,6 +22,10 @@ Icons:
   bin.list: lists.svg
   bin.search: search.svg
   bin.add_timeline: library_add.svg
+  bin.sort: sort.svg
+  bin.kind.video: movie.svg
+  bin.kind.audio: equalizer.svg
+  bin.kind.image: web_asset.svg
   tab.inspector: toolbar.svg
   tab.effects: polymer.svg
   tab.markers: bookmark_stacks.svg

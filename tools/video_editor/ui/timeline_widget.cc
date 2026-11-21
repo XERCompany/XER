@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "frame.h"
+#include "generated_source.h"
 #include "js_fx.h"
 #include "media_catalog.h"
 #include "rendering/renderer.h"
@@ -65,6 +66,31 @@ Color MarkerColor(const Marker& marker) {
 std::string Basename(const std::string& path) {
     const std::size_t pos = path.find_last_of("/\\");
     return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+// Name-strip label: the user-set Clip::name beats everything;
+// generated sources (empty source_path) get a kind/text label so
+// mattes, bars and titles stay identifiable; media keeps the source
+// basename.
+std::string ClipLabel(const Clip& clip) {
+    if (!clip.name.empty()) return clip.name;
+    if (!clip.source_path.empty()) return Basename(clip.source_path);
+    if (clip.is_adjustment) return "Adjustment Layer";
+    switch (clip.source.kind) {
+        case SourceKind::ColorMatte:
+            return "Color Matte";
+        case SourceKind::ColorBars:
+            return "Color Bars";
+        case SourceKind::Text: {
+            const ClipTextStyle style =
+                ParseClipTextStyle(clip.source.param);
+            const std::size_t nl = style.text.find_first_of("\r\n");
+            const std::string text = style.text.substr(0, nl);
+            return text.empty() ? "Title" : text;
+        }
+        default:
+            return "Clip";
+    }
 }
 
 std::string FormatTime(double seconds) {
@@ -222,6 +248,11 @@ double TimelineWidget::TimeAtDropPoint(
     return TimeAtX(point.x);
 }
 
+int TimelineWidget::TrackAtDropPoint(
+    XER::UI::Layout::Point point) const {
+    return TrackAtY(point.y);
+}
+
 void TimelineWidget::SetExternalDropHover(bool active) {
     if (external_drop_hover_ == active) return;
     external_drop_hover_ = active;
@@ -242,7 +273,9 @@ int TimelineWidget::TrackAtY(float y) const {
     if (project_ == nullptr) return -1;
     const float row_top =
         timeline_area_.y + kMarkerLaneHeight + kRulerHeight;
-    const float local = y - row_top;
+    // TrackRect() scrolls rows up by track_scroll_, so a y in screen
+    // space maps to scrolled content space by adding it back.
+    const float local = y - row_top + track_scroll_;
     if (local < 0.0f) return -1;
     const int index = static_cast<int>(local / (kTrackHeight + kTrackGap));
     const float row_y = local - index * (kTrackHeight + kTrackGap);
@@ -932,7 +965,7 @@ void TimelineWidget::Render(
         float name_w = rect.width - 12.0f;
         if (track.locked) name_w -= 34.0f;
         renderer.DrawText(
-            Basename(clip.source_path),
+            ClipLabel(clip),
             Rect{rect.x + 6.0f, rect.y + 2.0f,
                  std::max(0.0f, name_w), kClipLabelHeight - 3.0f},
             {label_color, tokens.font_small, 600});
@@ -1665,6 +1698,48 @@ bool TimelineWidget::ShowContextMenu(
                 if (hooks_.on_add_marker) hooks_.on_add_marker(t, "");
             };
             items.push_back(std::move(add));
+            // Free clip insertion on the lane under the cursor —
+            // Premiere's "New Item -> at playhead", placed at the
+            // clicked time instead. Generated kinds only on
+            // unlocked video lanes; media import works anywhere
+            // (the shell resolves the kind-appropriate target).
+            const int lane = TrackAtY(p.y);
+            if (lane >= 0 &&
+                lane < static_cast<int>(project_->tracks.size()) &&
+                !project_->tracks[lane].locked) {
+                const Track& lane_track = project_->tracks[lane];
+                if (lane_track.kind == TrackKind::Video &&
+                    hooks_.on_add_generated) {
+                    const struct {
+                        const char* label;
+                        SourceKind kind;
+                    } kInserts[] = {
+                        {"Add Color Matte Here", SourceKind::ColorMatte},
+                        {"Add Text Here", SourceKind::Text},
+                        {"Add Color Bars Here", SourceKind::ColorBars},
+                    };
+                    bool first = true;
+                    for (const auto& ins : kInserts) {
+                        Widgets::ContextMenu::Item item;
+                        item.label = ins.label;
+                        item.separator_before = first;
+                        item.action = [this, lane, kind = ins.kind, t] {
+                            hooks_.on_add_generated(lane, kind, t);
+                        };
+                        items.push_back(std::move(item));
+                        first = false;
+                    }
+                }
+                if (hooks_.on_add_media) {
+                    Widgets::ContextMenu::Item media;
+                    media.label = "Add Media Here";
+                    media.separator_before = true;
+                    media.action = [this, lane, t] {
+                        hooks_.on_add_media(lane, t);
+                    };
+                    items.push_back(std::move(media));
+                }
+            }
         } else {
             const Clip& clip = *hit.clip;
             if (hooks_.on_select_clip) hooks_.on_select_clip(clip.id);

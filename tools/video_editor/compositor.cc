@@ -1090,14 +1090,17 @@ struct Compositor::Impl {
                 continue;
             }
             if (type.rfind("ocio:", 0) == 0) {
-                // Named OCIO profile (color.yaml Profiles:) — LUT or
-                // colorspace conversion applied in place. The config
-                // loads once per process; unknown profile names and
-                // failed transforms leave the frame untouched
-                // (identity) — warned at Init, silent here.
-                const Color::OcioProfile* profile =
-                    Color::FindOcioProfile(type.substr(5));
-                if (profile != nullptr &&
+                // Named OCIO profile (color.yaml Profiles: + LUT
+                // manager registrations) — LUT or colorspace
+                // conversion applied in place. The config loads once
+                // per process; unknown profile names and failed
+                // transforms leave the frame untouched (identity) —
+                // warned at Init, silent here. The copy-out find keeps
+                // this thread safe against the LUT manager rescanning
+                // profiles on the UI thread mid-frame.
+                Color::OcioProfile profile;
+                if (Color::FindOcioProfileCopy(type.substr(5),
+                                               &profile) &&
                     frame.Format() == video::PixelFormat::BGRA8) {
                     // Export + preview compositors run on different
                     // threads — the one-shot config load must be
@@ -1117,7 +1120,7 @@ struct Compositor::Impl {
                     });
                     Color::ApplyProfileTransform(
                         frame.Data(), frame.Width(), frame.Height(),
-                        frame.Stride(), *profile, ocio_cfg,
+                        frame.Stride(), profile, ocio_cfg,
                         ocio_assets_dir);
                 }
                 continue;
