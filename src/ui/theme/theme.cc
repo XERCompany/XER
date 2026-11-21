@@ -33,6 +33,14 @@ constexpr Tokens kLightTokens{
     .font_small = 12.0f,
     .font_body = 14.0f,
     .font_title = 20.0f,
+    // Media-editor semantics: darker cyan/teal family so the digits
+    // stay readable on the light canvas.
+    .timecode = {0.031f, 0.569f, 0.698f, 1.0f},     // cyan-700 #0891b2
+    .waveform = {0.051f, 0.580f, 0.533f, 1.0f},     // teal-600 #0d9488
+    .track_video = {0.145f, 0.388f, 0.922f, 1.0f},  // blue-600 #2563eb
+    .track_audio = {0.051f, 0.580f, 0.533f, 1.0f},  // teal-600 #0d9488
+    .playhead = {0.031f, 0.569f, 0.698f, 1.0f},     // cyan-700 #0891b2
+    .warning_chip = {0.851f, 0.467f, 0.024f, 1.0f}, // amber-600 #d97706
 };
 
 // shadcn/ui dark: near-black zinc-950 canvas, cards one step above,
@@ -66,6 +74,14 @@ constexpr Tokens kDarkTokens{
     .font_small = 12.0f,
     .font_body = 14.0f,
     .font_title = 20.0f,
+    // Media-editor semantics: the cyan/teal NLE accents (timecode,
+    // waveform, track kind colors, playhead, fx chip).
+    .timecode = {0.133f, 0.827f, 0.933f, 1.0f},     // cyan-400 #22d3ee
+    .waveform = {0.176f, 0.831f, 0.627f, 1.0f},     // #2dd4a0
+    .track_video = {0.231f, 0.510f, 0.965f, 1.0f},  // blue-500 #3b82f6
+    .track_audio = {0.176f, 0.831f, 0.749f, 1.0f},  // teal-400 #2dd4bf
+    .playhead = {0.133f, 0.827f, 0.933f, 1.0f},     // cyan-400 #22d3ee
+    .warning_chip = {0.984f, 0.749f, 0.141f, 1.0f}, // amber-400 #fbbf24
 };
 
 } // namespace

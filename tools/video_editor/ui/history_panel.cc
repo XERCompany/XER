@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "ve_theme.h"
@@ -30,8 +31,7 @@ void HistoryPanelWidget::EnsureChildren() {
     if (children_attached_) return;
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
-    title_ = std::make_shared<Widgets::Label>("HISTORY");
-    // "N undo · M redo" — muted caption right of the title band.
+    // "N undo · M redo" — muted caption right of the header band.
     counts_ = std::make_shared<Widgets::Label>("", true);
     // Current-state divider: Separator — muted Label — Separator.
     // All three disabled so they stay transparent to hit-testing.
@@ -45,7 +45,6 @@ void HistoryPanelWidget::EnsureChildren() {
     divider_label_->SetEnabled(false);
     divider_right_->SetEnabled(false);
     status_ = std::make_shared<Widgets::Label>("no history", true);
-    AddChild(title_);
     AddChild(counts_);
     AddChild(divider_left_);
     AddChild(divider_label_);
@@ -172,6 +171,13 @@ void HistoryPanelWidget::Render(
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
+    // Collapsible-style panel header — the shared VeIcons chrome.
+    const float pad = tokens.spacing_medium;
+    VeIcons::DrawSectionHeader(
+        renderer, tokens,
+        {bounds.x + pad, bounds.y + pad * 0.6f,
+         bounds.width - pad * 2.0f, VeTheme::kRowHeight},
+        "History", false);
 
     if (rows_top_ <= 0.0f) return;   // not yet laid out
     if (undo_.empty() && redo_.empty()) {
@@ -203,9 +209,8 @@ void HistoryPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f},
-                   tokens);
+    // The header row is drawn chrome (see Render); counts_ keeps its
+    // right-aligned band on the same row.
     counts_->Layout({bounds.x + bounds.width - pad - 150.0f,
                      bounds.y + pad * 0.6f, 150.0f, 24.0f},
                     tokens);

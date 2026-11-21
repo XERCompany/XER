@@ -37,32 +37,43 @@ Color TrackKindColor(bool video_track) {
 }
 
 Tokens DarkTokens(std::uint32_t accent_argb) {
-    // Refined neutral-dark NLE palette: a three-step elevation ramp
-    // (background < panel < surface), hairline borders, and the brand
-    // violet accent (assets/editor.yaml `Accent:`) replacing the stock
-    // monochrome primary so interactive state actually reads.
+    // Reference modern-NLE palette: near-black cool-neutral surfaces
+    // (#141417 canvas → #1a1a20 chrome → #222229 raised cards), subtle
+    // hairline borders, medium radii, and a cyan/teal accent family
+    // (cyan timecode + playhead, teal waveforms + audio chrome).
+    // assets/editor.yaml `Accent:` still overrides the interactive
+    // accent; the NLE semantic colors below stay fixed.
     const Color accent =
         accent_argb != 0u ? FromArgb(accent_argb)
                           : FromRgb(kDefaultAccentRgb);
     Tokens t{};
-    t.background = {0.102f, 0.114f, 0.137f, 1.0f};   // #1a1d23 canvas
-    t.foreground = {0.902f, 0.910f, 0.925f, 1.0f};   // #e6e8ec
-    t.surface = {0.133f, 0.149f, 0.180f, 1.0f};      // #22262e panels
-    t.muted = {0.604f, 0.627f, 0.671f, 1.0f};        // #9aa0ab dim text
-    t.border = {0.188f, 0.212f, 0.247f, 1.0f};       // #30363f hairline
+    t.background = {0.078f, 0.078f, 0.090f, 1.0f};   // #141417 canvas
+    t.foreground = {0.910f, 0.918f, 0.933f, 1.0f};   // #e8eaee
+    t.surface = {0.133f, 0.133f, 0.161f, 1.0f};      // #222229 cards
+    t.muted = {0.561f, 0.573f, 0.620f, 1.0f};        // #8f929e dim text
+    t.border = {0.176f, 0.176f, 0.208f, 1.0f};       // #2d2d35 hairline
     t.accent = accent;
-    t.accent_foreground = {0.965f, 0.957f, 1.0f, 1.0f};  // on-accent text
+    // Near-black on the bright cyan accent (accent fills are vivid).
+    t.accent_foreground = {0.043f, 0.055f, 0.071f, 1.0f};  // #0b0e12
     t.focus = accent;
-    t.secondary = {0.165f, 0.184f, 0.220f, 1.0f};    // #2a2f38 quiet fill
-    t.hover = {0.184f, 0.204f, 0.243f, 1.0f};        // #2f3440 hover
+    t.secondary = {0.149f, 0.149f, 0.180f, 1.0f};    // #26262e quiet fill
+    t.hover = {0.184f, 0.184f, 0.220f, 1.0f};        // #2f2f38 hover
     t.ring = WithAlpha(accent, 0.85f);
     t.danger = {0.898f, 0.282f, 0.302f, 1.0f};       // #e5484d
     t.danger_foreground = {1.0f, 0.98f, 0.98f, 1.0f};
-    t.panel = {0.118f, 0.133f, 0.161f, 1.0f};        // #1e2229 chrome
-    t.input = {0.086f, 0.098f, 0.118f, 1.0f};        // #16191e sunken
-    t.pressed = {0.224f, 0.247f, 0.290f, 1.0f};      // #393f4a
-    t.disabled = {0.361f, 0.388f, 0.439f, 1.0f};     // #5c6370
-    t.selection = WithAlpha(accent, 0.22f);          // accent row wash
+    t.panel = {0.102f, 0.102f, 0.125f, 1.0f};        // #1a1a20 chrome
+    t.input = {0.055f, 0.055f, 0.071f, 1.0f};        // #0e0e12 sunken
+    t.pressed = {0.227f, 0.227f, 0.271f, 1.0f};      // #3a3a45 press
+    t.disabled = {0.341f, 0.353f, 0.396f, 1.0f};     // #575a65
+    t.selection = WithAlpha(accent, 0.20f);          // cyan row wash
+    // NLE semantic colors (tokens.h tail) — fixed cyan/teal family,
+    // independent of the configurable accent.
+    t.timecode = kTimecode;
+    t.waveform = kWaveform;
+    t.track_video = kTrackVideo;
+    t.track_audio = kTrackAudio;
+    t.playhead = kPlayhead;
+    t.warning_chip = kWarningChip;
     t.radius_small = kRadiusSm;
     t.radius_medium = kRadiusMd;
     t.radius_large = kRadiusLg;

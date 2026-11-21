@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <utility>
 
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "ve_theme.h"
@@ -94,7 +95,6 @@ void MarkersPanelWidget::EnsureChildren() {
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
 
-    title_ = std::make_shared<Widgets::Label>("MARKERS");
     add_btn_ = std::make_shared<Widgets::Button>(
         "Add @ playhead", Widgets::ButtonStyle::Secondary);
     add_btn_->SetTooltip("Add a marker at the current playhead (M)");
@@ -108,7 +108,6 @@ void MarkersPanelWidget::EnsureChildren() {
     rename_input_->SetOnSubmit([this] { CommitRename(); });
     status_ = std::make_shared<Widgets::Label>("No markers", true);
 
-    AddChild(title_);
     AddChild(add_btn_);
     AddChild(rename_input_);
     AddChild(status_);
@@ -283,6 +282,13 @@ void MarkersPanelWidget::Render(
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
+    // Collapsible-style panel header — the shared VeIcons chrome.
+    const float pad = tokens.spacing_medium;
+    VeIcons::DrawSectionHeader(
+        renderer, tokens,
+        {bounds.x + pad, bounds.y + pad * 0.6f,
+         bounds.width - pad * 2.0f, VeTheme::kRowHeight},
+        "Markers", false);
     if (markers_.empty() || rows_top_ <= 0.0f) {
         renderer.DrawText("press M on the timeline to add markers",
                           {bounds.x + 12.0f,
@@ -321,9 +327,8 @@ void MarkersPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f},
-                   tokens);
+    // The header row is drawn chrome (see Render) — controls keep
+    // their old band offsets.
     add_btn_->Layout({bounds.x + pad, bounds.y + 34.0f, 132.0f,
                       VeTheme::kControlHeight},
                      tokens);

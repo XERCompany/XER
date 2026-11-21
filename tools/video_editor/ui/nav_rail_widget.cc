@@ -1,5 +1,7 @@
 #include "nav_rail_widget.h"
 
+#include <algorithm>
+
 #include "app_runtime/icon_pack.h"
 #include "icon_helpers.h"
 #include "rendering/renderer.h"
@@ -123,21 +125,30 @@ void NavRailWidget::Render(
     XER::UI::Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, tokens.panel, 0.0f);
-    renderer.DrawLine({bounds.x + bounds.width, bounds.y},
-                      {bounds.x + bounds.width,
-                       bounds.y + bounds.height},
-                      tokens.border, 1.0f);
+    // Floating icon strip: an inset rounded card instead of a
+    // hard-edged dock — monochrome Ghost buttons get the hover pill.
+    const XER::UI::Layout::Rect strip{bounds.x + 4.0f,
+                                      bounds.y + 8.0f,
+                                      bounds.width - 8.0f,
+                                      bounds.height - 16.0f};
+    renderer.FillRect(strip, tokens.panel, tokens.radius_large);
+    renderer.StrokeRect(strip, tokens.border, 1.0f,
+                        tokens.radius_large);
 
-    // Active slot = Primary (accent fill); the rest stay Ghost — the
-    // activity-bar selection convention. The buttons paint themselves
-    // as children after this chrome pass.
-    const auto sync = [](const Slot& slot) {
+    // Active tool: the icon stays monochrome (Ghost — the button
+    // paints no fill at rest, so the accent bar on the strip's left
+    // edge shows through it, activity-bar convention). Drawn first
+    // so the buttons still own hover/press above it.
+    const auto sync = [&renderer, &tokens, &strip](const Slot& slot) {
         const bool active =
             slot.item.is_active && slot.item.is_active();
-        slot.button->SetStyle(active
-                                  ? XER::UI::Widgets::ButtonStyle::Primary
-                                  : XER::UI::Widgets::ButtonStyle::Ghost);
+        slot.button->SetStyle(XER::UI::Widgets::ButtonStyle::Ghost);
+        if (active) {
+            const auto btn = slot.button->GetBounds();
+            renderer.FillRect({strip.x + 1.5f, btn.y + 8.0f, 3.0f,
+                               std::max(0.0f, btn.height - 16.0f)},
+                              tokens.accent, 1.5f);
+        }
     };
     for (const auto& slot : top_) sync(slot);
     for (const auto& slot : bottom_) sync(slot);

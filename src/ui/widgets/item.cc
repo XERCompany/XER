@@ -50,7 +50,14 @@ void Item::Render(Rendering::Renderer& renderer,
                   const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
     if (selected_) {
-        renderer.FillRect(bounds, tokens.hover, tokens.radius_medium);
+        // Accent-tinted selection wash + a slim kind-bar at the leading
+        // edge — the NLE list-selection pattern.
+        renderer.FillRect(bounds, tokens.selection, tokens.radius_medium);
+        constexpr float kBarW = 2.5f;
+        renderer.FillRect(
+            {bounds.x + 1.0f, bounds.y + 3.0f, kBarW,
+             std::max(0.0f, bounds.height - 6.0f)},
+            tokens.accent, kBarW * 0.5f);
     }
 
     const auto& children = GetChildren();

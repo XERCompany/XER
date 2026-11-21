@@ -264,7 +264,6 @@ void EffectsPanelWidget::EnsureChildren() {
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
 
-    title_ = std::make_shared<Widgets::Label>("EFFECTS");
     search_ = std::make_shared<Widgets::TextInput>("");
     search_->SetPlaceholder("Search effects...");
     search_->SetTooltip("Filter by name or description");
@@ -303,7 +302,6 @@ void EffectsPanelWidget::EnsureChildren() {
     list_->SetSelected(selected_);
     scroll_area_ = std::make_shared<Widgets::ScrollArea>(list_);
 
-    AddChild(title_);
     AddChild(search_);
     AddChild(scroll_area_);
     AddChild(add_btn_);
@@ -412,6 +410,13 @@ void EffectsPanelWidget::Render(
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
+    // Collapsible-style panel header — the shared VeIcons chrome.
+    const float pad = tokens.spacing_medium;
+    VeIcons::DrawSectionHeader(
+        renderer, tokens,
+        {bounds.x + pad, bounds.y + pad * 0.6f,
+         bounds.width - pad * 2.0f, VeTheme::kRowHeight},
+        "Effects", false);
     if (filtered_.empty()) {
         // The hint sits where the list would — the ScrollArea's rect
         // once laid out, the same offset arithmetic otherwise.
@@ -445,7 +450,7 @@ void EffectsPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const float inner_w = bounds.width - pad * 2.0f;
     float y = bounds.y + pad * 0.6f;
 
-    title_->Layout({inner_x, y, inner_w, VeTheme::kRowHeight}, tokens);
+    // The header row is drawn chrome (see Render) — reserve its band.
     y += VeTheme::kRowHeight + VeTheme::kSpaceXxs;
     search_->Layout({inner_x, y, inner_w, VeTheme::kControlHeight},
                     tokens);

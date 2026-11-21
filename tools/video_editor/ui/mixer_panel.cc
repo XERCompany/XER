@@ -5,8 +5,10 @@
 #include <cstdio>
 #include <utility>
 
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
 #include "widgets/label.h"
 
@@ -26,8 +28,7 @@ constexpr float kStripInset = 8.0f;
 constexpr float kGainMinDb = -60.0f;   // fader bottom ("-inf")
 constexpr float kGainMaxDb = 12.0f;    // fader top
 constexpr float kMeterMinDb = -60.0f;
-constexpr float kMeterYellowDb = -12.0f;
-constexpr float kMeterRedDb = -3.0f;
+constexpr float kMeterRedDb = -3.0f;   // over-zone starts here
 // Ballistics mirror MonitorWidget::SetPeakLevels.
 constexpr float kMeterFallDbPerSec = 20.0f;
 constexpr double kPeakHoldSeconds = 1.6;
@@ -49,10 +50,10 @@ float ClampGain(float db) {
     return std::clamp(db, kGainMinDb, kGainMaxDb);
 }
 
-// Fixed meter palette — zone colors are an industry convention, not a
-// theme concern (same palette as monitor_widget.cc).
-Color MeterGreen() { return {0.22f, 0.78f, 0.35f, 1.0f}; }
-Color MeterYellow() { return {0.94f, 0.78f, 0.18f, 1.0f}; }
+// Meter palette: the reference's teal program-meter fill (#2dd4a0);
+// the over-zone above -3 dB still reads danger. The teal literal is a
+// candidate theme token once the token set gains a semantic for it.
+Color MeterTeal() { return {0.18f, 0.83f, 0.63f, 1.0f}; }
 Color MeterRed() { return {0.93f, 0.26f, 0.22f, 1.0f}; }
 
 Color WithAlpha(Color color, float alpha) {
@@ -88,11 +89,9 @@ void MixerPanelWidget::EnsureChildren() {
     if (children_attached_) return;
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
-    title_ = std::make_shared<Widgets::Label>("MIXER");
     hint_ = std::make_shared<Widgets::Label>(
         "drag faders \xc2\xb7 dbl-click resets \xc2\xb7 wheel scrolls",
         true);
-    AddChild(title_);
     AddChild(hint_);
 }
 
@@ -290,7 +289,8 @@ Rect MixerPanelWidget::MuteRect(const Rect& strip) const {
 
 Rect MixerPanelWidget::MeterRect(const Rect& strip) const {
     const Rect fader = FaderTrackRect(strip);
-    return {strip.Right() - 18.0f, fader.y, 13.0f, fader.height};
+    // Bars + a dB-tick label column on the strip's right edge.
+    return {strip.Right() - 30.0f, fader.y, 30.0f, fader.height};
 }
 
 int MixerPanelWidget::StripAt(const Point& position) const {
@@ -428,33 +428,40 @@ void MixerPanelWidget::DrawStrip(
                       {thumb.Right() - 3.0f, thumb_y},
                       WithAlpha(tokens.background, 0.8f), 1.0f);
 
-    // Peak meters: two bars, zone colors, peak-hold ticks. Master
-    // strip only — the host feeds SetPeak(-1, ...) exclusively (the
-    // mix bus), so per-track bars would sit permanently dead.
+    // Peak meters: two teal bars with a dB-tick column (0/-6/-12/-24),
+    // peak-hold ticks and an "S" (stereo bus) label under the pair —
+    // the reference audio-meters look. Master strip only — the host
+    // feeds SetPeak(-1, ...) exclusively (the mix bus), so per-track
+    // bars would sit permanently dead.
     if (s.master) {
         const Rect meter = MeterRect(strip);
+        constexpr float kBarW = 5.0f;
+        constexpr float kBarGap = 7.0f;
+        // The bottom 12px carry the "S" channel label, not bar.
+        const float bars_h = meter.height - 12.0f;
+        const auto y_for_db = [&](float db) {
+            const float u = std::clamp(
+                (db - kMeterMinDb) / (0.0f - kMeterMinDb), 0.0f, 1.0f);
+            return meter.y + bars_h - u * bars_h;
+        };
         const auto draw_bar = [&](float x, float level_db,
                                   float hold_db) {
-            constexpr float kBarW = 5.0f;
-            renderer.FillRect({x, meter.y, kBarW, meter.height},
+            renderer.FillRect({x, meter.y, kBarW, bars_h},
                               tokens.input, 1.0f);
-            const auto y_for_db = [&](float db) {
-                const float u = std::clamp(
-                    (db - kMeterMinDb) / (0.0f - kMeterMinDb), 0.0f,
-                    1.0f);
-                return meter.y + meter.height - u * meter.height;
-            };
             const float level_y = y_for_db(std::min(level_db, 0.0f));
-            const Color zone = level_db > kMeterRedDb
-                                   ? MeterRed()
-                                   : level_db > kMeterYellowDb
-                                         ? MeterYellow()
-                                         : MeterGreen();
-            if (level_y < meter.y + meter.height) {
+            if (level_y < meter.y + bars_h) {
                 renderer.FillRect(
                     {x, level_y, kBarW,
-                     meter.y + meter.height - level_y},
-                    zone, 0.0f);
+                     meter.y + bars_h - level_y},
+                    MeterTeal(), 0.0f);
+                // Over-zone: the portion above -3 dB reads danger.
+                if (level_db > kMeterRedDb) {
+                    const float over_y = y_for_db(kMeterRedDb);
+                    renderer.FillRect(
+                        {x, level_y, kBarW,
+                         std::max(0.0f, over_y - level_y)},
+                        MeterRed(), 0.0f);
+                }
             }
             if (hold_db > kMeterMinDb + 0.5f) {
                 const float y_peak = y_for_db(std::min(hold_db, 0.0f));
@@ -466,7 +473,39 @@ void MixerPanelWidget::DrawStrip(
             }
         };
         draw_bar(meter.x, s.meter_l_db, s.hold_l_db);
-        draw_bar(meter.x + 7.0f, s.meter_r_db, s.hold_r_db);
+        draw_bar(meter.x + kBarGap, s.meter_r_db, s.hold_r_db);
+
+        // dB tick column right of the bars: hairline ticks + tiny
+        // mono labels at the reference's 0/-6/-12/-24 marks.
+        const XER::UI::Rendering::TextStyle tick_style{
+            tokens.muted, tokens.font_small - 4.0f, 400,
+            /*monospace=*/true};
+        const float tick_x = meter.x + kBarGap + kBarW + 3.0f;
+        const float label_w = meter.Right() - tick_x - 2.0f;
+        for (const float db : {0.0f, -6.0f, -12.0f, -24.0f}) {
+            const float ty = y_for_db(db);
+            renderer.DrawLine({tick_x - 3.0f, ty}, {tick_x, ty},
+                              WithAlpha(tokens.muted, 0.6f), 1.0f);
+            char label[8];
+            std::snprintf(label, sizeof(label), "%d",
+                          static_cast<int>(db));
+            const auto size = renderer.MeasureText(label, tick_style);
+            renderer.DrawText(
+                label,
+                {tick_x + label_w - std::min(size.width, label_w),
+                 ty - size.height * 0.5f,
+                 std::min(size.width, label_w), size.height},
+                tick_style);
+        }
+        // "S" under the stereo pair — channel label per the
+        // reference's audio-meters panel (track strips carry the "M"
+        // mute chip already).
+        renderer.DrawText(
+            "S",
+            {meter.x - 2.0f, meter.y + bars_h,
+             kBarGap + kBarW + 4.0f, 12.0f},
+            XER::UI::Rendering::TextStyle{tokens.muted,
+                                          tokens.font_small, 600});
     }
 
     // Gain readout + name (muted strips dim everything; the name row
@@ -500,6 +539,15 @@ void MixerPanelWidget::Render(
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
+    // Collapsible-style panel header — the shared VeIcons chrome.
+    {
+        const float pad = tokens.spacing_medium;
+        VeIcons::DrawSectionHeader(
+            renderer, tokens,
+            {bounds.x + pad, bounds.y + pad * 0.6f,
+             bounds.width - pad * 2.0f, VeTheme::kRowHeight},
+            "Mixer", false);
+    }
     if (strips_top_ <= 0.0f) return;   // not yet laid out
 
     if (strips_.size() <= 1) {
@@ -534,9 +582,8 @@ void MixerPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f, 160.0f,
-                    24.0f},
-                   tokens);
+    // The header row is drawn chrome (see Render); the hint keeps its
+    // right-aligned band on the same row.
     const bool wide = bounds.width > 430.0f;
     hint_->SetVisible(wide);
     hint_->Layout({bounds.x + bounds.width - pad - 280.0f,

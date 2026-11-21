@@ -5,6 +5,8 @@
 
 #include "app_runtime/icon_pack.h"
 #include "rendering/renderer.h"
+#include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
 
 namespace XER::VideoEditor::Ui::VeIcons {
@@ -48,6 +50,12 @@ bool DrawIcon(XER::UI::Rendering::Renderer& renderer, float x, float y,
                                   bmp->height, dst, 1.0f);
 }
 
+bool DrawToggleIcon(XER::UI::Rendering::Renderer& renderer, bool on,
+                    const char* on_name, const char* off_name, int px,
+                    Color tint, const XER::UI::Layout::Rect& box) {
+    return DrawIcon(renderer, on ? on_name : off_name, px, tint, box);
+}
+
 void InstallButtonIconResolver() {
     static bool installed = false;
     if (installed) return;
@@ -57,6 +65,48 @@ void InstallButtonIconResolver() {
            int px, Color tint, const XER::UI::Layout::Rect& box) {
             return DrawIcon(renderer, name, px, tint, box);
         });
+}
+
+void DrawChevron(XER::UI::Rendering::Renderer& renderer, Color color,
+                 const XER::UI::Layout::Rect& box, bool collapsed) {
+    // A "v" (expanded) / ">" (collapsed) made of two strokes centered
+    // in the slot — no filled-path API exists, so strokes it is.
+    const float cx = box.x + box.width * 0.5f;
+    const float cy = box.y + box.height * 0.5f;
+    const float arm = box.width * 0.28f;
+    if (collapsed) {
+        renderer.DrawLine({cx - arm * 0.5f, cy - arm},
+                          {cx + arm * 0.5f, cy}, color, 1.4f);
+        renderer.DrawLine({cx + arm * 0.5f, cy},
+                          {cx - arm * 0.5f, cy + arm}, color, 1.4f);
+    } else {
+        renderer.DrawLine({cx - arm, cy - arm * 0.5f}, {cx, cy + arm * 0.5f},
+                          color, 1.4f);
+        renderer.DrawLine({cx, cy + arm * 0.5f},
+                          {cx + arm, cy - arm * 0.5f}, color, 1.4f);
+    }
+}
+
+XER::UI::Layout::Rect DrawSectionHeader(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const XER::UI::Layout::Rect& rect, std::string_view label,
+    bool collapsed) {
+    const float slot = rect.height;
+    const float chevron_box = std::min(slot, 14.0f);
+    DrawChevron(renderer, tokens.muted,
+                {rect.x, rect.y + (rect.height - chevron_box) * 0.5f,
+                 chevron_box, chevron_box},
+                collapsed);
+    const XER::UI::Layout::Rect label_rect{
+        rect.x + slot + VeTheme::kSpaceXs, rect.y,
+        std::max(0.0f, rect.width - slot - VeTheme::kSpaceXs),
+        rect.height};
+    renderer.DrawText(
+        label, label_rect,
+        XER::UI::Rendering::TextStyle{tokens.muted, tokens.font_small,
+                                      600});
+    return label_rect;
 }
 
 }  // namespace XER::VideoEditor::Ui::VeIcons

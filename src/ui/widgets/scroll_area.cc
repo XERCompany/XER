@@ -38,11 +38,11 @@ void ScrollBarWidget::Render(Rendering::Renderer& renderer, const Theme::Tokens&
                                  ScrollArea::kBarWidth,
                              strip.y, ScrollArea::kBarWidth, strip.height};
     const bool active = owner_->scrollbar_dragging_;
+    // Overlay-style chrome: the rail only appears on hover/drag so the
+    // floating thumb reads like modern NLE scrollbars (no permanent
+    // track strip at rest).
     if (IsHovered() || active) {
         renderer.FillRect(track, WithAlpha(tokens.border, 0.45f),
-                          track.width * 0.5f);
-    } else {
-        renderer.FillRect(track, WithAlpha(tokens.border, 0.22f),
                           track.width * 0.5f);
     }
     // Thumb: muted at rest, stronger on hover, strongest while dragging
@@ -50,7 +50,7 @@ void ScrollBarWidget::Render(Rendering::Renderer& renderer, const Theme::Tokens&
     const Theme::Color thumb_color =
         active ? tokens.foreground
                : (IsHovered() ? tokens.foreground : tokens.muted);
-    const float thumb_alpha = active ? 0.95f : (IsHovered() ? 0.85f : 0.55f);
+    const float thumb_alpha = active ? 0.95f : (IsHovered() ? 0.85f : 0.5f);
     renderer.FillRect(thumb, WithAlpha(thumb_color, thumb_alpha),
                       thumb.width * 0.5f);
 }

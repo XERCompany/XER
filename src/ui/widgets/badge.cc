@@ -1,5 +1,6 @@
 #include "badge.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "rendering/renderer.h"
@@ -93,11 +94,15 @@ void Badge::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
         has_fill = true;
     }
 
+    // Chip rounding: ~1/3 of the badge height (clamped to radius_medium)
+    // reads as a small rounded chip rather than a square tag.
+    const float chip_radius =
+        std::min(bounds.height * 0.35f, tokens.radius_medium);
     if (has_fill) {
-        renderer.FillRect(bounds, fill_color, tokens.radius_small);
+        renderer.FillRect(bounds, fill_color, chip_radius);
     }
     if (has_stroke) {
-        renderer.StrokeRect(bounds, stroke_color, 1.0f, tokens.radius_small);
+        renderer.StrokeRect(bounds, stroke_color, 1.0f, chip_radius);
     }
     const Rendering::TextStyle style{text_color, tokens.font_small, 500};
     renderer.DrawText(

@@ -112,7 +112,6 @@ private:
     // rows — retired children live one extra rebuild so a firing
     // widget is never freed mid-dispatch.
     std::vector<std::shared_ptr<XER::UI::Widgets::Widget>> retired_rows_;
-    std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
 };
 

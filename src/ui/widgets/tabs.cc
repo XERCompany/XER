@@ -96,11 +96,19 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     const bool pill = style_ == Style::Pill;
     const float press = press_t_.Value();
 
-    // Hover washes first (under the active pill so it never tints it).
+    // Active-tab surface slab first (Underline style only — the Pill
+    // style already draws its own chip), then hover washes, then the
+    // indicator on top.
     for (std::size_t i = 0; i < labels_.size(); ++i) {
         const auto& rect = tab_rects_[i];
         const bool active = static_cast<int>(i) == active_index_;
         const bool hovered = static_cast<int>(i) == hovered_tab_;
+        if (!pill && active) {
+            const Layout::Rect slab{rect.x + 2.0f, bounds.y + 3.0f,
+                                    rect.width - 4.0f,
+                                    bounds.height - 4.0f};
+            renderer.FillRect(slab, tokens.surface, tokens.radius_medium);
+        }
         if (!active && hovered && IsEnabled()) {
             const auto wash = pill
                 ? PillRect(rect.x, rect.width, bounds)
@@ -124,10 +132,12 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
                     tokens.ring, 1.5f, chip.height * 0.5f + 1.5f);
             }
         } else {
+            // NLE chrome: the active tab is marked by the accent bar
+            // (cyan in the video-editor theme), not a foreground bar.
             renderer.FillRect(
                 Layout::Rect{ind_x_.pos, bounds.y + bounds.height - 2.0f,
                              ind_w_.pos, 2.0f},
-                tokens.foreground,
+                tokens.accent,
                 1.0f
             );
         }

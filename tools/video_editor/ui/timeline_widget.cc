@@ -34,14 +34,19 @@ constexpr float kMarkerLaneHeight = 18.0f;
 constexpr float kRulerHeight = 28.0f;
 constexpr float kWorkBarHeight = 10.0f;   // band at the ruler's top edge
 constexpr float kTrackHeight = 64.0f;
+constexpr float kTrackHeightExpanded = 116.0f;  // header-chevron open row
 constexpr float kTrackGap = 3.0f;
 constexpr float kClipInset = 4.0f;
 constexpr float kEdgeGrabPx = 7.0f;
 constexpr float kHeaderButtonSize = 18.0f;
-constexpr float kHeaderButtonStep = 23.0f;
+constexpr float kHeaderButtonStep = 22.0f;
 constexpr float kClipLabelHeight = 17.0f; // name strip at a clip's top
-constexpr float kClipRadius = VeTheme::kRadiusSm;
+constexpr float kClipRadius = VeTheme::kRadiusMd;
 constexpr float kKindBarWidth = 3.0f;     // colored bar on header's left
+// Corner-toolbar ghost buttons inside the header corner box.
+constexpr float kToolButtonSize = 20.0f;
+constexpr float kToolButtonStep = 26.0f;
+constexpr int kToolButtonCount = 4;       // magnet, razor, marker, fx
 constexpr double kMinZoom = 8.0;
 constexpr double kMaxZoom = 600.0;
 constexpr std::chrono::milliseconds kDoubleClick{450};
@@ -53,6 +58,25 @@ constexpr std::size_t kMaxMissingKeys = 1024;    // negative-result sets
 constexpr double kPosterQuantize = 0.25;   // poster cache quantum (s)
 constexpr double kFallbackSampleRate = 48000.0;  // when bounds are unknown
 
+// ---- timeline palette literals ----
+// Reference-Premiere colors with no Theme::Tokens equivalent yet —
+// candidates for new tokens once the theme pass lands:
+//   accent_cyan      (playhead, ruler marks, snap-on, selection)
+//   clip_video_fill  (desaturated blue clip body)
+//   clip_audio_fill  (dark teal clip body)
+//   waveform_teal    (bright in-clip waveform stroke)
+//   badge_video/audio(track-id chips on the headers)
+//   fx_amber         ("fx" effect chips)
+constexpr Color kAccentCyan{0.13f, 0.83f, 0.93f, 1.0f};      // #22d3ee
+constexpr Color kClipVideoFill{0.28f, 0.42f, 0.55f, 1.0f};   // desat. blue
+constexpr Color kClipVideoFillAlt{0.33f, 0.41f, 0.60f, 1.0f};
+constexpr Color kClipAudioFill{0.10f, 0.35f, 0.33f, 1.0f};   // dark teal
+constexpr Color kClipAudioFillAlt{0.10f, 0.32f, 0.40f, 1.0f};
+constexpr Color kWaveformTeal{0.37f, 0.86f, 0.71f, 1.0f};    // in-clip wave
+constexpr Color kBadgeVideo{0.21f, 0.47f, 0.80f, 1.0f};      // "V1" chip
+constexpr Color kBadgeAudio{0.07f, 0.55f, 0.51f, 1.0f};      // "A1" chip
+constexpr Color kFxAmber{0.96f, 0.62f, 0.05f, 1.0f};         // "fx" chip
+
 Color WithAlpha(Color color, float alpha) {
     color.a = alpha;
     return color;
@@ -61,6 +85,19 @@ Color WithAlpha(Color color, float alpha) {
 Color MarkerColor(const Marker& marker) {
     return Color{marker.color[0] / 255.0f, marker.color[1] / 255.0f,
                  marker.color[2] / 255.0f, marker.color[3] / 255.0f};
+}
+
+// DrawText is left-aligned — chips/badges center their glyph by
+// measuring first.
+void DrawCenteredText(XER::UI::Rendering::Renderer& renderer,
+                      std::string_view text, Rect box,
+                      XER::UI::Rendering::TextStyle style) {
+    const auto size = renderer.MeasureText(text, style);
+    const float tx =
+        box.x + std::max(0.0f, (box.width - size.width) * 0.5f);
+    renderer.DrawText(
+        text, Rect{tx, box.y, box.width - (tx - box.x), box.height},
+        style);
 }
 
 std::string Basename(const std::string& path) {
@@ -105,43 +142,68 @@ std::string FormatTime(double seconds) {
     return buffer;
 }
 
-// Clip body color for a track: kind-coded (video=blue, audio=green)
-// with a per-track hue flip so neighbouring same-kind tracks stay
-// distinguishable (VeTheme::ClipBaseColor).
+// Clip body color for a track: reference-style desaturated blue for
+// video lanes, dark teal for audio, with a per-track hue flip so
+// neighbouring same-kind tracks stay distinguishable.
 Color ClipBaseFor(const Track& track, int index) {
-    return VeTheme::ClipBaseColor(track.kind == TrackKind::Video,
-                                  static_cast<std::size_t>(index));
+    const bool alt = (static_cast<std::size_t>(index) % 2u) != 0u;
+    if (track.kind == TrackKind::Video) {
+        return alt ? kClipVideoFillAlt : kClipVideoFill;
+    }
+    return alt ? kClipAudioFillAlt : kClipAudioFill;
 }
 
-// The three header toggle buttons: 0 = mute, 1 = hidden/eye, 2 = lock.
-// Kind gate mirroring ShowContextMenu's track menu: mute is an
-// audio-track concept (Track::muted is ignored on video), the
-// hidden/eye a video-track one (Track::hidden is ignored on audio);
-// lock applies to both.
+// Track-kind badge accent (header kind bar, badge chip, row wash).
+Color KindColor(bool video_track) {
+    return video_track ? kBadgeVideo : kBadgeAudio;
+}
+
+// Header affordance ids (see TimelineWidget::HeaderHit):
+//   0 = mute (audio), 1 = eye/hidden (video), 2 = lock,
+//   3 = expand chevron, 4 = solo (audio), 5 = record arm (audio).
+// Kind gate mirroring ShowContextMenu's track menu: mute/solo/arm are
+// audio-track concepts, the hidden/eye a video-track one; lock and the
+// expand chevron apply to both.
 bool HeaderButtonApplies(const Track& track, int button) {
     switch (button) {
-        case 0: return track.kind == TrackKind::Audio;   // M = muted
-        case 1: return track.kind == TrackKind::Video;   // H = hidden
-        default: return true;                            // L = locked
+        case 0:                                          // M = muted
+        case 4:                                          // S = solo
+        case 5:                                          // mic = arm
+            return track.kind == TrackKind::Audio;
+        case 1: return track.kind == TrackKind::Video;   // eye = hidden
+        default: return true;                            // lock, chevron
     }
 }
 
-Rect HeaderButtonRect(const Rect& label_rect, int button) {
+// Ordered bottom-strip button ids per kind — slot order is the
+// left-to-right paint order in RenderHeaderButtons.
+int HeaderButtonIdFor(const Track& track, int slot) {
+    if (track.kind == TrackKind::Audio) {
+        static constexpr int kAudio[] = {0, 4, 5, 2};   // M S mic lock
+        return kAudio[slot];
+    }
+    static constexpr int kVideo[] = {1, 2};             // eye lock
+    return kVideo[slot];
+}
+
+int HeaderButtonCount(const Track& track) {
+    return track.kind == TrackKind::Audio ? 4 : 2;
+}
+
+Rect HeaderButtonRect(const Rect& label_rect, int slot, int count) {
     // Chips sit on their own strip at the header's bottom edge —
     // 8px right margin / 6px bottom, 4px gaps via kHeaderButtonStep.
     return Rect{label_rect.x + label_rect.width - VeTheme::kSpaceSm -
-                    (3 - button) * kHeaderButtonStep,
+                    (count - slot) * kHeaderButtonStep,
                 label_rect.y + label_rect.height -
                     kHeaderButtonSize - 6.0f,
                 kHeaderButtonSize, kHeaderButtonSize};
 }
 
-const char* HeaderButtonLabel(int button) {
-    switch (button) {
-        case 0: return "M";   // Track::muted
-        case 1: return "H";   // Track::hidden (eye)
-        default: return "L";  // Track::locked
-    }
+// Expand chevron — top-right corner of the header card.
+Rect HeaderChevronRect(const Rect& label_rect) {
+    return Rect{label_rect.x + label_rect.width - 22.0f,
+                label_rect.y + 6.0f, 16.0f, 16.0f};
 }
 
 // Diamond outline (marker glyph) — four DrawLine segments, no polygon
@@ -156,6 +218,100 @@ void DrawDiamond(XER::UI::Rendering::Renderer& renderer, Point center,
                       {center.x - radius, center.y}, color, width);
     renderer.DrawLine({center.x - radius, center.y},
                       {center.x, center.y - radius}, color, width);
+}
+
+// ---- small icon glyphs ----
+// The shared SVG icon pack has no timeline glyphs (lock/eye/mic/
+// magnet/razor), so the header chips and corner toolbar draw them as
+// line art — same affordance language, no new assets.
+
+// Eye: almond outline (two-segment lids) + pupil dot; `slashed` draws
+// the "hidden" diagonal strike.
+void DrawEyeIcon(XER::UI::Rendering::Renderer& renderer, Rect box,
+                 Color color, bool slashed) {
+    const float cx = box.x + box.width * 0.5f;
+    const float mid = box.y + box.height * 0.5f;
+    const float lx = box.x + 1.5f, rx = box.x + box.width - 1.5f;
+    const float ty = box.y + 2.0f, by = box.y + box.height - 2.0f;
+    renderer.DrawLine({lx, mid}, {cx, ty}, color, 1.3f);
+    renderer.DrawLine({cx, ty}, {rx, mid}, color, 1.3f);
+    renderer.DrawLine({lx, mid}, {cx, by}, color, 1.3f);
+    renderer.DrawLine({cx, by}, {rx, mid}, color, 1.3f);
+    renderer.FillRect({cx - 1.6f, mid - 1.6f, 3.2f, 3.2f}, color, 1.6f);
+    if (slashed) {
+        renderer.DrawLine({lx + 0.5f, by - 0.5f}, {rx - 0.5f, ty + 0.5f},
+                          color, 1.4f);
+    }
+}
+
+// Padlock: squared shackle + filled body.
+void DrawLockIcon(XER::UI::Rendering::Renderer& renderer, Rect box,
+                  Color color) {
+    const float cx = box.x + box.width * 0.5f;
+    const float top = box.y + 1.5f;
+    renderer.DrawLine({cx - 3.0f, top + 4.0f}, {cx - 3.0f, top},
+                      color, 1.4f);
+    renderer.DrawLine({cx - 3.0f, top}, {cx + 3.0f, top}, color, 1.4f);
+    renderer.DrawLine({cx + 3.0f, top}, {cx + 3.0f, top + 4.0f},
+                      color, 1.4f);
+    renderer.FillRect({cx - 5.0f, top + 4.5f, 10.0f, 7.5f}, color, 2.0f);
+}
+
+// Studio mic: capsule + cradle + stem + base (audio record-arm).
+void DrawMicIcon(XER::UI::Rendering::Renderer& renderer, Rect box,
+                 Color color) {
+    const float cx = box.x + box.width * 0.5f;
+    const float top = box.y + 1.0f;
+    renderer.FillRect({cx - 2.6f, top, 5.2f, 8.4f}, color, 2.6f);
+    // Cradle under the capsule.
+    renderer.DrawLine({cx - 4.6f, top + 7.0f}, {cx - 4.6f, top + 9.6f},
+                      color, 1.3f);
+    renderer.DrawLine({cx - 4.6f, top + 9.6f}, {cx + 4.6f, top + 9.6f},
+                      color, 1.3f);
+    renderer.DrawLine({cx + 4.6f, top + 9.6f}, {cx + 4.6f, top + 7.0f},
+                      color, 1.3f);
+    // Stem + base.
+    renderer.DrawLine({cx, top + 9.6f}, {cx, top + 13.0f}, color, 1.3f);
+    renderer.DrawLine({cx - 3.4f, top + 13.0f}, {cx + 3.4f, top + 13.0f},
+                      color, 1.3f);
+}
+
+// Chevron: "v" collapsed -> expanded row affordance; "^" when open.
+void DrawChevronIcon(XER::UI::Rendering::Renderer& renderer, Rect box,
+                     Color color, bool expanded) {
+    const float cx = box.x + box.width * 0.5f;
+    const float cy = box.y + box.height * 0.5f;
+    const float d = expanded ? 2.4f : -2.4f;
+    renderer.DrawLine({cx - 4.0f, cy - d}, {cx, cy + d}, color, 1.5f);
+    renderer.DrawLine({cx, cy + d}, {cx + 4.0f, cy - d}, color, 1.5f);
+}
+
+// Horseshoe magnet: squared arch with bright pole tips (snap toggle).
+void DrawMagnetIcon(XER::UI::Rendering::Renderer& renderer, Rect box,
+                    Color color) {
+    const float lx = box.x + 3.5f, rx = box.x + box.width - 3.5f;
+    const float top = box.y + 3.0f, bot = box.y + box.height - 2.0f;
+    renderer.DrawLine({lx, bot}, {lx, top}, color, 1.6f);
+    renderer.DrawLine({lx, top}, {rx, top}, color, 1.6f);
+    renderer.DrawLine({rx, top}, {rx, bot}, color, 1.6f);
+    // Pole tips — slightly brighter so the glyph reads as a magnet.
+    const Color tip = WithAlpha(color, std::min(1.0f, color.a + 0.2f));
+    renderer.FillRect({lx - 1.6f, bot - 4.0f, 3.2f, 4.0f}, tip, 0.8f);
+    renderer.FillRect({rx - 1.6f, bot - 4.0f, 3.2f, 4.0f}, tip, 0.8f);
+}
+
+// Razor blade: skewed parallelogram with a centre slot line.
+void DrawRazorIcon(XER::UI::Rendering::Renderer& renderer, Rect box,
+                   Color color) {
+    const float x = box.x, y = box.y;
+    const Point a{x + 2.5f, y + 13.0f}, b{x + 9.0f, y + 13.0f},
+        c{x + 13.5f, y + 4.5f}, d{x + 7.0f, y + 4.5f};
+    renderer.DrawLine(a, b, color, 1.4f);
+    renderer.DrawLine(b, c, color, 1.4f);
+    renderer.DrawLine(c, d, color, 1.4f);
+    renderer.DrawLine(d, a, color, 1.4f);
+    renderer.DrawLine({x + 7.5f, y + 10.5f}, {x + 10.0f, y + 7.0f},
+                      color, 1.2f);
 }
 
 }  // namespace
@@ -269,6 +425,11 @@ float TimelineWidget::XAtTime(double t) const {
            static_cast<float>((t - scroll_seconds_) * px_per_second_);
 }
 
+float TimelineWidget::TrackRowHeight(int index) const {
+    return expanded_tracks_.count(index) != 0u ? kTrackHeightExpanded
+                                             : kTrackHeight;
+}
+
 int TimelineWidget::TrackAtY(float y) const {
     if (project_ == nullptr) return -1;
     const float row_top =
@@ -277,21 +438,53 @@ int TimelineWidget::TrackAtY(float y) const {
     // space maps to scrolled content space by adding it back.
     const float local = y - row_top + track_scroll_;
     if (local < 0.0f) return -1;
-    const int index = static_cast<int>(local / (kTrackHeight + kTrackGap));
-    const float row_y = local - index * (kTrackHeight + kTrackGap);
-    if (index < 0 || index >= static_cast<int>(project_->tracks.size()) ||
-        row_y > kTrackHeight) {
-        return -1;
+    // Rows have per-track heights (expand chevrons) — walk the stack.
+    float cursor = 0.0f;
+    for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
+        const float h = TrackRowHeight(static_cast<int>(i));
+        if (local < cursor + h) {
+            return local - cursor <= h ? static_cast<int>(i) : -1;
+        }
+        cursor += h + kTrackGap;
+        if (local < cursor) return -1;   // inside the gap
     }
-    return index;
+    return -1;
 }
 
 Rect TimelineWidget::TrackRect(int index) const {
-    return Rect{timeline_area_.x + kHeaderWidth,
-                timeline_area_.y + kMarkerLaneHeight + kRulerHeight +
-                    index * (kTrackHeight + kTrackGap) - track_scroll_,
+    float y = timeline_area_.y + kMarkerLaneHeight + kRulerHeight -
+              track_scroll_;
+    for (int i = 0; i < index && i <
+            static_cast<int>(project_ != nullptr
+                                 ? project_->tracks.size() : 0);
+         ++i) {
+        y += TrackRowHeight(i) + kTrackGap;
+    }
+    return Rect{timeline_area_.x + kHeaderWidth, y,
                 std::max(0.0f, timeline_area_.width - kHeaderWidth),
-                kTrackHeight};
+                TrackRowHeight(index)};
+}
+
+// Corner-toolbar ghost buttons inside the header-column corner box:
+// 0 = magnet (snap), 1 = razor tool, 2 = add marker, 3 = fx badge.
+Rect TimelineWidget::ToolbarButtonRect(int index) const {
+    return Rect{timeline_area_.x + VeTheme::kSpaceMd +
+                    static_cast<float>(index) * kToolButtonStep,
+                timeline_area_.y + 24.0f, kToolButtonSize,
+                kToolButtonSize};
+}
+
+int TimelineWidget::ToolbarButtonAt(Point p) const {
+    const float corner_bottom =
+        timeline_area_.y + kMarkerLaneHeight + kRulerHeight;
+    if (p.x >= timeline_area_.x + kHeaderWidth ||
+        p.y >= corner_bottom) {
+        return -1;
+    }
+    for (int i = 0; i < kToolButtonCount; ++i) {
+        if (ToolbarButtonRect(i).Contains(p)) return i;
+    }
+    return -1;
 }
 
 Rect TimelineWidget::HeaderRect(int index) const {
@@ -356,11 +549,15 @@ TimelineWidget::HeaderHit TimelineWidget::HitHeaderButton(
             p.y >= label.y + label.height) {
             continue;
         }
-        for (int button = 0; button < 3; ++button) {
-            if (!HeaderButtonApplies(project_->tracks[i], button)) {
-                continue;
-            }
-            if (HeaderButtonRect(label, button).Contains(p)) {
+        const Track& track = project_->tracks[i];
+        if (HeaderChevronRect(label).Contains(p)) {
+            return HeaderHit{static_cast<int>(i), 3};
+        }
+        const int count = HeaderButtonCount(track);
+        for (int slot = 0; slot < count; ++slot) {
+            const int button = HeaderButtonIdFor(track, slot);
+            if (!HeaderButtonApplies(track, button)) continue;
+            if (HeaderButtonRect(label, slot, count).Contains(p)) {
                 return HeaderHit{static_cast<int>(i), button};
             }
         }
@@ -725,25 +922,31 @@ void TimelineWidget::Render(
                       {bounds.x + bounds.width, ruler_bottom},
                       tokens.border, 1.0f);
 
-    // Corner box: app caption + the active tool as a small chip.
+    // Corner box: caption + active-tool chip on the first line, the
+    // ghost toolbar row (magnet/razor/marker/fx) underneath.
     const Rect caption{bounds.x + VeTheme::kSpaceMd, bounds.y + 3.0f,
                        kHeaderWidth - VeTheme::kSpaceMd * 2.0f, 14.0f};
     renderer.DrawText("TIMELINE", caption,
                       {tokens.muted, tokens.font_small, 700});
     if (const EditTool* tool = ActiveToolImpl()) {
         const std::string tool_name = tool->Name();
-        const auto size = renderer.MeasureText(
-            tool_name, {tokens.accent_foreground, tokens.font_small, 600});
-        const Rect chip{bounds.x + VeTheme::kSpaceMd,
-                        bounds.y + 21.0f, size.width + 12.0f, 16.0f};
-        renderer.FillRect(chip, WithAlpha(tokens.accent, 0.85f),
+        const auto name_size = renderer.MeasureText(
+            tool_name, {kAccentCyan, tokens.font_small, 600});
+        const auto caption_size = renderer.MeasureText(
+            "TIMELINE", {tokens.muted, tokens.font_small, 700});
+        const Rect chip{caption.x + caption_size.width + 8.0f,
+                        bounds.y + 2.0f, name_size.width + 10.0f, 15.0f};
+        renderer.FillRect(chip, WithAlpha(kAccentCyan, 0.16f),
                           tokens.radius_small);
+        renderer.StrokeRect(chip, WithAlpha(kAccentCyan, 0.45f), 1.0f,
+                            tokens.radius_small);
         renderer.DrawText(
             tool_name,
-            {chip.x + 6.0f, chip.y + 1.0f, chip.width - 12.0f,
+            {chip.x + 5.0f, chip.y + 1.0f, chip.width - 10.0f,
              chip.height - 2.0f},
-            {tokens.accent_foreground, tokens.font_small, 600});
+            {kAccentCyan, tokens.font_small, 600});
     }
+    RenderToolbar(renderer, tokens, bounds);
 
     // ---- ruler ----
     // Adaptive major step for labels, plus quarter subdivisions when
@@ -772,15 +975,17 @@ void TimelineWidget::Render(
             const float x = XAtTime(minor);
             renderer.DrawLine({x, ruler_bottom - 4.0f},
                               {x, ruler_bottom - 1.0f},
-                              WithAlpha(tokens.muted, 0.55f), 1.0f);
+                              WithAlpha(tokens.muted, 0.35f), 1.0f);
         }
     }
     double tick = std::floor(scroll_seconds_ / step) * step;
     for (; tick <= visible_end + step; tick += step) {
         const float x = XAtTime(tick);
         renderer.DrawLine({x, ruler_bottom - 8.0f},
-                          {x, ruler_bottom - 1.0f}, tokens.muted, 1.0f);
-        // Time labels sit above the tick marks, 4px right of the tick.
+                          {x, ruler_bottom - 1.0f},
+                          WithAlpha(kAccentCyan, 0.7f), 1.0f);
+        // Monospaced cyan timecode marks (reference ruler style),
+        // 4px right of the tick.
         char label[32];
         if (step < 1.0) {
             std::snprintf(label, sizeof(label), "%.2fs", tick);
@@ -794,7 +999,7 @@ void TimelineWidget::Render(
                           Rect{x + 4.0f, lane_bottom + kWorkBarHeight +
                                               1.0f,
                                56.0f, 14.0f},
-                          {tokens.muted, tokens.font_small, 400});
+                          {kAccentCyan, tokens.font_small, 500, true});
     }
 
     // Header-column divider spanning marker lane + tracks.
@@ -817,7 +1022,7 @@ void TimelineWidget::Render(
     for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
         const Track& track = project_->tracks[i];
         const bool is_video = track.kind == TrackKind::Video;
-        const Color kind = VeTheme::TrackKindColor(is_video);
+        const Color kind = KindColor(is_video);
         const Rect row = TrackRect(static_cast<int>(i));
         const Rect label_rect = HeaderRect(static_cast<int>(i));
 
@@ -835,26 +1040,43 @@ void TimelineWidget::Render(
                  label_rect.height - 8.0f},
             WithAlpha(kind, track.locked ? 0.4f : 0.9f), 1.5f);
 
-        // Kind badge: rounded square with the V/A glyph.
+        // Track-id badge chip ("V1" blue / "A1" teal): kind letter +
+        // per-kind ordinal, not the arbitrary track name.
+        int ordinal = 0;
+        for (std::size_t j = 0; j <= i; ++j) {
+            if (project_->tracks[j].kind == track.kind) ++ordinal;
+        }
+        char badge_text[8];
+        std::snprintf(badge_text, sizeof(badge_text), "%c%d",
+                      is_video ? 'V' : 'A', ordinal);
+        const auto badge_size = renderer.MeasureText(
+            badge_text,
+            {Color{1, 1, 1, 0.95f}, tokens.font_small, 700});
         const Rect badge{label_rect.x + kKindBarWidth + 8.0f,
-                         label_rect.y + 8.0f, 20.0f, 20.0f};
+                         label_rect.y + 8.0f,
+                         badge_size.width + 12.0f, 20.0f};
         renderer.FillRect(badge, WithAlpha(kind, 0.9f), 5.0f);
-        renderer.DrawText(is_video ? "V" : "A",
-                          Rect{badge.x, badge.y + 2.0f, badge.width,
-                               badge.height},
-                          {Color{1.0f, 1.0f, 1.0f, 0.95f},
-                           tokens.font_small, 700});
+        DrawCenteredText(renderer, badge_text,
+                         Rect{badge.x, badge.y + 2.5f, badge.width,
+                              badge.height},
+                         {Color{1.0f, 1.0f, 1.0f, 0.95f},
+                          tokens.font_small, 700});
 
-        // Track name on the badge's right; state flags on the line
-        // below it — no text touches the header edges.
+        // Track name on the badge's right when it adds information
+        // (duplicate of the badge id is hidden — "V1" over a "V1"
+        // chip reads as noise); state flags on the line below.
         const float name_x = badge.x + badge.width + 8.0f;
-        renderer.DrawText(
-            track.name,
-            Rect{name_x, label_rect.y + 7.0f,
-                 label_rect.x + label_rect.width - name_x - 6.0f,
-                 18.0f},
-            {track.locked ? tokens.muted : tokens.foreground,
-             tokens.font_small, 600});
+        const float name_right =
+            label_rect.x + label_rect.width - 24.0f;   // chevron lane
+        const bool name_differs = track.name != badge_text;
+        if (name_differs && !track.name.empty()) {
+            renderer.DrawText(
+                track.name,
+                Rect{name_x, label_rect.y + 7.0f,
+                     std::max(0.0f, name_right - name_x), 18.0f},
+                {track.locked ? tokens.muted : tokens.foreground,
+                 tokens.font_small, 600});
+        }
         std::string flags;
         if (track.muted) flags += "muted  ";
         if (track.hidden) flags += "hidden  ";
@@ -871,7 +1093,22 @@ void TimelineWidget::Render(
                  ? tokens.disabled
                  : tokens.danger,
              tokens.font_small, 400});
-        RenderHeaderButtons(renderer, tokens, track, label_rect);
+        RenderHeaderButtons(renderer, tokens, track,
+                            static_cast<int>(i), label_rect);
+
+        // Expand chevron at the header's top-right corner — swaps the
+        // lane between compact and tall (waveform/thumbnail room).
+        const bool expanded = expanded_tracks_.count(i) != 0u;
+        const Rect chev = HeaderChevronRect(label_rect);
+        const bool chev_hot = hover_header_.track ==
+                static_cast<int>(i) &&
+            hover_header_.button == 3;
+        if (expanded || chev_hot) {
+            renderer.FillRect(chev, tokens.hover, 4.0f);
+        }
+        DrawChevronIcon(renderer, chev,
+                        expanded ? kAccentCyan : tokens.muted,
+                        expanded);
 
         // Track lane: sunken fill with a whisper of the kind tint.
         Color row_color =
@@ -933,10 +1170,15 @@ void TimelineWidget::Render(
                               kClipRadius);
         }
         const bool selected = clip.id == selected_clip_id_;
+        const bool hovered =
+            !selected && clip.id == hover_clip_id_ && !previewed;
         const Color stroke =
             previewed ? tokens.accent
-                      : selected ? tokens.ring
-                                 : WithAlpha(tokens.border, 0.8f);
+                      : selected
+                            ? kAccentCyan
+                            : hovered
+                                  ? WithAlpha(Color{1, 1, 1, 1}, 0.5f)
+                                  : WithAlpha(tokens.border, 0.8f);
         renderer.StrokeRect(
             rect, stroke,
             previewed || selected ? 2.0f : 1.0f, kClipRadius);
@@ -957,26 +1199,50 @@ void TimelineWidget::Render(
         renderer.PopClip();
 
         // Clip name inside the band — 6px left inset, vertically
-        // centered; never touches the rounded corners.
+        // centered; never touches the rounded corners. Right-edge
+        // chips stack inward: "lock" tag, amber "fx", link rings.
         const Color label_color =
             track.locked || clip.muted || track.hidden
                 ? WithAlpha(Color{1, 1, 1, 1}, 0.62f)
                 : Color{1.0f, 1.0f, 1.0f, 0.96f};
-        float name_w = rect.width - 12.0f;
-        if (track.locked) name_w -= 34.0f;
-        renderer.DrawText(
-            ClipLabel(clip),
-            Rect{rect.x + 6.0f, rect.y + 2.0f,
-                 std::max(0.0f, name_w), kClipLabelHeight - 3.0f},
-            {label_color, tokens.font_small, 600});
-        // Linked-clip marker: two small overlapping rings at the
-        // band's right edge (shifting left of the "lock" tag when a
-        // locked track shows both).
-        if (!clip.link_group.empty() &&
-            rect.width > (track.locked ? 90.0f : 44.0f)) {
+        const bool has_fx =
+            !clip.effects.empty() || !clip.audio_fx.empty();
+        // Junction badges straddle the cut on the label strip —
+        // reserve room: out-transition pushes the right chips left,
+        // in-transition pushes the name right.
+        bool trans_in = false, trans_out = false;
+        for (const Transition& tr : project_->transitions) {
+            if (tr.from_clip == clip.id) trans_out = true;
+            if (tr.to_clip == clip.id) trans_in = true;
+        }
+        float right_cursor =
+            rect.x + rect.width - 5.0f - (trans_out ? 14.0f : 0.0f);
+        const float left_cursor =
+            rect.x + 6.0f + (trans_in ? 14.0f : 0.0f);
+        if (track.locked && rect.width > 70.0f) {
+            renderer.DrawText("lock",
+                              Rect{right_cursor - 25.0f, rect.y + 2.0f,
+                                   26.0f, kClipLabelHeight - 3.0f},
+                              {WithAlpha(tokens.danger, 0.9f),
+                               tokens.font_small, 600});
+            right_cursor -= 30.0f;
+        }
+        if (has_fx && rect.width > 46.0f) {
+            // Amber "fx" chip — clip carries an effect/audio-fx chain.
+            const Rect fx{right_cursor - 18.0f, rect.y + 3.0f, 18.0f,
+                          12.0f};
+            renderer.FillRect(fx, WithAlpha(kFxAmber, 0.92f), 3.0f);
+            DrawCenteredText(
+                renderer, "fx",
+                Rect{fx.x, fx.y + 0.5f, fx.width, fx.height},
+                {Color{0.10f, 0.07f, 0.0f, 1.0f}, tokens.font_small,
+                 700});
+            right_cursor -= 22.0f;
+        }
+        if (!clip.link_group.empty() && rect.width > 44.0f &&
+            right_cursor - 16.0f > left_cursor + 2.0f) {
             const float cy = rect.y + kClipLabelHeight * 0.5f + 0.5f;
-            const float lx = rect.x + rect.width - 13.0f -
-                             (track.locked ? 34.0f : 0.0f);
+            const float lx = right_cursor - 12.0f;
             const Color link =
                 WithAlpha(label_color, label_color.a * 0.9f);
             renderer.StrokeRect(
@@ -985,15 +1251,14 @@ void TimelineWidget::Render(
             renderer.StrokeRect(
                 Rect{lx + 0.5f, cy - 3.0f, 6.5f, 6.0f}, link, 1.1f,
                 3.0f);
+            right_cursor -= 18.0f;
         }
-        if (track.locked && rect.width > 70.0f) {
-            renderer.DrawText("lock",
-                              Rect{rect.x + rect.width - 30.0f,
-                                   rect.y + 2.0f, 26.0f,
-                                   kClipLabelHeight - 3.0f},
-                              {WithAlpha(tokens.danger, 0.9f),
-                               tokens.font_small, 600});
-        }
+        renderer.DrawText(
+            ClipLabel(clip),
+            Rect{left_cursor, rect.y + 2.0f,
+                 std::max(0.0f, right_cursor - left_cursor - 2.0f),
+                 kClipLabelHeight - 3.0f},
+            {label_color, tokens.font_small, 600});
         // Duration/rate sub-line under the band, left-aligned with
         // the name's 6px inset.
         std::string sub = FormatTime(clip.duration);
@@ -1022,19 +1287,24 @@ void TimelineWidget::Render(
             WithAlpha(Color{1, 1, 1, 1}, 0.28f), 1.5f);
     }
 
-    // Transition badges at cuts.
+    // Transition badges at cuts — small rounded chips straddling the
+    // junction on the clip's top edge.
     for (const Transition& transition : project_->transitions) {
         const Clip* from = FindClip(*project_, transition.from_clip);
         const Clip* to = FindClip(*project_, transition.to_clip);
         if (from == nullptr || to == nullptr) continue;
         const float x = XAtTime(ClipEndSeconds(*from));
         const Rect row = TrackRect(from->track);
-        renderer.FillRect(Rect{x - 10.0f, row.y + 18.0f, 20.0f, 20.0f},
-                          tokens.accent, 10.0f);
-        renderer.DrawText("T",
-                          Rect{x - 10.0f, row.y + 21.0f, 20.0f, 16.0f},
-                          {tokens.accent_foreground, tokens.font_small,
-                           700});
+        const Rect badge{x - 9.0f, row.y + kClipInset + 1.0f, 18.0f,
+                         14.0f};
+        renderer.FillRect(badge, WithAlpha(tokens.accent, 0.9f), 4.0f);
+        renderer.StrokeRect(badge, WithAlpha(tokens.border, 0.7f), 1.0f,
+                            4.0f);
+        DrawCenteredText(renderer, "T",
+                         Rect{badge.x, badge.y + 0.5f, badge.width,
+                              badge.height},
+                         {tokens.accent_foreground, tokens.font_small,
+                          700});
     }
     renderer.PopClip();   // tracks_viewport
 
@@ -1047,15 +1317,15 @@ void TimelineWidget::Render(
         renderer.StrokeRect(band, tokens.accent, 1.0f, 0.0f);
     }
 
-    // Playhead: thin high-visibility line with a grab handle in the
-    // ruler band.
+    // Playhead: bright cyan line with a pill-shaped cap handle in the
+    // ruler/marker band (reference NLE style).
     const float play_x = XAtTime(playhead_);
-    renderer.DrawLine({play_x, bounds.y + 4.0f},
-                      {play_x, bounds.y + bounds.height}, tokens.danger,
-                      1.5f);
     renderer.FillRect(
-        Rect{play_x - 5.0f, bounds.y + 1.0f, 10.0f, 12.0f},
-        tokens.danger, 3.0f);
+        Rect{play_x - 7.0f, bounds.y + 1.0f, 14.0f, 14.0f},
+        kAccentCyan, 7.0f);
+    renderer.DrawLine({play_x, bounds.y + 5.0f},
+                      {play_x, bounds.y + bounds.height}, kAccentCyan,
+                      2.0f);
 
     // Media-bin drag hovering this widget — accent frame marks the
     // panel as a live drop target (SetExternalDropHover).
@@ -1122,25 +1392,126 @@ void TimelineWidget::RenderWorkArea(
 void TimelineWidget::RenderHeaderButtons(
     XER::UI::Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens,
-    const Track& track,
+    const Track& track, int track_index,
     const Rect& label_rect) {
-    const bool active[3] = {track.muted, track.hidden, track.locked};
-    for (int button = 0; button < 3; ++button) {
-        if (!HeaderButtonApplies(track, button)) continue;
-        const Rect r = HeaderButtonRect(label_rect, button);
-        const Color fill = active[button]
-            ? (button == 2 ? tokens.danger : tokens.accent)
-            : WithAlpha(tokens.foreground, 0.07f);
-        const Color text = active[button] ? tokens.accent_foreground
-                                          : tokens.muted;
-        renderer.FillRect(r, fill, tokens.radius_small);
-        if (!active[button]) {
-            renderer.StrokeRect(r, WithAlpha(tokens.border, 0.8f), 1.0f,
-                                tokens.radius_small);
+    // Logical-id -> live state (solo/arm draw but stay unwired — the
+    // track model has no fields for them yet; clicks explain via
+    // status).
+    const auto is_active = [&track](int button) {
+        switch (button) {
+            case 0: return track.muted;
+            case 1: return track.hidden;
+            case 2: return track.locked;
+            default: return false;
         }
-        renderer.DrawText(HeaderButtonLabel(button),
-                          Rect{r.x, r.y + 2.0f, r.width, r.height},
-                          {text, tokens.font_small, 700});
+    };
+    const Color kind = KindColor(track.kind == TrackKind::Video);
+    const int count = HeaderButtonCount(track);
+    for (int slot = 0; slot < count; ++slot) {
+        const int button = HeaderButtonIdFor(track, slot);
+        const Rect r = HeaderButtonRect(label_rect, slot, count);
+        const bool active = is_active(button);
+        const bool hot = hover_header_.track == track_index &&
+                         hover_header_.button == button;
+        // Ghost affordance: no chrome until hovered; active toggles
+        // get a tinted chip (lock reads danger, kind toggles the kind
+        // color).
+        Color glyph = hot ? tokens.foreground : tokens.muted;
+        if (active) {
+            const Color fill =
+                button == 2 ? tokens.danger : WithAlpha(kind, 0.9f);
+            renderer.FillRect(r, fill, tokens.radius_small);
+            glyph = Color{1.0f, 1.0f, 1.0f, 0.96f};
+        } else if (hot) {
+            renderer.FillRect(r, tokens.hover, tokens.radius_small);
+        }
+        const Rect box{r.x + 2.0f, r.y + 2.0f, r.width - 4.0f,
+                       r.height - 4.0f};
+        switch (button) {
+            case 0:   // M — mute
+                DrawCenteredText(renderer, "M",
+                                 Rect{r.x, r.y + 1.5f, r.width,
+                                      r.height},
+                                 {glyph, tokens.font_small, 700});
+                break;
+            case 4:   // S — solo
+                DrawCenteredText(renderer, "S",
+                                 Rect{r.x, r.y + 1.5f, r.width,
+                                      r.height},
+                                 {glyph, tokens.font_small, 700});
+                break;
+            case 5:   // mic — record arm
+                DrawMicIcon(renderer, box, glyph);
+                break;
+            case 1:   // eye — visibility (slashed when hidden)
+                DrawEyeIcon(renderer, box, glyph, track.hidden);
+                break;
+            case 2:   // lock
+                DrawLockIcon(renderer, box, glyph);
+                break;
+            default:
+                break;
+        }
+    }
+}
+
+void TimelineWidget::RenderToolbar(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const Rect& bounds) {
+    (void)bounds;
+    // Ghost icon row under the caption: magnet (snap), razor, marker
+    // at playhead, fx badge. Same affordance language as the nav rail:
+    // no chrome until hovered, tinted chip while the state is on.
+    for (int i = 0; i < kToolButtonCount; ++i) {
+        const Rect r = ToolbarButtonRect(i);
+        const bool hot = hover_toolbar_ == i;
+        const bool active =
+            (i == 0 && snap_enabled_) ||
+            (i == 1 && active_tool_ == ToolId::Razor);
+        if (active) {
+            renderer.FillRect(r, WithAlpha(kAccentCyan, 0.18f),
+                              tokens.radius_small);
+            renderer.StrokeRect(r, WithAlpha(kAccentCyan, 0.55f), 1.0f,
+                                tokens.radius_small);
+        } else if (hot) {
+            renderer.FillRect(r, tokens.hover, tokens.radius_small);
+        }
+        const Color glyph =
+            active ? kAccentCyan
+                   : (hot ? tokens.foreground : tokens.muted);
+        const Rect box{r.x + 2.0f, r.y + 2.0f, r.width - 4.0f,
+                       r.height - 4.0f};
+        switch (i) {
+            case 0:
+                DrawMagnetIcon(renderer, box, glyph);
+                break;
+            case 1:
+                DrawRazorIcon(renderer, box, glyph);
+                break;
+            case 2:
+                DrawDiamond(
+                    renderer,
+                    Point{box.x + box.width * 0.5f,
+                          box.y + box.height * 0.5f},
+                    4.0f, glyph, 1.4f);
+                break;
+            case 3: {
+                // fx badge chip — amber, matching the per-clip chips.
+                const Rect chip{r.x, r.y + 4.0f, r.width, 12.0f};
+                renderer.FillRect(chip, WithAlpha(kFxAmber,
+                                                  hot ? 1.0f : 0.8f),
+                                  3.0f);
+                DrawCenteredText(
+                    renderer, "fx",
+                    Rect{chip.x, chip.y, chip.width, chip.height},
+                    {Color{0.10f, 0.07f, 0.0f, 1.0f},
+                     tokens.font_small, 700});
+                break;
+            }
+            default:
+                break;
+        }
     }
 }
 
@@ -1149,6 +1520,7 @@ void TimelineWidget::RenderWaveform(
     const XER::UI::Theme::Tokens& tokens,
     const Clip& clip,
     const Rect& rect) {
+    (void)tokens;
     if (!hooks_.get_audio_peaks || clip.source_path.empty() ||
         clip.source.kind != SourceKind::Media) {
         return;
@@ -1162,7 +1534,11 @@ void TimelineWidget::RenderWaveform(
     if (!(src1 > src0)) return;
     const float mid = rect.y + rect.height * 0.58f;
     const float half = rect.height * 0.38f;
-    const Color color = WithAlpha(tokens.accent_foreground, 0.55f);
+    // Bright teal min/max strokes on the dark-teal clip body (the
+    // reference's in-clip waveform read).
+    const Color color = WithAlpha(kWaveformTeal, 0.85f);
+    renderer.DrawLine({rect.x, mid}, {rect.x + rect.width, mid},
+                      WithAlpha(kWaveformTeal, 0.25f), 1.0f);
     for (int px = 0; px < columns; ++px) {
         const double t0 = src0 + (src1 - src0) * px / columns;
         const double t1 = src0 + (src1 - src0) * (px + 1) / columns;
@@ -1249,8 +1625,11 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
             const float ruler_h = kMarkerLaneHeight + kRulerHeight;
             const float viewport =
                 std::max(0.0f, timeline_area_.height - ruler_h);
-            const float content =
-                project_->tracks.size() * (kTrackHeight + kTrackGap);
+            float content = 0.0f;
+            for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
+                content += TrackRowHeight(static_cast<int>(i)) +
+                           kTrackGap;
+            }
             const float max_scroll =
                 std::max(0.0f, content - viewport);
             track_scroll_ = std::clamp(
@@ -1301,7 +1680,46 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         event.mouse_button == MouseButton::Left) {
         SetFocused(true);
 
-        // Track-header toggle buttons (mute / hidden-eye / lock).
+        // Corner-toolbar ghost buttons (magnet/razor/marker/fx).
+        if (const int tool_btn = ToolbarButtonAt(p); tool_btn >= 0) {
+            switch (tool_btn) {
+                case 0:
+                    if (hooks_.on_snap_toggle) {
+                        hooks_.on_snap_toggle(!snap_enabled_);
+                    } else {
+                        SetSnapEnabled(!snap_enabled_);
+                    }
+                    break;
+                case 1:
+                    SetTool(ToolId::Razor);
+                    break;
+                case 2:
+                    if (hooks_.on_add_marker) {
+                        hooks_.on_add_marker(playhead_, "");
+                    }
+                    break;
+                case 3: {
+                    int fx = 0;
+                    for (const Clip& clip : project_->clips) {
+                        if (!clip.effects.empty() ||
+                            !clip.audio_fx.empty()) {
+                            ++fx;
+                        }
+                    }
+                    SetStatus(std::to_string(fx) +
+                              (fx == 1 ? " clip carries effects"
+                                       : " clips carry effects"));
+                    break;
+                }
+                default:
+                    break;
+            }
+            Invalidate();
+            return true;
+        }
+
+        // Track-header affordances (mute / hidden-eye / lock /
+        // expand chevron / solo / record arm).
         if (const HeaderHit hit = HitHeaderButton(p);
             hit.track >= 0 && hit.button >= 0) {
             const Track& track = project_->tracks[hit.track];
@@ -1314,6 +1732,18 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 hooks_.on_track_hidden(hit.track, !track.hidden);
             } else if (hit.button == 2 && hooks_.on_track_locked) {
                 hooks_.on_track_locked(hit.track, !track.locked);
+            } else if (hit.button == 3) {
+                // Expand chevron — taller lane, widget-side only.
+                if (expanded_tracks_.count(hit.track) != 0u) {
+                    expanded_tracks_.erase(hit.track);
+                } else {
+                    expanded_tracks_.insert(hit.track);
+                }
+            } else if (hit.button == 4) {
+                SetStatus("Solo isn't wired into the track model yet");
+            } else if (hit.button == 5) {
+                SetStatus("Record arm isn't wired into the track "
+                          "model yet");
             }
             Invalidate();
             return true;
@@ -1370,6 +1800,24 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     }
 
     if (event.type == Event::Type::MouseMove) {
+        // Hover affordances — clip border, header-button and toolbar
+        // tints. Repaint only when the hit result actually changed.
+        {
+            const ClipHit hover = HitClip(p);
+            const std::string hover_id =
+                hover.clip != nullptr ? hover.clip->id : "";
+            const HeaderHit hover_header = HitHeaderButton(p);
+            const int hover_tool = ToolbarButtonAt(p);
+            if (hover_id != hover_clip_id_ ||
+                hover_header.track != hover_header_.track ||
+                hover_header.button != hover_header_.button ||
+                hover_tool != hover_toolbar_) {
+                hover_clip_id_ = hover_id;
+                hover_header_ = hover_header;
+                hover_toolbar_ = hover_tool;
+                Invalidate();
+            }
+        }
         if (ruler_scrub_) {
             if (hooks_.on_seek) hooks_.on_seek(TimeAtX(p.x));
             return true;

@@ -1319,6 +1319,36 @@ void VideoEditorAppWidget::EnsureChildren() {
         fx.type = type;
         AddClipEffectBy(selected_clip_id_, fx);
     });
+    // Correction controls (wheel/sliders) commit parameterized
+    // ClipEffects. A committed gesture replaces the first effect of
+    // the same type rather than stacking — a second wheel drag
+    // rewrites the grade instead of doubling it. Single undo step
+    // via ReplaceClip, same as AddClipEffectBy.
+    color_panel_->SetOnCorrection([this](const ClipEffect& fx) {
+        const Clip* clip = FindClip(project_, selected_clip_id_);
+        if (clip == nullptr) {
+            SetStatus("Select a clip to grade", true);
+            return;
+        }
+        Clip updated = *clip;
+        const auto existing = std::find_if(
+            updated.effects.begin(), updated.effects.end(),
+            [&fx](const ClipEffect& e) { return e.type == fx.type; });
+        if (existing != updated.effects.end()) {
+            *existing = fx;
+        } else {
+            updated.effects.push_back(fx);
+        }
+        std::string error;
+        if (!history_.ReplaceClip(selected_clip_id_, updated,
+                                  BoundsForPath(clip->source_path),
+                                  &error)) {
+            SetStatus("Correction failed: " + error, true);
+            return;
+        }
+        NotifyProjectChanged();
+        SetStatus("Applied " + fx.type);
+    });
     color_panel_->Refresh();
 
     // Extensions dock tab (ui/extensions_panel.h): the .xexrj list
@@ -1537,6 +1567,15 @@ void VideoEditorAppWidget::EnsureChildren() {
         };
     timeline_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
+    };
+    // Timeline corner-toolbar magnet — same flip as the main-toolbar
+    // Snap button / S shortcut so all three stay in sync.
+    timeline_hooks.on_snap_toggle = [this](bool on) {
+        snap_enabled_ = on;
+        timeline_->SetSnapEnabled(on);
+        snap_btn_->SetStyle(on ? Widgets::ButtonStyle::Secondary
+                               : Widgets::ButtonStyle::Ghost);
+        SetStatus(on ? "Snapping on" : "Snapping off");
     };
     timeline_ = std::make_shared<TimelineWidget>(timeline_hooks);
 
@@ -1974,6 +2013,8 @@ bool VideoEditorAppWidget::SaveProject(bool choose_path) {
     autosave_.ClearDirty();
     project_dirty_ = false;
     if (title_bar_) title_bar_->SetCenterCommandValue(Basename(project_path_));
+    // Rename landed without a project change — sync the monitor card.
+    if (monitor_) monitor_->SetTitle(Basename(project_path_));
     return true;
 }
 
@@ -4791,6 +4832,10 @@ void VideoEditorAppWidget::NotifyProjectChanged() {
     }
     RefreshWaveformPanel();
     monitor_->SetProject(project_);
+    // Monitor-card chrome title — same name the title-bar pill shows.
+    monitor_->SetTitle(project_path_.empty()
+                           ? "Untitled"
+                           : Basename(project_path_));
     if (title_bar_) {
         title_bar_->SetCenterCommandValue(
             project_path_.empty() ? "Untitled.xerproj"

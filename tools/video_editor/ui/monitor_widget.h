@@ -10,12 +10,16 @@
 //   * safe-margins overlay (action-safe 90% + title-safe 80% + center
 //     cross) toggled by SetSafeMargins() or the on-monitor button
 //   * rule-of-thirds grid overlay toggled by SetGrid()
-//   * big HH:MM:SS:FF timecode readout (bottom-left) driven by the
-//     playhead + project fps
+//   * big HH:MM:SS:FF timecode readout (transport row, left) driven by
+//     the playhead + project fps — monospaced accent digits
 //   * mini ruler strip: marker flags, work-area in/out brackets, loop
 //     range band and the playhead tick; click to seek
-//   * transport row: play/pause, safe-margins / grid / loop toggles and
-//     a preview-quality badge (SetQualityTag, e.g. "1/2")
+//   * centered transport strip — |◄ ‹ ►/❚❚ › ►| ghost icon buttons,
+//     hover pill, accent on the playing state — plus a right-aligned
+//     display-toggle cluster (safe margins / grid / loop / scopes /
+//     focus) and a preview-quality badge (SetQualityTag, e.g. "1/2")
+//   * title row: the sequence/project name (SetTitle) + a "≡" overflow
+//     button that opens the same menu as right-click
 #pragma once
 
 #include <cstdint>
@@ -87,6 +91,12 @@ public:
     void SetQualityTag(const std::string& tag);
     const std::string& QualityTag() const { return quality_tag_; }
 
+    // Monitor-card title: the sequence/project name shown on the top
+    // chrome row (a ".xerproj" suffix is stripped for display). Empty
+    // falls back to the strings.ini "program_title" label.
+    void SetTitle(const std::string& title);
+    const std::string& Title() const { return title_; }
+
     // External-playback mode: an outside engine (PreviewEngine) pumps
     // frames through SetExternalFrame — the internal compositor and the
     // Tick stepping loop stand down but the meter/overlay/transport
@@ -133,14 +143,19 @@ public:
 
 private:
     // Transport row buttons — real Widgets::Button children; the enum
-    // indexes their geometry via OverlayButtonRect().
+    // indexes their geometry via OverlayButtonRect(). The first five
+    // form the centered transport strip; the rest are the right-aligned
+    // display-toggle cluster that drops tail entries when narrow.
     enum class OverlayButton {
-        Play,
+        ToStart,
         PrevFrame,
+        Play,
         NextFrame,
+        ToEnd,
         SafeMargins,
         Grid,
         Loop,
+        Scopes,
         Focus
     };
 
@@ -166,7 +181,16 @@ private:
     XER::UI::Layout::Rect VideoAreaRect() const;
     XER::UI::Layout::Rect RulerRect() const;
     XER::UI::Layout::Rect TransportRect() const;
+    // Left x of the centered 5-button transport strip (or the
+    // left-aligned strip when layout.yaml transport_center is off).
+    float CenterStripLeft() const;
+    // How many right-cluster toggles fit beside the centered strip and
+    // the timecode reserve (0..5 — prefix of the compiled order).
+    int RightClusterKept() const;
     XER::UI::Layout::Rect OverlayButtonRect(OverlayButton button) const;
+    // Header chrome rects (title text + the "≡" overflow button).
+    XER::UI::Layout::Rect HeaderRect() const;
+    XER::UI::Layout::Rect OverflowButtonRect() const;
     // The rect the decoded frame is letterboxed into inside
     // VideoAreaRect() (the video_area itself when no frame).
     XER::UI::Layout::Rect FrameDestRect() const;
@@ -184,14 +208,12 @@ private:
     void DrawMeters(XER::UI::Rendering::Renderer& renderer,
                     const XER::UI::Theme::Tokens& tokens,
                     const XER::UI::Layout::Rect& video_area);
-    void DrawTimecode(XER::UI::Rendering::Renderer& renderer,
-                      const XER::UI::Theme::Tokens& tokens,
-                      const XER::UI::Layout::Rect& video_area);
     void DrawRuler(XER::UI::Rendering::Renderer& renderer,
                    const XER::UI::Theme::Tokens& tokens,
                    const XER::UI::Layout::Rect& ruler);
-    // The transport row's drawn remainder — the "current / duration"
-    // readout; the buttons themselves are child widgets now.
+    // The transport row's drawn remainder — the big monospaced accent
+    // timecode (+ "/ duration" tail on wide rows); the buttons
+    // themselves are child widgets now.
     void DrawTransport(XER::UI::Rendering::Renderer& renderer,
                        const XER::UI::Theme::Tokens& tokens,
                        const XER::UI::Layout::Rect& row);
@@ -245,18 +267,24 @@ private:
     // preview-quality hint when the widget renders frames itself.
     float preview_scale_ = 1.0f;
 
-    // Transport row children (indexed by OverlayButton order) plus the
-    // appended scopes toggle and the quality chip.
+    // Transport row children: the centered 5-button strip
+    // (|◄ ‹ ► › ►|), the right-aligned display-toggle cluster, the
+    // header "≡" overflow button and the quality chip.
     bool transport_children_ = false;
-    std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> to_start_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> prev_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> next_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> to_end_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> safe_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> grid_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> loop_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> focus_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> scopes_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> menu_btn_;
     std::shared_ptr<XER::UI::Widgets::Badge> quality_badge_;
+    // Title-row text — the sequence/project name (SetTitle).
+    std::string title_;
 };
 
 }  // namespace XER::VideoEditor::Ui

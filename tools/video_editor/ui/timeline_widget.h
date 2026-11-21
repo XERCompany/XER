@@ -134,6 +134,12 @@ public:
         // `track` at `at_seconds` (kind-mismatched/locked targets
         // fall back to the shell's normal placement rules).
         std::function<void(int, double)> on_add_media;
+        // Corner-toolbar magnet button: fires with the REQUESTED snap
+        // state so the shell (which also owns the main-toolbar Snap
+        // button and the S shortcut) stays the single source of truth
+        // — the shell flips its flag and calls SetSnapEnabled back.
+        // Unset -> the widget toggles snap_enabled_ itself.
+        std::function<void(bool)> on_snap_toggle;
     };
 
     explicit TimelineWidget(Hooks hooks = {});
@@ -199,8 +205,11 @@ private:
         const Clip* clip = nullptr;
         ClipPart part = ClipPart::Body;
     };
-    // Track-header button hit: button 0 = mute, 1 = hidden/eye,
-    // 2 = lock. track -1 = no hit.
+    // Track-header affordance hit. Logical button ids:
+    //   0 = mute (audio), 1 = hidden/eye (video), 2 = lock,
+    //   3 = expand chevron (both kinds), 4 = solo (audio),
+    //   5 = record arm (audio).
+    // track -1 = no hit.
     struct HeaderHit {
         int track = -1;
         int button = -1;
@@ -227,9 +236,16 @@ private:
 
     double TimeAtX(float x) const;
     float XAtTime(double t) const;
+    // Per-track lane height — the header chevron (button id 3)
+    // expands a row to a taller lane for waveform/thumbnail room.
+    float TrackRowHeight(int index) const;
     int TrackAtY(float y) const;
     XER::UI::Layout::Rect TrackRect(int index) const;
     XER::UI::Layout::Rect HeaderRect(int index) const;
+    // Corner-toolbar ghost buttons (magnet/razor/marker/fx), index or
+    // -1. Lives in the header-column corner box above the track rows.
+    int ToolbarButtonAt(XER::UI::Layout::Point p) const;
+    XER::UI::Layout::Rect ToolbarButtonRect(int index) const;
     XER::UI::Layout::Rect ClipRect(const Clip& clip) const;
     // Clip span ignoring the preview overlay (used to draw the dimmed
     // "original position" ghost under a preview).
@@ -254,8 +270,13 @@ private:
                         const XER::UI::Layout::Rect& bounds);
     void RenderHeaderButtons(XER::UI::Rendering::Renderer& renderer,
                              const XER::UI::Theme::Tokens& tokens,
-                             const Track& track,
+                             const Track& track, int track_index,
                              const XER::UI::Layout::Rect& label_rect);
+    // Corner-box toolbar row: magnet snap toggle, razor tool, add
+    // marker at playhead, fx summary badge.
+    void RenderToolbar(XER::UI::Rendering::Renderer& renderer,
+                       const XER::UI::Theme::Tokens& tokens,
+                       const XER::UI::Layout::Rect& bounds);
     void RenderWaveform(XER::UI::Rendering::Renderer& renderer,
                         const XER::UI::Theme::Tokens& tokens,
                         const Clip& clip,
@@ -328,6 +349,16 @@ private:
     // Media-bin drag hovering this widget — Render strokes an accent
     // frame so the panel reads as a live drop target.
     bool external_drop_hover_ = false;
+
+    // Premiere-style hover affordances — painted thin borders/glyph
+    // tints only, no interaction change.
+    std::string hover_clip_id_;
+    HeaderHit hover_header_;
+    int hover_toolbar_ = -1;
+
+    // Per-track expand state for the header chevrons (track index ->
+    // tall lane). Widget-side only; the model has no row-height field.
+    std::unordered_set<int> expanded_tracks_;
 
     // Tool model — one instance per ToolId, active_tool_ picks the
     // receiver of pointer events.

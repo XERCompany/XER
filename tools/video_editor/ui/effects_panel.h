@@ -103,7 +103,6 @@ private:
     int selected_ = -1;           // index into filtered_
     bool children_attached_ = false;
 
-    std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::TextInput> search_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;

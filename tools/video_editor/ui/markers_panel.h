@@ -116,7 +116,6 @@ private:
     // NEXT rebuild, so a firing button can never be freed under its
     // own event regardless of how dispatch holds refs.
     std::vector<std::shared_ptr<XER::UI::Widgets::Widget>> retired_rows_;
-    std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> rename_input_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;

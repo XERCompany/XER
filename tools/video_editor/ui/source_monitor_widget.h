@@ -7,8 +7,10 @@
 //
 //   * seek bar (mini ruler): marked in/out brackets + playhead;
 //     click/drag seeks
-//   * transport row: play/pause, |◀ ▶| frame step, { IN, OUT } mark
-//     buttons, INS (,) / OVR (.) three-point-edit buttons
+//   * transport row: big mono accent timecode on the left, a centered
+//     ghost-icon strip (|◄ ‹ ►/❚❚ › ►| — skip/step/play parity with
+//     the program monitor), and a right-aligned edit cluster
+//     ({ IN, OUT } marks, INS (,) / OVR (.) three-point edits)
 //   * footer: source timecode + the marked range (or the media range
 //     when nothing is marked)
 //   * header: "SOURCE" + the loaded clip's basename
@@ -107,10 +109,15 @@ public:
 private:
     // Transport row indexes — the buttons themselves are
     // Widgets::Button children; the enum only feeds ButtonRect().
+    // The first five form the centered transport strip (parity with
+    // the program monitor); the rest are the right-aligned edit
+    // cluster that drops tail entries when the row narrows.
     enum class Button {
-        Play,
+        ToStart,
         PrevFrame,
+        Play,
         NextFrame,
+        ToEnd,
         MarkIn,
         MarkOut,
         Insert,
@@ -128,6 +135,12 @@ private:
     XER::UI::Layout::Rect RulerRect() const;
     XER::UI::Layout::Rect TransportRect() const;
     XER::UI::Layout::Rect FooterRect() const;
+    // Left x of the centered 5-button transport strip.
+    float CenterStripLeft() const;
+    // How many right-cluster edit buttons fit beside the centered
+    // strip + the timecode reserve (0..4 — prefix of the compiled
+    // order {IN, OUT, INS, OVR}).
+    int RightClusterKept() const;
     XER::UI::Layout::Rect ButtonRect(Button button) const;
     XER::UI::Layout::Rect FrameDestRect() const;
     double RulerTimeAtX(float x) const;
@@ -138,8 +151,9 @@ private:
     void DrawRuler(XER::UI::Rendering::Renderer& renderer,
                    const XER::UI::Theme::Tokens& tokens,
                    const XER::UI::Layout::Rect& ruler);
-    // The transport row's drawn remainder — the "current / duration"
-    // readout; the buttons themselves are child widgets now.
+    // The transport row's drawn remainder — the big monospaced
+    // accent source timecode; the buttons themselves are child
+    // widgets now.
     void DrawTransport(XER::UI::Rendering::Renderer& renderer,
                        const XER::UI::Theme::Tokens& tokens,
                        const XER::UI::Layout::Rect& row);
@@ -166,9 +180,11 @@ private:
     // Transport row children (indexed by the Button enum) plus the
     // header/footer labels.
     bool transport_children_ = false;
-    std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> to_start_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> prev_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> next_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> to_end_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> mark_in_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> mark_out_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> insert_btn_;

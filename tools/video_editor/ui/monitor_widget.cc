@@ -1,6 +1,7 @@
 #include "monitor_widget.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -116,25 +117,28 @@ MonitorScopes& ScopesState(MonitorWidget* self) {
     return ScopesTable()[self];
 }
 
-// Width of the 8th transport button appended after Focus (see
-// ScopesButtonRect); also counted in OverlayButtonRect's centering.
-constexpr float kScopesButtonWidth = 52.0f;
+// ---- transport-row geometry ----
+// Row = [mono timecode] … [centered |◄ ‹ ► › ►| strip] … [display
+// toggles]. The first five OverlayButton entries form the center
+// strip; the right cluster keeps a PREFIX of {safe, grid, loop,
+// scopes, focus} and drops tail entries when the row narrows.
+constexpr std::array<float, 5> kCenterW = {30.0f, 30.0f, 34.0f,
+                                           30.0f, 30.0f};
+constexpr float kCenterGap = 6.0f;
+constexpr float kCenterStripW =
+    30.0f + 30.0f + 34.0f + 30.0f + 30.0f + 4.0f * kCenterGap;
+// Right cluster order (left→right): safe, grid, loop, scopes, focus.
+constexpr std::array<float, 5> kRightW = {30.0f, 30.0f, 30.0f,
+                                          68.0f, 30.0f};
+constexpr float kRightGap = 4.0f;
 
-// Geometry mirrors OverlayButtonRect(): 7 buttons
-// {34,30,30,52,52,52,30} + 6 px gaps, then the scopes toggle last.
-Layout::Rect ScopesButtonRect(const Layout::Rect& row) {
-    const float gap = 6.0f;
-    const float widths[] = {34.0f, 30.0f, 30.0f, 52.0f, 52.0f, 52.0f,
-                            30.0f};
-    float strip = gap * 7.0f + kScopesButtonWidth;
-    for (float w : widths) strip += w;
-    float x = row.x;
-    if (AppRuntime::SharedLayoutConfig().transport_center) {
-        x += std::max(0.0f, (row.width - strip) * 0.5f);
-    }
-    return {x + strip - kScopesButtonWidth, row.y, kScopesButtonWidth,
-            row.height};
+// Width reserved on the row's left for the drawn timecode readout —
+// an estimate only (Layout can't measure text): 11 mono chars at
+// font_title, plus the " / duration" tail when the row is wide.
+float TimecodeReserve(float row_width) {
+    return row_width >= 560.0f ? 250.0f : 136.0f;
 }
+bool ShowDurationTail(float row_width) { return row_width >= 560.0f; }
 
 // Top-right scopes overlay inside the video area, kept clear of the
 // audio meters hugging the right edge.
@@ -145,21 +149,6 @@ Layout::Rect ScopesOverlayRect(const Layout::Rect& video_area) {
         std::max(0.0f, std::min(190.0f, video_area.height - 16.0f));
     return {video_area.x + video_area.width - w - 24.0f,
             video_area.y + 8.0f, w, h};
-}
-
-std::string FormatTime(double seconds) {
-    if (!std::isfinite(seconds) || seconds < 0.0) return "00:00:00.000";
-    const int hours = static_cast<int>(seconds / 3600.0);
-    seconds -= hours * 3600.0;
-    const int minutes = static_cast<int>(seconds / 60.0);
-    seconds -= minutes * 60.0;
-    const int whole = static_cast<int>(seconds);
-    const int millis = static_cast<int>(
-        std::round((seconds - whole) * 1000.0));
-    char buffer[32];
-    std::snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d.%03d", hours,
-                  minutes, whole, millis == 1000 ? 999 : millis);
-    return buffer;
 }
 
 // Big monitor timecode HH:MM:SS:FF — FF is the frame index inside the
@@ -203,9 +192,12 @@ void MonitorWidget::EnsureChildren() {
     // Icon-capable buttons resolve through the pack (idempotent).
     VeIcons::InstallButtonIconResolver();
 
-    const auto make = [this](const char* icon, const char* tooltip) {
+    // Ghost icon buttons: transparent until the hover pill, accent
+    // (Primary) only while the state they represent is active.
+    const auto make = [this](const char* icon, const char* text,
+                             const char* tooltip) {
         auto button = std::make_shared<Widgets::Button>(
-            "", Widgets::ButtonStyle::Secondary);
+            text != nullptr ? text : "", Widgets::ButtonStyle::Ghost);
         // Transport keys must keep routing to the monitor / global
         // shortcuts — the row's buttons take pointer input only.
         button->SetFocusable(false);
@@ -215,7 +207,22 @@ void MonitorWidget::EnsureChildren() {
         return button;
     };
 
-    play_btn_ = make("transport.play", "Play / pause (Space)");
+    // Centered transport strip — skip/start, step, play, step,
+    // skip/end. The pack has no first_page/last_page glyphs, so the
+    // end-seek buttons carry the literal "|‹" / "›|" text glyphs.
+    const auto seek_to = [this](double t) {
+        if (on_seek_request_) {
+            on_seek_request_(t);
+            return;
+        }
+        SetPlaying(false);
+        SetTime(t, true);
+        EmitTime(time_);
+    };
+    to_start_btn_ = make(nullptr, "|‹", "Go to start (Home)");
+    to_start_btn_->SetOnClick([seek_to] { seek_to(0.0); });
+    play_btn_ = make("transport.play", nullptr,
+                     "Play / pause (Space)");
     play_btn_->SetOnClick([this] {
         if (on_play_toggle_) {
             on_play_toggle_();
@@ -239,23 +246,26 @@ void MonitorWidget::EnsureChildren() {
                 true);
         EmitTime(time_);
     };
-    prev_btn_ = make("transport.prev", "Previous frame");
+    prev_btn_ = make("transport.prev", nullptr, "Previous frame");
     prev_btn_->SetOnClick([step] { step(-1); });
-    next_btn_ = make("transport.next", "Next frame");
+    next_btn_ = make("transport.next", nullptr, "Next frame");
     next_btn_->SetOnClick([step] { step(1); });
-    safe_btn_ = make("transport.safe", "Safe margins");
+    to_end_btn_ = make(nullptr, "›|", "Go to end (End)");
+    to_end_btn_->SetOnClick(
+        [this, seek_to] { seek_to(project_.duration()); });
+    safe_btn_ = make("transport.safe", nullptr, "Safe margins");
     safe_btn_->SetOnClick([this] { SetSafeMargins(!safe_margins_); });
-    grid_btn_ = make("transport.grid", "Rule-of-thirds grid");
+    grid_btn_ = make("transport.grid", nullptr, "Rule-of-thirds grid");
     grid_btn_->SetOnClick([this] { SetGrid(!grid_); });
-    loop_btn_ = make("transport.loop", "Loop playback");
+    loop_btn_ = make("transport.loop", nullptr, "Loop playback");
     loop_btn_->SetOnClick([this] { SetLoop(!loop_); });
-    focus_btn_ = make("transport.fullscreen", "Monitor focus");
+    focus_btn_ = make("transport.fullscreen", nullptr, "Monitor focus");
     focus_btn_->SetOnClick([this] {
         if (hooks_.on_toggle_focus) hooks_.on_toggle_focus();
     });
     // No scopes icon ships in the pack — text chip like before.
     scopes_btn_ = std::make_shared<Widgets::Button>(
-        "SCOPES", Widgets::ButtonStyle::Secondary);
+        "SCOPES", Widgets::ButtonStyle::Ghost);
     scopes_btn_->SetFocusable(false);
     scopes_btn_->SetTooltip("Toggle scopes overlay");
     scopes_btn_->SetOnClick([this] {
@@ -264,6 +274,13 @@ void MonitorWidget::EnsureChildren() {
         Invalidate();
     });
     AddChild(scopes_btn_);
+
+    // Header "≡" overflow — same menu as right-click on the card.
+    menu_btn_ = make("action.menu", nullptr, "Monitor options");
+    menu_btn_->SetOnClick([this] {
+        const auto r = menu_btn_->GetBounds();
+        ShowContextMenu({r.x, r.y + r.height + 2.0f});
+    });
 
     quality_badge_ = std::make_shared<Widgets::Badge>(
         quality_tag_, Widgets::BadgeVariant::Secondary);
@@ -276,9 +293,11 @@ void MonitorWidget::EnsureChildren() {
 void MonitorWidget::SyncTransportChildren() {
     if (!transport_children_) return;
     namespace Widgets = XER::UI::Widgets;
+    // Ghost at rest — the hover pill carries interactivity; Primary
+    // (accent) marks the live state: playing, enabled overlays.
     const auto style = [](bool active) {
         return active ? Widgets::ButtonStyle::Primary
-                      : Widgets::ButtonStyle::Secondary;
+                      : Widgets::ButtonStyle::Ghost;
     };
     play_btn_->SetIcon(TransportPlaying() ? "transport.pause"
                                           : "transport.play");
@@ -407,6 +426,21 @@ void MonitorWidget::SetQualityTag(const std::string& tag) {
     Invalidate();
 }
 
+void MonitorWidget::SetTitle(const std::string& title) {
+    std::string t = title;
+    // Project filenames read cleaner without the .xerproj suffix in
+    // the card chrome ("My sequence", not "My sequence.xerproj").
+    constexpr const char* kExt = ".xerproj";
+    if (t.size() > std::char_traits<char>::length(kExt) &&
+        t.compare(t.size() - std::char_traits<char>::length(kExt),
+                  std::string::npos, kExt) == 0) {
+        t.erase(t.size() - std::char_traits<char>::length(kExt));
+    }
+    if (title_ == t) return;
+    title_ = std::move(t);
+    Invalidate();
+}
+
 void MonitorWidget::SetExternalPlayback(bool on) {
     if (external_playback_ == on) return;
     external_playback_ = on;
@@ -520,7 +554,7 @@ Layout::Rect MonitorWidget::VideoAreaRect() const {
     const float pad = CachedLayoutTokens().spacing_medium;
     const float chrome_bottom =
         16.0f + 2.0f +   // ruler strip + gap
-        28.0f +          // transport row
+        30.0f +          // transport row
         pad;
     return {bounds.x + pad, bounds.y + 34.0f,
             bounds.width - pad * 2.0f,
@@ -540,28 +574,81 @@ Layout::Rect MonitorWidget::TransportRect() const {
     const float pad = CachedLayoutTokens().spacing_medium;
     const auto ruler = RulerRect();
     return {bounds.x + pad, ruler.y + ruler.height + 2.0f,
-            bounds.width - pad * 2.0f, 26.0f};
+            bounds.width - pad * 2.0f, 30.0f};
+}
+
+float MonitorWidget::CenterStripLeft() const {
+    const auto row = TransportRect();
+    // assets/ui/layout.yaml — Monitor.transport_center centers the
+    // transport strip; off, it hugs the timecode reserve on the left.
+    if (AppRuntime::SharedLayoutConfig().transport_center) {
+        return row.x + std::max(0.0f, (row.width - kCenterStripW) * 0.5f);
+    }
+    return row.x + TimecodeReserve(row.width) + kCenterGap;
+}
+
+int MonitorWidget::RightClusterKept() const {
+    const auto row = TransportRect();
+    // Space left of the row edge after the centered strip and the
+    // timecode reserve — the cluster keeps a prefix of its order.
+    const float occupied =
+        std::max(CenterStripLeft() + kCenterStripW,
+                 row.x + TimecodeReserve(row.width));
+    const float avail = row.x + row.width - occupied - kCenterGap;
+    float total = 0.0f;
+    int kept = 0;
+    for (float w : kRightW) {
+        const float need = total + (kept > 0 ? kRightGap : 0.0f) + w;
+        if (need > avail) break;
+        total = need;
+        ++kept;
+    }
+    return kept;
 }
 
 Layout::Rect MonitorWidget::OverlayButtonRect(OverlayButton button) const {
     const auto row = TransportRect();
-    const float gap = 6.0f;
-    float x = row.x;
-    const float widths[] = {34.0f, 30.0f, 30.0f, 52.0f, 52.0f,
-                            52.0f, 30.0f};
-    // assets/ui/layout.yaml — Monitor.transport_center centers the
-    // transport strip instead of left-aligning it.
-    if (AppRuntime::SharedLayoutConfig().transport_center) {
-        float total = gap * 6.0f;
-        for (float w : widths) total += w;
-        // + gap + the scopes toggle appended after Focus (see
-        // ScopesButtonRect) so the whole 8-button strip stays centered.
-        total += gap + kScopesButtonWidth;
-        x = row.x + std::max(0.0f, (row.width - total) * 0.5f);
-    }
     const int index = static_cast<int>(button);
-    for (int i = 0; i < index; ++i) x += widths[i] + gap;
-    return {x, row.y, widths[index], row.height};
+    if (index <= static_cast<int>(OverlayButton::ToEnd)) {
+        // Centered strip: to-start, step-back, play, step-fwd, to-end.
+        float x = CenterStripLeft();
+        for (int i = 0; i < index; ++i) {
+            x += kCenterW[static_cast<std::size_t>(i)] + kCenterGap;
+        }
+        return {x, row.y + 1.0f,
+                kCenterW[static_cast<std::size_t>(index)],
+                row.height - 2.0f};
+    }
+    // Right cluster: Safe/Grid/Loop/Scopes/Focus map onto the kept
+    // prefix — Layout() hides buttons past the RightClusterKept()
+    // count, so the rect math only runs for kept slots.
+    const int cluster =
+        index - static_cast<int>(OverlayButton::SafeMargins);
+    const int kept = RightClusterKept();
+    float total = 0.0f;
+    for (int i = 0; i < kept; ++i) {
+        total += kRightW[static_cast<std::size_t>(i)] +
+                 (i > 0 ? kRightGap : 0.0f);
+    }
+    float x = row.x + row.width - total;
+    for (int i = 0; i < cluster; ++i) {
+        x += kRightW[static_cast<std::size_t>(i)] + kRightGap;
+    }
+    return {x, row.y + 1.0f, kRightW[static_cast<std::size_t>(cluster)],
+            row.height - 2.0f};
+}
+
+Layout::Rect MonitorWidget::HeaderRect() const {
+    const auto bounds = GetBounds();
+    const float pad = CachedLayoutTokens().spacing_medium;
+    return {bounds.x + pad, bounds.y + pad * 0.6f,
+            bounds.width - pad * 2.0f, 24.0f};
+}
+
+Layout::Rect MonitorWidget::OverflowButtonRect() const {
+    const auto header = HeaderRect();
+    return {header.x + header.width - 26.0f, header.y + 1.0f, 26.0f,
+            header.height - 2.0f};
 }
 
 Layout::Rect MonitorWidget::FrameDestRect() const {
@@ -624,15 +711,28 @@ void MonitorWidget::Render(
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
 
-    const float pad = tokens.spacing_medium;
-    const Layout::Rect header{bounds.x + pad, bounds.y + pad * 0.6f,
-                              bounds.width - pad * 2.0f, 24.0f};
-    // assets/ui/strings.ini — program_title overrides the header.
+    // Title row: sequence/project name + the "≡" overflow button
+    // (a child — it and the quality chip paint after this pass).
+    const Layout::Rect header = HeaderRect();
+    // assets/ui/strings.ini — program_title is the unnamed fallback.
+    const std::string title =
+        title_.empty()
+            ? AppRuntime::SharedUiStrings().Get("program_title",
+                                                "PROGRAM")
+            : title_;
+    const auto menu = OverflowButtonRect();
+    const Rendering::TextStyle title_style{tokens.foreground,
+                                           tokens.font_body, 600};
+    const auto title_size = renderer.MeasureText(title, title_style);
+    renderer.PushClip({header.x, header.y,
+                       std::max(0.0f, menu.x - header.x - 8.0f),
+                       header.height});
     renderer.DrawText(
-        AppRuntime::SharedUiStrings().Get("program_title", "PROGRAM"),
-        header, {tokens.muted, tokens.font_small, 700});
-    // The preview-quality chip ("Full"/"1/2"/"1/4"...) is a Badge
-    // child top-right — it renders itself after this pass.
+        title,
+        {header.x, header.y + (header.height - title_size.height) * 0.5f,
+         title_size.width, title_size.height},
+        title_style);
+    renderer.PopClip();
 
     const auto video_area = VideoAreaRect();
     renderer.FillRect(video_area, tokens.background, tokens.radius_medium);
@@ -653,7 +753,6 @@ void MonitorWidget::Render(
     }
 
     DrawMeters(renderer, tokens, video_area);
-    DrawTimecode(renderer, tokens, video_area);
 
     // Scopes overlay: semi-transparent dark backing + border, the
     // scopes widget drawn inside. The SetFrame() call refreshes the
@@ -789,26 +888,6 @@ void MonitorWidget::DrawMeters(Rendering::Renderer& renderer,
     draw_bar(rx, meter_r_db_, peak_hold_r_db_);
 }
 
-void MonitorWidget::DrawTimecode(Rendering::Renderer& renderer,
-                                 const XER::UI::Theme::Tokens& tokens,
-                                 const Layout::Rect& video_area) {
-    const std::string tc =
-        FormatTimecode(time_, project_.fps_num, project_.fps_den);
-    const Rendering::TextStyle style{tokens.foreground,
-                                     std::min(tokens.font_title, 19.0f),
-                                     700};
-    const auto size = renderer.MeasureText(tc, style);
-    const Layout::Rect chip{
-        video_area.x + 8.0f,
-        video_area.y + video_area.height - size.height - 14.0f,
-        size.width + 14.0f, size.height + 8.0f};
-    renderer.FillRect(chip, {0.0f, 0.0f, 0.0f, 0.55f},
-                      tokens.radius_small);
-    renderer.DrawText(
-        tc, {chip.x + 7.0f, chip.y + 4.0f, size.width, size.height},
-        style);
-}
-
 void MonitorWidget::DrawRuler(Rendering::Renderer& renderer,
                               const XER::UI::Theme::Tokens& tokens,
                               const Layout::Rect& ruler) {
@@ -885,17 +964,42 @@ void MonitorWidget::DrawRuler(Rendering::Renderer& renderer,
 void MonitorWidget::DrawTransport(Rendering::Renderer& renderer,
                                   const XER::UI::Theme::Tokens& tokens,
                                   const Layout::Rect& row) {
-    // The row's buttons are Widgets::Button children now — only the
-    // right-aligned "current / duration" readout stays drawn here.
-    const std::string time_text =
-        FormatTime(time_) + "  /  " + FormatTime(project_.duration());
-    const Rendering::TextStyle style{tokens.muted, tokens.font_small, 500};
-    const auto size = renderer.MeasureText(time_text, style);
-    renderer.DrawText(
-        time_text,
-        {row.x + row.width - size.width, row.y + 4.0f, size.width,
-         row.height},
-        style);
+    // The row's buttons are Widgets::Button children — drawn here is
+    // only the left readout: a big monospaced accent HH:MM:SS:FF at
+    // the project's rate (Premiere's bottom-left timecode). Mono
+    // digits keep the readout rock-steady while scrubbing; the
+    // muted " / duration" tail only joins on wide rows.
+    const std::string tc =
+        FormatTimecode(time_, project_.fps_num, project_.fps_den);
+    const Rendering::TextStyle tc_style{tokens.accent,
+                                        tokens.font_title, 700,
+                                        /*monospace=*/true};
+    const auto tc_size = renderer.MeasureText(tc, tc_style);
+    const float tc_y =
+        row.y + (row.height - tc_size.height) * 0.5f;
+    // Clip the readout before it can reach the centered button strip.
+    const float clip_w =
+        CenterStripLeft() - row.x - kCenterGap;
+    renderer.PushClip({row.x, row.y, std::max(0.0f, clip_w),
+                       row.height});
+    renderer.DrawText(tc, {row.x + 2.0f, tc_y, tc_size.width,
+                           tc_size.height},
+                      tc_style);
+    if (ShowDurationTail(row.width)) {
+        const std::string tail =
+            " / " + FormatTimecode(project_.duration(),
+                                   project_.fps_num, project_.fps_den);
+        const Rendering::TextStyle tail_style{
+            tokens.muted, tokens.font_body, 500, /*monospace=*/true};
+        const auto tail_size = renderer.MeasureText(tail, tail_style);
+        renderer.DrawText(
+            tail,
+            {row.x + 2.0f + tc_size.width + 2.0f,
+             row.y + (row.height - tail_size.height) * 0.5f,
+             tail_size.width, tail_size.height},
+            tail_style);
+    }
+    renderer.PopClip();
 }
 
 bool MonitorWidget::ShowContextMenu(const Layout::Point p) {
@@ -992,26 +1096,42 @@ void MonitorWidget::Layout(const Layout::Rect& bounds) {
     EnsureChildren();
     SetBounds(bounds);
     const auto& tokens = CachedLayoutTokens();
-    play_btn_->Layout(OverlayButtonRect(OverlayButton::Play), tokens);
+    // Centered transport strip — always fully shown.
+    to_start_btn_->Layout(OverlayButtonRect(OverlayButton::ToStart),
+                          tokens);
     prev_btn_->Layout(OverlayButtonRect(OverlayButton::PrevFrame),
                       tokens);
+    play_btn_->Layout(OverlayButtonRect(OverlayButton::Play), tokens);
     next_btn_->Layout(OverlayButtonRect(OverlayButton::NextFrame),
                       tokens);
-    safe_btn_->Layout(OverlayButtonRect(OverlayButton::SafeMargins),
-                      tokens);
-    grid_btn_->Layout(OverlayButtonRect(OverlayButton::Grid), tokens);
-    loop_btn_->Layout(OverlayButtonRect(OverlayButton::Loop), tokens);
-    focus_btn_->Layout(OverlayButtonRect(OverlayButton::Focus), tokens);
-    scopes_btn_->Layout(ScopesButtonRect(TransportRect()), tokens);
+    to_end_btn_->Layout(OverlayButtonRect(OverlayButton::ToEnd),
+                        tokens);
+    // Right-aligned display-toggle cluster: keeps a prefix of
+    // {safe, grid, loop, scopes, focus} — the tail hides when the
+    // row is too narrow (the context menu still reaches them).
+    const int kept = RightClusterKept();
+    XER::UI::Widgets::Button* cluster[] = {
+        safe_btn_.get(), grid_btn_.get(), loop_btn_.get(),
+        scopes_btn_.get(), focus_btn_.get()};
+    const OverlayButton cluster_ids[] = {
+        OverlayButton::SafeMargins, OverlayButton::Grid,
+        OverlayButton::Loop, OverlayButton::Scopes,
+        OverlayButton::Focus};
+    for (int i = 0; i < 5; ++i) {
+        const bool shown = i < kept;
+        cluster[i]->SetVisible(shown);
+        if (shown) {
+            cluster[i]->Layout(OverlayButtonRect(cluster_ids[i]),
+                               tokens);
+        }
+    }
+    // Header overflow "≡" + the quality chip immediately left of it.
+    const auto menu = OverflowButtonRect();
+    menu_btn_->Layout(menu, tokens);
     if (!quality_tag_.empty()) {
-        // The chip hugs the top-right of the header band, mirroring
-        // where the drawn tag used to sit.
         const float w = quality_badge_->GetPreferredSize().width;
-        const float pad = tokens.spacing_medium;
         quality_badge_->Layout(
-            {bounds.x + bounds.width - pad - w,
-             bounds.y + pad * 0.6f + 1.0f, w, 20.0f},
-            tokens);
+            {menu.x - 6.0f - w, menu.y, w, 20.0f}, tokens);
     }
 }
 

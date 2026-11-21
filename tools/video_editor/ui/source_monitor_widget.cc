@@ -4,6 +4,7 @@
 #include "source_monitor_widget.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
@@ -29,20 +30,22 @@ Color WithAlpha(Color c, float alpha) {
     return c;
 }
 
-std::string FormatTime(double seconds) {
-    if (!std::isfinite(seconds) || seconds < 0.0) return "00:00:00.000";
-    const int hours = static_cast<int>(seconds / 3600.0);
-    seconds -= hours * 3600.0;
-    const int minutes = static_cast<int>(seconds / 60.0);
-    seconds -= minutes * 60.0;
-    const int whole = static_cast<int>(seconds);
-    const int millis = static_cast<int>(
-        std::round((seconds - whole) * 1000.0));
-    char buffer[32];
-    std::snprintf(buffer, sizeof(buffer), "%02d:%02d:%02d.%03d", hours,
-                  minutes, whole, millis == 1000 ? 999 : millis);
-    return buffer;
-}
+// ---- transport-row geometry (mirrors the program monitor) ----
+// Row = [mono timecode] … [centered |◄ ‹ ► › ►| strip] … [edit
+// cluster]. The first five Button entries form the center strip; the
+// edit cluster keeps a PREFIX of {IN, OUT, INS, OVR} and drops tail
+// entries when the row narrows.
+constexpr std::array<float, 5> kCenterW = {30.0f, 30.0f, 34.0f,
+                                           30.0f, 30.0f};
+constexpr float kCenterGap = 6.0f;
+constexpr float kCenterStripW =
+    30.0f + 30.0f + 34.0f + 30.0f + 30.0f + 4.0f * kCenterGap;
+// Right cluster order (left→right): mark-in, mark-out, insert,
+// overwrite — text chips like before.
+constexpr std::array<float, 4> kRightW = {36.0f, 40.0f, 40.0f, 44.0f};
+constexpr float kRightGap = 4.0f;
+// Left reserve for the drawn mono timecode (11 chars at font_title).
+constexpr float kTimecodeReserve = 136.0f;
 
 // Big monitor timecode HH:MM:SS:FF — identical convention to the
 // program monitor (frame index inside the current second at the
@@ -94,7 +97,7 @@ void SourceMonitorWidget::EnsureChildren() {
                              const char* tooltip) {
         auto button = std::make_shared<Widgets::Button>(
             text != nullptr ? text : "",
-            Widgets::ButtonStyle::Secondary);
+            Widgets::ButtonStyle::Ghost);
         // JKL/I-O keys stay app-level — the row's buttons take
         // pointer input only, never keyboard focus.
         button->SetFocusable(false);
@@ -104,6 +107,16 @@ void SourceMonitorWidget::EnsureChildren() {
         return button;
     };
 
+    // Centered transport strip — skip/start, step, play, step,
+    // skip/end (parity with the program monitor). The pack has no
+    // first_page/last_page glyphs, so the end seeks carry the literal
+    // "|‹" / "›|" text glyphs.
+    const auto seek_to = [this, activate](double t) {
+        activate();
+        if (hooks_.on_seek_request) hooks_.on_seek_request(t);
+    };
+    to_start_btn_ = make("|‹", nullptr, "Go to start");
+    to_start_btn_->SetOnClick([seek_to] { seek_to(0.0); });
     play_btn_ = make(nullptr, "transport.play", "Play / pause (Space)");
     play_btn_->SetOnClick([this, activate] {
         activate();
@@ -119,6 +132,8 @@ void SourceMonitorWidget::EnsureChildren() {
         activate();
         if (hooks_.on_frame_step) hooks_.on_frame_step(1);
     });
+    to_end_btn_ = make("›|", nullptr, "Go to end");
+    to_end_btn_->SetOnClick([this, seek_to] { seek_to(duration_); });
     mark_in_btn_ = make("IN", nullptr, "Mark in (I)");
     mark_in_btn_->SetOnClick([this, activate] {
         activate();
@@ -150,9 +165,11 @@ void SourceMonitorWidget::SyncTransportChildren() {
     if (!transport_children_) return;
     namespace Widgets = XER::UI::Widgets;
     const bool enabled = HasSource();
+    // Ghost at rest — hover pill carries interactivity; Primary
+    // (accent) marks the live state (playing, set marks).
     const auto style = [enabled](bool active) {
         return enabled && active ? Widgets::ButtonStyle::Primary
-                                 : Widgets::ButtonStyle::Secondary;
+                                 : Widgets::ButtonStyle::Ghost;
     };
     play_btn_->SetIcon(playing_ ? "transport.pause" : "transport.play");
     play_btn_->SetStyle(style(playing_));
@@ -160,7 +177,8 @@ void SourceMonitorWidget::SyncTransportChildren() {
     mark_out_btn_->SetStyle(
         style(mark_out_ > (mark_in_ >= 0.0 ? mark_in_ : 0.0)));
     XER::UI::Widgets::Button* row[] = {
-        play_btn_.get(),     prev_btn_.get(), next_btn_.get(),
+        to_start_btn_.get(), prev_btn_.get(),  play_btn_.get(),
+        next_btn_.get(),     to_end_btn_.get(),
         mark_in_btn_.get(),  mark_out_btn_.get(),
         insert_btn_.get(),   overwrite_btn_.get()};
     for (auto* btn : row) btn->SetEnabled(enabled);
@@ -286,7 +304,7 @@ Layout::Rect SourceMonitorWidget::VideoAreaRect() const {
     const float pad = CachedLayoutTokens().spacing_medium;
     const float chrome_bottom =
         16.0f + 2.0f +   // ruler strip + gap
-        28.0f +          // transport row + gap
+        30.0f +          // transport row + gap
         20.0f +          // footer readout
         pad;
     return {bounds.x + pad, bounds.y + 34.0f,
@@ -307,7 +325,7 @@ Layout::Rect SourceMonitorWidget::TransportRect() const {
     const float pad = CachedLayoutTokens().spacing_medium;
     const auto ruler = RulerRect();
     return {bounds.x + pad, ruler.y + ruler.height + 2.0f,
-            bounds.width - pad * 2.0f, 26.0f};
+            bounds.width - pad * 2.0f, 30.0f};
 }
 
 Layout::Rect SourceMonitorWidget::FooterRect() const {
@@ -318,22 +336,61 @@ Layout::Rect SourceMonitorWidget::FooterRect() const {
             bounds.width - pad * 2.0f, 16.0f};
 }
 
+float SourceMonitorWidget::CenterStripLeft() const {
+    const auto row = TransportRect();
+    // assets/ui/layout.yaml — Monitor.transport_center centers the
+    // strip; off, it hugs the timecode reserve on the left.
+    if (AppRuntime::SharedLayoutConfig().transport_center) {
+        return row.x + std::max(0.0f, (row.width - kCenterStripW) * 0.5f);
+    }
+    return row.x + kTimecodeReserve + kCenterGap;
+}
+
+int SourceMonitorWidget::RightClusterKept() const {
+    const auto row = TransportRect();
+    const float occupied =
+        std::max(CenterStripLeft() + kCenterStripW,
+                 row.x + kTimecodeReserve);
+    const float avail = row.x + row.width - occupied - kCenterGap;
+    float total = 0.0f;
+    int kept = 0;
+    for (float w : kRightW) {
+        const float need = total + (kept > 0 ? kRightGap : 0.0f) + w;
+        if (need > avail) break;
+        total = need;
+        ++kept;
+    }
+    return kept;
+}
+
 Layout::Rect SourceMonitorWidget::ButtonRect(Button button) const {
     const auto row = TransportRect();
-    const float gap = 6.0f;
-    // Play |◀ ▶| then the edit cluster: marks, then the two
-    // three-point-edit buttons (Premiere , and .).
-    const float widths[] = {34.0f, 30.0f, 30.0f, 44.0f, 44.0f, 52.0f,
-                            52.0f};
-    float x = row.x;
-    if (AppRuntime::SharedLayoutConfig().transport_center) {
-        float total = gap * (std::size(widths) - 1);
-        for (float w : widths) total += w;
-        x = row.x + std::max(0.0f, (row.width - total) * 0.5f);
-    }
     const int index = static_cast<int>(button);
-    for (int i = 0; i < index; ++i) x += widths[i] + gap;
-    return {x, row.y, widths[index], row.height};
+    if (index <= static_cast<int>(Button::ToEnd)) {
+        // Centered strip: to-start, step-back, play, step-fwd, to-end.
+        float x = CenterStripLeft();
+        for (int i = 0; i < index; ++i) {
+            x += kCenterW[static_cast<std::size_t>(i)] + kCenterGap;
+        }
+        return {x, row.y + 1.0f,
+                kCenterW[static_cast<std::size_t>(index)],
+                row.height - 2.0f};
+    }
+    // Right cluster: IN/OUT/INS/OVR map onto the kept prefix —
+    // Layout() hides buttons past the RightClusterKept() count.
+    const int cluster = index - static_cast<int>(Button::MarkIn);
+    const int kept = RightClusterKept();
+    float total = 0.0f;
+    for (int i = 0; i < kept; ++i) {
+        total += kRightW[static_cast<std::size_t>(i)] +
+                 (i > 0 ? kRightGap : 0.0f);
+    }
+    float x = row.x + row.width - total;
+    for (int i = 0; i < cluster; ++i) {
+        x += kRightW[static_cast<std::size_t>(i)] + kRightGap;
+    }
+    return {x, row.y + 1.0f, kRightW[static_cast<std::size_t>(cluster)],
+            row.height - 2.0f};
 }
 
 Layout::Rect SourceMonitorWidget::FrameDestRect() const {
@@ -399,26 +456,6 @@ void SourceMonitorWidget::Render(Rendering::Renderer& renderer,
                            tokens.font_body, 500});
     }
 
-    // Source timecode chip (bottom-left), same convention as the
-    // program monitor.
-    if (!path_.empty()) {
-        const std::string tc =
-            FormatTimecode(time_, fps_num_, fps_den_);
-        const Rendering::TextStyle style{
-            tokens.foreground, std::min(tokens.font_title, 19.0f), 700};
-        const auto size = renderer.MeasureText(tc, style);
-        const Layout::Rect chip{
-            video_area.x + 8.0f,
-            video_area.y + video_area.height - size.height - 14.0f,
-            size.width + 14.0f, size.height + 8.0f};
-        renderer.FillRect(chip, {0.0f, 0.0f, 0.0f, 0.55f},
-                          tokens.radius_small);
-        renderer.DrawText(
-            tc, {chip.x + 7.0f, chip.y + 4.0f, size.width,
-                 size.height},
-            style);
-    }
-
     DrawRuler(renderer, tokens, RulerRect());
     DrawTransport(renderer, tokens, TransportRect());
     if (IsFocused()) {
@@ -471,19 +508,25 @@ void SourceMonitorWidget::DrawTransport(
     Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens,
     const Layout::Rect& row) {
-    // The row's buttons are Widgets::Button children now — only the
-    // "current / duration" readout, right-aligned (mirrors the
-    // program monitor's transport readout), stays drawn here.
-    const std::string time_text =
-        FormatTime(time_) + "  /  " + FormatTime(duration_);
-    const Rendering::TextStyle style{tokens.muted, tokens.font_small,
-                                     500};
-    const auto size = renderer.MeasureText(time_text, style);
+    // The row's buttons are Widgets::Button children — drawn here is
+    // only the big monospaced accent source timecode on the left
+    // (parity with the program monitor's readout; the marked range
+    // stays in the footer).
+    if (path_.empty()) return;
+    const std::string tc = FormatTimecode(time_, fps_num_, fps_den_);
+    const Rendering::TextStyle tc_style{tokens.accent,
+                                        tokens.font_title, 700,
+                                        /*monospace=*/true};
+    const auto tc_size = renderer.MeasureText(tc, tc_style);
+    const float clip_w = CenterStripLeft() - row.x - kCenterGap;
+    renderer.PushClip({row.x, row.y, std::max(0.0f, clip_w),
+                       row.height});
     renderer.DrawText(
-        time_text,
-        {row.x + row.width - size.width, row.y + 4.0f, size.width,
-         row.height},
-        style);
+        tc,
+        {row.x + 2.0f, row.y + (row.height - tc_size.height) * 0.5f,
+         tc_size.width, tc_size.height},
+        tc_style);
+    renderer.PopClip();
 }
 
 // ---- events ----
@@ -498,13 +541,28 @@ void SourceMonitorWidget::Layout(const Layout::Rect& bounds) {
          bounds.width - pad * 2.0f, 24.0f},
         tokens);
     footer_label_->Layout(FooterRect(), tokens);
-    play_btn_->Layout(ButtonRect(Button::Play), tokens);
+    // Centered transport strip — always fully shown.
+    to_start_btn_->Layout(ButtonRect(Button::ToStart), tokens);
     prev_btn_->Layout(ButtonRect(Button::PrevFrame), tokens);
+    play_btn_->Layout(ButtonRect(Button::Play), tokens);
     next_btn_->Layout(ButtonRect(Button::NextFrame), tokens);
-    mark_in_btn_->Layout(ButtonRect(Button::MarkIn), tokens);
-    mark_out_btn_->Layout(ButtonRect(Button::MarkOut), tokens);
-    insert_btn_->Layout(ButtonRect(Button::Insert), tokens);
-    overwrite_btn_->Layout(ButtonRect(Button::Overwrite), tokens);
+    to_end_btn_->Layout(ButtonRect(Button::ToEnd), tokens);
+    // Right-aligned edit cluster: keeps a prefix of {IN, OUT, INS,
+    // OVR} — the tail hides when the row is too narrow (the I/O and
+    // ,/. keyboard shortcuts still reach them).
+    const int kept = RightClusterKept();
+    XER::UI::Widgets::Button* cluster[] = {
+        mark_in_btn_.get(), mark_out_btn_.get(), insert_btn_.get(),
+        overwrite_btn_.get()};
+    const Button cluster_ids[] = {Button::MarkIn, Button::MarkOut,
+                                  Button::Insert, Button::Overwrite};
+    for (int i = 0; i < 4; ++i) {
+        const bool shown = i < kept;
+        cluster[i]->SetVisible(shown);
+        if (shown) {
+            cluster[i]->Layout(ButtonRect(cluster_ids[i]), tokens);
+        }
+    }
 }
 
 bool SourceMonitorWidget::HandleEvent(

@@ -1,9 +1,10 @@
-// CapCut-style left icon rail: a slim vertical strip of tool buttons
+// CapCut-style left icon rail: a slim floating strip of tool buttons
 // (media, audio, text, fx, transitions) with settings pinned to the
 // bottom. Each slot is a Widgets::Button — Ghost style, icon-only via
 // SetIcon with the pack's nav.* names — while the rail itself draws
-// the panel chrome and owns the slot geometry. The active slot's
-// button flips to Primary (accent) through Item::is_active.
+// an inset rounded card and owns the slot geometry. Icons stay
+// monochrome (Ghost); the active slot gets a thin accent bar on the
+// strip's left edge through Item::is_active.
 #pragma once
 
 #include <functional>

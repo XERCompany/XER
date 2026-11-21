@@ -149,23 +149,32 @@ void Button::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
                 break;
             case ButtonStyle::Secondary:
                 // shadcn secondary: quiet zinc fill, no border — hover lifts
-                // one step toward `pressed`.
-                fill_color = lerp(tokens.secondary, tokens.pressed, hov);
+                // one step toward `pressed`, press settles all the way.
+                fill_color = lerp(tokens.secondary, tokens.pressed,
+                                  std::max(hov, press));
                 text_color = tokens.foreground;
                 break;
             case ButtonStyle::Outline:
                 // shadcn outline: transparent + hairline border; hover
-                // introduces a quiet secondary fill.
-                has_fill = hov > 0.01f;
-                fill_color = lerp(tokens.surface, tokens.hover, hov);
+                // introduces a quiet fill, press deepens it toward
+                // `pressed` (icon-button chrome stays flat otherwise).
+                has_fill = hov > 0.01f || press > 0.01f;
+                fill_color = lerp(
+                    lerp(tokens.surface, tokens.hover, hov),
+                    tokens.pressed, press * 0.7f);
                 stroke_color = tokens.border;
                 text_color = tokens.foreground;
                 has_stroke = true;
                 break;
             case ButtonStyle::Ghost:
-                has_fill = hov > 0.01f;
-                fill_color = lerp(tokens.surface, tokens.hover, hov);
-                text_color = tokens.foreground;
+                // NLE icon chrome: flat at rest with a muted glyph,
+                // subtle hover wash, `pressed` fill while held.
+                has_fill = hov > 0.01f || press > 0.01f;
+                fill_color = lerp(
+                    lerp(tokens.surface, tokens.hover, hov),
+                    tokens.pressed, press * 0.7f);
+                text_color = lerp(tokens.muted, tokens.foreground,
+                                  std::max(hov, press));
                 break;
             case ButtonStyle::Destructive:
                 fill_color = lerp(tokens.danger, tokens.danger_foreground, hov * 0.12f);

@@ -49,6 +49,24 @@ struct Tokens {
     float font_small;
     float font_body;
     float font_title;
+    // ---- media-editor semantic colors (NLE chrome) ----
+    // Appended for the video_editor redesign; the stock light/dark
+    // themes default them to sensible accent-family hues so generic
+    // consumers see reasonable colors without opting in.
+    // Bright readout digits — timecode counters, meter values, numeric
+    // columns (pair with TextStyle::monospace for the digits).
+    Color timecode{};
+    // Waveform traces on clips and audio-overview panels.
+    Color waveform{};
+    // Per-kind track chrome: header kind-bars, track-color tints
+    // (video reads blue, audio reads teal).
+    Color track_video{};
+    Color track_audio{};
+    // Playhead / current-time indicator line over ruler + timeline.
+    Color playhead{};
+    // Small rounded "fx"-style chip drawn on clips carrying applied
+    // effects or warnings.
+    Color warning_chip{};
 };
 
 } // namespace XER::UI::Theme

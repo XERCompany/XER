@@ -1,6 +1,9 @@
 #include "color_panel_widget.h"
 
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
 #include <utility>
 
 #include "app_runtime/app_runtime.h"
@@ -14,21 +17,38 @@
 #include "widgets/item.h"
 #include "widgets/label.h"
 #include "widgets/scroll_area.h"
+#include "widgets/slider.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
 namespace Ocio = XER::VideoEditor::Color;
 namespace Path = XER::Helper::Path;
+namespace Rendering = XER::UI::Rendering;
+
+using XER::UI::Layout::Point;
+using XER::UI::Layout::Rect;
+using XER::UI::Theme::Color;
 
 // Two-line catalog row: body-size name over a caption-size subtitle.
 constexpr float kRowHeight = VeTheme::kFontBody * 1.4f +
                              VeTheme::kFontCaption * 1.4f +
                              VeTheme::kSpaceXs;
 constexpr float kHeaderHeight = VeTheme::kRowHeight;
-constexpr float kHeaderIcon = VeTheme::kFontBody;
 constexpr float kRowIcon = VeTheme::kSpaceLg;
 constexpr float kActionWidth = 100.0f;   // "Add to Clip" button
+
+// ---- correction section geometry ----
+constexpr float kWheelSize = 128.0f;      // square the disc fills
+constexpr int kWheelBmpPx = 132;          // rasterized disc size
+constexpr float kSliderLabelW = 80.0f;    // "Temperature" caption col
+constexpr float kSliderValueW = 48.0f;    // mono readout col
+constexpr float kSliderRowH = 26.0f;
+// Correction ClipEffect types — kept as constants so a host
+// replace-by-type pass stays coherent with what the panel emits.
+constexpr const char* kWheelEffectType = "color_balance";
+constexpr const char* kTempEffectType = "plugin:xer.fx.temperature";
+constexpr const char* kTintEffectType = "plugin:xer.fx.tint";
 
 // Last path segment of `path` — color.yaml LUT paths may use either
 // separator style regardless of platform.
@@ -66,6 +86,25 @@ std::string TagFor(const Ocio::OcioProfile& profile,
     return src + " → " + dst + "/" + view;
 }
 
+// HSV -> RGB, all components in [0,1]; h wraps at 360.
+void HsvToRgb(float h, float s, float v, float* r, float* g, float* b) {
+    h = std::fmod(h, 360.0f);
+    if (h < 0.0f) h += 360.0f;
+    const float c = v * s;
+    const float x = c * (1.0f - std::fabs(std::fmod(h / 60.0f, 2.0f) - 1.0f));
+    const float m = v - c;
+    float rr = 0.0f, gg = 0.0f, bb = 0.0f;
+    if (h < 60.0f)       { rr = c; gg = x; }
+    else if (h < 120.0f) { rr = x; gg = c; }
+    else if (h < 180.0f) { gg = c; bb = x; }
+    else if (h < 240.0f) { gg = x; bb = c; }
+    else if (h < 300.0f) { rr = x; bb = c; }
+    else                 { rr = c; bb = x; }
+    *r = rr + m;
+    *g = gg + m;
+    *b = bb + m;
+}
+
 // Leading-slot glyph for a row Item: draws its section's pack icon
 // centered in the slot. Disabled so hit-testing skips it (the same
 // convention as MarkersPanelWidget::MarkerSwatch) — row clicks and
@@ -77,13 +116,13 @@ public:
         SetEnabled(false);
     }
 
-    void Render(XER::UI::Rendering::Renderer& renderer,
+    void Render(Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override {
         VeIcons::DrawIcon(renderer, name_.c_str(),
                           static_cast<int>(kRowIcon), tokens.foreground,
                           GetBounds());
     }
-    void Layout(const XER::UI::Layout::Rect& bounds) override {
+    void Layout(const Rect& bounds) override {
         SetBounds(bounds);
     }
     bool HandleEvent(const XER::UI::Widgets::Event&) override {
@@ -105,24 +144,26 @@ private:
 
 }  // namespace
 
-// The ScrollArea's content: drawn section headers interleaved with
-// Item rows, plus the selection/hover chrome painted behind rows —
-// children render after this widget's own pass, so the chrome reads
-// as the rows' background exactly like the old drawn list.
-// Deliberately not focusable: click focus must climb to the panel so
-// arrow-key navigation keeps working after a row click.
+// The ScrollArea's content: drawn collapsible section headers
+// interleaved with Item rows, plus the selection/hover chrome painted
+// behind rows — children render after this widget's own pass, so the
+// chrome reads as the rows' background exactly like the old drawn
+// list. Deliberately not focusable: click focus must climb to the
+// panel so arrow-key navigation keeps working after a row click.
 class ColorPanelWidget::RowList final : public XER::UI::Widgets::Widget {
 public:
     RowList() {
         SetFocusable(false);
     }
 
-    // One display line: either a drawn header (icon + muted caption)
-    // or a row Item.
+    // One display line: either a drawn collapsible header or a row
+    // Item. `entry_index` points back into the panel's entries_ (row
+    // indices differ once a group collapses).
     struct Line {
         bool header = false;
+        bool collapsed = false;
+        int entry_index = -1;
         std::string header_text;
-        std::string header_icon;
         std::shared_ptr<XER::UI::Widgets::Item> item;   // rows only
     };
 
@@ -146,43 +187,34 @@ public:
         Invalidate();
     }
 
-    // Selected index into lines_ (-1 = none); header indices are
-    // simply never passed.
-    void SetSelected(int index) {
-        if (selected_ == index) return;
-        selected_ = index;
+    // Selected ENTRY index (-1 = none); header entries are simply
+    // never passed.
+    void SetSelected(int entry_index) {
+        if (selected_ == entry_index) return;
+        selected_ = entry_index;
         Invalidate();
     }
 
-    void Render(XER::UI::Rendering::Renderer& renderer,
+    // Header clicks toggle a group — the panel flips its collapsed
+    // set and rebuilds the lines.
+    void SetOnHeaderToggle(
+        std::function<void(const std::string& header_text)> cb) {
+        on_header_toggle_ = std::move(cb);
+    }
+
+    void Render(Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override {
-        const float sub_h = tokens.font_small * 1.4f;
         for (std::size_t i = 0; i < lines_.size(); ++i) {
             const Line& line = lines_[i];
             const auto& r = line_rects_[i];
             if (line.header) {
-                // Section header — the inspector's drawn-label
-                // convention: muted, small, weight 600, centered.
-                float label_x = r.x + VeTheme::kSpaceMd;
-                if (!line.header_icon.empty() &&
-                    VeIcons::DrawIcon(
-                        renderer, line.header_icon.c_str(),
-                        static_cast<int>(kHeaderIcon), tokens.muted,
-                        {label_x,
-                         r.y + (kHeaderHeight - kHeaderIcon) * 0.5f,
-                         kHeaderIcon, kHeaderIcon})) {
-                    label_x += kHeaderIcon + VeTheme::kSpaceXs;
-                }
-                renderer.DrawText(
-                    line.header_text,
-                    {label_x, r.y + (kHeaderHeight - sub_h) * 0.5f,
-                     r.x + r.width - label_x - VeTheme::kSpaceMd, sub_h},
-                    XER::UI::Rendering::TextStyle{
-                        tokens.muted, tokens.font_small, 600});
+                VeIcons::DrawSectionHeader(renderer, tokens, r,
+                                           line.header_text,
+                                           line.collapsed);
                 continue;
             }
             const auto row = line.item->GetBounds();
-            if (static_cast<int>(i) == selected_) {
+            if (line.entry_index == selected_) {
                 renderer.FillRect(row, tokens.selection,
                                   tokens.radius_small);
                 renderer.StrokeRect(
@@ -194,7 +226,7 @@ public:
         }
     }
 
-    void Layout(const XER::UI::Layout::Rect& bounds) override {
+    void Layout(const Rect& bounds) override {
         SetBounds(bounds);
         const auto& tokens = CachedLayoutTokens();
         line_rects_.clear();
@@ -217,9 +249,23 @@ public:
     }
     using Widget::Layout;
 
-    // Rows consume their own clicks (Item::SetOnClick); headers and
-    // gaps stay transparent so clicks bubble like the drawn list's.
-    bool HandleEvent(const XER::UI::Widgets::Event&) override {
+    bool HandleEvent(const XER::UI::Widgets::Event& event) override {
+        // Rows consume their own clicks (Item::SetOnClick). A click on
+        // a drawn header line toggles its group; gaps stay
+        // transparent so clicks bubble like the drawn list's.
+        if (event.type == XER::UI::Widgets::Event::Type::Click &&
+            event.mouse_button == XER::UI::Widgets::MouseButton::Left) {
+            for (std::size_t i = 0; i < lines_.size(); ++i) {
+                const Line& line = lines_[i];
+                if (line.header && i < line_rects_.size() &&
+                    line_rects_[i].Contains(event.position)) {
+                    if (on_header_toggle_) {
+                        on_header_toggle_(line.header_text);
+                    }
+                    return true;
+                }
+            }
+        }
         return false;
     }
 
@@ -245,8 +291,9 @@ private:
     // Row Items removed by the last SetLines — kept alive one rebuild
     // in case an event was mid-dispatch through them.
     std::vector<std::shared_ptr<XER::UI::Widgets::Item>> retired_;
-    std::vector<XER::UI::Layout::Rect> line_rects_;
+    std::vector<Rect> line_rects_;
     int selected_ = -1;
+    std::function<void(const std::string&)> on_header_toggle_;
 };
 
 std::shared_ptr<ColorPanelWidget> ColorPanelWidget::Create() {
@@ -266,6 +313,11 @@ void ColorPanelWidget::SetOnAddEffect(
     on_add_effect_ = std::move(cb);
 }
 
+void ColorPanelWidget::SetOnCorrection(
+    std::function<void(const ClipEffect&)> cb) {
+    on_correction_ = std::move(cb);
+}
+
 void ColorPanelWidget::SetOnSelectionChanged(
     std::function<void(const std::string&)> cb) {
     on_selection_changed_ = std::move(cb);
@@ -276,11 +328,11 @@ void ColorPanelWidget::EnsureChildren() {
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
 
-    title_ = std::make_shared<Widgets::Label>("COLOR");
     ocio_state_ = std::make_shared<Widgets::Label>(
         ocio_enabled_ ? "Display Transform: ON"
                       : "Display Transform: OFF",
         true);
+    ocio_state_->SetEnabled(false);   // readout on the header row
     add_btn_ = std::make_shared<Widgets::Button>(
         "Add to Clip", Widgets::ButtonStyle::Primary);
     add_btn_->SetTooltip("Add the selected color profile to the clip");
@@ -289,11 +341,46 @@ void ColorPanelWidget::EnsureChildren() {
         entries_.empty() ? "No profiles found" : "Select a profile",
         true);
 
+    // Correction sliders — -100..100 to match the plugin params. A
+    // committed gesture emits one parameterized ClipEffect; drags
+    // commit on release (Tick watches IsDragging) so undo gets a
+    // single step per gesture, clicks/arrow keys commit immediately.
+    const auto make_slider = [this](const char* type,
+                                    bool* pending) {
+        auto slider = std::make_shared<Widgets::Slider>(-100.0f, 100.0f,
+                                                        0.0f);
+        slider->SetTooltip(
+            "Release applies the correction to the selected clip");
+        // Capture the raw pointer — a shared_ptr here would cycle
+        // slider -> callback -> slider.
+        Widgets::Slider* raw = slider.get();
+        slider->SetOnValueChanged([this, type, pending,
+                                   raw](float value) {
+            if (raw->IsDragging()) {
+                *pending = true;
+            } else {
+                CommitSliderEffect(type, value);
+            }
+        });
+        return slider;
+    };
+    temp_slider_ = make_slider(kTempEffectType, &temp_pending_commit_);
+    tint_slider_ = make_slider(kTintEffectType, &tint_pending_commit_);
+
     list_ = std::make_shared<RowList>();
+    list_->SetOnHeaderToggle([this](const std::string& header) {
+        if (collapsed_groups_.count(header) != 0) {
+            collapsed_groups_.erase(header);
+        } else {
+            collapsed_groups_.insert(header);
+        }
+        RebuildList();
+    });
     scroll_area_ = std::make_shared<Widgets::ScrollArea>(list_);
 
-    AddChild(title_);
     AddChild(ocio_state_);
+    AddChild(temp_slider_);
+    AddChild(tint_slider_);
     AddChild(scroll_area_);
     AddChild(add_btn_);
     AddChild(status_);
@@ -340,8 +427,8 @@ void ColorPanelWidget::Refresh() {
             ++profile_count;
         }
     };
-    append_group(true, "LOOKS", "shadow");
-    append_group(false, "TRANSFORMS", "compare_arrows");
+    append_group(true, "Looks", "shadow");
+    append_group(false, "Transforms", "compare_arrows");
 
     selected_ = -1;
     if (!keep.empty()) {
@@ -366,19 +453,40 @@ void ColorPanelWidget::Refresh() {
     Invalidate();
 }
 
+bool ColorPanelWidget::EntryHidden(int index) const {
+    if (index < 0 || index >= static_cast<int>(entries_.size())) {
+        return true;
+    }
+    // Rows fold under the collapsed header that precedes them.
+    bool hidden = false;
+    for (int i = 0; i <= index; ++i) {
+        if (entries_[static_cast<std::size_t>(i)].header) {
+            hidden = collapsed_groups_.count(
+                         entries_[static_cast<std::size_t>(i)].text) !=
+                     0;
+        }
+    }
+    return hidden && !entries_[static_cast<std::size_t>(index)].header;
+}
+
 void ColorPanelWidget::RebuildList() {
     std::vector<RowList::Line> lines;
     lines.reserve(entries_.size());
     // The section icon travels from the header into each row's leading
     // slot — same sharing the drawn list had via section_icon.
     std::string section_icon;
+    bool collapsed = false;
     for (std::size_t i = 0; i < entries_.size(); ++i) {
         const Entry& entry = entries_[i];
         if (entry.header) {
             section_icon = entry.tag;
-            lines.push_back({true, entry.text, entry.tag, nullptr});
+            collapsed =
+                collapsed_groups_.count(entry.text) != 0;
+            lines.push_back({true, collapsed,
+                             static_cast<int>(i), entry.text, nullptr});
             continue;
         }
+        if (collapsed) continue;   // folded group: skip the row
         auto item = std::make_shared<XER::UI::Widgets::Item>();
         item->SetTitle(entry.text);
         item->SetDescription(entry.tag);
@@ -389,7 +497,7 @@ void ColorPanelWidget::RebuildList() {
         const int index = static_cast<int>(i);
         item->SetOnClick([this, index] { SelectRow(index); });
         item->SetOnDoubleClick([this] { AddSelected(); });
-        lines.push_back({false, {}, {}, std::move(item)});
+        lines.push_back({false, false, index, {}, std::move(item)});
     }
     list_->SetLines(std::move(lines));
     list_->SetSelected(selected_);
@@ -420,7 +528,15 @@ float ColorPanelWidget::EntryHeight(int index) const {
 
 float ColorPanelWidget::EntryTop(int index) const {
     float y = 0.0f;
-    for (int i = 0; i < index; ++i) y += EntryHeight(i);
+    for (int i = 0; i < index; ++i) {
+        // Collapsed rows are absent from the list — their share of the
+        // content height doesn't exist.
+        if (!entries_[static_cast<std::size_t>(i)].header &&
+            EntryHidden(i)) {
+            continue;
+        }
+        y += EntryHeight(i);
+    }
     return y;
 }
 
@@ -464,32 +580,204 @@ void ColorPanelWidget::SetStatus(const std::string& text) {
     if (children_attached_) status_->SetText(text);
 }
 
+// ---- correction section ----
+
+Rect ColorPanelWidget::WheelRect() const {
+    return wheel_rect_;
+}
+
+void ColorPanelWidget::EnsureWheelBitmap() {
+    if (!wheel_bmp_.empty()) return;
+    // Hue/saturation disc: angle -> hue, radius -> saturation (value
+    // pinned at 1). Premultiplied BGRA — DrawFrameBgra uploads to a
+    // premultiplied D2D bitmap, so edge pixels fade out instead of
+    // ringing.
+    wheel_bmp_.assign(
+        static_cast<std::size_t>(kWheelBmpPx) * kWheelBmpPx * 4, 0);
+    const float half = kWheelBmpPx * 0.5f;
+    const float max_r = half - 0.5f;
+    for (int py = 0; py < kWheelBmpPx; ++py) {
+        for (int px = 0; px < kWheelBmpPx; ++px) {
+            const float dx = px + 0.5f - half;
+            const float dy = py + 0.5f - half;
+            const float r = std::sqrt(dx * dx + dy * dy) / max_r;
+            if (r > 1.0f) continue;
+            const float hue =
+                std::atan2(dy, dx) * 180.0f / 3.14159265358979f;
+            float rr, gg, bb;
+            HsvToRgb(hue, r, 1.0f, &rr, &gg, &bb);
+            // 1px antialiased rim.
+            const float a =
+                std::clamp((1.0f - r) * max_r, 0.0f, 1.0f);
+            auto* out =
+                wheel_bmp_.data() +
+                (static_cast<std::size_t>(py) * kWheelBmpPx + px) * 4;
+            out[0] = static_cast<std::uint8_t>(bb * a * 255.0f);
+            out[1] = static_cast<std::uint8_t>(gg * a * 255.0f);
+            out[2] = static_cast<std::uint8_t>(rr * a * 255.0f);
+            out[3] = static_cast<std::uint8_t>(a * 255.0f);
+        }
+    }
+}
+
+void ColorPanelWidget::UpdateWheelFromPoint(const Point& position) {
+    const Rect wheel = wheel_rect_;
+    const float cx = wheel.x + wheel.width * 0.5f;
+    const float cy = wheel.y + wheel.height * 0.5f;
+    const float max_r = wheel.width * 0.5f;
+    const float dx = position.x - cx;
+    const float dy = position.y - cy;
+    const float r = std::sqrt(dx * dx + dy * dy);
+    wheel_amount_ = max_r > 0.0f ? std::clamp(r / max_r, 0.0f, 1.0f)
+                                 : 0.0f;
+    // Hue is undefined at the exact center — keep the last angle.
+    if (r > 2.0f) {
+        wheel_hue_deg_ =
+            std::atan2(dy, dx) * 180.0f / 3.14159265358979f;
+        if (wheel_hue_deg_ < 0.0f) wheel_hue_deg_ += 360.0f;
+    }
+    Invalidate();
+}
+
+ClipEffect ColorPanelWidget::WheelEffect() const {
+    // Lift toward the picked hue: fully-saturated hue color, recentered
+    // around neutral and scaled by the radius — a drag to the edge
+    // pushes a ±0.5 channel offset.
+    float rr, gg, bb;
+    HsvToRgb(wheel_hue_deg_, 1.0f, 1.0f, &rr, &gg, &bb);
+    ClipEffect effect;
+    effect.type = kWheelEffectType;
+    effect.params = {(rr - 0.5f) * wheel_amount_,
+                     (gg - 0.5f) * wheel_amount_,
+                     (bb - 0.5f) * wheel_amount_,
+                     1.0f, 1.0f, 1.0f};
+    return effect;
+}
+
+void ColorPanelWidget::CommitSliderEffect(const std::string& type,
+                                          float value) {
+    ClipEffect effect;
+    effect.type = type;
+    effect.params = {std::clamp(value, -100.0f, 100.0f)};
+    EmitCorrection(effect);
+}
+
+void ColorPanelWidget::EmitCorrection(const ClipEffect& effect) {
+    if (on_correction_) {
+        on_correction_(effect);
+        SetStatus("correction " + effect.type);
+    } else {
+        SetStatus("Select a clip to grade");
+    }
+}
+
 void ColorPanelWidget::Render(
-    XER::UI::Rendering::Renderer& renderer,
+    Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens) {
     EnsureChildren();
+    EnsureWheelBitmap();
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
+
+    // "Correction" section header — chevron + bold caption (the shared
+    // VeIcons header the other right-dock panels use).
+    if (header_rect_.width > 0.0f) {
+        VeIcons::DrawSectionHeader(renderer, tokens, header_rect_,
+                                   "Correction", correction_collapsed_);
+    }
+
+    if (!correction_collapsed_) {
+        // Color wheel: premultiplied hue/saturation disc + border ring
+        // + draggable indicator (accent ring over the picked color).
+        const Rect wheel = wheel_rect_;
+        if (wheel.width > 4.0f) {
+            renderer.DrawFrameBgra(wheel_bmp_.data(), kWheelBmpPx,
+                                   kWheelBmpPx, wheel, 1.0f);
+            const float cx = wheel.x + wheel.width * 0.5f;
+            const float cy = wheel.y + wheel.height * 0.5f;
+            const float radius = wheel.width * 0.5f;
+            renderer.StrokeRect({cx - radius, cy - radius,
+                                 radius * 2.0f, radius * 2.0f},
+                                VeTheme::WithAlpha(tokens.border, 0.9f),
+                                1.0f, radius);
+            const float angle =
+                wheel_hue_deg_ * 3.14159265358979f / 180.0f;
+            const float ix =
+                cx + std::cos(angle) * wheel_amount_ * radius;
+            const float iy =
+                cy + std::sin(angle) * wheel_amount_ * radius;
+            float pr, pg, pb;
+            HsvToRgb(wheel_hue_deg_, wheel_amount_, 1.0f, &pr, &pg,
+                     &pb);
+            constexpr float kDot = 11.0f;
+            const Rect dot{ix - kDot * 0.5f, iy - kDot * 0.5f, kDot,
+                           kDot};
+            renderer.FillRect(dot, {pr, pg, pb, 1.0f}, kDot * 0.5f);
+            renderer.StrokeRect(
+                dot,
+                wheel_drag_ ? tokens.accent
+                            : Color{1.0f, 1.0f, 1.0f, 0.9f},
+                wheel_drag_ ? 2.0f : 1.5f, kDot * 0.5f);
+        }
+
+        // Slider rows: caption left, Slider child mid, monospace value
+        // right — the labeled readout style from the reference.
+        const Rendering::TextStyle label_style{
+            tokens.foreground, tokens.font_small, 500};
+        const Rendering::TextStyle value_style{
+            tokens.foreground, tokens.font_small, 400,
+            /*monospace=*/true};
+        const auto draw_row = [&](const char* label,
+                                  const std::shared_ptr<
+                                      XER::UI::Widgets::Slider>& slider,
+                                  const char* fmt) {
+            const Rect sb = slider->GetBounds();
+            if (sb.width <= 0.0f) return;
+            renderer.DrawText(
+                label,
+                {sb.x - kSliderLabelW, sb.y, kSliderLabelW - 4.0f,
+                 sb.height},
+                label_style);
+            char value[24];
+            std::snprintf(value, sizeof(value), fmt,
+                          static_cast<double>(slider->GetValue()));
+            const Rect vr{sb.Right() + VeTheme::kSpaceSm, sb.y,
+                          kSliderValueW, sb.height};
+            // Measure to right-align the mono readout in its column.
+            const auto size = renderer.MeasureText(value, value_style);
+            renderer.DrawText(
+                value,
+                {vr.Right() - std::min(size.width, vr.width), vr.y,
+                 std::min(size.width, vr.width), vr.height},
+                value_style);
+        };
+        draw_row("Temperature", temp_slider_, "%+.1f");
+        draw_row("Tint", tint_slider_, "%+.1f");
+    }
+
     if (entries_.empty()) {
-        const XER::UI::Rendering::TextStyle style{
+        const Rendering::TextStyle style{
             tokens.muted, tokens.font_small, 400};
         const char* hint = "No profiles — check assets/color.yaml";
         const auto size = renderer.MeasureText(hint, style);
+        const Rect area =
+            scroll_area_ != nullptr ? scroll_area_->GetBounds()
+                                    : bounds;
         renderer.DrawText(
             hint,
-            {bounds.x +
-                 std::max(0.0f, (bounds.width - size.width) * 0.5f),
-             bounds.y +
-                 std::max(0.0f, (bounds.height - size.height) * 0.5f),
+            {area.x +
+                 std::max(0.0f, (area.width - size.width) * 0.5f),
+             area.y +
+                 std::max(0.0f, (area.height - size.height) * 0.5f),
              size.width, size.height},
             style);
     }
     // Rows paint themselves — Item children inside the ScrollArea;
-    // the RowList draws headers + selection/hover chrome.
+    // the RowList draws collapsible headers + selection/hover chrome.
 }
 
-void ColorPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
+void ColorPanelWidget::Layout(const Rect& bounds) {
     EnsureChildren();
     SetBounds(bounds);
     const auto& tokens = CachedLayoutTokens();
@@ -499,14 +787,48 @@ void ColorPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const float inner_w = bounds.width - pad * 2.0f;
     float y = bounds.y + pad * 0.6f;
 
-    title_->Layout({inner_x, y, inner_w, VeTheme::kRowHeight}, tokens);
-    y += VeTheme::kRowHeight + VeTheme::kSpaceXxs;
-    ocio_state_->Layout({inner_x, y, inner_w, VeTheme::kSpaceLg}, tokens);
-    y += VeTheme::kSpaceLg + gap;
+    // "Correction" header row — the chevron/title is drawn, the OCIO
+    // state readout sits right-aligned on the same band.
+    header_rect_ = {inner_x, y, inner_w, kHeaderHeight};
+    ocio_state_->Layout({inner_x + inner_w * 0.5f, y, inner_w * 0.5f,
+                         kHeaderHeight},
+                        tokens);
+    y += kHeaderHeight + VeTheme::kSpaceXs;
 
     const float footer_h = VeTheme::kControlHeight;
     const float footer_y =
         bounds.y + bounds.height - footer_h - VeTheme::kSpaceXs;
+
+    if (!correction_collapsed_) {
+        // Wheel: centered square capped at kWheelSize so the disc
+        // doesn't blow up on wide docks.
+        const float wheel_side = std::min(inner_w, kWheelSize);
+        wheel_rect_ = {inner_x + (inner_w - wheel_side) * 0.5f, y,
+                       wheel_side, wheel_side};
+        y += wheel_side + gap;
+
+        // Slider rows: [label 80][slider flex][value 48].
+        const float slider_w = std::max(
+            40.0f, inner_w - kSliderLabelW - kSliderValueW - gap);
+        const float slider_x = inner_x + kSliderLabelW;
+        temp_slider_->Layout(
+            {slider_x, y + (kSliderRowH - 20.0f) * 0.5f, slider_w,
+             20.0f},
+            tokens);
+        y += kSliderRowH;
+        tint_slider_->Layout(
+            {slider_x, y + (kSliderRowH - 20.0f) * 0.5f, slider_w,
+             20.0f},
+            tokens);
+        y += kSliderRowH + gap;
+    } else {
+        wheel_rect_ = {};
+        temp_slider_->Layout({0.0f, 0.0f, 0.0f, 0.0f}, tokens);
+        tint_slider_->Layout({0.0f, 0.0f, 0.0f, 0.0f}, tokens);
+    }
+    temp_slider_->SetVisible(!correction_collapsed_);
+    tint_slider_->SetVisible(!correction_collapsed_);
+
     scroll_area_->Layout(
         {inner_x, y, inner_w, std::max(0.0f, footer_y - gap - y)},
         tokens);
@@ -520,29 +842,74 @@ void ColorPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
 
 bool ColorPanelWidget::HandleEvent(
     const XER::UI::Widgets::Event& event) {
+    namespace Widgets = XER::UI::Widgets;
+    switch (event.type) {
+        case Widgets::Event::Type::MouseDown: {
+            if (event.mouse_button == Widgets::MouseButton::Left &&
+                !correction_collapsed_ &&
+                wheel_rect_.Contains(event.position)) {
+                wheel_drag_ = true;
+                UpdateWheelFromPoint(event.position);
+                return true;
+            }
+            return false;
+        }
+        case Widgets::Event::Type::MouseMove: {
+            if (wheel_drag_) {
+                UpdateWheelFromPoint(event.position);
+                return true;
+            }
+            return false;
+        }
+        case Widgets::Event::Type::MouseUp: {
+            if (wheel_drag_ &&
+                event.mouse_button == Widgets::MouseButton::Left) {
+                wheel_drag_ = false;
+                Invalidate();
+                EmitCorrection(WheelEffect());
+                return true;
+            }
+            return false;
+        }
+        case Widgets::Event::Type::Click: {
+            // The drawn "Correction" header toggles its section.
+            if (event.mouse_button == Widgets::MouseButton::Left &&
+                header_rect_.Contains(event.position)) {
+                correction_collapsed_ = !correction_collapsed_;
+                RequestLayout();
+                Invalidate();
+                return true;
+            }
+            return false;
+        }
+        default:
+            break;
+    }
     // Row clicks are consumed by the Items themselves; this panel only
     // still owns keyboard navigation. Clicks bubbling up from dead
     // children land in `default` and stay unhandled — the same dead
     // zone the drawn list's gaps were.
-    if (event.type == XER::UI::Widgets::Event::Type::KeyDown) {
-        if (event.key == XER::UI::Widgets::KeyCode::Enter) {
+    if (event.type == Widgets::Event::Type::KeyDown) {
+        if (event.key == Widgets::KeyCode::Enter) {
             AddSelected();
             return true;
         }
-        if (event.key == XER::UI::Widgets::KeyCode::ArrowDown ||
-            event.key == XER::UI::Widgets::KeyCode::ArrowUp) {
+        if (event.key == Widgets::KeyCode::ArrowDown ||
+            event.key == Widgets::KeyCode::ArrowUp) {
             if (!entries_.empty()) {
                 const int count = static_cast<int>(entries_.size());
                 const int dir =
-                    event.key == XER::UI::Widgets::KeyCode::ArrowDown
+                    event.key == Widgets::KeyCode::ArrowDown
                         ? 1
                         : -1;
-                // Step over section headers until a row is found.
+                // Step over section headers and collapsed rows until a
+                // visible row is found.
                 int i = selected_;
                 for (int step = 0; step < count; ++step) {
                     i = i < 0 ? (dir > 0 ? 0 : count - 1)
                               : (i + dir + count) % count;
-                    if (!entries_[static_cast<std::size_t>(i)].header) {
+                    if (!entries_[static_cast<std::size_t>(i)].header &&
+                        !EntryHidden(i)) {
                         SelectRow(i);
                         break;
                     }
@@ -555,6 +922,22 @@ bool ColorPanelWidget::HandleEvent(
     return false;
 }
 
-void ColorPanelWidget::Tick(double dt_seconds) { (void)dt_seconds; }
+void ColorPanelWidget::Tick(double dt_seconds) {
+    (void)dt_seconds;
+    // Drag-committed sliders fire once on release — polling IsDragging
+    // here catches the MouseUp without each move being an undo step.
+    if (children_attached_) {
+        if (temp_pending_commit_ && !temp_slider_->IsDragging()) {
+            temp_pending_commit_ = false;
+            CommitSliderEffect(kTempEffectType,
+                               temp_slider_->GetValue());
+        }
+        if (tint_pending_commit_ && !tint_slider_->IsDragging()) {
+            tint_pending_commit_ = false;
+            CommitSliderEffect(kTintEffectType,
+                               tint_slider_->GetValue());
+        }
+    }
+}
 
 }  // namespace XER::VideoEditor::Ui

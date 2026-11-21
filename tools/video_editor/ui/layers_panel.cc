@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "generated_source.h"
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "ve_theme.h"
@@ -81,9 +82,7 @@ void LayersPanelWidget::EnsureChildren() {
     if (children_attached_) return;
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
-    title_ = std::make_shared<Widgets::Label>("LAYERS");
     status_ = std::make_shared<Widgets::Label>("No clips", true);
-    AddChild(title_);
     AddChild(status_);
     RebuildRows();
 }
@@ -217,7 +216,14 @@ void LayersPanelWidget::Render(
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f,
                         tokens.radius_large);
-    // Track label under the title — the list's context.
+    // Collapsible-style panel header — the shared VeIcons chrome.
+    const float pad = tokens.spacing_medium;
+    VeIcons::DrawSectionHeader(
+        renderer, tokens,
+        {bounds.x + pad, bounds.y + pad * 0.6f,
+         bounds.width - pad * 2.0f, VeTheme::kRowHeight},
+        "Layers", false);
+    // Track label under the header — the list's context.
     if (!track_name_.empty()) {
         renderer.DrawText(
             track_name_,
@@ -265,9 +271,7 @@ void LayersPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f},
-                   tokens);
+    // The header row is drawn chrome (see Render) — reserve its band.
     rows_top_ = bounds.y + 52.0f;
 
     const float view_bottom = RowsViewportBottom();

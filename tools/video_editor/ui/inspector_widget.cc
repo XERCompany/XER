@@ -14,6 +14,7 @@
 #include <utility>
 
 #include "keyframe_editor.h"
+#include "icon_helpers.h"
 #include "js_fx.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
@@ -216,7 +217,6 @@ void InspectorWidget::EnsureChildren() {
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
 
-    title_ = std::make_shared<Widgets::Label>("INSPECTOR");
     source_ = std::make_shared<Widgets::Label>("No clip selected", true);
     muted_ = std::make_shared<Widgets::Checkbox>(false);
     muted_->SetTooltip("Mute clip audio");
@@ -388,7 +388,6 @@ void InspectorWidget::EnsureChildren() {
         CommitClip(next);
     });
 
-    AddChild(title_);
     AddChild(source_);
     for (const Row& row : rows_) AddChild(row.input);
     AddChild(blend_combo_);
@@ -1146,12 +1145,19 @@ void InspectorWidget::Render(
             line.rect.y > bounds.y + bounds.height) {
             continue;
         }
+        if (line.header) {
+            // Collapsible-style section header (chevron + bold caption)
+            // — the shared VeIcons chrome the other right-dock panels
+            // use. Inspector sections don't fold; the chevron is the
+            // consistent "expanded" glyph.
+            VeIcons::DrawSectionHeader(renderer, tokens, line.rect,
+                                       line.text, false);
+            continue;
+        }
         renderer.DrawText(
             line.text, line.rect,
             XER::UI::Rendering::TextStyle{
-                line.header ? tokens.muted : tokens.foreground,
-                line.header ? tokens.font_small : tokens.font_body,
-                line.header ? 600 : 400});
+                tokens.foreground, tokens.font_body, 400});
     }
     renderer.PopClip();
 }
@@ -1194,7 +1200,9 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         gap(2.0f);
     };
 
-    place(title_, 24.0f);
+    // Panel header — a drawn collapsible-style row (chevron + bold
+    // caption) like the other right-dock panels, not a Label child.
+    label("Inspector", 24.0f, 0.0f, true);
     place(source_, 22.0f);
     gap(10.0f);
 

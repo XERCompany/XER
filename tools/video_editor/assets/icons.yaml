@@ -55,3 +55,31 @@ Icons:
   fx.stylize: brush.svg
   fx.overlay: layers.svg
   fx.key: key.svg
+  # --- NLE transport / track / edit-tool icons (redesign) ---
+  # stop/skip_previous/skip_next/chevron_*/lock*/visibility*/mic/
+  # volume_*/magnet/content_cut/build/headset/fiber_manual_record are
+  # locally-authored 24px Material-style glyphs (standard material-icons
+  # path data) — swap in fetched Material Symbols files when available.
+  transport.stop: stop.svg
+  transport.skip_back: skip_previous.svg
+  transport.skip_forward: skip_next.svg
+  transport.step_back: chevron_left.svg
+  transport.step_forward: chevron_right.svg
+  transport.record: fiber_manual_record.svg
+  track.lock: lock.svg
+  track.unlock: lock_open.svg
+  track.visible: visibility.svg
+  track.hidden: visibility_off.svg
+  track.mute: volume_off.svg
+  track.unmute: volume_up.svg
+  track.solo: headset.svg
+  track.mic: mic.svg
+  track.fx: bolt.svg
+  track.video: movie.svg
+  track.audio: equalizer.svg
+  edit.snap: magnet.svg
+  edit.razor: content_cut.svg
+  edit.marker: bookmark_stacks.svg
+  tool.wrench: build.svg
+  tool.color_wheel: palette.svg
+  audio.waveform: equalizer.svg

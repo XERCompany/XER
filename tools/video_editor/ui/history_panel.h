@@ -118,7 +118,6 @@ private:
     bool children_attached_ = false;
 
     std::vector<Row> rows_;   // display order: undos, then redos
-    std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> counts_;
     // Current-state divider row: rule — caption — rule.
     std::shared_ptr<XER::UI::Widgets::Separator> divider_left_;

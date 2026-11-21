@@ -181,7 +181,6 @@ private:
     float content_height_ = 0.0f;
     std::vector<DrawnLine> drawn_;
 
-    std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> source_;
     std::vector<Row> rows_;
     std::shared_ptr<XER::UI::Widgets::Combobox> blend_combo_;

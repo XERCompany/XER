@@ -168,7 +168,6 @@ private:
     std::chrono::steady_clock::time_point last_click_time_{};
     bool children_attached_ = false;
 
-    std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> hint_;
     // Per-strip mute chip, parallel to strips_ (nullptr on the master
     // strip — the host mutes the mix bus itself). Destructive while
