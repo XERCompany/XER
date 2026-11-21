@@ -36,6 +36,9 @@ void PutStyle(std::vector<uint8_t>& out, const TextStyle& s) {
     PutColor(out, s.color);
     PutFloat(out, s.size);
     PutU32(out, static_cast<std::uint32_t>(s.weight));
+    // Style flags: bit0 = monospace. Serialized as u32 to leave room
+    // for future style bits without a format bump.
+    PutU32(out, s.monospace ? 1u : 0u);
 }
 void PutString(std::vector<uint8_t>& out, std::string_view s) {
     PutU32(out, static_cast<std::uint32_t>(s.size()));
@@ -74,10 +77,13 @@ struct Cursor {
     }
     bool Style(TextStyle* s) {
         std::uint32_t weight = 0;
-        if (!Color(&s->color) || !F32(&s->size) || !U32(&weight)) {
+        std::uint32_t flags = 0;
+        if (!Color(&s->color) || !F32(&s->size) || !U32(&weight) ||
+            !U32(&flags)) {
             return false;
         }
         s->weight = static_cast<int>(weight);
+        s->monospace = (flags & 1u) != 0;
         return true;
     }
     bool Str(std::string_view* s) {

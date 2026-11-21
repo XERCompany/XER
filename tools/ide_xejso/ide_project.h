@@ -67,6 +67,48 @@ bool ReadTextFile(const std::string& path, std::string* out,
 bool WriteTextFile(const std::string& path, const std::string& text,
                    std::string* error);
 
+// ---- editor tab model -------------------------------------------------------
+// Headless multi-file tab state — the GUI's tab strip and the
+// `--selftest` exercise the same code path. Each tab carries its own
+// buffer text so switching tabs never loses unsaved edits (the v1
+// auto-save-on-switch behavior is gone).
+struct EditorTabs {
+    struct Tab {
+        std::string rel_path;   // '/'-separated, relative to project
+        bool dirty = false;
+        std::string text;       // buffer contents ("" = not loaded yet)
+        int caret_line = 0;
+        int caret_col = 0;
+    };
+    std::vector<Tab> tabs;
+    int active = -1;            // index into tabs, -1 when empty
+
+    // Activates the tab for `rel` if already open, else appends a new
+    // clean tab and activates it. Returns the active index.
+    int Open(const std::string& rel);
+    // Removes `index` and fixes `active` (prefers the neighbor on the
+    // right, else the left, else -1). false for a bad index.
+    bool Close(int index);
+    int Find(const std::string& rel) const;
+    bool Activate(int index);
+    bool SetDirty(int index, bool dirty);
+    bool AnyDirty() const;
+};
+
+// ---- build-log diagnostics ----------------------------------------------------
+// One file:line[:col] reference parsed from a build/test log line
+// (ztzmake's clang diagnostics look like "native/hello.cc:5:1: error:
+// ...", MSVC style "D:\path\x.cc(12,3)" is NOT matched).
+struct DiagnosticRef {
+    std::string path;   // as written in the log (abs or rel)
+    int line = 0;       // 1-based
+    int col = 0;        // 1-based, 0 when the log had no column
+    bool is_error = false;  // "error"/"fatal" in the message tail
+};
+// Scans `log_line` for the first path:digits[:digits] pattern where the
+// path part contains a '/' '\' or '.'. Returns false on no match.
+bool ParseDiagnostic(const std::string& log_line, DiagnosticRef* out);
+
 // Minimal manifest scrape — [extension] id/name/entry plus the [pack]
 // probe key ("" when undeclared). Line-based like ztzmake's manifest
 // reader; NOT a full TOML parser.

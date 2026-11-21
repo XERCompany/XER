@@ -27,6 +27,12 @@
 #include "worker_pipe.h"
 #include <json/json.h>
 
+#include "ide_format.h"
+#include "ide_preview_widget.h"   // IdePreviewSelftest
+#ifdef _WIN32
+#include "code_editor_widget.h"   // headless tokenizer for selftest
+#endif
+
 namespace XER::IdeXejso {
 namespace {
 
@@ -391,6 +397,135 @@ bool WriteTextFile(const std::string& path, const std::string& text,
         return false;
     }
     return true;
+}
+
+// ---- editor tabs --------------------------------------------------------------
+
+int EditorTabs::Open(const std::string& rel) {
+    const int found = Find(rel);
+    if (found >= 0) {
+        active = found;
+        return found;
+    }
+    Tab t;
+    t.rel_path = rel;
+    tabs.push_back(std::move(t));
+    active = static_cast<int>(tabs.size()) - 1;
+    return active;
+}
+
+bool EditorTabs::Close(int index) {
+    if (index < 0 || index >= static_cast<int>(tabs.size())) {
+        return false;
+    }
+    tabs.erase(tabs.begin() + index);
+    if (tabs.empty()) {
+        active = -1;
+    } else if (active > index) {
+        --active;
+    } else if (active == index) {
+        active = std::min(index, static_cast<int>(tabs.size()) - 1);
+    }
+    return true;
+}
+
+int EditorTabs::Find(const std::string& rel) const {
+    for (std::size_t i = 0; i < tabs.size(); ++i) {
+        if (tabs[i].rel_path == rel) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+bool EditorTabs::Activate(int index) {
+    if (index < 0 || index >= static_cast<int>(tabs.size())) {
+        return false;
+    }
+    active = index;
+    return true;
+}
+
+bool EditorTabs::SetDirty(int index, bool dirty) {
+    if (index < 0 || index >= static_cast<int>(tabs.size())) {
+        return false;
+    }
+    tabs[static_cast<std::size_t>(index)].dirty = dirty;
+    return true;
+}
+
+bool EditorTabs::AnyDirty() const {
+    return std::any_of(tabs.begin(), tabs.end(),
+                       [](const Tab& t) { return t.dirty; });
+}
+
+// ---- build-log diagnostics -----------------------------------------------------
+
+bool ParseDiagnostic(const std::string& log_line, DiagnosticRef* out) {
+    const std::string& l = log_line;
+    const std::size_t n = l.size();
+    for (std::size_t i = 0; i + 1 < n; ++i) {
+        if (l[i] != ':' ||
+            !std::isdigit(static_cast<unsigned char>(l[i + 1]))) {
+            continue;
+        }
+        // Digits for the line number.
+        std::size_t j = i + 1;
+        while (j < n &&
+               std::isdigit(static_cast<unsigned char>(l[j]))) {
+            ++j;
+        }
+        const int line_no = std::atoi(l.substr(i + 1, j - i - 1).c_str());
+        if (line_no <= 0) continue;
+        int col_no = 0;
+        std::size_t tail = j;
+        if (j < n && l[j] == ':' && j + 1 < n &&
+            std::isdigit(static_cast<unsigned char>(l[j + 1]))) {
+            std::size_t k = j + 1;
+            while (k < n &&
+                   std::isdigit(static_cast<unsigned char>(l[k]))) {
+                ++k;
+            }
+            col_no = std::atoi(l.substr(j + 1, k - j - 1).c_str());
+            tail = k;
+        }
+        // The char after the location must end it (':' or ws or EOS).
+        if (tail < n && l[tail] != ':' && l[tail] != ' ' &&
+            l[tail] != '\t' && l[tail] != ')' && l[tail] != ',') {
+            continue;
+        }
+        // The path is the run of non-whitespace before the ':'.
+        std::size_t start = i;
+        while (start > 0) {
+            const char p = l[start - 1];
+            if (std::isspace(static_cast<unsigned char>(p)) ||
+                p == '"' || p == '\'' || p == '(' || p == '[' ||
+                p == '<') {
+                break;
+            }
+            --start;
+        }
+        const std::string path = l.substr(start, i - start);
+        // Require it to look like a file path (separators or an
+        // extension) — "note: 3:4" must not match.
+        if (path.empty() ||
+            (path.find('/') == std::string::npos &&
+             path.find('\\') == std::string::npos &&
+             path.find('.') == std::string::npos)) {
+            continue;
+        }
+        if (out != nullptr) {
+            out->path = path;
+            out->line = line_no;
+            out->col = col_no;
+            const std::string tail_s = l.substr(tail);
+            out->is_error =
+                tail_s.find("error") != std::string::npos ||
+                tail_s.find("fatal") != std::string::npos;
+        }
+        return true;
+    }
+    return false;
 }
 
 // ---- manifest lite ------------------------------------------------------------
@@ -867,7 +1002,248 @@ int RunSelftest(const LogFn& log) {
         return 1;
     }
 
-    // 5. tolerated: drive VE.ExtensionsRuntime when it sits beside the
+    // 5. formatter + editor-model checks (all headless).
+    {
+        // JS beautifier idempotency: format(format(x)) == format(x).
+        const std::string ugly_js =
+            "const ext=NativeImport(\"xer_ext\");\n"
+            "function go(){ext.log( \"hi\" );if(ext.id()){return 1;}\n"
+            "return   0;}\n"
+            "ext.ve(\"timeline.info\").then(x=>ext.log(x));\n";
+        const std::string once = FormatJs(ugly_js);
+        const std::string twice = FormatJs(once);
+        step("fmt-js", !once.empty() && once == twice,
+             once == twice ? "" : "second pass differed");
+        if (once != twice) {
+            fs::remove_all(scratch, ec);
+            return 1;
+        }
+    }
+    if (ClangFormatAvailable()) {
+        // C++ clang-format: ugly input must come out normalized.
+        const std::string ugly_cc =
+            "int ve_ext_probe(ve_ctx* ctx,const char* args_json){\n"
+            "(void)ctx;(void)args_json;\n"
+            "return \"{\\\"ok\\\":true}\";}\n";
+        std::string pretty, f_err;
+        const bool f_ok =
+            FormatCpp(ugly_cc, "x.cc", &pretty, &f_err);
+        if (!step("fmt-cpp",
+                  f_ok && pretty != ugly_cc &&
+                      pretty.find("ve_ext_probe") != std::string::npos,
+                  f_err)) {
+            fs::remove_all(scratch, ec);
+            return 1;
+        }
+    } else {
+        say("SELFTEST fmt-cpp SKIP — libclang-cpp not linked "
+            "(XER_IDE_HAS_CLANG unset)");
+    }
+#ifdef _WIN32
+    {
+        // Tokenizer sanity: pathological inputs must tokenize without
+        // crashing and end in sane cross-line states.
+        bool tok_ok = true;
+        // Balanced block comment across lines.
+        {
+            const std::vector<std::string> doc = {
+                "int a; /* open", "still comment */ int b;"};
+            const auto spans =
+                TokenizeDocument(EditorLanguage::Cpp, doc);
+            tok_ok &= spans.size() == 2;
+            tok_ok &= !spans[1].empty() &&
+                      spans[1].front().kind == TokKind::Comment;
+        }
+        // Unterminated string stays inside itself to EOL.
+        {
+            LineLexState st;
+            const auto s = TokenizeLine(EditorLanguage::Cpp,
+                                        "const char* s = \"unterm", st);
+            tok_ok &= !s.empty() &&
+                      s.back().kind == TokKind::String &&
+                      s.back().end == 23;
+        }
+        // JS template literal spanning lines -> mode 2 then closed.
+        {
+            const std::vector<std::string> doc = {
+                "let t = `line one", "two ${x} three`;"};
+            const auto spans =
+                TokenizeDocument(EditorLanguage::JavaScript, doc);
+            tok_ok &= spans.size() == 2 && !spans[1].empty() &&
+                      spans[1].front().kind == TokKind::String;
+        }
+        // C++ raw string across lines.
+        {
+            const std::vector<std::string> doc = {
+                "auto s = R\"tag(l1", "l2)tag\"; int y;"};
+            const auto spans =
+                TokenizeDocument(EditorLanguage::Cpp, doc);
+            tok_ok &= spans.size() == 2 && !spans[1].empty() &&
+                      spans[1].front().kind == TokKind::String;
+        }
+        // Garbage bytes: must never crash or produce empty doc spans.
+        {
+            std::string junk;
+            for (int i = 0; i < 256; ++i) {
+                junk.push_back(static_cast<char>(i));
+            }
+            const std::vector<std::string> doc = {junk, "x"};
+            const auto spans =
+                TokenizeDocument(EditorLanguage::Cpp, doc);
+            tok_ok &= spans.size() == 2;
+        }
+        if (!step("tokenizer", tok_ok)) {
+            fs::remove_all(scratch, ec);
+            return 1;
+        }
+    }
+    {
+        // HTML/CSS language detection + tokenizer checks.
+        bool ok = true;
+        ok &= LanguageForPath("static/index.html") ==
+              EditorLanguage::Html;
+        ok &= LanguageForPath("a.htm") == EditorLanguage::Html;
+        ok &= LanguageForPath("doc.xml") == EditorLanguage::Html;
+        ok &= LanguageForPath("p.xhtml") == EditorLanguage::Html;
+        ok &= LanguageForPath("icon.svg") == EditorLanguage::Html;
+        ok &= LanguageForPath("site.css") == EditorLanguage::Css;
+        ok &= std::string(LanguageName(EditorLanguage::Html)) == "HTML";
+        const auto kind_at =
+            [](const std::vector<HighlightSpan>& v, std::size_t pos) {
+                for (const auto& s : v) {
+                    if (pos >= s.begin && pos < s.end) return s.kind;
+                }
+                return TokKind::Plain;
+            };
+        {
+            const std::vector<std::string> doc = {
+                "<!-- head -->",
+                "<div class=\"a\">hi</div>",
+                "<script>let x = 1;",
+                "x += 2;</script><p>t</p>",
+                "<style>body { color: #fff }</style>",
+            };
+            const auto sp =
+                TokenizeDocument(EditorLanguage::Html, doc);
+            ok &= sp.size() == 5;
+            ok &= !sp[0].empty() &&
+                  sp[0].front().kind == TokKind::Comment;
+            // tag name vs attr name vs quoted value vs text
+            ok &= kind_at(sp[1], 2) == TokKind::Keyword;   // div
+            ok &= kind_at(sp[1], 7) == TokKind::Type;      // class
+            ok &= kind_at(sp[1], 12) == TokKind::String;   // "a"
+            ok &= kind_at(sp[1], 16) == TokKind::Plain;    // hi text
+            // <script> line delegated to the JS tokenizer
+            ok &= kind_at(sp[2], 9) == TokKind::Keyword;   // let
+            ok &= kind_at(sp[2], 16) == TokKind::Number;   // 1
+            // a line starting mid-script stays JS until </script>
+            ok &= kind_at(sp[3], 0) == TokKind::Plain;     // x (JS ident)
+            ok &= kind_at(sp[3], 5) == TokKind::Number;    // 2
+            ok &= kind_at(sp[3], 8) == TokKind::Punct;     // </
+            ok &= kind_at(sp[3], 10) == TokKind::Keyword;  // script
+            ok &= kind_at(sp[3], 17) == TokKind::Keyword;  // p tag
+            // <style> delegated to the CSS tokenizer
+            ok &= kind_at(sp[4], 8) == TokKind::Keyword;   // body sel
+            ok &= kind_at(sp[4], 17) == TokKind::Type;     // color:
+            ok &= kind_at(sp[4], 24) == TokKind::Number;   // #fff
+        }
+        // Standalone CSS.
+        {
+            const std::vector<std::string> doc = {
+                "/* c */ body { margin: 0 }",
+                ".a { color: red; /* tail */ }",
+            };
+            const auto sp =
+                TokenizeDocument(EditorLanguage::Css, doc);
+            ok &= sp.size() == 2;
+            ok &= !sp[0].empty() &&
+                  sp[0].front().kind == TokKind::Comment;
+            ok &= kind_at(sp[0], 10) == TokKind::Keyword;  // body
+            ok &= kind_at(sp[0], 19) == TokKind::Type;     // margin:
+            ok &= kind_at(sp[0], 23) == TokKind::Number;   // 0
+        }
+        // Headless auto-indent.
+        {
+            AutoIndent ai = AutoIndentForNewline(
+                "if (x) {", 8, EditorLanguage::Cpp, "    ");
+            ok &= ai.indent == "    " && !ai.extra_line;
+            ai = AutoIndentForNewline(
+                "x = 1;", 6, EditorLanguage::Cpp, "    ");
+            ok &= ai.indent.empty();
+            ai = AutoIndentForNewline(
+                "{}", 1, EditorLanguage::Cpp, "    ");
+            ok &= ai.indent == "    " && ai.extra_line &&
+                  ai.closing.empty();
+            ai = AutoIndentForNewline(
+                "\t\tif {", 6, EditorLanguage::Cpp, "\t");
+            ok &= ai.indent == "\t\t\t";
+            ai = AutoIndentForNewline(
+                "<div>", 5, EditorLanguage::Html, "    ");
+            ok &= ai.indent == "    ";
+            ai = AutoIndentForNewline(
+                "  <p>t</p>", 10, EditorLanguage::Html, "    ");
+            ok &= ai.indent == "  ";
+            ok &= DetectIndentUnit({"\tx;", "y"}) == "\t";
+            ok &= DetectIndentUnit({"    y;", "z"}) == "    ";
+        }
+        // Auto-pairs: pair/overtype/plain and backspace plans.
+        {
+            ok &= PairedClose('(') == ')' && PairedClose('{') == '}' &&
+                  PairedClose('x') == '\0';
+            ok &= AutoPairOk("int x", 5);
+            ok &= !AutoPairOk("foo", 0);
+            PairPlan pp = PlanPairInput("x = ", 4, '(');
+            ok &= pp.pair && !pp.overtype;
+            pp = PlanPairInput("()", 1, ')');
+            ok &= pp.overtype && !pp.pair;
+            pp = PlanPairInput("foo", 2, '"');
+            ok &= !pp.pair && !pp.overtype;   // next char is a word char
+            // Backspace: empty pair deletes both, tab stop, normal.
+            BackspacePlan bp = PlanBackspace("()", 1);
+            ok &= !bp.join_prev && bp.begin == 0 && bp.end == 2;
+            bp = PlanBackspace("        x", 8);
+            ok &= bp.begin == 4 && bp.end == 8;
+            bp = PlanBackspace("abc", 3);
+            ok &= bp.begin == 2 && bp.end == 3;
+            bp = PlanBackspace("abc", 0);
+            ok &= bp.join_prev;
+        }
+        if (!step("editor-ux", ok)) {
+            fs::remove_all(scratch, ec);
+            return 1;
+        }
+    }
+#endif
+    {
+        // Tab model: open/activate/dirty/close transitions.
+        EditorTabs tabs;
+        bool ok = tabs.Open("a.js") == 0 && tabs.active == 0;
+        ok = ok && tabs.Open("b.cc") == 1 && tabs.active == 1;
+        ok = ok && tabs.Open("a.js") == 0 && tabs.active == 0;
+        ok = ok && tabs.SetDirty(0, true) && tabs.AnyDirty();
+        ok = ok && tabs.Activate(1) && tabs.Close(0) &&
+             tabs.active == 0 &&
+             tabs.tabs[0].rel_path == "b.cc";
+        ok = ok && tabs.Close(0) && tabs.active == -1 &&
+             !tabs.Close(0);
+        // Diagnostic parsing.
+        DiagnosticRef d;
+        ok = ok && ParseDiagnostic("native/hello.cc:5:1: error: boom",
+                                   &d) &&
+             d.path == "native/hello.cc" && d.line == 5 &&
+             d.col == 1 && d.is_error;
+        ok = ok && ParseDiagnostic(
+                       "D:/proj/x.cc(12,3) note ignored", &d) ==
+                       false &&
+             ParseDiagnostic("x.cc:9: warning: w", &d) &&
+             d.line == 9 && d.col == 0;
+        if (!step("tabs+diag", ok)) {
+            fs::remove_all(scratch, ec);
+            return 1;
+        }
+    }
+
+    // 6. tolerated: drive VE.ExtensionsRuntime when it sits beside the
     //    exe (LLVM/JIT absence is reported, never fatal — the contract
     //    above is scaffold+build+list).
     if (!FindSiblingExe("VE.ExtensionsRuntime.exe").empty()) {
@@ -883,6 +1259,18 @@ int RunSelftest(const LogFn& log) {
         TestExtension(xexrj, probe, say);
     } else {
         say("SELFTEST runtime SKIP — VE.ExtensionsRuntime.exe absent");
+    }
+
+    // 7. live-preview selftest: file watcher round trip (hard fail)
+    //    + headless CEF availability report (non-fatal when absent).
+    {
+        std::string report;
+        const bool preview_ok = IdePreviewSelftest(&report);
+        say("SELFTEST preview — " + report);
+        if (!step("preview", preview_ok)) {
+            fs::remove_all(scratch, ec);
+            return 1;
+        }
     }
 
     fs::remove_all(scratch, ec);

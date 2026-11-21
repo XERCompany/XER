@@ -44,6 +44,7 @@ Widgets::KeyCode TranslateShortcutKey(WPARAM key) {
     case 'X': return Widgets::KeyCode::X;
     case 'Y': return Widgets::KeyCode::Y;
     case 'Z': return Widgets::KeyCode::Z;
+    case VK_OEM_2: return Widgets::KeyCode::Slash;   // '/' key (Ctrl+/)
     default: return Widgets::KeyCode::None;
     }
 }

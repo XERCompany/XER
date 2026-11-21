@@ -54,7 +54,9 @@ enum class KeyCode {
     V,
     X,
     Y,
-    Z
+    Z,
+    // Punctuation shortcuts (Ctrl-held only, like the letters above).
+    Slash
 };
 
 enum class TextDirection {

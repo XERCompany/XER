@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstring>
 #include <map>
+#include <tuple>
 #include <utility>
 
 #include <wincodec.h>
@@ -84,19 +85,22 @@ bool DecodeImageFileToBgra(std::string_view path,
 }
 
 HFONT GdiText::FontFor(TextStyle style, unsigned dpi) {
-    static std::map<std::pair<int, int>, HFONT> cache;
+    static std::map<std::tuple<int, int, bool>, HFONT> cache;
     const int height_px = std::max(
         1, static_cast<int>(style.size * static_cast<float>(dpi) / 96.0f +
                             0.5f));
     const int weight = std::clamp(style.weight, 1, 999);
-    const auto key = std::make_pair(height_px, weight);
+    const auto key = std::make_tuple(height_px, weight, style.monospace);
     if (const auto it = cache.find(key); it != cache.end()) {
         return it->second;
     }
     HFONT font = CreateFontW(
         -height_px, 0, 0, 0, weight, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        CLEARTYPE_QUALITY,
+        style.monospace ? FIXED_PITCH | FF_MODERN
+                        : DEFAULT_PITCH | FF_DONTCARE,
+        style.monospace ? L"Consolas" : L"Segoe UI");
     cache.emplace(key, font);
     return font;
 }

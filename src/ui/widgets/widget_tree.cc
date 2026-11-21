@@ -305,6 +305,20 @@ bool WidgetTree::HandleEvent(const Event& event) {
     }
 
     if (evt.type == Event::Type::KeyDown && evt.key == KeyCode::Tab) {
+        // A focused widget that consumes Tab itself (a code editor
+        // indenting, a table moving cells) wins over focus cycling;
+        // widgets that ignore it (TextInput returns false) keep the
+        // classic Tab/Shift+Tab navigation.
+        std::vector<std::shared_ptr<Widget>> focusable;
+        CollectFocusable(input_root, true, focusable);
+        const auto focused = std::find_if(
+            focusable.begin(), focusable.end(),
+            [](const std::shared_ptr<Widget>& widget) {
+                return widget->IsFocused();
+            });
+        if (focused != focusable.end() && (*focused)->HandleEvent(evt)) {
+            return true;
+        }
         return MoveFocus(evt.is_shift);
     }
 
