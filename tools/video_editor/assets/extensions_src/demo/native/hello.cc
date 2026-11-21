@@ -25,11 +25,16 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-#define VE_CORE_API_VERSION 1
+#define VE_CORE_API_VERSION 2
 enum { VE_OK = 0, VE_ERR_GENERIC = 1 };
 typedef struct ve_ctx ve_ctx;
 void ve_log(ve_ctx* ctx, const char* message);
 void ve_set_status(ve_ctx* ctx, const char* message);
+int ve_add_clip(ve_ctx* ctx, const char* kind, const char* param,
+                double start_seconds, double duration_seconds);
+int ve_call(ve_ctx* ctx, const char* name, const char* args_json,
+            char** out_json);
+void ve_free(ve_ctx* ctx, void* ptr);
 #ifdef __cplusplus
 }
 #endif
@@ -83,6 +88,48 @@ const char* ve_demo_echo(ve_ctx* ctx, const char* args_json) {
     }
     *out++ = kSuffix[0];
     *out = '\0';
+    return buf;
+}
+
+// Callable through ext_call: asks the host to place a clip. The
+// request queues as an "add_clip" event (fire-and-forget bridge —
+// the editor applies it on its next pump); this export exists so
+// the smoke suite can drive and inspect that event shape.
+const char* ve_demo_add_clip(ve_ctx* ctx, const char* args_json) {
+    (void)args_json;
+    const int rc =
+        ve_add_clip(ctx, "color", "{\"color\":\"#22AA88\"}", 1.0, 2.5);
+    return rc == VE_OK ? "{\"ok\":true,\"queued\":\"add_clip\"}"
+                       : "{\"ok\":false}";
+}
+
+// Callable through ext_call: drives ve_call — the synchronous
+// editor-service bridge (v2). Whatever the host answered is echoed
+// back verbatim so callers can inspect the whole round trip.
+const char* ve_demo_hostcall(ve_ctx* ctx, const char* args_json) {
+    (void)args_json;
+    static char buf[1024];
+    static const char kPrefix[] = "{\"ok\":true,\"reply\":";
+    static const char kNull[] = "null}";
+    char* reply = nullptr;
+    const int rc = ve_call(ctx, "project.info", "{}", &reply);
+    char* out = buf;
+    for (const char* p = kPrefix; *p && out < buf + sizeof(buf) - 2;
+         ++p, ++out) {
+        *out = *p;
+    }
+    if (rc == VE_OK && reply != nullptr) {
+        for (const char* p = reply;
+             *p && out < buf + sizeof(buf) - 2; ++p, ++out) {
+            *out = *p;
+        }
+        *out++ = '}';
+        *out = '\0';
+    } else {
+        for (const char* p = kNull; *p; ++p, ++out) *out = *p;
+        *out = '\0';
+    }
+    if (reply != nullptr) ve_free(ctx, reply);
     return buf;
 }
 

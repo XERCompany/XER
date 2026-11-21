@@ -62,6 +62,10 @@ Goal started: 2026-11-15. Design doc:
 - [crash-debugging-windows.md](architecture/crash-debugging-windows.md)
   — no gdb/lldb; VeCrashTrace SEH symbolizer, llvm-symbolizer for
   RVAs, dormant minidump handler, 0xC0000374 fast-fail (2026-11-21).
+- [live-ui-testing.md](architecture/live-ui-testing.md) — driving the
+  real GUI for verification: ui_drive.ps1 (click by exe-name+coords,
+  window→PNG screenshot), the launch→wait→click→shot→check→kill loop,
+  PostMessage caveats (2026-11-21).
 - [video-editor-js-fx.md](architecture/video-editor-js-fx.md) —
   JS effects/transitions (`assets/scripts/fx`, `script:` types) and
   the `--media-worker` decode subprocess (2026-11-20).

@@ -282,3 +282,26 @@ Reproduced live: GPU child exit 0xC0000139 -> FATAL -> process crash.
   relink of dependents; ninja alone leaves stale binaries.
 - bootstrap.exe fallback on this CEF 156 requires --module and
   FATALs — noted, unaddressed.
+
+
+## Env + ext-bridge batch (same day, uncommitted)
+
+Smoke **37/37** (new: `ext_bridge`).
+
+- `tools/scripts/ui_drive.ps1` — reusable GUI driver
+  (click/shot/wait verbs); wiki `architecture/live-ui-testing.md`.
+- `disable_gpu` also set in xbrowser.cc + vst3_cef.cc demos.
+- **Delay-load staging fixed**: xer_stage_runtime_dlls only saw
+  regular imports — now seeds delay-load list too; shaderc/whisper/
+  spirv-cross staged, `--diag` missing=0.
+- `bootstrap.exe` fallback removed (CEF>=139 needs --module) ->
+  honest Initialize error when shell missing.
+- **ve_call bridge**: reverse anon-pipe channel via env-handoff
+  (XER_VE_EXT_HOST_REQ/RSP); runtime blocks on host_call reply on
+  second transport; editor services host_calls on UI thread via
+  WorkerPipe callback-reader + Tick pump; ext ops ride Lab::AsyncOp
+  to avoid UI-thread RoundTrip deadlock. Dispatch table: project.*/
+  timeline.*/transport.*/status. ve_add_clip applied via
+  AddGeneratedClipAt. VE_CORE_API_VERSION=2.
+- Limits: ve_call no timeout; add_clip fire-and-forget; JS
+  native_call async-only.

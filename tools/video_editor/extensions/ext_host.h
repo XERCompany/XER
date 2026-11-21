@@ -51,6 +51,11 @@ struct Extension {
     std::string path;               // absolute path of the .xexrj
     ExtManifest manifest;
     bool verified = false;
+    // True when the archive carries mobjective/*.xsjo members — the
+    // JIT payload VE.ExtensionsRuntime owns. The app checks this to
+    // decide whether the out-of-process runtime needs an ext_load for
+    // the package (JS-only extensions stay entirely in ExtHost).
+    bool has_native = false;
     std::vector<std::string> verify_errors;
 };
 

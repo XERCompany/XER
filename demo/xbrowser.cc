@@ -780,6 +780,10 @@ int RunXBrowser(const std::vector<std::string>& urls) {
     if (std::getenv("XER_CEF_DEBUG")) {
         cef_opts.log_severity = 1;   // LOGSEVERITY_VERBOSE
     }
+    // The GPU child process traps on this build (0xC0000139 exit loop
+    // — see docs/wiki/architecture/live-ui-testing.md); the browser
+    // panel does not need hardware acceleration.
+    cef_opts.disable_gpu = true;
     // Let pages autoplay media without a user gesture.
     cef_opts.command_line_switches = {
         "autoplay-policy=no-user-gesture-required",

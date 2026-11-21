@@ -132,22 +132,37 @@ bool Initialize(const RuntimeOptions& options, std::string* error_out) {
     if (!options.log_file.empty()) {
         CefString(&settings.log_file) = Utf8(options.log_file);
     }
-    // Newer CEF ships bootstrap.exe as the subprocess launcher; it must
-    // sit beside the executable (deploy step does this). Resource files
-    // (*.pak, icudtl.dat, locales/) are also deployed beside the exe.
+    // The deploy step places the CEF distribution beside the exe:
+    // libcef.dll, resources (*.pak, icudtl.dat, locales/) and the
+    // stock bootstrap.exe/bootstrapc.exe launchers (unused by us —
+    // see the subprocess note below).
     const std::string res_dir = options.resources_dir.empty()
                                     ? exe_dir
                                     : options.resources_dir;
-    // Prefer our own subprocess shell — it injects the `xer` src/ API
-    // object into every page. Stock bootstrap.exe is the fallback when
-    // the shell was not built/deployed.
+    // Our own subprocess shell — it injects the `xer` src/ API object
+    // into every page. There is deliberately NO bootstrap.exe fallback:
+    // on CEF >= 139 bootstrap.exe is a launcher that demands
+    // --module=<client dll exporting RunWinMain/RunConsoleMain>, and
+    // browser_subprocess_path cannot carry arguments — every child
+    // process spawned through it FATALs on startup (verified on CEF
+    // 156). Fail cleanly instead and let callers run browser-less.
     const std::string shell = exe_dir + "\\xer_browser_shell.exe";
+    if (options.subprocess_path.empty() &&
+        !std::filesystem::exists(shell)) {
+        g_last_error =
+            "CEF: xer_browser_shell.exe not found next to the executable "
+            "(CEF 156's stock bootstrap.exe cannot substitute — it "
+            "requires --module=<client dll>, which "
+            "browser_subprocess_path cannot express). Build/deploy "
+            "xer_browser_shell, or set RuntimeOptions::subprocess_path "
+            "to an exe that calls XER::Cef::RunSubprocessIfAny first in "
+            "main().";
+        if (error_out != nullptr) *error_out = g_last_error;
+        return false;
+    }
     CefString(&settings.browser_subprocess_path) = Utf8(
-        options.subprocess_path.empty()
-            ? (std::filesystem::exists(shell)
-                   ? shell
-                   : exe_dir + "\\bootstrap.exe")
-            : options.subprocess_path);
+        options.subprocess_path.empty() ? shell
+                                        : options.subprocess_path);
     CefString(&settings.resources_dir_path) = Utf8(res_dir);
     CefString(&settings.locales_dir_path) =
         Utf8(options.locales_dir.empty() ? res_dir + "\\locales"

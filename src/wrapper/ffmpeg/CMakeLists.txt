@@ -50,6 +50,20 @@ if(XER_YA_DLLS AND XER_FFMPEG_API_ARCHIVES)
         target_link_options(YA_MediaDecoderUniversal PRIVATE ${_ff_dl_opts})
         message(STATUS
             "FFMPEG: delay-loaded DLLs: ${XER_FFMPEG_DELAYLOAD_DLLS}")
+        # Delay-load only defers a missing DLL to first call, where it
+        # still hard-kills the process (libshaderc_shared.dll /
+        # libwhisper-1.dll surfaced via --diag: shader-compiler and
+        # whisper paths die on first use). Seed the stage walk with the
+        # delay-load names themselves — the PE walk only sees regular
+        # imports, so delay-imported DLLs must be listed explicitly;
+        # their own import closures (whisper -> ggml backends, …) are
+        # then pulled in transitively.
+        if(MINGW AND COMMAND xer_stage_runtime_dlls)
+            get_filename_component(_ff_toolchain_bin
+                "${CMAKE_CXX_COMPILER}" DIRECTORY)
+            xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin"
+                "${_ff_toolchain_bin}" ${XER_FFMPEG_DELAYLOAD_DLLS})
+        endif()
     endif()
     xer_ya_bundle(XER_FFmpeg
         MODULES YA_MediaDecoderUniversal

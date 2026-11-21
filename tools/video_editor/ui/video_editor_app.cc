@@ -11,10 +11,13 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <json/json.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -73,6 +76,40 @@ namespace Widgets = XER::UI::Widgets;
 std::string Basename(const std::string& path) {
     const std::size_t pos = path.find_last_of("/\\");
     return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+// One JSON value -> a single protocol line (the worker protocol's
+// wire encoding — indentation stripped).
+std::string JsonLine(const Json::Value& v) {
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    return Json::writeString(w, v);
+}
+
+bool ParseJsonLine(const std::string& line, Json::Value* out) {
+    std::string errs;
+    Json::CharReaderBuilder r;
+    std::istringstream in(line);
+    return Json::parseFromStream(r, in, out, &errs) &&
+           out->isObject();
+}
+
+// One ext-runtime round trip — runs on whatever thread calls it (the
+// ext_op_ worker or the UI tick's idle poll). `req` gets "id" filled;
+// `reply` receives the decoded body. false = transport failure or an
+// ok:false envelope (callers read the error from `reply` when it
+// parsed).
+bool ExtRoundTrip(Json::Value& req, int timeout_ms,
+                  Json::Value* reply) {
+    WorkerPipe& pipe = ExtRuntimePipe();
+    const std::uint64_t id = pipe.NextId();
+    req["id"] = Json::UInt64(id);
+    std::string line;
+    if (!pipe.RoundTrip(id, JsonLine(req), timeout_ms, &line)) {
+        return false;
+    }
+    return ParseJsonLine(line, reply) &&
+           reply->get("ok", false).asBool();
 }
 
 // MediaPrep::Lookup -> the widget's MediaLookup tri-state (the widget
@@ -488,6 +525,10 @@ VideoEditorAppWidget::~VideoEditorAppWidget() {
         RemoveChild(lab_panel_);
         lab_panel_.reset();
     }
+    // A parked ext RoundTrip only returns when the worker dies —
+    // kill it here so the ext_op_ member dtor's cancel+join can't
+    // hang on a request blocked inside JIT'd extension code.
+    ExtRuntimePipe().KillWorker();
     preview_engine_.Shutdown();
     source_engine_.Shutdown();
     export_engine_.Cancel();
@@ -1345,6 +1386,11 @@ void VideoEditorAppWidget::EnsureChildren() {
     // The Ext tab's list mirrors whatever the scan left in Entries()
     // (empty included) — Reload snapshots it into rows.
     if (extensions_panel_) extensions_panel_->Reload();
+    // Native payloads (mobjective/*.xsjo) belong to
+    // VE.ExtensionsRuntime — queue their ext_loads on ext_op_ (the
+    // entry point can ve_call back into the editor; the host_call
+    // pump in Tick is what lets it, see PumpExtensionRuntime).
+    QueueNativeExtensionLoads();
 
     TimelineWidget::Hooks timeline_hooks;
     timeline_hooks.on_select_clip = [this](const std::string& id) {
@@ -4788,6 +4834,27 @@ std::string VideoEditorAppWidget::DispatchExtensionAction(
         if (!r.ok) return "{\"error\":\"" + r.error + "\"}";
         return "{\"ok\":true,\"output\":\"" + r.output + "\"}";
     }
+    if (action == "native_call") {
+        // {"id","fn","args"?} — invoke an exported callable inside
+        // VE.ExtensionsRuntime. Deliberately FIRE-AND-FORGET for the
+        // JS surface: the answer must return through a synchronous
+        // action result, but the underlying ext_call can itself
+        // ve_call back into the editor — only a background job can
+        // wait on it without deadlocking the host_call pump. The
+        // result lands on the status strip via the Tick pump.
+        Json::Value args;
+        if (!ParseJsonLine(arg_json, &args) ||
+            !args.isMember("id") || !args.isMember("fn")) {
+            return "{\"error\":\"native_call needs id+fn\"}";
+        }
+        const std::string args_str =
+            args["args"].isString() ? args["args"].asString()
+            : args["args"].isNull() ? "{}"
+                                    : JsonLine(args["args"]);
+        CallNativeExtension(args["id"].asString(),
+                            args["fn"].asString(), args_str);
+        return "{\"ok\":true,\"queued\":true}";
+    }
     return "{\"error\":\"unknown extension action: " + action + "\"}";
 }
 
@@ -4831,6 +4898,9 @@ void VideoEditorAppWidget::RescanExtensions() {
     // The Extensions top menu mirrors Entries() — rebuild it so the
     // rescan's adds/removals show up on next open.
     RebuildTitleBarMenus();
+    // Mirror the rescan into the native runtime too (stale ids are
+    // unloaded, the current native set re-loaded on ext_op_).
+    QueueNativeExtensionLoads();
 }
 
 void VideoEditorAppWidget::RevealExtensionsFolder() {
@@ -4849,6 +4919,416 @@ void VideoEditorAppWidget::RevealExtensionsFolder() {
 #else
     SetStatus("Reveal in Explorer is Windows-only", true);
 #endif
+}
+
+// ---- native extension bridge (VE.ExtensionsRuntime) ------------------
+// Channel recap (worker_pipe.h callback_env + ext_runtime_server.h):
+// the runtime's single request thread runs JIT'd extension code;
+// ve_call inside it writes host_call on the reverse channel and
+// parks until the editor answers. Two editor-side rules keep that
+// deadlock-free:
+//   1. Requests that execute extension code ride ext_op_ (a
+//      background thread) — a synchronous UI RoundTrip would leave
+//      nobody to drain host_call until the timeout killed the
+//      worker.
+//   2. Tick ALWAYS drains + answers host_call, including mid-job.
+
+void VideoEditorAppWidget::QueueNativeExtensionLoads() {
+    std::vector<std::string> paths;
+    for (const Extension& e : ExtHost::Shared().Entries()) {
+        if (e.verified && e.has_native) paths.push_back(e.path);
+    }
+    if (paths.empty() && native_ext_ids_.empty()) return;
+    if (ext_op_.IsRunning()) {
+        SetStatus("Extension job in flight — native rescan deferred");
+        return;
+    }
+    const std::vector<std::string> stale = native_ext_ids_;
+    const std::string project_json =
+        DispatchExtensionAction("project_info", "{}");
+    const bool started = ext_op_.Start(
+        [this, paths, stale,
+         project_json](const Lab::JobControl& ctl) {
+            ExtOutcome out;
+            out.apply_loaded = true;
+            WorkerPipe& pipe = ExtRuntimePipe();
+            const auto store = [&] {
+                std::lock_guard lock(ext_mutex_);
+                ext_outcome_ = out;
+            };
+            if (!pipe.Available()) {
+                out.summary = "";
+                store();
+                ctl.Fail("VE.ExtensionsRuntime unavailable");
+                return false;
+            }
+            // Drop the stale resident set first — a reload of the
+            // same id would duplicate its LoadedExt (Find() returns
+            // the first match and the old modules leak).
+            for (const std::string& id : stale) {
+                Json::Value req(Json::objectValue);
+                req["kind"] = "ext_unload";
+                req["ext_id"] = id;
+                Json::Value reply;
+                ExtRoundTrip(req, 10000, &reply);   // best-effort
+            }
+            Json::Value events(Json::arrayValue);
+            std::string first_error;
+            int loaded = 0;
+            for (const std::string& path : paths) {
+                Json::Value req(Json::objectValue);
+                req["kind"] = "ext_load";
+                req["path"] = path;
+                req["project_json"] = project_json;
+                Json::Value reply;
+                if (!ExtRoundTrip(req, 120000, &reply)) {
+                    if (first_error.empty()) {
+                        first_error =
+                            reply.isMember("err")
+                                ? reply.get("err", "?").asString()
+                                : "ext_load transport failure";
+                    }
+                    continue;
+                }
+                for (const auto& e : reply["events"]) {
+                    events.append(e);
+                }
+                if (reply.get("native", false).asBool()) {
+                    out.loaded_ids.push_back(
+                        reply.get("ext_id", "").asString());
+                    ++loaded;
+                }
+            }
+            out.events_json = JsonLine(events);
+            if (first_error.empty()) {
+                out.summary = "native extensions: " +
+                              std::to_string(loaded) + " loaded";
+            }
+            store();
+            if (!first_error.empty()) {
+                ctl.Fail(first_error);
+                return false;
+            }
+            return true;
+        });
+    if (!started) {
+        SetStatus("Extension job could not start", true);
+    }
+}
+
+void VideoEditorAppWidget::CallNativeExtension(
+    const std::string& ext_id, const std::string& fn,
+    const std::string& args_json) {
+    if (ext_op_.IsRunning()) {
+        SetStatus("Extension job in flight — call queued locally",
+                  true);
+        return;
+    }
+    const bool started = ext_op_.Start(
+        [this, ext_id, fn,
+         args_json](const Lab::JobControl& ctl) {
+            ExtOutcome out;
+            WorkerPipe& pipe = ExtRuntimePipe();
+            const auto store = [&] {
+                std::lock_guard lock(ext_mutex_);
+                ext_outcome_ = out;
+            };
+            if (!pipe.Available()) {
+                store();
+                ctl.Fail("VE.ExtensionsRuntime unavailable");
+                return false;
+            }
+            Json::Value req(Json::objectValue);
+            req["kind"] = "ext_call";
+            req["ext_id"] = ext_id;
+            req["fn"] = fn;
+            req["args"] = args_json;
+            Json::Value reply;
+            if (!ExtRoundTrip(req, 120000, &reply)) {
+                store();
+                ctl.Fail(reply.isMember("err")
+                             ? reply.get("err", "?").asString()
+                             : "ext_call transport failure");
+                return false;
+            }
+            Json::Value events(Json::arrayValue);
+            for (const auto& e : reply["events"]) events.append(e);
+            out.events_json = JsonLine(events);
+            out.call_result = reply.get("result_json", "").asString();
+            out.summary = ext_id + "." + fn + " answered";
+            store();
+            return true;
+        });
+    if (!started) {
+        SetStatus("Extension call could not start", true);
+    }
+}
+
+void VideoEditorAppWidget::PumpExtensionRuntime(double dt_seconds) {
+    // 1. Finished ext job — marshal its outcome onto the UI thread.
+    {
+        bool ok = false, cancelled = false;
+        std::string error;
+        if (ext_op_.PopResult(&ok, &cancelled, &error)) {
+            ExtOutcome out;
+            {
+                std::lock_guard lock(ext_mutex_);
+                out = std::move(ext_outcome_);
+                ext_outcome_ = ExtOutcome{};
+            }
+            if (out.apply_loaded) {
+                native_ext_ids_ = std::move(out.loaded_ids);
+            }
+            // events_json is a serialized ARRAY — ParseJsonLine's
+            // isObject() gate would reject it, so parse inline.
+            Json::Value events;
+            {
+                std::string errs;
+                Json::CharReaderBuilder r;
+                std::istringstream in(out.events_json);
+                if (Json::parseFromStream(r, in, &events, &errs) &&
+                    events.isArray()) {
+                    ApplyExtEvents(events);
+                }
+            }
+            if (!error.empty()) {
+                SetStatus("ext: " + error, true);
+            } else if (!out.summary.empty()) {
+                SetStatus(out.summary);
+            }
+            if (!out.call_result.empty() && ok) {
+                SetStatus("ext result: " +
+                          out.call_result.substr(0, 120));
+            }
+        }
+    }
+    // 2. host_call service — ALWAYS, including mid-job: a ve_call
+    //    parked inside the runtime's request thread only unblocks
+    //    when this pump answers. Servicing here keeps dispatch on the
+    //    UI thread where project/history mutation is legal.
+    std::string line;
+    while (ExtRuntimePipe().PopCallbackLine(&line)) {
+        ServiceExtHostCall(line);
+    }
+    // 3. Idle event drain — events queued OUTSIDE a request context
+    //    (extension-owned threads calling ve_log/ve_post after the
+    //    callable returned) only surface through this poll. Skipped
+    //    while a job runs: the worker's single request thread is busy
+    //    and a RoundTrip timeout would needlessly kill it mid-call.
+    ext_poll_ += dt_seconds;
+    if (ext_poll_ >= 0.3 && !ext_op_.IsRunning() &&
+        !native_ext_ids_.empty() &&
+        ExtRuntimePipe().HasCallbackChannel()) {
+        ext_poll_ = 0.0;
+        Json::Value req(Json::objectValue);
+        req["kind"] = "ext_events";
+        Json::Value reply;
+        if (ExtRoundTrip(req, 250, &reply)) {
+            ApplyExtEvents(reply["events"]);
+        } else {
+            // Transport dead — the resident set is gone with the
+            // worker; stop polling until the next reload.
+            native_ext_ids_.clear();
+        }
+    }
+}
+
+void VideoEditorAppWidget::ServiceExtHostCall(const std::string& line) {
+    Json::Value req;
+    if (!ParseJsonLine(line, &req)) return;
+    if (req.get("kind", "").asString() != "host_call") {
+        return;   // only host_call exists today; future push kinds
+                  // land here harmlessly
+    }
+    const std::uint64_t req_id = req.get("req_id", 0).asUInt64();
+    const std::string name = req.get("name", "").asString();
+    std::string args;
+    if (req["args"].isString()) {
+        args = req["args"].asString();
+    } else if (!req["args"].isNull()) {
+        args = JsonLine(req["args"]);
+    }
+    const std::string result = DispatchExtHostCall(name, args);
+    Json::Value rsp(Json::objectValue);
+    rsp["req_id"] = Json::UInt64(req_id);
+    rsp["ok"] = true;
+    rsp["result"] = result;
+    if (!ExtRuntimePipe().WriteCallbackLine(JsonLine(rsp))) {
+        SetStatus("ext host channel died mid-reply", true);
+    }
+}
+
+std::string VideoEditorAppWidget::DispatchExtHostCall(
+    const std::string& name, const std::string& args_json) {
+    const auto wrap = [](Json::Value&& v) {
+        v["ok"] = true;
+        return JsonLine(v);
+    };
+    if (name == "project.info") {
+        return DispatchExtensionAction("project_info", "{}");
+    }
+    if (name == "project.clips") {
+        Json::Value clips(Json::arrayValue);
+        for (const Clip& c : project_.clips) {
+            Json::Value j(Json::objectValue);
+            j["id"] = c.id;
+            j["name"] = c.name;
+            j["track"] = c.track;
+            j["start"] = c.timeline_start;
+            j["duration"] = c.duration;
+            j["source"] = c.source_path;
+            switch (c.source.kind) {
+                case SourceKind::Media:      j["kind"] = "media"; break;
+                case SourceKind::ColorMatte: j["kind"] = "color"; break;
+                case SourceKind::ColorBars:  j["kind"] = "bars";  break;
+                case SourceKind::Text:       j["kind"] = "text";  break;
+            }
+            clips.append(std::move(j));
+        }
+        Json::Value v(Json::objectValue);
+        v["clips"] = std::move(clips);
+        v["count"] =
+            static_cast<Json::UInt64>(project_.clips.size());
+        return wrap(std::move(v));
+    }
+    if (name == "timeline.info") {
+        Json::Value v(Json::objectValue);
+        v["playhead"] = playhead_;
+        v["duration"] = project_.duration();
+        v["tracks"] = static_cast<Json::UInt64>(project_.tracks.size());
+        v["clips"] = static_cast<Json::UInt64>(project_.clips.size());
+        v["selected_clip"] = selected_clip_id_;
+        return wrap(std::move(v));
+    }
+    if (name == "transport.play") {
+        if (monitor_ && !monitor_->IsPlaying()) TogglePlay();
+        Json::Value v(Json::objectValue);
+        v["playing"] = monitor_ && monitor_->IsPlaying();
+        return wrap(std::move(v));
+    }
+    if (name == "transport.pause" || name == "transport.stop") {
+        StopProgramTransport();
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "transport.seek") {
+        Json::Value args;
+        const double t =
+            (ParseJsonLine(args_json, &args) && args.isMember("t"))
+                ? args["t"].asDouble()
+                : playhead_;
+        Seek(t);
+        Json::Value v(Json::objectValue);
+        v["playhead"] = playhead_;
+        return wrap(std::move(v));
+    }
+    if (name == "status") {
+        return DispatchExtensionAction("status", args_json);
+    }
+    if (name == "timeline.add_clip") {
+        // The synchronous sibling of the add_clip event — same
+        // apply path, but ve_call callers get an ok back.
+        Json::Value args;
+        if (!ParseJsonLine(args_json, &args)) {
+            return "{\"ok\":false,\"error\":\"malformed args\"}";
+        }
+        Json::Value e(Json::objectValue);
+        e["kind"] = args.get("kind", "").asString();
+        // param is a string by contract — a JSON-typed argument is
+        // re-serialized so ApplyExtAddClip always sees text.
+        e["param"] = args["param"].isString()
+                         ? args["param"].asString()
+                     : args["param"].isNull() ? ""
+                                              : JsonLine(args["param"]);
+        e["start"] = args.get("start", -1.0);
+        e["duration"] = args.get("duration", 5.0);
+        ApplyExtAddClip("ext", e);
+        return wrap(Json::Value(Json::objectValue));
+    }
+    return "{\"ok\":false,\"error\":\"unknown service '" + name +
+           "'\"}";
+}
+
+void VideoEditorAppWidget::ApplyExtAddClip(const std::string& ext_id,
+                                         const Json::Value& e) {
+    const std::string kind = e.get("kind", "").asString();
+    const double start = e.get("start", -1.0).asDouble();
+    const double duration = e.get("duration", 5.0).asDouble();
+    // "param" is a JSON STRING the extension chose — unpack the
+    // conventional fields ({name,color,text,param,path}); a non-JSON
+    // payload rides through verbatim as the clip param.
+    std::string param = e.get("param", "").asString();
+    std::string clip_name;
+    std::string media_path;
+    Json::Value pj;
+    if (!param.empty() && param.front() == '{' &&
+        ParseJsonLine(param, &pj)) {
+        clip_name = pj.get("name", "").asString();
+        media_path = pj.get("path", "").asString();
+        if (pj.isMember("param")) {
+            param = pj["param"].asString();
+        } else if (pj.isMember("color")) {
+            param = pj["color"].asString();
+        } else if (pj.isMember("text")) {
+            param = pj["text"].asString();
+        } else if (!media_path.empty()) {
+            param = media_path;
+        }
+    }
+    if (kind == "media") {
+        const std::string path =
+            !media_path.empty() ? media_path : param;
+        if (path.empty()) {
+            SetStatus(ext_id + ": add_clip kind 'media' needs a path",
+                      true);
+            return;
+        }
+        AddMediaToTimelineAt(path, start >= 0.0 ? start : playhead_);
+        return;
+    }
+    SourceKind source = SourceKind::Text;
+    if (kind == "color" || kind == "matte" || kind == "color_matte") {
+        source = SourceKind::ColorMatte;
+    } else if (kind == "bars" || kind == "color_bars") {
+        source = SourceKind::ColorBars;
+    } else if (kind == "text" || kind == "title") {
+        source = SourceKind::Text;
+    } else {
+        SetStatus(ext_id + ": unknown add_clip kind '" + kind + "'",
+                  true);
+        return;
+    }
+    AddGeneratedClipAt(source, -1, start, clip_name, param,
+                       duration > 0.0 ? duration : 5.0);
+    SetStatus(ext_id + ": clip added");
+}
+
+void VideoEditorAppWidget::ApplyExtEvents(const Json::Value& events) {
+    if (!events.isArray()) return;
+    for (const Json::Value& e : events) {
+        const std::string type = e.get("type", "").asString();
+        const std::string ext = e.get("ext", "ext").asString();
+        if (type == "log" || type == "status") {
+            const std::string msg = e.get("msg", "").asString();
+            std::cerr << "[ext:" << ext << "] " << msg << "\n";
+            SetStatus(ext + ": " + msg);
+        } else if (type == "add_clip") {
+            ApplyExtAddClip(ext, e);
+        } else if (type == "event") {
+            SetStatus(ext + " posted an event");
+        } else if (type == "entry_failed") {
+            SetStatus(ext + ": entry point failed (rc=" +
+                          std::to_string(e.get("rc", 0).asInt()) + ")",
+                      true);
+        } else if (type == "call_request") {
+            // v1 fallback shape — only seen when the runtime was
+            // spawned without the host channel; nothing can reply
+            // after the fact.
+            SetStatus(ext + ": call '" +
+                          e.get("name", "?").asString() +
+                          "' had no reply channel",
+                      true);
+        }
+    }
 }
 
 MediaBounds VideoEditorAppWidget::BoundsForPath(
@@ -5896,6 +6376,9 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             }
         }
     }
+    // Native-extension bridge: job outcome, host_call service (the
+    // ve_call reply path), and the idle event drain.
+    PumpExtensionRuntime(dt_seconds);
     if (undo_btn_) {
         undo_btn_->SetEnabled(history_.CanUndo());
         redo_btn_->SetEnabled(history_.CanRedo());

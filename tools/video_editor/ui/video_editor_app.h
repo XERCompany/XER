@@ -62,6 +62,8 @@ class Label;
 class Tabs;
 }
 
+namespace Json { class Value; }
+
 namespace XER::VideoEditor::Ui {
 
 // Bound thunks the window subclass proc reads via its ref_data
@@ -367,6 +369,37 @@ private:
     void RunExtensionById(const std::string& id);
     void RescanExtensions();
     void RevealExtensionsFolder();
+    // ---- out-of-process native extensions (VE.ExtensionsRuntime) --
+    // ext_loads every verified package carrying a native payload
+    // (Extension::has_native) into the runtime, unloading the stale
+    // resident set first. The job runs on ext_op_ — NEVER a
+    // synchronous UI-thread RoundTrip: extension code can ve_call
+    // back into the editor, and only a free UI thread can service
+    // the host_call request that produces (see worker_pipe.h's
+    // callback_env contract).
+    void QueueNativeExtensionLoads();
+    // Fires one ext_call at a resident native extension; the result +
+    // events land through the next Tick pump (status strip).
+    void CallNativeExtension(const std::string& ext_id,
+                             const std::string& fn,
+                             const std::string& args_json);
+    // Tick hook: pops the finished ext job, drains + answers queued
+    // host_call requests (the ve_call reply path — MUST run even
+    // while a job is in flight), and throttles an ext_events poll
+    // for events extension-owned threads queued between calls.
+    void PumpExtensionRuntime(double dt_seconds);
+    // One host_call line -> dispatch -> reply. UI thread.
+    void ServiceExtHostCall(const std::string& line);
+    // The editor service table extensions reach through ve_call —
+    // JSON result string per the {"ok":...} result contract.
+    std::string DispatchExtHostCall(const std::string& name,
+                                    const std::string& args_json);
+    // Applies a drained event array: log/status surface on the
+    // status strip, add_clip lands through the same
+    // AddGeneratedClipAt/AddMediaToTimelineAt paths the menus use.
+    void ApplyExtEvents(const Json::Value& events);
+    void ApplyExtAddClip(const std::string& ext_id,
+                         const Json::Value& event);
     MediaBounds BoundsForPath(const std::string& path) const;
     const CatalogEntry* FindCatalogEntry(const std::string& path) const;
 
@@ -680,6 +713,27 @@ private:
     std::mutex lab_mutex_;
     std::string pending_lab_png_;
     bool has_pending_lab_ = false;
+
+    // ---- native extension bridge (VE.ExtensionsRuntime.exe) -------
+    // ext_op_ serializes every request that EXECUTES extension code
+    // (ext_load/ext_call/ext_unload). The worker's reply carries the
+    // drained event array; the job thread writes ext_outcome_ under
+    // ext_mutex_ and Tick marshals it (same pattern as ai_op_).
+    Lab::AsyncOp ext_op_;
+    std::mutex ext_mutex_;
+    struct ExtOutcome {
+        bool apply_loaded = false;   // reload job: swap resident ids
+        std::vector<std::string> loaded_ids;
+        std::string summary;         // status-strip text on success
+        // Serialized JSON array — kept as TEXT so this header stays
+        // free of <json/json.h>; Tick parses before ApplyExtEvents.
+        std::string events_json = "[]";
+        std::string call_result;     // ext_call result_json
+    };
+    ExtOutcome ext_outcome_;              // under ext_mutex_
+    // ext_ids currently resident in the runtime (UI thread only).
+    std::vector<std::string> native_ext_ids_;
+    double ext_poll_ = 0.0;               // ext_events pump accumulator
 };
 
 }  // namespace XER::VideoEditor::Ui

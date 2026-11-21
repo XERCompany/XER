@@ -1200,6 +1200,10 @@ int RunVst3CefDemo(const Vst3CefDemoOptions& options) {
     if (std::getenv("XER_CEF_DEBUG")) {
         cef_opts.log_severity = 1;   // LOGSEVERITY_VERBOSE
     }
+    // The GPU child process traps on this build (0xC0000139 exit loop
+    // — see docs/wiki/architecture/live-ui-testing.md); the browser
+    // pane does not need hardware acceleration.
+    cef_opts.disable_gpu = true;
     // Let pages start media without a user gesture — the demo exists to
     // exercise the browser pane, not to gate playback behind a click.
     cef_opts.command_line_switches = {

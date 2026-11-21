@@ -278,6 +278,19 @@ bool ExtHost::Load(const std::string& path, std::string* error) {
         entries_.push_back(std::move(ext));
         return false;
     }
+    // Native JIT payload? Same member-prefix test the runtime's
+    // HasXsjoMembers uses — the app reads Extension::has_native to
+    // route the package to VE.ExtensionsRuntime.
+    for (const Tz::TzEntry& entry : archive->Entries()) {
+        if (entry.name.size() > 11 &&
+            entry.name.compare(0, 11, "mobjective/") == 0 &&
+            entry.name.size() > 5 &&
+            entry.name.compare(entry.name.size() - 5, 5, ".xsjo") ==
+                0) {
+            ext.has_native = true;
+            break;
+        }
+    }
     std::string parse_err;
     if (!ParseManifest(manifest_text, &ext.manifest, &parse_err)) {
         if (error) *error = parse_err;

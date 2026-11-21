@@ -47,7 +47,18 @@
 extern "C" {
 #endif
 
-#define VE_CORE_API_VERSION 1
+/* Version history:
+ *   1 — initial ABI; ve_add_clip/ve_call only queue events, ve_call
+ *       answers {"ok":false,"error":"not bridged yet"}.
+ *   2 — ve_call is bridged synchronously: when the runtime was
+ *       spawned with the reverse host channel (worker_pipe
+ *       callback_env, XER_VE_EXT_HOST_* handles), ve_call blocks in
+ *       the runtime until the editor's service dispatcher answers.
+ *       A host spawned without the channel keeps the v1 fallback, so
+ *       extensions built against v1 keep working unchanged — only the
+ *       result JSON differs (a real answer instead of the stub
+ *       error). No signatures changed in v2. */
+#define VE_CORE_API_VERSION 2
 
 enum {
     VE_OK = 0,              /* success */
@@ -83,20 +94,32 @@ int ve_project_info(ve_ctx* ctx, char** out_json);
 /* Ask the editor to create a clip. kind is a clip kind token
  * ("media", "color", "bars", "text", ...); param is a JSON string
  * with kind-specific parameters; start/duration are timeline
- * seconds. In v1 the request is QUEUED as an "add_clip" event the
- * editor fulfills asynchronously — VE_OK means accepted for
- * delivery, not necessarily applied. */
+ * seconds. The request is deliberately QUEUED as an "add_clip"
+ * event the editor fulfills asynchronously (unchanged in v2 — the
+ * user-visible placement is acknowledgement enough); VE_OK means
+ * accepted for delivery, not necessarily applied. Extensions that
+ * need confirmation use ve_call("timeline.add_clip", ...) instead. */
 int ve_add_clip(ve_ctx* ctx, const char* kind, const char* param,
                 double start_seconds, double duration_seconds);
 
 /* Call a named editor service synchronously. name is a service id
- * (e.g. "timeline.info"); args_json is a JSON argument object.
+ * (e.g. "project.info"); args_json is a JSON argument object.
  * Returns VE_OK and a JSON result string [host-alloc] in *out_json;
- * the result may itself carry {"ok":false,...} when the service is
- * not bridged — v1 queues the call as a "call_request" event and
- * returns {"ok":false,"error":"not bridged yet"}. A future protocol
- * version will route this through a dedicated request channel so the
- * editor can answer synchronously (see ext_runtime_server.cc). */
+ * the result may itself carry {"ok":false,...} when the service
+ * failed or is unknown.
+ *
+ * v2 (VE.ExtensionsRuntime spawned by the editor): the call travels
+ * the reverse host channel — the runtime writes a "host_call"
+ * request and BLOCKS inside ve_call until the editor's service
+ * dispatcher answers on the reply pipe. This is deadlock-free only
+ * because the editor services host_call from its UI tick while the
+ * triggering request runs on a background job; see
+ * ext_runtime_server.cc for the full channel contract.
+ *
+ * v1 fallback (host spawned without the channel, e.g. an in-editor
+ * stub): the call is queued as a "call_request" event and ve_call
+ * returns {"ok":false,"error":"not bridged yet"} — accepted for
+ * delivery, never answered synchronously. */
 int ve_call(ve_ctx* ctx, const char* name, const char* args_json,
             char** out_json);
 

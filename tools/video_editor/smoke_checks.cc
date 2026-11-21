@@ -2724,7 +2724,249 @@ std::string CheckExtRuntime() {
 #endif
 }
 
-// ---- registry + runner ----------------------------------------------
+// ext_bridge — the v2 host channel (sdk/ve.core.h, worker_pipe's
+// callback_env reverse channel). Drives the REAL ExtRuntimePipe
+// singleton so the spawned VE.ExtensionsRuntime gets the
+// XER_VE_EXT_HOST_* handle handoff the editor would give it, then:
+//   1. ext_call "ve_demo_add_clip" — the fire-and-forget path; the
+//      reply's events[] must carry a well-formed "add_clip" event.
+//   2. ext_call "ve_demo_hostcall" on a SECOND thread while this one
+//      services the reverse channel — the extension's ve_call parks
+//      inside the runtime until our host_call reply unblocks it; the
+//      callable echoes the editor's result back through result_json.
+// Tolerated: missing exe/JIT, a demo packed before these exports
+// existed (ok:false symbol errors), or a worker spawned without the
+// channel. Hard failures: transport silence and malformed shapes.
+std::string CheckExtBridge() {
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    if (!std::filesystem::exists(
+            bin_dir / "VE.ExtensionsRuntime.exe", ec)) {
+        return {};   // ext_runtime owns the missing-exe complaint
+    }
+    WorkerPipe& pipe = ExtRuntimePipe();
+    if (!pipe.Available()) {
+        return {};   // tolerated — spawn may be disabled
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "ext runtime ping failed";
+    }
+    if (role != "VE.ExtensionsRuntime") {
+        return "unexpected ext runtime role '" + role + "'";
+    }
+
+    const auto round_trip =
+        [&](const std::function<void(Json::Value&)>& fill,
+            int timeout_ms, std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            Json::Value req(Json::objectValue);
+            req["id"] = Json::UInt64(id);
+            fill(req);
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            return pipe.RoundTrip(id, Json::writeString(w, req),
+                                  timeout_ms, reply);
+        };
+    const auto parse = [](const std::string& line, Json::Value* out) {
+        std::string errs;
+        Json::CharReaderBuilder r;
+        std::istringstream in(line);
+        return Json::parseFromStream(r, in, out, &errs) &&
+               out->isObject();
+    };
+
+    // Find + load the demo. native:false/ok:false both skip the rest
+    // gracefully (JS-only pack, or no LLVM in this toolchain).
+    const std::string ext_dir =
+        Utf8Path(bin_dir / "assets" / "extensions");
+    std::string reply;
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_list";
+                r["dir"] = ext_dir;
+            },
+            15000, &reply)) {
+        return "ext_list got no reply";
+    }
+    Json::Value list;
+    if (!parse(reply, &list) || !list.get("ok", false).asBool()) {
+        return "ext_list reply malformed";
+    }
+    std::string demo_path;
+    for (const auto& e : list["exts"]) {
+        if (e.get("id", "").asString() == "demo") {
+            demo_path = e.get("path", "").asString();
+        }
+    }
+    if (demo_path.empty()) {
+        return {};   // no demo deployed — nothing to bridge
+    }
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_load";
+                r["path"] = demo_path;
+            },
+            60000, &reply)) {
+        return "ext_load demo got no reply";
+    }
+    Json::Value load;
+    if (!parse(reply, &load) || !load.get("ok", false).asBool() ||
+        !load.get("native", false).asBool()) {
+        return {};   // JIT unavailable or JS-only pack — tolerated
+    }
+
+    // 1. Queued add_clip event — must arrive in the ext_call reply's
+    //    events[] with the exact shape the editor pump consumes.
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_call";
+                r["ext_id"] = "demo";
+                r["fn"] = "ve_demo_add_clip";
+                r["args"] = "{}";
+            },
+            30000, &reply)) {
+        return "ext_call ve_demo_add_clip got no reply";
+    }
+    Json::Value call;
+    if (!parse(reply, &call)) {
+        return "ext_call ve_demo_add_clip reply is malformed";
+    }
+    if (call.get("ok", false).asBool()) {
+        const Json::Value& events = call["events"];
+        if (!events.isArray()) {
+            return "ext_call reply carries no events array";
+        }
+        const Json::Value* add = nullptr;
+        for (const auto& e : events) {
+            if (e.get("type", "").asString() == "add_clip") {
+                add = &e;
+            }
+        }
+        if (add == nullptr) {
+            return "ve_demo_add_clip produced no add_clip event";
+        }
+        if (add->get("kind", "").asString() != "color" ||
+            std::fabs(add->get("start", 0.0).asDouble() - 1.0) >
+                1e-6 ||
+            std::fabs(add->get("duration", 0.0).asDouble() - 2.5) >
+                1e-6) {
+            return "add_clip event fields are wrong";
+        }
+    }
+    // ok:false tolerated — a demo packed before the export existed.
+
+    // 2. Synchronous host channel — ve_call parked in the runtime is
+    //    answered by OUR callback reply, proving the reverse channel
+    //    end to end without the editor UI.
+    if (!pipe.HasCallbackChannel()) {
+        return {};   // worker spawned without the channel — tolerated
+    }
+    {
+        std::atomic<bool> done{false};
+        std::string call_reply;
+        std::thread caller([&] {
+            std::string r;
+            static_cast<void>(round_trip(
+                [&](Json::Value& req) {
+                    req["kind"] = "ext_call";
+                    req["ext_id"] = "demo";
+                    req["fn"] = "ve_demo_hostcall";
+                    req["args"] = "{}";
+                },
+                120000, &r));
+            call_reply = std::move(r);
+            done.store(true, std::memory_order_release);
+        });
+        bool saw_host_call = false;
+        std::string failure;   // deferred — caller must join first
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(10);
+        while (!done.load(std::memory_order_acquire) &&
+               failure.empty() &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::string line;
+            if (!pipe.PopCallbackLine(&line)) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(5));
+                continue;
+            }
+            Json::Value req;
+            if (!parse(line, &req) ||
+                req.get("kind", "").asString() != "host_call") {
+                continue;
+            }
+            saw_host_call = true;
+            if (req.get("name", "").asString() != "project.info") {
+                failure = "host_call asked for an unexpected service";
+                break;
+            }
+            Json::Value rsp(Json::objectValue);
+            rsp["req_id"] = req["req_id"];
+            rsp["ok"] = true;
+            rsp["result"] = "{\"ok\":true,\"via\":\"smoke\"}";
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            if (!pipe.WriteCallbackLine(
+                    Json::writeString(w, rsp))) {
+                failure = "host_call reply write failed";
+            }
+        }
+        if (!done.load(std::memory_order_acquire)) {
+            // Unstick the parked RoundTrip before joining — a kill
+            // breaks every pipe and fails the wait fast.
+            pipe.KillWorker();
+        }
+        caller.join();
+        if (!failure.empty()) {
+            return failure;
+        }
+        if (!done.load(std::memory_order_acquire)) {
+            return saw_host_call
+                       ? "ve_call never returned after the host "
+                         "reply — bridge broken"
+                       : "ext_call hung with no host_call — demo "
+                         "stale?";
+        }
+        if (call_reply.empty()) {
+            return "ext_call ve_demo_hostcall got no reply";
+        }
+        Json::Value host;
+        if (!parse(call_reply, &host)) {
+            return "ve_demo_hostcall reply is malformed";
+        }
+        if (!host.get("ok", false).asBool()) {
+            return {};   // symbol absent in this pack — tolerated
+        }
+        // The demo echoes ve_call's raw result: our editor reply must
+        // be visible inside result_json.
+        const std::string result =
+            host.get("result_json", "").asString();
+        if (result.find("\"via\":\"smoke\"") == std::string::npos) {
+            return "ve_call did not return the editor's reply: " +
+                   result;
+        }
+    }
+
+    // Best-effort unload.
+    reply.clear();
+    static_cast<void>(round_trip(
+        [&](Json::Value& r) {
+            r["kind"] = "ext_unload";
+            r["ext_id"] = "demo";
+        },
+        15000, &reply));
+    return {};
+#else
+    return {};
+#endif
+}
 
 using CheckFn = std::string (*)();
 struct CheckEntry {
@@ -2765,6 +3007,7 @@ constexpr CheckEntry kChecks[] = {
     {"sync_worker", &CheckSyncMediaWorker},
     {"fx_worker", &CheckFxScriptWorker},
     {"ext_runtime", &CheckExtRuntime},
+    {"ext_bridge", &CheckExtBridge},
     {"assets_icons", &CheckAssetsIcons},
     {"extensions_panel", &CheckExtensionsPanelData},
     {"ext_xsjo", &CheckExtXsjo},
