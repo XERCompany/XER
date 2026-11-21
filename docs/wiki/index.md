@@ -66,6 +66,10 @@ Goal started: 2026-11-15. Design doc:
   real GUI for verification: ui_drive.ps1 (click by exe-name+coords,
   window→PNG screenshot), the launch→wait→click→shot→check→kill loop,
   PostMessage caveats (2026-11-21).
+- [extension-platform.md](architecture/extension-platform.md) —
+  .xexrj/.xsjo/.xejslib wire formats, in-process Clang compile,
+  LLJIT + LinkModules mesh, ve.core.h v1→v3 service table,
+  xer_ext.ve() JS parity, IDEXEJSO IDE (2026-11-21).
 - [video-editor-js-fx.md](architecture/video-editor-js-fx.md) —
   JS effects/transitions (`assets/scripts/fx`, `script:` types) and
   the `--media-worker` decode subprocess (2026-11-20).

@@ -1,6 +1,8 @@
 // ext_runtime_server.cc — see ext_runtime_server.h for the wire
 // protocol and the ve_* bridge design (v1 event queue + v2
-// synchronous host channel). Compiled ONLY into
+// synchronous host channel; v3 widens the served ve_call table
+// editor-side — this file only forwards names, plus the live
+// ve_project_info upgrade). Compiled ONLY into
 // VE.ExtensionsRuntime.exe (excluded from the core glob) — the
 // editor talks to this over worker_pipe, it never links the server.
 //
@@ -248,6 +250,23 @@ int ve_project_info(ve_ctx* ctx, char** out_json) {
     *out_json = nullptr;
     auto* ext = XER::VideoEditor::ExtOwner(ctx);
     if (ext == nullptr) return VE_ERR_GENERIC;
+#ifdef _WIN32
+    // v3: prefer the LIVE project — forward as ve_call("project.info")
+    // on the reverse channel. Blocking is legal for exactly the same
+    // reason ve_call blocks (extension code, never the reply-pump
+    // thread). A dead or absent channel falls through to the static
+    // load-time snapshot — a stale answer beats none for a read-only
+    // convenience API.
+    if (XER::VideoEditor::BridgeAvailable()) {
+        std::string live;
+        if (XER::VideoEditor::BridgeCall(ext->ext_id, "project.info",
+                                         "{}", &live) ==
+            XER::VideoEditor::BridgeResult::kAnswer) {
+            *out_json = XER::VideoEditor::DupString(live);
+            return *out_json != nullptr ? VE_OK : VE_ERR_GENERIC;
+        }
+    }
+#endif
     *out_json = XER::VideoEditor::DupString(ext->project_json);
     return *out_json != nullptr ? VE_OK : VE_ERR_GENERIC;
 }
@@ -612,6 +631,21 @@ std::string HandleExtLoad(ExtRuntime& rt, std::uint64_t id,
         ext->modules.push_back(mid);
     }
 
+    // Mesh the extension's module dylibs: each module's undefined
+    // symbols resolve against every other module of the SAME
+    // extension — this is what links spliced-in library objects
+    // (mobjective/lib_*.xsjo, produced from .xejslib deps by
+    // ztzmake) to the extension's own code. The mesh is built
+    // lazily-safe: ORC resolves at materialization time, and every
+    // dylib already exists here.
+    for (const std::uint64_t mid : ext->modules) {
+        auto res = jit->LinkModules(mid, ext->modules);
+        if (!res) {
+            rt.UnloadModules(*ext);
+            return ReplyErr(id, "module link failed: " + res.error);
+        }
+    }
+
     rt.loaded.push_back(std::move(ext));
     LoadedExt& le = *rt.loaded.back();
 
@@ -765,10 +799,17 @@ int RunExtRuntime(const char* role) {
             if (kind == "ping") {
                 reply = MediaWorker::EncodePongReply(id, role_str);
             } else if (kind == "info") {
-                reply = MediaWorker::EncodeInfoReply(
-                    id, role_str,
+                // Same {role,serves} shape as EncodeInfoReply plus
+                // "sdk" — the ve.core generation this runtime was
+                // built against so clients can probe the service
+                // table level (v3: the full ve_call surface).
+                Json::Value p(Json::objectValue);
+                p["role"] = role_str;
+                p["serves"] =
                     "ext_load,ext_call,ext_unload,ext_list,"
-                    "ext_events,ping,info");
+                    "ext_events,ping,info";
+                p["sdk"] = VE_CORE_API_VERSION;
+                reply = Reply(id, std::move(p));
             } else if (kind == "ext_list") {
                 reply = HandleExtList(rt, id, root);
             } else if (kind == "ext_load") {

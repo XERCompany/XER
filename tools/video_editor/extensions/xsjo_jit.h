@@ -27,6 +27,14 @@
 // un-provided symbol fails to resolve loudly instead of binding a
 // random host function.
 //
+// Cross-module references (extension code calling into library
+// objects — mobjective/lib_*.xsjo members spliced in by ztzmake from
+// a .xejslib dep) are opt-in via LinkModules: it appends one
+// module's JITDylib to another's link order, so all of one
+// extension's modules can be meshed after load and resolve each
+// other's exported symbols with static-link semantics while staying
+// independently unloadable.
+//
 // LLVM is an implementation detail of the .cc: this header is
 // LLVM-free so consumers (and the no-LLVM stub build) need nothing
 // from the toolchain. Errors inside are llvm::Expected and surface
@@ -87,6 +95,16 @@ public:
                       const std::string& name,
                       const std::vector<HostSymbol>& host_symbols,
                       std::uint64_t* module_out);
+
+    // Adds every module in `deps` to `module`'s JITDylib link order:
+    // undefined symbols inside `module` then resolve against those
+    // dylibs' exports (the module's own dylib is always searched
+    // first, so its definitions win). Used to mesh one extension's
+    // modules — its own objects plus spliced-in library objects —
+    // giving the package static-link semantics. Self-references are
+    // skipped; every id must be a live module.
+    Result LinkModules(std::uint64_t module,
+                       const std::vector<std::uint64_t>& deps);
 
     // Unmangled-name lookup inside the module's JITDylib; the address
     // of the (now materialized) symbol lands in `addr_out`.

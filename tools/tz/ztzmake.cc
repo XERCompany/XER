@@ -1,6 +1,7 @@
 // ztzmake.cc — packer for the XER TZ container.
 //
 //   ztzmake <input_dir> -o <output.tz|.xexrj> [-I<dir>] [--sdk <dir>]
+//                                              [--dep <lib.xejslib>]
 //
 // Packs every file under input_dir (recursively) into a TZ archive.
 // A fresh OVERFLOW integrity manifest is generated automatically —
@@ -16,6 +17,19 @@
 // The compile needs the extension SDK on the include path — resolved
 // from --sdk, $XER_VE_SDK, then a few conventional locations
 // (<exe>/sdk, <exe>/assets/sdk, <input>/sdk, assets/sdk siblings).
+//
+// Library dependencies (.xejslib — tools/tz/xejslib.h, built by
+// XSJOBuildX): three ways to consume, combinable —
+//   --dep <lib.xejslib>        explicit path (repeatable)
+//   manifest.toml [native] deps = ["libs/lib.xejslib", ...]
+//                            — member paths relative to input_dir
+//   libs/*.xejslib           auto-consumed: drop the file in
+// Every dep's modules land as mobjective/lib_<stem>.xsjo (the JIT
+// resolves them against the extension's own modules — same-dylib
+// link order, see xsjo_jit.h::LinkModules); the dep's .xejshead
+// headers are unpacked under a scratch dir fed to -I during the
+// extension's compile. A consumed .xejslib inside the input tree is
+// NOT packed as a regular member.
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -27,6 +41,7 @@
 #include <vector>
 
 #include "tz/tz.h"
+#include "xejslib.h"
 #include "xsjo_compile.h"
 
 #ifdef _WIN32
@@ -48,6 +63,9 @@ void Usage(const char* argv0) {
         " (repeatable)\n"
         "  --sdk <dir>   extension SDK dir (ve.core.h) — overrides the\n"
         "                conventional locations\n"
+        "  --dep <file>  .xejslib library to consume (repeatable);\n"
+        "                [native] deps + libs/*.xejslib are picked\n"
+        "                up automatically\n"
         "  --clang-prefix <dir>  LLVM/Clang toolchain root used for the\n"
         "                resource dir + system headers\n",
         argv0);
@@ -56,6 +74,7 @@ void Usage(const char* argv0) {
 // ---- minimal manifest probe ------------------------------------------
 // ztzmake only needs:
 //   [native] sources = ["native/a.cc", ...]   — explicit source pick
+//   [native] deps    = ["libs/a.xejslib", ..] — library deps
 //   [pack]   keep_sources = true              — also pack raw sources
 //   [pack]   sources = [...]                  — alias for the above
 // [native] values must stay arrays: the extension host's manifest
@@ -67,6 +86,7 @@ void Usage(const char* argv0) {
 struct NativeManifest {
     bool has_sources = false;
     std::vector<std::string> sources;
+    std::vector<std::string> deps;   // [native] deps — member paths
     bool keep_sources = false;
 };
 
@@ -164,6 +184,11 @@ bool ParseNativeManifest(const std::string& text, NativeManifest* out,
             if (!TomlParseArray(val, &out->sources)) {
                 return fail("expected [\"a.cc\", ...] for sources");
             }
+        } else if (section == "native" && key == "deps") {
+            if (!TomlParseArray(val, &out->deps)) {
+                return fail("expected [\"libs/a.xejslib\", ...] "
+                            "for deps");
+            }
         } else if (section == "pack") {
             if (key == "keep_sources") {
                 out->keep_sources = (val == "true");
@@ -189,64 +214,45 @@ std::string RelMemberName(const fs::path& root, const fs::path& p) {
     return XER::Tz::TzNormalizeName(s);
 }
 
-// SDK include-dir candidates, in priority order. Only directories that
-// actually exist are returned.
-std::vector<std::string> ResolveSdkDirs(const fs::path& exe_dir,
-                                        const fs::path& input_dir,
-                                        const std::string& explicit_sdk) {
-    std::vector<std::string> out;
-    std::set<std::string> seen;
-    auto add = [&](const fs::path& p) {
+// Scratch dir .xejslib dep headers unpack into for the duration of
+// one pack — removed on scope exit (success or error).
+struct DepTempDir {
+    fs::path dir;
+    ~DepTempDir() {
         std::error_code ec;
-        if (!fs::is_directory(p, ec)) return;
-        const auto key = fs::weakly_canonical(p, ec).string();
-        if (!key.empty() && seen.insert(key).second) {
-            out.push_back(key);
-        }
-    };
-    if (!explicit_sdk.empty()) add(explicit_sdk);
-    if (const char* env = std::getenv("XER_VE_SDK");
-        env != nullptr && *env != '\0') {
-        add(env);
+        if (!dir.empty()) fs::remove_all(dir, ec);
     }
-    add(exe_dir / "sdk");
-    add(exe_dir / "assets" / "sdk");
-    add(exe_dir.parent_path() / "sdk");
-    // Dev-layout fallback: <build>/bin/../.. is the repo root.
-    add(exe_dir / ".." / ".." / ".." / "tools" / "video_editor" / "sdk");
-    add(input_dir / "sdk");
-    add(input_dir / ".." / "sdk");               // extensions_src/sdk
-    add(input_dir / ".." / ".." / "sdk");        // assets/sdk
-    // tools/video_editor/assets/extensions_src/<ext>/../../../sdk
-    // -> tools/video_editor/sdk — the in-tree SDK location.
-    add(input_dir / ".." / ".." / ".." / "sdk");
-    return out;
-}
+    bool Ok() const { return !dir.empty(); }
+};
 
-fs::path ExeDir(const char* argv0) {
-#ifdef _WIN32
-    // argv[0] can be a bare name resolved via PATH — ask the loader
-    // where this exe actually lives.
-    wchar_t buf[MAX_PATH]{};
-    if (::GetModuleFileNameW(nullptr, buf, MAX_PATH) != 0) {
-        return fs::path(buf).parent_path();
-    }
-#endif
+DepTempDir MakeDepTempDir() {
+    DepTempDir out;
     std::error_code ec;
-    const fs::path exe = fs::canonical(
-        fs::path(argv0).has_parent_path()
-            ? fs::absolute(argv0, ec)
-            : fs::path(argv0),
-        ec);
-    if (!ec && !exe.empty()) return exe.parent_path();
-    return fs::current_path(ec);
+    const fs::path base = fs::temp_directory_path(ec);
+    if (ec) return out;
+#ifdef _WIN32
+    const unsigned long pid = ::GetCurrentProcessId();
+#else
+    const unsigned long pid = 0;
+#endif
+    for (unsigned i = 0; i < 100; ++i) {
+        const fs::path d =
+            base / ("ztzmake-xejs-" + std::to_string(pid) + "-" +
+                    std::to_string(i));
+        if (fs::create_directory(d, ec)) {
+            out.dir = d;
+            return out;
+        }
+        ec.clear();
+    }
+    return out;
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
     std::string input_dir, out_path, explicit_sdk, clang_prefix;
-    std::vector<std::string> extra_includes;
+    std::vector<std::string> extra_includes, dep_args;
     bool verbose = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -256,6 +262,8 @@ int main(int argc, char** argv) {
             extra_includes.push_back(argv[++i]);
         } else if (a.rfind("-I", 0) == 0 && a.size() > 2) {
             extra_includes.push_back(a.substr(2));
+        } else if (a == "--dep" && i + 1 < argc) {
+            dep_args.push_back(argv[++i]);
         } else if (a == "--sdk" && i + 1 < argc) {
             explicit_sdk = argv[++i];
         } else if (a == "--clang-prefix" && i + 1 < argc) {
@@ -342,6 +350,83 @@ int main(int argc, char** argv) {
         }
     }
 
+    // ---- .xejslib dependency resolution ---------------------------------
+    // Merge the three sources into one deduped-by-canonical-path list:
+    //   1. --dep <path>                          (any filesystem path)
+    //   2. manifest [native] deps (member paths relative to input dir)
+    //   3. libs/*.xejslib auto-scan              (drop-in consume)
+    std::vector<fs::path> dep_paths;
+    {
+        std::set<std::string> seen;
+        auto add_dep = [&](const fs::path& p,
+                           const char* origin) -> bool {
+            std::error_code e2;
+            if (!fs::is_regular_file(p, e2)) {
+                std::fprintf(stderr,
+                             "ztzmake: %s not found: %s\n", origin,
+                             p.generic_string().c_str());
+                return false;
+            }
+            const std::string canon =
+                fs::weakly_canonical(p, e2).generic_string();
+            if (!canon.empty() && seen.insert(canon).second) {
+                dep_paths.push_back(p);
+            }
+            return true;
+        };
+        for (const std::string& d : dep_args) {
+            if (!add_dep(fs::path(d), "--dep")) return 1;
+        }
+        for (const std::string& d : native.deps) {
+            const std::string n = XER::Tz::TzNormalizeName(d);
+            if (n.empty()) {
+                std::fprintf(stderr,
+                             "ztzmake: unsafe [native] dep path: %s\n",
+                             d.c_str());
+                return 1;
+            }
+            if (!add_dep(root / fs::path(n),
+                         "[native] dep")) {
+                return 1;
+            }
+        }
+        // libs/ drop-in: every *.xejslib directly inside the dir.
+        const fs::path libs_dir = root / "libs";
+        if (fs::is_directory(libs_dir, ec)) {
+            for (const auto& de :
+                 fs::directory_iterator(libs_dir, ec)) {
+                if (!de.is_regular_file(ec)) continue;
+                if (de.path().extension() == ".xejslib") {
+                    if (!add_dep(de.path(), "libs/ dep")) {
+                        return 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // Parse every dep up front — a bad lib fails the whole pack
+    // before any source compiles.
+    std::vector<XER::Xejs::Lib> deps;
+    std::set<std::string> consumed_dep_files;   // canonical paths
+    for (const fs::path& p : dep_paths) {
+        XER::Xejs::Lib lib;
+        std::string lerr;
+        if (!XER::Xejs::ReadLibFile(p.string(), &lib, &lerr)) {
+            std::fprintf(stderr, "ztzmake: %s\n", lerr.c_str());
+            return 1;
+        }
+        std::error_code e2;
+        const std::string canon =
+            fs::weakly_canonical(p, e2).generic_string();
+        if (!canon.empty()) consumed_dep_files.insert(canon);
+        std::fprintf(stderr,
+                     "ztzmake: dep %s (%zu modules, %zu headers)\n",
+                     p.filename().generic_string().c_str(),
+                     lib.modules.size(), lib.headers.size());
+        deps.push_back(std::move(lib));
+    }
+
     // ---- gather members -------------------------------------------------
     std::map<std::string, std::vector<std::uint8_t>> files;
     std::vector<std::pair<std::string, fs::path>> to_compile;
@@ -350,6 +435,17 @@ int main(int argc, char** argv) {
         const std::string name = RelMemberName(root, de.path());
         if (name.empty()) continue;
         if (name == "OVERFLOW") continue;   // regenerated by TzWrite
+        if (!consumed_dep_files.empty()) {
+            // A consumed .xejslib under the input tree is a pack
+            // INPUT, not a member — skip it.
+            std::error_code e2;
+            const std::string canon =
+                fs::weakly_canonical(de.path(), e2).generic_string();
+            if (!canon.empty() &&
+                consumed_dep_files.count(canon)) {
+                continue;
+            }
+        }
         if (selected.count(name)) {
             to_compile.emplace_back(name, de.path());
             if (!native.keep_sources) continue;
@@ -366,15 +462,52 @@ int main(int argc, char** argv) {
         files[name] = std::move(bytes);
     }
 
+    // ---- unpack dep headers for the extension's -I -----------------
+    // Each dep's .xejshead lands under <tmp>/<index>/ preserving its
+    // include-root-relative layout (#include "libdemo/dsp.h" works
+    // with the dep dir itself on -I). The whole tree is scratch —
+    // DepTempDir removes it on return.
+    DepTempDir dep_tmp;
+    std::vector<std::string> dep_include_dirs;
+    if (!deps.empty()) {
+        dep_tmp = MakeDepTempDir();
+        if (!dep_tmp.Ok()) {
+            std::fprintf(stderr,
+                         "ztzmake: cannot create a scratch dir for "
+                         "dep headers\n");
+            return 1;
+        }
+        for (std::size_t i = 0; i < deps.size(); ++i) {
+            if (deps[i].headers.empty()) continue;
+            const fs::path dest =
+                dep_tmp.dir / ("dep" + std::to_string(i));
+            std::string xerr;
+            if (!XER::Xejs::ExtractHeaders(deps[i].headers,
+                                           dest.string(), &xerr)) {
+                std::fprintf(stderr, "ztzmake: dep %s: %s\n",
+                             dep_paths[i].filename()
+                                 .generic_string()
+                                 .c_str(),
+                             xerr.c_str());
+                return 1;
+            }
+            dep_include_dirs.push_back(dest.generic_string());
+        }
+    }
+
     // ---- compile native sources -> mobjective/<stem>.xsjo -------------
     if (!to_compile.empty()) {
-        const fs::path exe_dir = ExeDir(argv[0]);
+        const std::string exe_dir = XER::Xejs::ExeDir(argv[0]);
         XER::Xsjo::CompileOptions copts;
         copts.clang_prefix = clang_prefix;
-        // -I order: source dirs (via per-file dir below) -> SDK ->
-        // caller flags.
+        // -I order: source dirs (via per-file dir below) -> dep
+        // headers -> SDK -> caller flags.
+        for (const std::string& d : dep_include_dirs) {
+            copts.include_dirs.push_back(d);
+        }
         for (const std::string& d :
-             ResolveSdkDirs(exe_dir, root, explicit_sdk)) {
+             XER::Xejs::ResolveSdkDirs(exe_dir, root.generic_string(),
+                                       explicit_sdk)) {
             copts.include_dirs.push_back(d);
         }
         for (const std::string& d : extra_includes) {
@@ -410,6 +543,31 @@ int main(int argc, char** argv) {
                          member.c_str(), member_name.c_str(),
                          static_cast<unsigned long long>(
                              files[member_name].size()));
+        }
+    }
+
+    // ---- splice dep modules -> mobjective/lib_<stem>.xsjo ----------
+    // ReadLibFile already validated every payload as XSJ1 — the bytes
+    // move verbatim; the lib_ prefix keeps them collision-free next
+    // to the extension's own <stem>.xsjo members.
+    for (const XER::Xejs::Lib& dep : deps) {
+        for (const XER::Xejs::Module& m : dep.modules) {
+            const std::string member_name =
+                std::string(XER::Xsjo::kArchiveDir) + "/lib_" +
+                m.stem + ".xsjo";
+            if (files.count(member_name)) {
+                std::fprintf(stderr,
+                             "ztzmake: dep stem collision on %s\n",
+                             member_name.c_str());
+                return 1;
+            }
+            std::fprintf(stderr,
+                         "ztzmake: dep module %s -> %s "
+                         "(%llu bytes)\n",
+                         m.source_name.c_str(), member_name.c_str(),
+                         static_cast<unsigned long long>(
+                             m.xsjo_bytes.size()));
+            files[member_name] = m.xsjo_bytes;
         }
     }
 

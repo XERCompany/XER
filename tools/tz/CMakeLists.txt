@@ -1,7 +1,11 @@
 # tools/tz — command-line TZ packer and integrity verifier.
 #
-#   ztzmake   <dir> -o <out.tz|.xexrj>  — pack a directory into TZ
-#   ztzvertfy <archive> [-r member] [-l] — verify crc + OVERFLOW
+#   ztzmake    <dir> -o <out.tz|.xexrj> — pack a directory into TZ
+#   ztzvertfy  <archive> [-r member] [-l] — verify crc + OVERFLOW
+#   XSJOBuildX <dir> -o <lib.xejslib>  — compile a C++ library into
+#              the .xejslib container (xejslib.h): XSJ1-wrapped COFF
+#              modules + a .xejshead header bundle, which ztzmake
+#              consumes via --dep / [native] deps / libs/*.xejslib.
 #
 # ztzmake also JIT-packs extension native code: *.cc/*.cpp/*.cxx
 # sources selected via manifest.toml [native] sources (or auto-scanned
@@ -12,10 +16,19 @@
 # "compile not supported" error only if a package actually carries
 # native sources.
 
-add_executable(ztzmake ztzmake.cc xsjo_compile.cc)
+add_executable(ztzmake ztzmake.cc xsjo_compile.cc xejslib.cc)
 target_link_libraries(ztzmake PRIVATE XER_Tz)
 set_target_properties(ztzmake PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+add_executable(XSJOBuildX xsjobuildx.cc xsjo_compile.cc xejslib.cc)
+target_link_libraries(XSJOBuildX PRIVATE XER_Tz)
+set_target_properties(XSJOBuildX PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
+# ztzmake + XSJOBuildX share the in-process Clang compile path and
+# the toolchain discovery below.
+set(_ztz_clang_tools ztzmake XSJOBuildX)
 
 # Clang/LLVM from the same toolchain that compiles this tree. The
 # package exports monolithic shared targets (clang-cpp, LLVM) —
@@ -29,9 +42,11 @@ find_package(Clang CONFIG QUIET)
 set(_ztz_llvm_ok OFF)
 if(TARGET clang-cpp AND TARGET LLVM)
     set(_ztz_llvm_ok ON)
-    target_link_libraries(ztzmake PRIVATE clang-cpp LLVM)
-    target_include_directories(ztzmake SYSTEM PRIVATE
-        ${LLVM_INCLUDE_DIRS})
+    foreach(_t IN LISTS _ztz_clang_tools)
+        target_link_libraries(${_t} PRIVATE clang-cpp LLVM)
+        target_include_directories(${_t} SYSTEM PRIVATE
+            ${LLVM_INCLUDE_DIRS})
+    endforeach()
 else()
     # No package configs — try bare import-lib discovery (still the
     # same single-DLL style: libclang-cpp.dll.a + libLLVM-*.dll.a).
@@ -49,16 +64,24 @@ else()
     if(XER_ZTZ_CLANGCPP_LIB AND XER_ZTZ_LLVM_LIB AND
        XER_ZTZ_LLVM_INCLUDE)
         set(_ztz_llvm_ok ON)
-        target_link_libraries(ztzmake PRIVATE
-            ${XER_ZTZ_CLANGCPP_LIB} ${XER_ZTZ_LLVM_LIB})
-        target_include_directories(ztzmake SYSTEM PRIVATE
-            ${XER_ZTZ_LLVM_INCLUDE})
+        foreach(_t IN LISTS _ztz_clang_tools)
+            target_link_libraries(${_t} PRIVATE
+                ${XER_ZTZ_CLANGCPP_LIB} ${XER_ZTZ_LLVM_LIB})
+            target_include_directories(${_t} SYSTEM PRIVATE
+                ${XER_ZTZ_LLVM_INCLUDE})
+        endforeach()
         set(LLVM_INCLUDE_DIRS ${XER_ZTZ_LLVM_INCLUDE})
     endif()
 endif()
 
 if(_ztz_llvm_ok)
-    target_compile_definitions(ztzmake PRIVATE XER_ZTZ_HAS_CLANG=1)
+    # Export so tools/video_editor (added after tools/tz) can gate the
+    # XSJOBuildX-driven .xejslib demo packaging on real Clang support.
+    set(XER_ZTZ_HAS_CLANG ON CACHE INTERNAL
+        "in-process Clang native packing available in ztzmake/XSJOBuildX")
+    foreach(_t IN LISTS _ztz_clang_tools)
+        target_compile_definitions(${_t} PRIVATE XER_ZTZ_HAS_CLANG=1)
+    endforeach()
     # Bake the toolchain root in so xsjo_compile.cc can locate the
     # Clang resource dir + libc++/CRT headers at pack time. Derive it
     # from the compiler location (clang64/bin -> clang64).
@@ -71,10 +94,12 @@ if(_ztz_llvm_ok)
             set(_ztz_tc_root "${_ztz_clang_prefix}")
         endif()
     endif()
-    target_compile_definitions(ztzmake PRIVATE
-        "XER_XSJO_CLANG_PREFIX=\"${_ztz_tc_root}\"")
-    message(STATUS "ztzmake: in-process Clang native packing enabled "
-                   "(${_ztz_tc_root})")
+    foreach(_t IN LISTS _ztz_clang_tools)
+        target_compile_definitions(${_t} PRIVATE
+            "XER_XSJO_CLANG_PREFIX=\"${_ztz_tc_root}\"")
+    endforeach()
+    message(STATUS "ztzmake/XSJOBuildX: in-process Clang native "
+                   "packing enabled (${_ztz_tc_root})")
     # ztzmake runs inside builds (packing .xexrj assets) — the LLVM /
     # libclang-cpp runtime DLLs must sit next to the exe or it dies
     # with exit 127 whenever clang64/bin is not on PATH.

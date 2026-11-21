@@ -91,6 +91,18 @@
 // Spawned WITHOUT the env vars (any non-editor client), the bridge
 // is absent and ve_call keeps the v1 queued call_request + explicit
 // {"ok":false,"error":"not bridged yet"} result.
+//
+// ---- SDK v3 -------------------------------------------------------
+// The C surface did not grow: the entire v3 expansion is the ve_call
+// service table the EDITOR serves (project.*, timeline.*, transport.*,
+// selection.*, media.*, fx.*, export.*, ui.*, edit.* — sdk/ve.core.h).
+// This process only forwards names over the channel, so no new
+// bridging was needed. Two v3 behaviors land here:
+//   * ve_project_info rides the bridge when it is up — the editor's
+//     live "project.info" answer replaces the load-time snapshot
+//     (the static snapshot stays the no-channel fallback).
+//   * the "info" reply carries "sdk":VE_CORE_API_VERSION so a client
+//     can prove which service-table generation this runtime reports.
 #pragma once
 
 namespace XER::VideoEditor {

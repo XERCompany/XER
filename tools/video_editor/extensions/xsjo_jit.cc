@@ -271,6 +271,25 @@ llvm::orc::JITDylib* XsjoJit::Module(std::uint64_t module) {
     return it == impl_->modules.end() ? nullptr : it->second;
 }
 
+XsjoJit::Result XsjoJit::LinkModules(
+    std::uint64_t module, const std::vector<std::uint64_t>& deps) {
+    llvm::orc::JITDylib* jd = Module(module);
+    if (jd == nullptr) {
+        return Result::Fail("unknown module id " +
+                            std::to_string(module));
+    }
+    for (const std::uint64_t dep : deps) {
+        if (dep == module) continue;   // a dylib always searches itself
+        llvm::orc::JITDylib* djd = Module(dep);
+        if (djd == nullptr) {
+            return Result::Fail("unknown module id " +
+                                std::to_string(dep));
+        }
+        jd->addToLinkOrder(*djd);
+    }
+    return Result::Ok();
+}
+
 XsjoJit::Result XsjoJit::FindSymbol(std::uint64_t module,
                                     const std::string& name,
                                     void** addr_out) {
@@ -355,6 +374,10 @@ XsjoJit::Result XsjoJit::LoadModule(const void*, std::size_t,
                                     const std::string&,
                                     const std::vector<HostSymbol>&,
                                     std::uint64_t*) {
+    return Result::Fail("built without LLVM");
+}
+XsjoJit::Result XsjoJit::LinkModules(
+    std::uint64_t, const std::vector<std::uint64_t>&) {
     return Result::Fail("built without LLVM");
 }
 XsjoJit::Result XsjoJit::FindSymbol(std::uint64_t, const std::string&,

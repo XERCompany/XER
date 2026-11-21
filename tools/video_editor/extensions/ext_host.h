@@ -10,9 +10,38 @@
 //   4. registers the archive with the xer-ext:// CEF scheme so the
 //      extension's HTML/CSS is served straight from the TZ blob,
 //   5. runs main.js inside the shared V8 engine with a "xer_ext"
-//      module whose surface is scoped to THIS extension (log, setStatus,
-//      projectInfo, call, listFiles, readFile, openUi, loadNative,
-//      runLua, runPython).
+//      module whose surface is scoped to THIS extension:
+//        log(...)                    — capture into RunResult::output
+//        setStatus(text)             — editor status strip
+//        projectInfo()               — legacy project snapshot
+//        call(action, json)          — raw app action dispatch
+//        id()                        — this extension's manifest id
+//        listFiles() / readFile(n)   — archive members
+//        openUi(name?)               — xer-ext:// page in the Ext tab
+//        loadNative(member)          — manifest-allowlisted .dll
+//        runLua(member) / runPython(member) — allowlisted interpreters
+//        ve(name, args?)             — ve.core v3: the SAME service
+//                                      table native extensions reach
+//                                      through ve_call (project.*,
+//                                      timeline.*, transport.*,
+//                                      selection.*, media.*, fx.*,
+//                                      export.*, ui.*, edit.*) routed
+//                                      in-process to the editor's
+//                                      dispatcher — synchronous,
+//                                      returns the result JSON string.
+//                                      veCall is an alias. args may be
+//                                      a JS object or a JSON string.
+//        nativeCall(id, fn, args?)   — fire-and-forget ext_call into a
+//                                      resident native extension
+//                                      (VE.ExtensionsRuntime). Async
+//                                      by design: the callable may
+//                                      ve_call back into the editor,
+//                                      which only a background job can
+//                                      wait on — the result lands on
+//                                      the status strip.
+//        listExtensions()            — JSON array of scanned .xexrj
+//                                      entries (id/name/version/path/
+//                                      verified/native/loaded).
 //
 // Native payloads (.dll/.node/.lua/.py) are only reachable when the
 // manifest's [native] section allowlists them, and .dll/.node binaries

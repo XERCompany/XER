@@ -300,21 +300,61 @@ if(WIN32)
                 "$<TARGET_FILE_DIR:video_editor>/assets"
         COMMENT "Deploying app assets (icons, yaml, runtime.js)"
         VERBATIM)
-    # .xexrj extensions: every dir under assets/extensions_src/ is
-    # packed by ztzmake into <exe>/assets/extensions/<name>.xexrj
-    # — the same artifact a user gets from running ztzmake.exe.
+    # .xexrj extensions: every dir under assets/extensions_src/ that
+    # carries a manifest.toml is packed by ztzmake into
+    # <exe>/assets/extensions/<name>.xexrj — the same artifact a user
+    # gets from running ztzmake.exe. Dirs without a manifest are
+    # library sources (libdemo/), not extensions, and are skipped.
+    #
+    # .xejslib deps (tools/tz/xejslib.h): when XSJOBuildX was built
+    # with real Clang support, libdemo/ is compiled into
+    # <build>/xejslib/libdemo.xejslib and the demo pack consumes it
+    # via ztzmake --dep — modules land as mobjective/lib_*.xsjo and
+    # the lib's headers feed the demo's compile -I. Without Clang
+    # the demo packs cleanly anyway (hello.cc's __has_include guard).
+    set(_libdemo_xejslib "")
+    if(TARGET XSJOBuildX AND XER_ZTZ_HAS_CLANG)
+        set(_libdemo_src
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/extensions_src/libdemo")
+        if(IS_DIRECTORY "${_libdemo_src}")
+            set(_libdemo_xejslib
+                "${CMAKE_BINARY_DIR}/xejslib/libdemo.xejslib")
+            file(GLOB_RECURSE _libdemo_inputs CONFIGURE_DEPENDS
+                 "${_libdemo_src}/*.cc" "${_libdemo_src}/*.cpp"
+                 "${_libdemo_src}/*.h" "${_libdemo_src}/*.hpp")
+            add_custom_command(
+                OUTPUT "${_libdemo_xejslib}"
+                COMMAND $<TARGET_FILE:XSJOBuildX>
+                        "${_libdemo_src}"
+                        -o "${_libdemo_xejslib}"
+                        --name libdemo
+                DEPENDS XSJOBuildX ${_libdemo_inputs}
+                COMMENT "XSJOBuildX libdemo.xejslib"
+                VERBATIM)
+            add_custom_target(xejslib_libdemo
+                DEPENDS "${_libdemo_xejslib}")
+            add_dependencies(video_editor_assets xejslib_libdemo)
+        endif()
+    endif()
     if(TARGET ztzmake)
         file(GLOB XER_EXT_SRC_DIRS CONFIGURE_DEPENDS
              LIST_DIRECTORIES true
              "${CMAKE_CURRENT_SOURCE_DIR}/assets/extensions_src/*")
         foreach(ext_src IN LISTS XER_EXT_SRC_DIRS)
-            if(IS_DIRECTORY "${ext_src}")
+            if(IS_DIRECTORY "${ext_src}" AND
+               EXISTS "${ext_src}/manifest.toml")
                 get_filename_component(ext_name "${ext_src}" NAME)
+                set(_ext_pack_args)
+                if(ext_name STREQUAL "demo" AND _libdemo_xejslib)
+                    list(APPEND _ext_pack_args
+                         --dep "${_libdemo_xejslib}")
+                endif()
                 add_custom_command(TARGET video_editor_assets
                     POST_BUILD
                     COMMAND $<TARGET_FILE:ztzmake>
                             "${ext_src}"
                             -o "$<TARGET_FILE_DIR:video_editor>/assets/extensions/${ext_name}.xexrj"
+                            ${_ext_pack_args}
                     COMMENT "Packing ${ext_name}.xexrj"
                     VERBATIM)
             endif()
