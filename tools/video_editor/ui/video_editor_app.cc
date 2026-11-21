@@ -11,10 +11,13 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <json/json.h>
 
 #ifdef _WIN32
 #ifndef WIN32_LEAN_AND_MEAN
@@ -52,7 +55,9 @@
 #include "js_fx.h"
 #include "plugin_host.h"
 #include "project_store.h"
+#include "export_preset.h"
 #include "extensions/ext_host.h"
+#include "cef/cef_ext_scheme.h"
 #include "rendering/renderer.h"
 #include "video/frame_exporter.h"
 #include "theme/tokens.h"
@@ -72,6 +77,40 @@ namespace Widgets = XER::UI::Widgets;
 std::string Basename(const std::string& path) {
     const std::size_t pos = path.find_last_of("/\\");
     return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+// One JSON value -> a single protocol line (the worker protocol's
+// wire encoding — indentation stripped).
+std::string JsonLine(const Json::Value& v) {
+    Json::StreamWriterBuilder w;
+    w["indentation"] = "";
+    return Json::writeString(w, v);
+}
+
+bool ParseJsonLine(const std::string& line, Json::Value* out) {
+    std::string errs;
+    Json::CharReaderBuilder r;
+    std::istringstream in(line);
+    return Json::parseFromStream(r, in, out, &errs) &&
+           out->isObject();
+}
+
+// One ext-runtime round trip — runs on whatever thread calls it (the
+// ext_op_ worker or the UI tick's idle poll). `req` gets "id" filled;
+// `reply` receives the decoded body. false = transport failure or an
+// ok:false envelope (callers read the error from `reply` when it
+// parsed).
+bool ExtRoundTrip(Json::Value& req, int timeout_ms,
+                  Json::Value* reply) {
+    WorkerPipe& pipe = ExtRuntimePipe();
+    const std::uint64_t id = pipe.NextId();
+    req["id"] = Json::UInt64(id);
+    std::string line;
+    if (!pipe.RoundTrip(id, JsonLine(req), timeout_ms, &line)) {
+        return false;
+    }
+    return ParseJsonLine(line, reply) &&
+           reply->get("ok", false).asBool();
 }
 
 // MediaPrep::Lookup -> the widget's MediaLookup tri-state (the widget
@@ -295,6 +334,37 @@ private:
     ProjectSettings next_;
 };
 
+// Undoable track rename — TimelineHistory has no name wrapper, so the
+// ve.core "timeline.rename_track"/"timeline.set_track" services ride
+// this dedicated Command (Apply/Revert swap the string only).
+class RenameTrackCommand final : public Command {
+public:
+    RenameTrackCommand(int track, std::string name)
+        : track_(track), name_(std::move(name)) {}
+    bool Apply(Project& project) override {
+        if (track_ < 0 ||
+            track_ >= static_cast<int>(project.tracks.size())) {
+            return false;
+        }
+        before_ = project.tracks[static_cast<std::size_t>(track_)].name;
+        project.tracks[static_cast<std::size_t>(track_)].name = name_;
+        return true;
+    }
+    bool Revert(Project& project) override {
+        if (track_ >= 0 &&
+            track_ < static_cast<int>(project.tracks.size())) {
+            project.tracks[static_cast<std::size_t>(track_)].name =
+                before_;
+        }
+        return true;
+    }
+    std::string Label() const override { return "Rename track"; }
+
+private:
+    int track_;
+    std::string name_, before_;
+};
+
 }  // namespace
 
 // Clip + horizontal wheel-scroll host for the right-panel tab strip.
@@ -487,6 +557,10 @@ VideoEditorAppWidget::~VideoEditorAppWidget() {
         RemoveChild(lab_panel_);
         lab_panel_.reset();
     }
+    // A parked ext RoundTrip only returns when the worker dies —
+    // kill it here so the ext_op_ member dtor's cancel+join can't
+    // hang on a request blocked inside JIT'd extension code.
+    ExtRuntimePipe().KillWorker();
     preview_engine_.Shutdown();
     source_engine_.Shutdown();
     export_engine_.Cancel();
@@ -1192,17 +1266,21 @@ void VideoEditorAppWidget::EnsureChildren() {
     right_tabs_ = std::make_shared<Widgets::Tabs>();
     right_tabs_->SetStyle(Widgets::Tabs::Style::Underline);
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Web, 10 Lyr — the right_tab_ indexing documented in
+    // 8 Color, 9 Ext, 10 Lyr — the right_tab_ indexing documented in
     // the header.
     for (const char* label :
          {"Insp", "FX", "Mkr", "Lab", "Hist", "Mix", "Q", "Plg",
-          "Color", "Web", "Lyr"}) {
+          "Color", "Ext", "Lyr"}) {
         right_tabs_->AddTab(label);
     }
     right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 10));
     right_tabs_->SetOnChanged(
         [this](int index) { SetRightTab(index); });
     tab_strip_ = std::make_shared<TabStripScroll>(right_tabs_);
+    // A layout-seeded right_tab_ bypasses SetRightTab, so the strip
+    // never scrolled — reveal the active tab here instead.
+    tab_strip_->RevealFraction(
+        (std::clamp(right_tab_, 0, 10) + 0.5f) / 11.0f);
 
     PluginsPanelWidget::Hooks plugin_hooks;
     plugin_hooks.on_add_effect = [this](const std::string& type) {
@@ -1243,9 +1321,33 @@ void VideoEditorAppWidget::EnsureChildren() {
     });
     color_panel_->Refresh();
 
-    // Embedded Chromium tab (src/cef): graceful placeholder when the
-    // CEF binary distribution is not installed next to the exe.
-    browser_panel_ = std::make_shared<BrowserPanelWidget>(parent_hwnd_);
+    // Extensions dock tab (ui/extensions_panel.h): the .xexrj list
+    // plus the embedded CEF surface their xer-ext:// pages render
+    // into — the panel owns the browser widget that used to be the
+    // standalone "Web" tab. Graceful placeholder behavior when the
+    // CEF distribution is absent is unchanged.
+    ExtensionsPanelWidget::Hooks ext_panel_hooks;
+    ext_panel_hooks.on_status =
+        [this](const std::string& text, bool err) {
+            SetStatus(text, err);
+        };
+    ext_panel_hooks.on_reveal = [this](const std::string& path) {
+#ifdef _WIN32
+        // explorer /select,<path> — same reveal the media bin uses.
+        const std::wstring wpath =
+            Path::FromUtf8(Path::NormalizeUtf8Path(path)).wstring();
+        const std::wstring args = L"/select,\"" + wpath + L"\"";
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(),
+                      nullptr, SW_SHOWNORMAL);
+        SetStatus("Revealed " + Basename(path));
+#else
+        (void)path;
+        SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+    };
+    ext_panel_hooks.on_rescan = [this] { RescanExtensions(); };
+    extensions_panel_ = std::make_shared<ExtensionsPanelWidget>(
+        parent_hwnd_, ext_panel_hooks);
 
     // VST3 editor popup (ui/vst3_editor.h): when its session ends,
     // commit the edited parameters back into the bound clip's fx
@@ -1254,7 +1356,8 @@ void VideoEditorAppWidget::EnsureChildren() {
 
     // .xexrj extension host: verified TZ archives under
     // assets/extensions/ whose main.js runs in the shared V8 engine;
-    // extension UI renders via xer-ext:// inside the Web tab.
+    // extension UI renders via xer-ext:// inside the Ext tab's
+    // embedded CEF view.
     ExtHost::Shared().SetActionFn(
         [this](const std::string& action, const std::string& arg_json) {
             return DispatchExtensionAction(action, arg_json);
@@ -1262,10 +1365,25 @@ void VideoEditorAppWidget::EnsureChildren() {
     ExtHost::Shared().SetOpenUiFn([this](const std::string& url) {
         right_panel_visible_ = true;
         SetRightTab(9);
-        if (browser_panel_) browser_panel_->OpenUrl(url);
+        if (extensions_panel_) extensions_panel_->OpenUrl(url);
         RequestLayout();
         Invalidate();
     });
+    // xer-ext:// member bridge: ExtHost lives inside
+    // YA.VideoEditor-Core.dll, which carries its own static XER_Cef —
+    // archives it registers never reach THIS module's scheme handler
+    // (the CEF runtime is initialized by video_editor.exe). The
+    // provider answers with member bytes across the boundary.
+    XER::Cef::ExtSchemeSetProvider(
+        [](const std::string& ext_id, const std::string& member,
+           std::vector<std::uint8_t>* bytes_out) {
+            auto bytes = ExtHost::Shared().ReadMember(ext_id, member);
+            if (bytes.empty()) {
+                return false;
+            }
+            *bytes_out = std::move(bytes);
+            return true;
+        });
     {
         const auto ext_dir =
             AppRuntime::SharedAssetsConfig().assets_dir / "extensions";
@@ -1297,6 +1415,14 @@ void VideoEditorAppWidget::EnsureChildren() {
             }
         }
     }
+    // The Ext tab's list mirrors whatever the scan left in Entries()
+    // (empty included) — Reload snapshots it into rows.
+    if (extensions_panel_) extensions_panel_->Reload();
+    // Native payloads (mobjective/*.xsjo) belong to
+    // VE.ExtensionsRuntime — queue their ext_loads on ext_op_ (the
+    // entry point can ve_call back into the editor; the host_call
+    // pump in Tick is what lets it, see PumpExtensionRuntime).
+    QueueNativeExtensionLoads();
 
     TimelineWidget::Hooks timeline_hooks;
     timeline_hooks.on_select_clip = [this](const std::string& id) {
@@ -1461,7 +1587,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(export_queue_);
     AddChild(plugins_panel_);
     AddChild(color_panel_);
-    AddChild(browser_panel_);
+    AddChild(extensions_panel_);
     AddChild(layers_panel_);
     AddChild(waveform_panel_);
     AddChild(status_toast_);
@@ -1674,7 +1800,7 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
              right_tab_ == 5),
         item("Color", "", [this] { SetRightTab(8); }, true,
              right_tab_ == 8),
-        item("Browser", "", [this] {
+        item("Extensions", "", [this] {
             right_panel_visible_ = true;
             SetRightTab(9);
         }, true, right_tab_ == 9),
@@ -1691,7 +1817,51 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             item("Workspace: " + ws.name, "",
                  [this, ws] { ApplyWorkspace(ws); }));
     }
-    title_bar_->SetMenus({file, edit, tools, timeline, view});
+    // Extensions menu mirrors ExtHost::Shared().Entries() — rebuilt
+    // by RebuildTitleBarMenus() whenever RescanExtensions() runs.
+    Menu exts_menu;
+    exts_menu.label = "Extensions";
+    {
+        const auto& entries = ExtHost::Shared().Entries();
+        if (entries.empty()) {
+            exts_menu.items.push_back(
+                item("(no extensions found)", "", [] {}, false));
+        }
+        for (const Extension& e : entries) {
+            const std::string id = e.manifest.id;
+            const bool has_ui = e.verified && !e.manifest.ui.empty();
+            std::string label =
+                e.manifest.name.empty() ? id : e.manifest.name;
+            if (!e.manifest.version.empty()) {
+                label += " v" + e.manifest.version;
+            }
+            exts_menu.items.push_back(item(
+                has_ui ? label + " — Open UI" : label + " — Run", "",
+                [this, id, has_ui] {
+                    if (has_ui) {
+                        OpenExtensionUi(id);
+                    } else {
+                        RunExtensionById(id);
+                    }
+                },
+                e.verified));
+        }
+        exts_menu.items.push_back(item("Show Extensions Panel", "",
+                                     [this] {
+                                         right_panel_visible_ = true;
+                                         SetRightTab(9);
+                                     },
+                                     true,
+                                     right_panel_visible_ &&
+                                         right_tab_ == 9,
+                                     false, true));
+        exts_menu.items.push_back(item(
+            "Reload Extensions", "", [this] { RescanExtensions(); }));
+        exts_menu.items.push_back(item(
+            "Open Extensions Folder", "",
+            [this] { RevealExtensionsFolder(); }));
+    }
+    title_bar_->SetMenus({file, edit, tools, timeline, view, exts_menu});
 }
 
 void VideoEditorAppWidget::ShowProjectSettingsDialog() {
@@ -4696,7 +4866,1453 @@ std::string VideoEditorAppWidget::DispatchExtensionAction(
         if (!r.ok) return "{\"error\":\"" + r.error + "\"}";
         return "{\"ok\":true,\"output\":\"" + r.output + "\"}";
     }
+    if (action == "native_call") {
+        // {"id","fn","args"?} — invoke an exported callable inside
+        // VE.ExtensionsRuntime. Deliberately FIRE-AND-FORGET for the
+        // JS surface: the answer must return through a synchronous
+        // action result, but the underlying ext_call can itself
+        // ve_call back into the editor — only a background job can
+        // wait on it without deadlocking the host_call pump. The
+        // result lands on the status strip via the Tick pump.
+        Json::Value args;
+        if (!ParseJsonLine(arg_json, &args) ||
+            !args.isMember("id") || !args.isMember("fn")) {
+            return "{\"error\":\"native_call needs id+fn\"}";
+        }
+        const std::string args_str =
+            args["args"].isString() ? args["args"].asString()
+            : args["args"].isNull() ? "{}"
+                                    : JsonLine(args["args"]);
+        CallNativeExtension(args["id"].asString(),
+                            args["fn"].asString(), args_str);
+        return "{\"ok\":true,\"queued\":true}";
+    }
+    if (action == "ve_call") {
+        // The JS side of ve.core v3: xer_ext.ve(name, args) lands here
+        // as {"name","args"} and routes IN-PROCESS into the same
+        // service table the native host_call channel feeds — one
+        // dispatch, two transports. UI thread already, so the
+        // synchronous answer is safe (unlike native_call above).
+        Json::Value args;
+        if (!ParseJsonLine(arg_json, &args) ||
+            !args.isMember("name")) {
+            return "{\"ok\":false,\"error\":\"ve_call needs name\"}";
+        }
+        const std::string inner =
+            args["args"].isString() ? args["args"].asString()
+            : args["args"].isNull() ? "{}"
+                                    : JsonLine(args["args"]);
+        return DispatchExtHostCall(args["name"].asString(), inner);
+    }
     return "{\"error\":\"unknown extension action: " + action + "\"}";
+}
+
+std::string VideoEditorAppWidget::ExtensionsDir() const {
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) return {};
+    return (cfg.assets_dir / "extensions").string();
+}
+
+void VideoEditorAppWidget::OpenExtensionUi(const std::string& id) {
+    right_panel_visible_ = true;
+    SetRightTab(9);
+    if (extensions_panel_) extensions_panel_->OpenExtension(id);
+    RequestLayout();
+    Invalidate();
+}
+
+void VideoEditorAppWidget::RunExtensionById(const std::string& id) {
+    const auto r = ExtHost::Shared().Run(id);
+    if (r.ok) {
+        SetStatus("ran " + id);
+    } else {
+        SetStatus(id + ": " + r.error, true);
+    }
+}
+
+void VideoEditorAppWidget::RescanExtensions() {
+    const std::string dir = ExtensionsDir();
+    if (dir.empty()) {
+        SetStatus("assets dir unresolved — cannot rescan extensions",
+                  true);
+        return;
+    }
+    ExtHost::Shared().Scan(dir);
+    if (extensions_panel_) extensions_panel_->Reload();
+    const auto& exts = ExtHost::Shared().Entries();
+    std::size_t good = 0;
+    for (const auto& e : exts) good += e.verified ? 1 : 0;
+    SetStatus("extensions rescanned: " + std::to_string(good) + "/" +
+              std::to_string(exts.size()) + " verified");
+    // The Extensions top menu mirrors Entries() — rebuild it so the
+    // rescan's adds/removals show up on next open.
+    RebuildTitleBarMenus();
+    // Mirror the rescan into the native runtime too (stale ids are
+    // unloaded, the current native set re-loaded on ext_op_).
+    QueueNativeExtensionLoads();
+}
+
+void VideoEditorAppWidget::RevealExtensionsFolder() {
+    const std::string dir = ExtensionsDir();
+    if (dir.empty()) {
+        SetStatus("assets dir unresolved — no extensions folder", true);
+        return;
+    }
+#ifdef _WIN32
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const std::wstring wpath =
+        Path::FromUtf8(Path::NormalizeUtf8Path(dir)).wstring();
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", wpath.c_str(),
+                  nullptr, SW_SHOWNORMAL);
+#else
+    SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+}
+
+// ---- native extension bridge (VE.ExtensionsRuntime) ------------------
+// Channel recap (worker_pipe.h callback_env + ext_runtime_server.h):
+// the runtime's single request thread runs JIT'd extension code;
+// ve_call inside it writes host_call on the reverse channel and
+// parks until the editor answers. Two editor-side rules keep that
+// deadlock-free:
+//   1. Requests that execute extension code ride ext_op_ (a
+//      background thread) — a synchronous UI RoundTrip would leave
+//      nobody to drain host_call until the timeout killed the
+//      worker.
+//   2. Tick ALWAYS drains + answers host_call, including mid-job.
+
+void VideoEditorAppWidget::QueueNativeExtensionLoads() {
+    std::vector<std::string> paths;
+    for (const Extension& e : ExtHost::Shared().Entries()) {
+        if (e.verified && e.has_native) paths.push_back(e.path);
+    }
+    if (paths.empty() && native_ext_ids_.empty()) return;
+    if (ext_op_.IsRunning()) {
+        SetStatus("Extension job in flight — native rescan deferred");
+        return;
+    }
+    const std::vector<std::string> stale = native_ext_ids_;
+    const std::string project_json =
+        DispatchExtensionAction("project_info", "{}");
+    const bool started = ext_op_.Start(
+        [this, paths, stale,
+         project_json](const Lab::JobControl& ctl) {
+            ExtOutcome out;
+            out.apply_loaded = true;
+            WorkerPipe& pipe = ExtRuntimePipe();
+            const auto store = [&] {
+                std::lock_guard lock(ext_mutex_);
+                ext_outcome_ = out;
+            };
+            if (!pipe.Available()) {
+                out.summary = "";
+                store();
+                ctl.Fail("VE.ExtensionsRuntime unavailable");
+                return false;
+            }
+            // Drop the stale resident set first — a reload of the
+            // same id would duplicate its LoadedExt (Find() returns
+            // the first match and the old modules leak).
+            for (const std::string& id : stale) {
+                Json::Value req(Json::objectValue);
+                req["kind"] = "ext_unload";
+                req["ext_id"] = id;
+                Json::Value reply;
+                ExtRoundTrip(req, 10000, &reply);   // best-effort
+            }
+            Json::Value events(Json::arrayValue);
+            std::string first_error;
+            int loaded = 0;
+            for (const std::string& path : paths) {
+                Json::Value req(Json::objectValue);
+                req["kind"] = "ext_load";
+                req["path"] = path;
+                req["project_json"] = project_json;
+                Json::Value reply;
+                if (!ExtRoundTrip(req, 120000, &reply)) {
+                    if (first_error.empty()) {
+                        first_error =
+                            reply.isMember("err")
+                                ? reply.get("err", "?").asString()
+                                : "ext_load transport failure";
+                    }
+                    continue;
+                }
+                for (const auto& e : reply["events"]) {
+                    events.append(e);
+                }
+                if (reply.get("native", false).asBool()) {
+                    out.loaded_ids.push_back(
+                        reply.get("ext_id", "").asString());
+                    ++loaded;
+                }
+            }
+            out.events_json = JsonLine(events);
+            if (first_error.empty()) {
+                out.summary = "native extensions: " +
+                              std::to_string(loaded) + " loaded";
+            }
+            store();
+            if (!first_error.empty()) {
+                ctl.Fail(first_error);
+                return false;
+            }
+            return true;
+        });
+    if (!started) {
+        SetStatus("Extension job could not start", true);
+    }
+}
+
+void VideoEditorAppWidget::CallNativeExtension(
+    const std::string& ext_id, const std::string& fn,
+    const std::string& args_json) {
+    if (ext_op_.IsRunning()) {
+        SetStatus("Extension job in flight — call queued locally",
+                  true);
+        return;
+    }
+    const bool started = ext_op_.Start(
+        [this, ext_id, fn,
+         args_json](const Lab::JobControl& ctl) {
+            ExtOutcome out;
+            WorkerPipe& pipe = ExtRuntimePipe();
+            const auto store = [&] {
+                std::lock_guard lock(ext_mutex_);
+                ext_outcome_ = out;
+            };
+            if (!pipe.Available()) {
+                store();
+                ctl.Fail("VE.ExtensionsRuntime unavailable");
+                return false;
+            }
+            Json::Value req(Json::objectValue);
+            req["kind"] = "ext_call";
+            req["ext_id"] = ext_id;
+            req["fn"] = fn;
+            req["args"] = args_json;
+            Json::Value reply;
+            if (!ExtRoundTrip(req, 120000, &reply)) {
+                store();
+                ctl.Fail(reply.isMember("err")
+                             ? reply.get("err", "?").asString()
+                             : "ext_call transport failure");
+                return false;
+            }
+            Json::Value events(Json::arrayValue);
+            for (const auto& e : reply["events"]) events.append(e);
+            out.events_json = JsonLine(events);
+            out.call_result = reply.get("result_json", "").asString();
+            out.summary = ext_id + "." + fn + " answered";
+            store();
+            return true;
+        });
+    if (!started) {
+        SetStatus("Extension call could not start", true);
+    }
+}
+
+void VideoEditorAppWidget::PumpExtensionRuntime(double dt_seconds) {
+    // 1. Finished ext job — marshal its outcome onto the UI thread.
+    {
+        bool ok = false, cancelled = false;
+        std::string error;
+        if (ext_op_.PopResult(&ok, &cancelled, &error)) {
+            ExtOutcome out;
+            {
+                std::lock_guard lock(ext_mutex_);
+                out = std::move(ext_outcome_);
+                ext_outcome_ = ExtOutcome{};
+            }
+            if (out.apply_loaded) {
+                native_ext_ids_ = std::move(out.loaded_ids);
+            }
+            // events_json is a serialized ARRAY — ParseJsonLine's
+            // isObject() gate would reject it, so parse inline.
+            Json::Value events;
+            {
+                std::string errs;
+                Json::CharReaderBuilder r;
+                std::istringstream in(out.events_json);
+                if (Json::parseFromStream(r, in, &events, &errs) &&
+                    events.isArray()) {
+                    ApplyExtEvents(events);
+                }
+            }
+            if (!error.empty()) {
+                SetStatus("ext: " + error, true);
+            } else if (!out.summary.empty()) {
+                SetStatus(out.summary);
+            }
+            if (!out.call_result.empty() && ok) {
+                SetStatus("ext result: " +
+                          out.call_result.substr(0, 120));
+            }
+        }
+    }
+    // 2. host_call service — ALWAYS, including mid-job: a ve_call
+    //    parked inside the runtime's request thread only unblocks
+    //    when this pump answers. Servicing here keeps dispatch on the
+    //    UI thread where project/history mutation is legal.
+    std::string line;
+    while (ExtRuntimePipe().PopCallbackLine(&line)) {
+        ServiceExtHostCall(line);
+    }
+    // 3. Idle event drain — events queued OUTSIDE a request context
+    //    (extension-owned threads calling ve_log/ve_post after the
+    //    callable returned) only surface through this poll. Skipped
+    //    while a job runs: the worker's single request thread is busy
+    //    and a RoundTrip timeout would needlessly kill it mid-call.
+    ext_poll_ += dt_seconds;
+    if (ext_poll_ >= 0.3 && !ext_op_.IsRunning() &&
+        !native_ext_ids_.empty() &&
+        ExtRuntimePipe().HasCallbackChannel()) {
+        ext_poll_ = 0.0;
+        Json::Value req(Json::objectValue);
+        req["kind"] = "ext_events";
+        Json::Value reply;
+        if (ExtRoundTrip(req, 250, &reply)) {
+            ApplyExtEvents(reply["events"]);
+        } else {
+            // Transport dead — the resident set is gone with the
+            // worker; stop polling until the next reload.
+            native_ext_ids_.clear();
+        }
+    }
+}
+
+void VideoEditorAppWidget::ServiceExtHostCall(const std::string& line) {
+    Json::Value req;
+    if (!ParseJsonLine(line, &req)) return;
+    if (req.get("kind", "").asString() != "host_call") {
+        return;   // only host_call exists today; future push kinds
+                  // land here harmlessly
+    }
+    const std::uint64_t req_id = req.get("req_id", 0).asUInt64();
+    const std::string name = req.get("name", "").asString();
+    std::string args;
+    if (req["args"].isString()) {
+        args = req["args"].asString();
+    } else if (!req["args"].isNull()) {
+        args = JsonLine(req["args"]);
+    }
+    const std::string result = DispatchExtHostCall(name, args);
+    Json::Value rsp(Json::objectValue);
+    rsp["req_id"] = Json::UInt64(req_id);
+    rsp["ok"] = true;
+    rsp["result"] = result;
+    if (!ExtRuntimePipe().WriteCallbackLine(JsonLine(rsp))) {
+        SetStatus("ext host channel died mid-reply", true);
+    }
+}
+
+std::string VideoEditorAppWidget::DispatchExtHostCall(
+    const std::string& name, const std::string& args_json) {
+    // ve.core v3 service table (sdk/ve.core.h documents every name
+    // and the {"ok":...} result contract; VeServiceNames() in
+    // project_store.cc is the advertised mirror — keep both in sync).
+    // Runs on the UI thread: project/history mutation is legal here,
+    // and every edit goes through history_ so Ctrl+Z reverses it.
+    Json::Value args;
+    const bool have_args = ParseJsonLine(args_json, &args);
+    const auto wrap = [](Json::Value&& v) {
+        v["ok"] = true;
+        return JsonLine(v);
+    };
+    const auto fail = [](const std::string& err) {
+        Json::Value v(Json::objectValue);
+        v["ok"] = false;
+        v["error"] = err;
+        return JsonLine(v);
+    };
+    const auto arg_str = [&](const char* key) -> std::string {
+        return have_args && args[key].isString() ? args[key].asString()
+                                                 : std::string{};
+    };
+    const auto arg_num = [&](const char* key, double dflt) {
+        return have_args && args[key].isNumeric() ? args[key].asDouble()
+                                                  : dflt;
+    };
+    const auto arg_int = [&](const char* key, int dflt) {
+        return have_args && args[key].isInt() ? args[key].asInt()
+                                              : dflt;
+    };
+    const auto arg_bool = [&](const char* key, bool dflt) {
+        return have_args && args[key].isBool() ? args[key].asBool()
+                                               : dflt;
+    };
+    // "id"/"clip" arg, defaulting to the current selection — every
+    // clip-scoped op reads its target this way.
+    const auto clip_for = [&]() -> const Clip* {
+        std::string id = arg_str("id");
+        if (id.empty()) id = arg_str("clip");
+        return FindClip(project_,
+                        id.empty() ? selected_clip_id_ : id);
+    };
+    const auto frame_dt = [&] {
+        return project_.fps_num > 0
+                   ? static_cast<double>(project_.fps_den) /
+                         static_cast<double>(project_.fps_num)
+                   : 1.0 / 30.0;
+    };
+    const auto transport_state = [&] {
+        Json::Value v(Json::objectValue);
+        v["playing"] = monitor_ && monitor_->IsPlaying();
+        v["playhead"] = playhead_;
+        v["duration"] = project_.duration();
+        v["rate"] = shuttle_rate_;
+        v["loop"] = monitor_ && monitor_->Loop();
+        auto [li, lo] = monitor_ ? monitor_->LoopRange()
+                                 : std::pair<double, double>{0.0, 0.0};
+        v["loop_in"] = li;
+        v["loop_out"] = lo;
+        return v;
+    };
+
+    // ---- meta -----------------------------------------------------
+    if (name == "ve.services") {
+        Json::Value v(Json::objectValue);
+        v["version"] = 3;
+        Json::Value list(Json::arrayValue);
+        for (const std::string& s : VeServiceNames()) list.append(s);
+        v["services"] = std::move(list);
+        return wrap(std::move(v));
+    }
+    if (name == "app.info") {
+        Json::Value v(Json::objectValue);
+        v["role"] = "video_editor";
+        v["api"] = 3;
+        v["project_path"] = project_path_;
+        Json::Value ids(Json::arrayValue);
+        for (const std::string& id : native_ext_ids_) ids.append(id);
+        v["native_extensions"] = std::move(ids);
+        return wrap(std::move(v));
+    }
+
+    // ---- project.* -------------------------------------------------
+    if (name == "project.info") {
+        return wrap(VeDescribeProject(project_, project_path_,
+                                      project_dirty_));
+    }
+    if (name == "project.path") {
+        Json::Value v(Json::objectValue);
+        v["path"] = project_path_;
+        v["untitled"] = project_path_.empty();
+        v["dirty"] = project_dirty_;
+        return wrap(std::move(v));
+    }
+    if (name == "project.new") {
+        if (export_engine_.IsRunning()) return fail("export_running");
+        if (project_dirty_ && !arg_bool("force", false)) {
+            return fail("unsaved_changes");
+        }
+        // force: clearing the flag makes NewProject's discard-guard a
+        // no-op — the extension asked for it explicitly, no prompt.
+        project_dirty_ = false;
+        NewProject();
+        return wrap(VeDescribeProject(project_, project_path_,
+                                      project_dirty_));
+    }
+    if (name == "project.open") {
+        const std::string path = arg_str("path");
+        if (path.empty()) return fail("path required");
+        if (export_engine_.IsRunning()) return fail("export_running");
+        if (project_dirty_ && !arg_bool("force", false)) {
+            return fail("unsaved_changes");
+        }
+        project_dirty_ = false;
+        if (!LoadProject(path)) return fail("open_failed");
+        return wrap(VeDescribeProject(project_, project_path_,
+                                      project_dirty_));
+    }
+    if (name == "project.save") {
+        const std::string path = arg_str("path");
+        if (!path.empty()) {
+            project_path_ = Path::NormalizeUtf8Path(path);
+        }
+        if (project_path_.empty()) return fail("no_project_path");
+        // A bound path means SaveProject(false) never opens a dialog.
+        if (!SaveProject(false)) return fail("save_failed");
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "project.settings") {
+        ProjectSettings s;
+        s.w = arg_int("w", project_.width);
+        s.h = arg_int("h", project_.height);
+        s.fps_num = arg_int("fps_num", project_.fps_num);
+        s.fps_den = arg_int("fps_den", project_.fps_den);
+        s.bg = project_.bg_color;
+        ApplyProjectSettings(s);
+        return wrap(VeDescribeProject(project_, project_path_,
+                                      project_dirty_));
+    }
+    if (name == "project.markers") {
+        return wrap(VeDescribeMarkers(project_));
+    }
+    if (name == "project.add_marker") {
+        if (!have_args || !args["t"].isNumeric()) {
+            return fail("t required");
+        }
+        Marker m;
+        m.time = args["t"].asDouble();
+        const std::string label = arg_str("name");
+        m.name = label.empty() ? "Marker" : label;
+        std::string error;
+        if (!history_.AddMarker(m, &error)) return fail(error);
+        NotifyProjectChanged();
+        return wrap(VeDescribeMarkers(project_));
+    }
+    if (name == "project.remove_marker") {
+        if (!have_args || !args["t"].isNumeric()) {
+            return fail("t required");
+        }
+        if (!history_.RemoveMarker(args["t"].asDouble())) {
+            return fail("no_marker");
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeMarkers(project_));
+    }
+    if (name == "project.rename_marker") {
+        if (!have_args || !args["t"].isNumeric()) {
+            return fail("t required");
+        }
+        RenameMarkerAt(args["t"].asDouble(), arg_str("name"));
+        return wrap(VeDescribeMarkers(project_));
+    }
+    if (name == "project.set_work_area") {
+        SetWorkAreaRange(arg_num("in", 0.0), arg_num("out", 0.0));
+        Json::Value v(Json::objectValue);
+        v["work_in"] = project_.work_in;
+        v["work_out"] = project_.work_out;
+        return wrap(std::move(v));
+    }
+
+    // ---- timeline.* -------------------------------------------------
+    if (name == "timeline.info") {
+        return wrap(VeDescribeTimeline(project_, playhead_,
+                                       selected_clip_id_));
+    }
+    if (name == "timeline.tracks") {
+        return wrap(VeDescribeTracks(project_));
+    }
+    // "project.clips" is the v2 alias — same describe either way.
+    if (name == "timeline.clips" || name == "project.clips") {
+        return wrap(VeDescribeClips(project_));
+    }
+    if (name == "timeline.transitions") {
+        return wrap(VeDescribeTransitions(project_));
+    }
+    if (name == "timeline.add_track") {
+        const std::string kind = arg_str("kind");
+        TrackKind tk = TrackKind::Video;
+        if (kind == "audio") {
+            tk = TrackKind::Audio;
+        } else if (!kind.empty() && kind != "video") {
+            return fail("bad_kind");
+        }
+        std::string tname = arg_str("name");
+        if (tname.empty()) {
+            tname = tk == TrackKind::Video ? "Video" : "Audio";
+        }
+        const int index = history_.AddTrack(tk, tname);
+        if (index < 0) return fail("add_track_failed");
+        NotifyProjectChanged();
+        Json::Value v(Json::objectValue);
+        v["index"] = index;
+        return wrap(std::move(v));
+    }
+    if (name == "timeline.remove_track") {
+        if (!have_args || !args["index"].isInt()) {
+            return fail("index required");
+        }
+        std::string error;
+        if (!history_.RemoveTrack(args["index"].asInt(), &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "timeline.rename_track") {
+        if (!have_args || !args["index"].isInt()) {
+            return fail("index required");
+        }
+        const std::string tname = arg_str("name");
+        if (tname.empty()) return fail("name required");
+        if (!history_.Execute(std::make_unique<RenameTrackCommand>(
+                args["index"].asInt(), tname))) {
+            return fail("bad_index");
+        }
+        NotifyProjectChanged();
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "timeline.set_track") {
+        // One undo step covering every supplied field — flag ops and
+        // faders ride their history wrappers, the optional rename the
+        // command above.
+        if (!have_args || !args["index"].isInt()) {
+            return fail("index required");
+        }
+        const int index = args["index"].asInt();
+        if (index < 0 ||
+            index >= static_cast<int>(project_.tracks.size())) {
+            return fail("bad_index");
+        }
+        std::string error;
+        bool ok = true;
+        history_.BeginMacro("Set track");
+        if (args.isMember("name") && args["name"].isString()) {
+            ok = history_.Execute(std::make_unique<RenameTrackCommand>(
+                index, args["name"].asString()));
+        }
+        if (ok && args["muted"].isBool()) {
+            ok = history_.SetTrackMuted(index, args["muted"].asBool(),
+                                        &error);
+        }
+        if (ok && args["hidden"].isBool()) {
+            ok = history_.SetTrackHidden(index, args["hidden"].asBool(),
+                                         &error);
+        }
+        if (ok && args["locked"].isBool()) {
+            ok = history_.SetTrackLocked(index, args["locked"].asBool(),
+                                         &error);
+        }
+        if (ok && args["gain_db"].isNumeric()) {
+            ok = history_.SetTrackGainDb(
+                index, args["gain_db"].asFloat(), &error);
+        }
+        if (ok && args["pan"].isNumeric()) {
+            ok = history_.SetTrackPan(index, args["pan"].asFloat(),
+                                      &error);
+        }
+        history_.EndMacro();
+        if (!ok) return fail(error.empty() ? "set_track_failed" : error);
+        NotifyProjectChanged();
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "timeline.add_clip") {
+        // The synchronous sibling of the add_clip event — same
+        // apply path, but ve_call callers get an ok back.
+        if (!have_args) {
+            return "{\"ok\":false,\"error\":\"malformed args\"}";
+        }
+        Json::Value e(Json::objectValue);
+        e["kind"] = args.get("kind", "").asString();
+        // param is a string by contract — a JSON-typed argument is
+        // re-serialized so ApplyExtAddClip always sees text.
+        e["param"] = args["param"].isString()
+                         ? args["param"].asString()
+                     : args["param"].isNull() ? ""
+                                              : JsonLine(args["param"]);
+        e["start"] = args.get("start", -1.0);
+        e["duration"] = args.get("duration", 5.0);
+        e["track"] = args.get("track", -1);
+        ApplyExtAddClip("ext", e);
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "timeline.move_clip") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        std::string error;
+        if (args["track"].isInt() &&
+            args["track"].asInt() != clip->track) {
+            // Cross-track move rides ReplaceClip (the model's
+            // track-change path); a same-track start move then rides
+            // MoveClip under the same macro.
+            history_.BeginMacro("Move clip");
+            Clip updated = *clip;
+            updated.track = args["track"].asInt();
+            if (args["start"].isNumeric()) {
+                updated.timeline_start = args["start"].asDouble();
+            }
+            const bool ok = history_.ReplaceClip(
+                clip->id, updated,
+                BoundsForPath(clip->source_path), &error);
+            history_.EndMacro();
+            if (!ok) return fail(error);
+        } else if (args["start"].isNumeric()) {
+            if (!history_.MoveClip(clip->id, args["start"].asDouble(),
+                                   BoundsForPath(clip->source_path),
+                                   &error)) {
+                return fail(error);
+            }
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "timeline.remove_clip" || name == "timeline.ripple_delete") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        const bool ripple = name == "timeline.ripple_delete" ||
+                            arg_bool("ripple", false);
+        const std::string id = clip->id;
+        if (ripple) {
+            RippleDeleteClipById(id);
+        } else {
+            DeleteClip(id);
+        }
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "timeline.trim_clip") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        const std::string edge = arg_str("edge");
+        const TrimEdge te = edge == "out" ? TrimEdge::Out : TrimEdge::In;
+        if (!have_args || !args["point"].isNumeric()) {
+            return fail("point required");
+        }
+        std::string error;
+        if (!history_.TrimClip(clip->id, te, args["point"].asDouble(),
+                               BoundsForPath(clip->source_path),
+                               &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "timeline.split_clip") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        const double at = arg_num("at", playhead_);
+        std::string new_id, error;
+        if (!history_.SplitClip(clip->id, at, &new_id, &error)) {
+            return fail(error);
+        }
+        SelectClip(new_id);
+        NotifyProjectChanged();
+        Json::Value v(Json::objectValue);
+        v["new_clip_id"] = new_id;
+        return wrap(std::move(v));
+    }
+    if (name == "timeline.lift_range") {
+        if (!have_args || !args["t0"].isNumeric() ||
+            !args["t1"].isNumeric()) {
+            return fail("t0+t1 required");
+        }
+        std::string error;
+        if (!history_.LiftRange(args["t0"].asDouble(),
+                                args["t1"].asDouble(),
+                                arg_bool("close_gap", false), &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "timeline.slip") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        std::string error;
+        if (!history_.SlipClip(clip->id, arg_num("delta", 0.0),
+                               BoundsForPath(clip->source_path),
+                               &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "timeline.slide") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        std::string error;
+        if (!history_.SlideClip(clip->id, arg_num("delta", 0.0),
+                                BoundsForPath(clip->source_path),
+                                &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "timeline.set_rate") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        std::string error;
+        if (!history_.SetClipRate(clip->id, arg_num("rate", 1.0),
+                                  BoundsForPath(clip->source_path),
+                                  &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "timeline.nudge") {
+        const Clip* clip = FindClip(project_, selected_clip_id_);
+        if (clip == nullptr) return fail("no_selection");
+        const int frames = arg_int("frames", 1);
+        if (frames == 0) return fail("frames required");
+        // Same movers as NudgeSelection (the link group rides along),
+        // folded into ONE undo macro for the whole frame count.
+        const double delta = static_cast<double>(frames) * frame_dt();
+        std::vector<const Clip*> movers{clip};
+        if (!clip->link_group.empty()) {
+            for (const Clip& c : project_.clips) {
+                if (c.id != clip->id &&
+                    c.link_group == clip->link_group) {
+                    movers.push_back(&c);
+                }
+            }
+        }
+        std::string error;
+        bool ok = true;
+        history_.BeginMacro("Nudge");
+        for (const Clip* m : movers) {
+            if (!history_.MoveClip(
+                    m->id, std::max(0.0, m->timeline_start + delta),
+                    BoundsForPath(m->source_path), &error)) {
+                ok = false;
+                break;
+            }
+        }
+        history_.EndMacro();
+        if (!ok) return fail(error);
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "timeline.select_clip") {
+        const std::string id = arg_str("id");
+        SelectClip(id);
+        Json::Value v(Json::objectValue);
+        v["clip_id"] = selected_clip_id_;
+        return wrap(std::move(v));
+    }
+    if (name == "timeline.add_transition") {
+        const std::string type_text = arg_str("type");
+        Transition::Type type = Transition::Type::Crossfade;
+        if (type_text.empty() ||
+            !TransitionTypeFromString(type_text, &type)) {
+            return fail("bad_type");
+        }
+        const double duration = arg_num("duration", -1.0);
+        const std::string script = arg_str("script");
+        std::string from_id = arg_str("from");
+        if (from_id.empty()) from_id = arg_str("after");
+        if (from_id.empty()) from_id = selected_clip_id_;
+        const std::string to_id = arg_str("to");
+        if (from_id.empty()) return fail("from required");
+        if (!to_id.empty()) {
+            AddTransitionPair(from_id, to_id, type, duration, script);
+        } else {
+            AddTransitionAfter(from_id, type, duration, script);
+        }
+        return wrap(VeDescribeTransitions(project_));
+    }
+    if (name == "timeline.remove_transition") {
+        const std::string from_id = arg_str("from");
+        const std::string to_id = arg_str("to");
+        if (from_id.empty() || to_id.empty()) {
+            return fail("from+to required");
+        }
+        if (!history_.RemoveTransition(from_id, to_id)) {
+            return fail("no_transition");
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeTransitions(project_));
+    }
+
+    // ---- transport.* ------------------------------------------------
+    if (name == "transport.info") {
+        return wrap(transport_state());
+    }
+    if (name == "transport.play") {
+        if (monitor_ && !monitor_->IsPlaying()) TogglePlay();
+        return wrap(transport_state());
+    }
+    if (name == "transport.pause" || name == "transport.stop") {
+        StopProgramTransport();
+        return wrap(transport_state());
+    }
+    if (name == "transport.seek") {
+        const double t =
+            have_args && args.isMember("t") ? args["t"].asDouble()
+                                            : playhead_;
+        Seek(t);
+        return wrap(transport_state());
+    }
+    if (name == "transport.frame_step") {
+        const int frames = arg_int("frames", arg_int("dir", 1));
+        Seek(playhead_ + static_cast<double>(frames) * frame_dt());
+        return wrap(transport_state());
+    }
+    if (name == "transport.set_loop") {
+        if (monitor_ == nullptr) return fail("no_monitor");
+        const bool on = arg_bool("on", true);
+        monitor_->SetLoop(on);
+        const double li = arg_num("in", -1.0);
+        const double lo = arg_num("out", -1.0);
+        if (li >= 0.0 && lo >= 0.0) {
+            monitor_->SetLoopRange(li, lo);
+        }
+        // A running engine needs the loop command re-issued — the
+        // monitor flag only feeds the next playback start otherwise.
+        if (monitor_->IsPlaying() && preview_ready_) {
+            double ei = 0.0, eo = 0.0;
+            if (on) {
+                auto [a, b] = monitor_->LoopRange();
+                ei = a;
+                eo = b;
+                if (eo <= ei) {
+                    ei = project_.work_in;
+                    eo = project_.work_out;
+                }
+            }
+            preview_engine_.SetLoop(ei, eo);
+        }
+        return wrap(transport_state());
+    }
+    if (name == "transport.set_rate") {
+        if (monitor_ == nullptr) return fail("no_monitor");
+        const double rate = arg_num("rate", 1.0);
+        if (rate == 0.0) {
+            StopProgramTransport();
+            shuttle_rate_ = 0.0;
+            return wrap(transport_state());
+        }
+        if (!monitor_->IsPlaying()) {
+            // Cold start: the shuttle boot path inits the engine and
+            // marks the monitor playing, then the exact rate lands.
+            ShuttleStep(rate > 0.0 ? 1 : -1);
+            if (!monitor_->IsPlaying()) return fail("preview_unavailable");
+        } else {
+            EnsurePreviewEngine();
+            if (!preview_ready_) return fail("preview_unavailable");
+        }
+        preview_engine_.SetRate(rate);
+        shuttle_rate_ = rate;
+        return wrap(transport_state());
+    }
+    if (name == "transport.shuttle") {
+        ShuttleStep(arg_int("direction", 1));
+        return wrap(transport_state());
+    }
+    if (name == "transport.shuttle_stop") {
+        ShuttleStop();
+        return wrap(transport_state());
+    }
+    if (name == "transport.goto_marker") {
+        JumpToMarker(arg_bool("next", true));
+        return wrap(transport_state());
+    }
+    if (name == "transport.set_quality") {
+        const float scale = static_cast<float>(
+            std::clamp(arg_num("scale", 1.0), 0.05, 1.0));
+        preview_quality_ = scale;
+        preview_engine_.SetQuality(scale);
+        Json::Value v(Json::objectValue);
+        v["scale"] = static_cast<double>(scale);
+        return wrap(std::move(v));
+    }
+
+    // ---- selection.* -------------------------------------------------
+    if (name == "selection.get") {
+        Json::Value v(Json::objectValue);
+        v["clip_id"] = selected_clip_id_;
+        v["media_path"] = selected_media_path_;
+        if (!selected_clip_id_.empty()) {
+            v["clip"] = VeDescribeClip(project_, selected_clip_id_);
+        }
+        return wrap(std::move(v));
+    }
+    if (name == "selection.set") {
+        std::string id = arg_str("clip_id");
+        if (id.empty()) id = arg_str("id");
+        if (!id.empty() && FindClip(project_, id) == nullptr) {
+            return fail("no_clip");
+        }
+        SelectClip(id);
+        const std::string media = arg_str("media");
+        if (!media.empty()) {
+            selected_media_path_ = Path::NormalizeUtf8Path(media);
+        }
+        Json::Value v(Json::objectValue);
+        v["clip_id"] = selected_clip_id_;
+        v["media_path"] = selected_media_path_;
+        return wrap(std::move(v));
+    }
+    if (name == "selection.clear") {
+        SelectClip("");
+        return wrap(Json::Value(Json::objectValue));
+    }
+
+    // ---- media.* -----------------------------------------------------
+    if (name == "media.list") {
+        RefreshCatalog();
+        return wrap(VeDescribeCatalog(catalog_entries_));
+    }
+    if (name == "media.import") {
+        const std::string path = arg_str("path");
+        if (path.empty()) return fail("path required");
+        std::string error;
+        if (!ImportMediaFile(path, &error)) return fail(error);
+        RefreshCatalog();
+        const CatalogEntry* imported = FindCatalogEntry(path);
+        media_prep_.RequestImportPoster(
+            imported != nullptr ? imported->path : path);
+        Json::Value v(Json::objectValue);
+        if (imported != nullptr) {
+            v["id"] = Json::Int64(imported->id);
+            v["path"] = imported->path;
+        }
+        return wrap(std::move(v));
+    }
+    if (name == "media.refresh") {
+        RefreshCatalog();
+        Json::Value v(Json::objectValue);
+        v["count"] =
+            static_cast<Json::UInt64>(catalog_entries_.size());
+        return wrap(std::move(v));
+    }
+    if (name == "media.select") {
+        const std::string path = arg_str("path");
+        if (path.empty()) return fail("path required");
+        selected_media_path_ = Path::NormalizeUtf8Path(path);
+        Json::Value v(Json::objectValue);
+        v["path"] = selected_media_path_;
+        return wrap(std::move(v));
+    }
+    if (name == "media.add_to_timeline") {
+        const std::string path = arg_str("path");
+        if (path.empty()) return fail("path required");
+        AddMediaToTimelineAt(
+            path, arg_num("at", playhead_), arg_int("track", -1));
+        return wrap(VeDescribeTimeline(project_, playhead_,
+                                       selected_clip_id_));
+    }
+    if (name == "media.bounds") {
+        const std::string path = arg_str("path");
+        if (path.empty()) return fail("path required");
+        const MediaBounds b = BoundsForPath(path);
+        Json::Value v(Json::objectValue);
+        v["duration_seconds"] = b.duration_seconds;
+        v["has_video"] = b.has_video;
+        return wrap(std::move(v));
+    }
+
+    // ---- fx.* --------------------------------------------------------
+    if (name == "fx.list") {
+        if (have_args &&
+            (args["clip"].isString() || args["id"].isString())) {
+            const Clip* clip = clip_for();
+            if (clip == nullptr) return fail("no_clip");
+            Json::Value arr(Json::arrayValue);
+            int i = 0;
+            for (const ClipEffect& e : clip->effects) {
+                Json::Value j(Json::objectValue);
+                j["index"] = i++;
+                j["type"] = e.type;
+                Json::Value pa(Json::arrayValue);
+                for (const float f : e.params) {
+                    pa.append(static_cast<double>(f));
+                }
+                j["params"] = std::move(pa);
+                arr.append(std::move(j));
+            }
+            Json::Value v(Json::objectValue);
+            v["clip"] = clip->id;
+            v["effects"] = std::move(arr);
+            return wrap(std::move(v));
+        }
+        // No clip arg → the built-in effect catalog the Effects panel
+        // searches (same list, single implementation).
+        Json::Value arr(Json::arrayValue);
+        for (const auto& info : EffectsPanelWidget::Catalog()) {
+            Json::Value j(Json::objectValue);
+            j["type"] = info.type;
+            j["description"] = info.description;
+            Json::Value pa(Json::arrayValue);
+            for (const float f : info.default_params) {
+                pa.append(static_cast<double>(f));
+            }
+            j["defaults"] = std::move(pa);
+            arr.append(std::move(j));
+        }
+        Json::Value v(Json::objectValue);
+        v["effects"] = std::move(arr);
+        return wrap(std::move(v));
+    }
+    if (name == "fx.add") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        const std::string type = arg_str("type");
+        if (type.empty()) return fail("type required");
+        ClipEffect effect;
+        effect.type = type;
+        if (have_args && args["params"].isArray()) {
+            for (const Json::Value& p : args["params"]) {
+                if (p.isNumeric()) effect.params.push_back(p.asFloat());
+            }
+        }
+        // Known built-ins get their panel defaults when the caller
+        // passed no params — fx.list is the advertised catalog.
+        if (effect.params.empty()) {
+            for (const auto& info : EffectsPanelWidget::Catalog()) {
+                if (info.type == type) {
+                    effect.params = info.default_params;
+                    break;
+                }
+            }
+        }
+        AddClipEffectBy(clip->id, effect);
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "fx.remove" || name == "fx.clear") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        Clip updated = *clip;
+        if (name == "fx.clear") {
+            updated.effects.clear();
+        } else if (have_args && args["index"].isInt()) {
+            const int idx = args["index"].asInt();
+            if (idx < 0 ||
+                idx >= static_cast<int>(updated.effects.size())) {
+                return fail("bad_index");
+            }
+            updated.effects.erase(updated.effects.begin() + idx);
+        } else if (have_args && args["type"].isString()) {
+            const std::string doomed = args["type"].asString();
+            updated.effects.erase(
+                std::remove_if(updated.effects.begin(),
+                               updated.effects.end(),
+                               [&](const ClipEffect& e) {
+                                   return e.type == doomed;
+                               }),
+                updated.effects.end());
+        } else if (updated.effects.empty()) {
+            return fail("nothing_to_remove");
+        } else {
+            updated.effects.pop_back();
+        }
+        std::string error;
+        if (!history_.ReplaceClip(clip->id, updated,
+                                  BoundsForPath(clip->source_path),
+                                  &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+
+    // ---- export.* -----------------------------------------------------
+    if (name == "export.presets") {
+        Json::Value arr(Json::arrayValue);
+        const auto emit = [&](const ExportPreset& p,
+                              const char* origin) {
+            Json::Value j(Json::objectValue);
+            j["name"] = p.name;
+            j["origin"] = origin;
+            j["video_codec"] = p.video_codec;
+            j["video_bit_rate"] = p.video_bit_rate;
+            j["audio_codec"] = p.audio_codec;
+            j["audio_bit_rate"] = p.audio_bit_rate;
+            j["resolution_scale"] = p.resolution_scale;
+            j["audio_only"] = p.IsAudioOnly();
+            arr.append(std::move(j));
+        };
+        for (const ExportPreset& p : BuiltinPresets()) {
+            emit(p, "builtin");
+        }
+        std::vector<ExportPreset> user;
+        if (LoadPresets(DefaultPresetsPath(), &user, nullptr)) {
+            for (const ExportPreset& p : user) emit(p, "user");
+        }
+        Json::Value v(Json::objectValue);
+        v["presets"] = std::move(arr);
+        return wrap(std::move(v));
+    }
+    if (name == "export.start") {
+        const std::string output = arg_str("output");
+        if (output.empty()) return fail("output required");
+        if (export_engine_.IsRunning()) return fail("export_running");
+        ExportOptions options;
+        options.output_path = Path::NormalizeUtf8Path(output);
+        if (!arg_str("video_codec").empty()) {
+            options.video_codec = arg_str("video_codec");
+        }
+        if (!arg_str("audio_codec").empty()) {
+            options.audio_codec = arg_str("audio_codec");
+        }
+        if (have_args && args["video_bit_rate"].isNumeric()) {
+            options.video_bit_rate = args["video_bit_rate"].asInt();
+        }
+        if (have_args && args["audio_bit_rate"].isNumeric()) {
+            options.audio_bit_rate = args["audio_bit_rate"].asInt();
+        }
+        if (have_args && args["resolution_scale"].isNumeric()) {
+            options.resolution_scale = args["resolution_scale"].asDouble();
+        }
+        if (have_args && args["range_in"].isNumeric()) {
+            options.range_in = args["range_in"].asDouble();
+        }
+        if (have_args && args["range_out"].isNumeric()) {
+            options.range_out = args["range_out"].asDouble();
+        }
+        const std::string preset_name = arg_str("preset");
+        if (!preset_name.empty()) {
+            bool applied = false;
+            for (const ExportPreset& p : BuiltinPresets()) {
+                if (p.name == preset_name) {
+                    ApplyPreset(p, &options);
+                    applied = true;
+                    break;
+                }
+            }
+            if (!applied) {
+                std::vector<ExportPreset> user;
+                if (LoadPresets(DefaultPresetsPath(), &user, nullptr)) {
+                    for (const ExportPreset& p : user) {
+                        if (p.name == preset_name) {
+                            ApplyPreset(p, &options);
+                            applied = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!applied) return fail("unknown_preset");
+        }
+        options.master_gain_db = project_.master_gain_db;
+        EnqueueExport(options);
+        if (!export_engine_.IsRunning()) return fail("start_failed");
+        Json::Value v(Json::objectValue);
+        v["queued"] = true;
+        v["output"] = options.output_path;
+        return wrap(std::move(v));
+    }
+    if (name == "export.cancel") {
+        export_engine_.Cancel();
+        Json::Value v(Json::objectValue);
+        v["cancelled"] = true;
+        return wrap(std::move(v));
+    }
+    if (name == "export.status") {
+        Json::Value v(Json::objectValue);
+        const ExportStatus st = export_engine_.Status();
+        const char* st_name = "idle";
+        switch (st) {
+            case ExportStatus::kRunning:   st_name = "running";   break;
+            case ExportStatus::kDone:      st_name = "done";      break;
+            case ExportStatus::kCancelled: st_name = "cancelled"; break;
+            case ExportStatus::kError:     st_name = "error";     break;
+            case ExportStatus::kIdle:      break;
+        }
+        v["status"] = st_name;
+        v["running"] = export_engine_.IsRunning();
+        const ExportProgress p = export_engine_.Progress();
+        Json::Value pj(Json::objectValue);
+        pj["fraction"] = p.fraction;
+        pj["stage"] = p.stage;
+        pj["video_frames_done"] = Json::UInt64(p.video_frames_done);
+        pj["video_frames_total"] = Json::UInt64(p.video_frames_total);
+        pj["audio_chunks_done"] = Json::UInt64(p.audio_chunks_done);
+        pj["audio_chunks_total"] = Json::UInt64(p.audio_chunks_total);
+        v["progress"] = std::move(pj);
+        if (st == ExportStatus::kError) {
+            v["error"] = export_engine_.Error();
+        }
+        Json::Value jobs(Json::arrayValue);
+        for (const ExportJobRow& job : export_jobs_) {
+            Json::Value j(Json::objectValue);
+            j["label"] = job.label;
+            j["output"] = job.output_path;
+            j["state"] = job.state;
+            j["progress"] = static_cast<double>(job.progress);
+            jobs.append(std::move(j));
+        }
+        v["jobs"] = std::move(jobs);
+        return wrap(std::move(v));
+    }
+
+    // ---- ui.* --------------------------------------------------------
+    // v2 alias — the extension's status-line write.
+    if (name == "status") {
+        return DispatchExtensionAction("status", args_json);
+    }
+    if (name == "ui.status") {
+        SetStatus(arg_str("text"), arg_bool("is_error", false));
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "ui.open_panel") {
+        static const std::pair<const char*, int> kTabs[] = {
+            {"inspector", 0},  {"fx", 1},        {"effects", 1},
+            {"markers", 2},    {"lab", 3},       {"history", 4},
+            {"mixer", 5},      {"queue", 6},     {"export", 6},
+            {"plugins", 7},    {"color", 8},     {"extensions", 9},
+            {"ext", 9},        {"web", 9},       {"layers", 10},
+        };
+        int tab = -1;
+        if (have_args && args["tab"].isInt()) {
+            tab = args["tab"].asInt();
+        } else {
+            const std::string t = arg_str("tab");
+            for (const auto& entry : kTabs) {
+                if (t == entry.first) {
+                    tab = entry.second;
+                    break;
+                }
+            }
+        }
+        if (tab < 0) return fail("unknown_panel");
+        right_panel_visible_ = true;
+        SetRightTab(tab);
+        Json::Value v(Json::objectValue);
+        v["tab"] = right_tab_;
+        return wrap(std::move(v));
+    }
+    if (name == "ui.list_extensions") {
+        Json::Value arr(Json::arrayValue);
+        for (const Extension& ext : ExtHost::Shared().Entries()) {
+            Json::Value j(Json::objectValue);
+            j["id"] = ext.manifest.id;
+            j["name"] = ext.manifest.name;
+            j["version"] = ext.manifest.version;
+            j["path"] = ext.path;
+            j["verified"] = ext.verified;
+            j["native"] = ext.has_native;
+            arr.append(std::move(j));
+        }
+        Json::Value v(Json::objectValue);
+        v["extensions"] = std::move(arr);
+        return wrap(std::move(v));
+    }
+    if (name == "ui.open_extension_ui") {
+        const std::string id = arg_str("id");
+        if (id.empty()) return fail("id required");
+        OpenExtensionUi(id);
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "ui.run_extension") {
+        const std::string id = arg_str("id");
+        if (id.empty()) return fail("id required");
+        const auto result = ExtHost::Shared().Run(id);
+        if (!result.ok) return fail(result.error);
+        Json::Value v(Json::objectValue);
+        v["output"] = result.output;
+        return wrap(std::move(v));
+    }
+    if (name == "ui.rescan_extensions") {
+        RescanExtensions();
+        Json::Value v(Json::objectValue);
+        v["count"] = static_cast<Json::UInt64>(
+            ExtHost::Shared().Entries().size());
+        return wrap(std::move(v));
+    }
+
+    // ---- edit.* -------------------------------------------------------
+    if (name == "edit.undo") {
+        Undo();
+        Json::Value v(Json::objectValue);
+        v["can_undo"] = history_.CanUndo();
+        v["can_redo"] = history_.CanRedo();
+        return wrap(std::move(v));
+    }
+    if (name == "edit.redo") {
+        Redo();
+        Json::Value v(Json::objectValue);
+        v["can_undo"] = history_.CanUndo();
+        v["can_redo"] = history_.CanRedo();
+        return wrap(std::move(v));
+    }
+    if (name == "edit.history") {
+        Json::Value v(Json::objectValue);
+        v["can_undo"] = history_.CanUndo();
+        v["can_redo"] = history_.CanRedo();
+        Json::Value undo(Json::arrayValue);
+        for (const std::string& l : history_.UndoLabels()) undo.append(l);
+        Json::Value redo(Json::arrayValue);
+        for (const std::string& l : history_.RedoLabels()) redo.append(l);
+        v["undo"] = std::move(undo);
+        v["redo"] = std::move(redo);
+        return wrap(std::move(v));
+    }
+
+    Json::Value v(Json::objectValue);
+    v["ok"] = false;
+    v["error"] = "unknown_call";
+    v["name"] = name;
+    return JsonLine(v);
+}
+
+void VideoEditorAppWidget::ApplyExtAddClip(const std::string& ext_id,
+                                         const Json::Value& e) {
+    const std::string kind = e.get("kind", "").asString();
+    const double start = e.get("start", -1.0).asDouble();
+    const double duration = e.get("duration", 5.0).asDouble();
+    // "param" is a JSON STRING the extension chose — unpack the
+    // conventional fields ({name,color,text,param,path}); a non-JSON
+    // payload rides through verbatim as the clip param.
+    std::string param = e.get("param", "").asString();
+    std::string clip_name;
+    std::string media_path;
+    Json::Value pj;
+    if (!param.empty() && param.front() == '{' &&
+        ParseJsonLine(param, &pj)) {
+        clip_name = pj.get("name", "").asString();
+        media_path = pj.get("path", "").asString();
+        if (pj.isMember("param")) {
+            param = pj["param"].asString();
+        } else if (pj.isMember("color")) {
+            param = pj["color"].asString();
+        } else if (pj.isMember("text")) {
+            param = pj["text"].asString();
+        } else if (!media_path.empty()) {
+            param = media_path;
+        }
+    }
+    if (kind == "media") {
+        const std::string path =
+            !media_path.empty() ? media_path : param;
+        if (path.empty()) {
+            SetStatus(ext_id + ": add_clip kind 'media' needs a path",
+                      true);
+            return;
+        }
+        AddMediaToTimelineAt(path, start >= 0.0 ? start : playhead_,
+                             e.get("track", -1).asInt());
+        return;
+    }
+    SourceKind source = SourceKind::Text;
+    if (kind == "color" || kind == "matte" || kind == "color_matte") {
+        source = SourceKind::ColorMatte;
+    } else if (kind == "bars" || kind == "color_bars") {
+        source = SourceKind::ColorBars;
+    } else if (kind == "text" || kind == "title") {
+        source = SourceKind::Text;
+    } else {
+        SetStatus(ext_id + ": unknown add_clip kind '" + kind + "'",
+                  true);
+        return;
+    }
+    AddGeneratedClipAt(source, e.get("track", -1).asInt(), start,
+                       clip_name, param,
+                       duration > 0.0 ? duration : 5.0);
+    SetStatus(ext_id + ": clip added");
+}
+
+void VideoEditorAppWidget::ApplyExtEvents(const Json::Value& events) {
+    if (!events.isArray()) return;
+    for (const Json::Value& e : events) {
+        const std::string type = e.get("type", "").asString();
+        const std::string ext = e.get("ext", "ext").asString();
+        if (type == "log" || type == "status") {
+            const std::string msg = e.get("msg", "").asString();
+            std::cerr << "[ext:" << ext << "] " << msg << "\n";
+            SetStatus(ext + ": " + msg);
+        } else if (type == "add_clip") {
+            ApplyExtAddClip(ext, e);
+        } else if (type == "event") {
+            SetStatus(ext + " posted an event");
+        } else if (type == "entry_failed") {
+            SetStatus(ext + ": entry point failed (rc=" +
+                          std::to_string(e.get("rc", 0).asInt()) + ")",
+                      true);
+        } else if (type == "call_request") {
+            // v1 fallback shape — only seen when the runtime was
+            // spawned without the host channel; nothing can reply
+            // after the fact.
+            SetStatus(ext + ": call '" +
+                          e.get("name", "?").asString() +
+                          "' had no reply channel",
+                      true);
+        }
+    }
 }
 
 MediaBounds VideoEditorAppWidget::BoundsForPath(
@@ -4950,7 +6566,7 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     export_queue_->SetVisible(right_eff && right_tab_ == 6);
     plugins_panel_->SetVisible(right_eff && right_tab_ == 7);
     color_panel_->SetVisible(right_eff && right_tab_ == 8);
-    browser_panel_->SetVisible(right_eff && right_tab_ == 9);
+    extensions_panel_->SetVisible(right_eff && right_tab_ == 9);
     if (layers_panel_) {
         layers_panel_->SetVisible(right_eff && right_tab_ == 10);
     }
@@ -4965,7 +6581,7 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         std::shared_ptr<Widgets::Widget> panels[] = {
             inspector_,  effects_panel_, markers_panel_, lab_panel_,
             history_panel_, mixer_panel_, export_queue_,
-            plugins_panel_, color_panel_, browser_panel_,
+            plugins_panel_, color_panel_, extensions_panel_,
             layers_panel_};
         panels[std::clamp(right_tab_, 0, 10)]->Layout(
             {inspector_x, panel_y + tab_h, right_w - gap,
@@ -5744,6 +7360,9 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             }
         }
     }
+    // Native-extension bridge: job outcome, host_call service (the
+    // ve_call reply path), and the idle event drain.
+    PumpExtensionRuntime(dt_seconds);
     if (undo_btn_) {
         undo_btn_->SetEnabled(history_.CanUndo());
         redo_btn_->SetEnabled(history_.CanRedo());

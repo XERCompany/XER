@@ -64,7 +64,8 @@ std::wstring ToWideString(std::string_view text) {
 }
 
 std::string FormatKey(const TextStyle& style) {
-    return std::to_string(style.size) + "|" + std::to_string(style.weight);
+    return std::to_string(style.size) + "|" + std::to_string(style.weight) +
+           "|" + (style.monospace ? "m" : "p");
 }
 
 } // namespace
@@ -547,10 +548,12 @@ Microsoft::WRL::ComPtr<IDWriteTextFormat> Direct2DRenderer::CreateTextFormat(
         return cached->second;
     }
 
+    // Consolas ships with every Windows since Vista — the guaranteed
+    // monospace face (Cascadia is not installed by default).
     Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
     ThrowIfFailed(
         write_factory_->CreateTextFormat(
-            L"Segoe UI",
+            style.monospace ? L"Consolas" : L"Segoe UI",
             nullptr,
             static_cast<DWRITE_FONT_WEIGHT>(std::clamp(style.weight, 1, 999)),
             DWRITE_FONT_STYLE_NORMAL,

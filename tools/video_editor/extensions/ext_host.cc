@@ -210,12 +210,48 @@ std::string ToStr(const apprt::OutValue& v) {
     }
 }
 
+// JSON-argument marshalling for the v3 JS bridge below: a JS
+// object/array arrives as OutValue::Json carrying raw text, scalars
+// already spell valid JSON, and anything else (a bare string the
+// caller forgot to stringify) becomes a quoted JSON string.
+std::string JsonArgText(const apprt::OutValue& v) {
+    const std::string s = ToStr(v);
+    const auto b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return "{}";
+    const char c = s[b];
+    if (c == '{' || c == '[' || c == '"' || c == '-' ||
+        (c >= '0' && c <= '9') || s.compare(b, 4, "true") == 0 ||
+        s.compare(b, 5, "false") == 0 || s.compare(b, 4, "null") == 0) {
+        return s;
+    }
+    return "\"" + JsonEsc(s) + "\"";
+}
+
+// ve() arguments must be a JSON OBJECT (the ve_call contract) — a
+// scalar is wrapped as {"value":...} so dispatch never sees a
+// malformed args payload.
+std::string VeArgsText(const apprt::OutValue& v) {
+    std::string s = JsonArgText(v);
+    const auto b = s.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos || s[b] != '{') {
+        s = "{\"value\":" + s + "}";
+    }
+    return s;
+}
+
 bool InList(const std::vector<std::string>& list,
             const std::string& member) {
     return std::find(list.begin(), list.end(), member) != list.end();
 }
 
 }  // namespace
+
+// ---- shared manifest parse (see ext_host.h) ------------------------------
+
+bool ExtManifestParse(const std::string& text, ExtManifest* out,
+                      std::string* error) {
+    return ParseManifest(text, out, error);
+}
 
 // ---- ExtHost ------------------------------------------------------------
 
@@ -270,6 +306,19 @@ bool ExtHost::Load(const std::string& path, std::string* error) {
         ext.verify_errors.push_back(m);
         entries_.push_back(std::move(ext));
         return false;
+    }
+    // Native JIT payload? Same member-prefix test the runtime's
+    // HasXsjoMembers uses — the app reads Extension::has_native to
+    // route the package to VE.ExtensionsRuntime.
+    for (const Tz::TzEntry& entry : archive->Entries()) {
+        if (entry.name.size() > 11 &&
+            entry.name.compare(0, 11, "mobjective/") == 0 &&
+            entry.name.size() > 5 &&
+            entry.name.compare(entry.name.size() - 5, 5, ".xsjo") ==
+                0) {
+            ext.has_native = true;
+            break;
+        }
     }
     std::string parse_err;
     if (!ParseManifest(manifest_text, &ext.manifest, &parse_err)) {
@@ -669,6 +718,81 @@ void ExtHost::InstallModule(Loaded& loaded, RunResult* sink) {
                         running_ ? running_->ext.manifest.native_py
                                  : std::vector<std::string>{},
                         kPy, std::size(kPy), args);
+                });
+            // ---- ve.core v3 JS bridge ----------------------------
+            // The SAME service table native extensions reach through
+            // ve_call over the reverse host channel — routed
+            // in-process via the "ve_call" app action to the editor's
+            // dispatcher. Synchronous: the result JSON string comes
+            // straight back ({"ok":true,...} / {"ok":false,...} /
+            // "unknown_call" for unimplemented names). args may be a
+            // JS object or a JSON string; a scalar wraps as
+            // {"value":...} to keep the object contract.
+            const apprt::JsEngine::NativeFn ve_bridge =
+                [this](const std::vector<OutValue>& args) -> OutValue {
+                if (!action_fn_ || args.empty()) {
+                    return apprt::StrVal(
+                        "{\"ok\":false,\"error\":\"xer_ext.ve "
+                        "unavailable\"}");
+                }
+                const std::string inner = VeArgsText(
+                    args.size() > 1 ? args[1] : OutValue{});
+                return apprt::StrVal(action_fn_(
+                    "ve_call",
+                    "{\"name\":\"" + JsonEsc(ToStr(args[0])) +
+                        "\",\"args\":" + inner + "}"));
+            };
+            e.DefineFunction(obj, "ve", ve_bridge);
+            e.DefineFunction(obj, "veCall", ve_bridge);
+            // nativeCall(id, fn, args?) — fire-and-forget ext_call at
+            // a resident native extension. Sync here is impossible by
+            // design: the callable may itself ve_call back into the
+            // editor and only a background job can service that — the
+            // "native_call" action queues it and the Tick pump lands
+            // the result on the status strip.
+            e.DefineFunction(
+                obj, "nativeCall",
+                [this](const std::vector<OutValue>& args) {
+                    if (!action_fn_ || args.size() < 2) {
+                        return apprt::StrVal(
+                            "{\"error\":\"nativeCall needs id+fn\"}");
+                    }
+                    const std::string call_args =
+                        args.size() > 2 ? JsonArgText(args[2]) : "{}";
+                    return apprt::StrVal(action_fn_(
+                        "native_call",
+                        "{\"id\":\"" + JsonEsc(ToStr(args[0])) +
+                            "\",\"fn\":\"" + JsonEsc(ToStr(args[1])) +
+                            "\",\"args\":" + call_args + "}"));
+                });
+            // listExtensions() -> JSON array of the scanned .xexrj
+            // set (same entries the Ext panel lists).
+            e.DefineFunction(
+                obj, "listExtensions",
+                [this](const std::vector<OutValue>&) {
+                    std::string json = "[";
+                    bool first = true;
+                    for (const Extension& ext : entries_) {
+                        if (!first) json += ',';
+                        first = false;
+                        json += "{\"id\":\"" + JsonEsc(ext.manifest.id) +
+                                "\",\"name\":\"" +
+                                JsonEsc(ext.manifest.name) +
+                                "\",\"version\":\"" +
+                                JsonEsc(ext.manifest.version) +
+                                "\",\"path\":\"" + JsonEsc(ext.path) +
+                                "\",\"verified\":" +
+                                (ext.verified ? "true" : "false") +
+                                ",\"native\":" +
+                                (ext.has_native ? "true" : "false") +
+                                ",\"loaded\":" +
+                                (FindLoaded(ext.manifest.id) != nullptr
+                                     ? "true"
+                                     : "false") +
+                                "}";
+                    }
+                    json += ']';
+                    return apprt::StrVal(json);
                 });
         });
 }

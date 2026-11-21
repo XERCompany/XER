@@ -19,6 +19,9 @@ namespace {
 std::mutex g_mutex;
 std::unordered_map<std::string, std::shared_ptr<Tz::TzArchive>>
     g_registry;
+// Optional module-bridge fallback (see ExtSchemeSetProvider in the
+// header). Guarded by g_mutex like the map — set once at startup.
+ExtSchemeProvider g_provider = nullptr;
 
 std::string ExtMimeType(const std::string& name) {
     const auto dot = name.find_last_of('.');
@@ -62,6 +65,30 @@ std::shared_ptr<Tz::TzArchive> ExtSchemeLookup(
     std::lock_guard lock(g_mutex);
     const auto it = g_registry.find(ext_id);
     return it == g_registry.end() ? nullptr : it->second;
+}
+
+void ExtSchemeSetProvider(ExtSchemeProvider provider) {
+    std::lock_guard lock(g_mutex);
+    g_provider = provider;
+}
+
+// Serve one member for `request_url`'s ext id — registered archive
+// first, installed provider as the cross-module fallback. Shared by
+// the CEF handler and diagnostics.
+bool ExtSchemeServeMember(const std::string& ext_id,
+                          const std::string& member,
+                          std::vector<uint8_t>* bytes_out) {
+    if (const auto archive = ExtSchemeLookup(ext_id);
+        archive && archive->Read(member, bytes_out)) {
+        return true;
+    }
+    ExtSchemeProvider provider;
+    {
+        std::lock_guard lock(g_mutex);
+        provider = g_provider;
+    }
+    return provider != nullptr &&
+           provider(ext_id, member, bytes_out);
 }
 
 std::string ExtSchemeUrl(const std::string& ext_id,
@@ -160,10 +187,9 @@ public:
         if (query != std::string::npos) member.resize(query);
         if (member.empty()) member = "static/index.html";
 
-        const auto archive = ExtSchemeLookup(ext_id);
         std::vector<uint8_t> bytes;
         const bool found =
-            archive && archive->Read(member, &bytes);
+            ExtSchemeServeMember(ext_id, member, &bytes);
         return new ExtResourceHandler(std::move(bytes),
                                       ExtMimeType(member), found);
     }

@@ -24,9 +24,12 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <cstring>
+#include <cwchar>
+#include <deque>
 #include <map>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include <windows.h>
 
@@ -36,6 +39,12 @@ namespace XER::VideoEditor {
 namespace {
 
 constexpr int kMaxDeaths = 3;   // then the pipe stays down
+// Bounded queue for reverse-channel request lines the callback
+// reader has drained but the pump hasn't consumed yet — a stalled
+// pump must not grow memory without limit; the oldest line is
+// dropped (a dropped host_call leaves its worker-side waiter
+// parked, which is the documented stall, not a memory leak).
+constexpr std::size_t kMaxCallbackLines = 4096;
 
 // Reads one chunk from the pipe. Returns bytes or -1 (EOF/broken).
 int ReadPipe(HANDLE h, char* buf, int cap) {
@@ -68,6 +77,7 @@ struct WorkerPipe::Impl {
     // the mutex: its exit path takes mu for the reply-table clear.
     void Kill(bool deliberate) {
         std::thread to_join;
+        std::thread cb_to_join;
         {
             std::lock_guard<std::mutex> lock(mu);
             if (deliberate && proc.hProcess != nullptr) {
@@ -90,13 +100,27 @@ struct WorkerPipe::Impl {
                 CloseHandle(child_stdout);
                 child_stdout = nullptr;
             }
+            if (cb_read != nullptr) {
+                CloseHandle(cb_read);
+                cb_read = nullptr;
+            }
+            if (cb_write != nullptr) {
+                CloseHandle(cb_write);
+                cb_write = nullptr;
+            }
+            cb_lines.clear();
             reader_done.store(true);
+            cb_reader_done.store(true);
             if (reader.joinable()) {
                 to_join = std::move(reader);
+            }
+            if (cb_reader.joinable()) {
+                cb_to_join = std::move(cb_reader);
             }
         }
         cv.notify_all();   // wake waiters — no reply is coming
         if (to_join.joinable()) to_join.join();
+        if (cb_to_join.joinable()) cb_to_join.join();
     }
 
     // mu held. Spawns the child on first use (or after a teardown) and
@@ -161,6 +185,71 @@ struct WorkerPipe::Impl {
             spawn_failed = true;
             return false;
         }
+        // Optional reverse channel (spec.callback_env): two more
+        // anonymous pipes. The child inherits the ends it uses and
+        // learns their handle values through environment variables —
+        // anonymous-pipe handles can't be named, so an env handoff is
+        // the simplest side-band that survives an unchanged command
+        // line. Channel failure degrades to "no channel" (the worker
+        // falls back to its queued-event path); it never fails the
+        // spawn itself.
+        HANDLE cb_req_write = nullptr;   // child writes requests here
+        HANDLE cb_rsp_read = nullptr;    // child reads replies here
+        HANDLE cb_req_read = nullptr;    // parent drains this
+        HANDLE cb_rsp_write = nullptr;   // parent answers on this
+        const bool want_cb =
+            spec.callback_env != nullptr && spec.callback_env[0] != '\0';
+        const bool have_cb =
+            want_cb &&
+            CreatePipe(&cb_req_read, &cb_req_write, &sa, 1 << 20) &&
+            CreatePipe(&cb_rsp_read, &cb_rsp_write, &sa, 1 << 20);
+        if (have_cb) {
+            // Parent ends must not be inherited (same EOF rule as
+            // stdin/stdout), child ends already are.
+            SetHandleInformation(cb_req_read, HANDLE_FLAG_INHERIT, 0);
+            SetHandleInformation(cb_rsp_write, HANDLE_FLAG_INHERIT, 0);
+        } else if (want_cb) {
+            // Partial creation — close whatever exists.
+            for (HANDLE h : {cb_req_read, cb_req_write, cb_rsp_read,
+                             cb_rsp_write}) {
+                if (h != nullptr) CloseHandle(h);
+            }
+            cb_req_read = cb_req_write = cb_rsp_read = cb_rsp_write =
+                nullptr;
+        }
+        // Child environment: the parent's block plus the two handle
+        // advertisements. A nullptr lpEnvironment would just inherit —
+        // with a channel we must build the block ourselves.
+        std::vector<wchar_t> env_block;
+        DWORD create_flags = CREATE_NO_WINDOW;
+        if (have_cb) {
+            if (const wchar_t* parent_env = GetEnvironmentStringsW();
+                parent_env != nullptr) {
+                const wchar_t* p = parent_env;
+                while (*p != L'\0') {
+                    const std::size_t len = std::wcslen(p) + 1;
+                    env_block.insert(env_block.end(), p, p + len);
+                    p += len;
+                }
+                FreeEnvironmentStringsW(
+                    const_cast<wchar_t*>(parent_env));
+            }
+            const std::wstring prefix = Widen(spec.callback_env);
+            const auto push_var = [&env_block](const std::wstring& v) {
+                env_block.insert(env_block.end(), v.begin(), v.end());
+                env_block.push_back(L'\0');
+            };
+            // REQ = the handle the worker WRITES host requests to;
+            // RSP = the handle it READS editor replies from.
+            push_var(prefix + L"_REQ=" +
+                     std::to_wstring(reinterpret_cast<std::uintptr_t>(
+                         cb_req_write)));
+            push_var(prefix + L"_RSP=" +
+                     std::to_wstring(reinterpret_cast<std::uintptr_t>(
+                         cb_rsp_read)));
+            env_block.push_back(L'\0');   // double-NUL terminator
+            create_flags |= CREATE_UNICODE_ENVIRONMENT;
+        }
         STARTUPINFOW si{};
         si.cb = sizeof(si);
         si.dwFlags = STARTF_USESTDHANDLES | STARTF_USESHOWWINDOW;
@@ -171,13 +260,22 @@ struct WorkerPipe::Impl {
         PROCESS_INFORMATION pi{};
         const BOOL ok = CreateProcessW(
             nullptr, cmd.data(), nullptr, nullptr,
-            /*inherit*/ TRUE, CREATE_NO_WINDOW, nullptr, nullptr, &si,
-            &pi);
+            /*inherit*/ TRUE, create_flags,
+            env_block.empty() ? nullptr : env_block.data(), nullptr,
+            &si, &pi);
         CloseHandle(in_read);      // parent never uses these ends
         CloseHandle(out_write);
+        if (have_cb) {             // nor the child's channel ends
+            CloseHandle(cb_req_write);
+            CloseHandle(cb_rsp_read);
+        }
         if (!ok) {
             CloseHandle(in_write);
             CloseHandle(out_read);
+            if (have_cb) {
+                CloseHandle(cb_req_read);
+                CloseHandle(cb_rsp_write);
+            }
             spawn_failed = true;
             return false;
         }
@@ -189,7 +287,40 @@ struct WorkerPipe::Impl {
         child_stdout = out_read;
         reader_done.store(false);
         reader = std::thread([this] { ReaderLoop(); });
+        if (have_cb) {
+            cb_read = cb_req_read;
+            cb_write = cb_rsp_write;
+            cb_reader_done.store(false);
+            cb_reader = std::thread([this] { CallbackReaderLoop(); });
+        }
         return true;
+    }
+
+    // Drains the reverse channel's request pipe (worker -> editor),
+    // queueing complete JSON lines for PopCallbackLine. Death
+    // accounting stays with ReaderLoop only — a broken callback pipe
+    // just marks the channel done; the stdout reader reports the
+    // child exit.
+    void CallbackReaderLoop() {
+        char buf[65536];
+        std::string carry;
+        for (;;) {
+            const int n = ReadPipe(cb_read, buf, sizeof(buf));
+            if (n <= 0) break;
+            carry.append(buf, buf + n);
+            for (;;) {
+                const auto nl = carry.find('\n');
+                if (nl == std::string::npos) break;
+                std::string line = carry.substr(0, nl);
+                carry.erase(0, nl + 1);
+                std::lock_guard<std::mutex> lock(mu);
+                if (cb_lines.size() >= kMaxCallbackLines) {
+                    cb_lines.pop_front();   // bounded — see constant
+                }
+                cb_lines.push_back(std::move(line));
+            }
+        }
+        cb_reader_done.store(true);
     }
 
     void ReaderLoop() {
@@ -281,6 +412,15 @@ struct WorkerPipe::Impl {
     HANDLE child_stdout = nullptr;   // our read end
     std::thread reader;
     std::atomic<bool> reader_done{false};
+    // Reverse channel (spec.callback_env): cb_read drains the
+    // worker's host requests (cb_reader thread queues them in
+    // cb_lines under mu), cb_write carries our reply lines. Both null
+    // when the role has no channel.
+    HANDLE cb_read = nullptr;
+    HANDLE cb_write = nullptr;
+    std::thread cb_reader;
+    std::atomic<bool> cb_reader_done{false};
+    std::deque<std::string> cb_lines;   // under mu
     std::map<std::uint64_t, std::string> replies;
     std::atomic<std::uint64_t> next_id{1};
     std::atomic<int> deaths{0};
@@ -338,6 +478,37 @@ int WorkerPipe::Deaths() const {
     return impl_->deaths.load(std::memory_order_relaxed);
 }
 
+bool WorkerPipe::HasCallbackChannel() const {
+    std::lock_guard<std::mutex> lock(impl_->mu);
+    return impl_->cb_read != nullptr && impl_->cb_write != nullptr;
+}
+
+bool WorkerPipe::PopCallbackLine(std::string* line) {
+    if (line == nullptr) return false;
+    std::lock_guard<std::mutex> lock(impl_->mu);
+    if (impl_->cb_lines.empty()) return false;
+    *line = std::move(impl_->cb_lines.front());
+    impl_->cb_lines.pop_front();
+    return true;
+}
+
+bool WorkerPipe::WriteCallbackLine(const std::string& line) {
+    std::unique_lock<std::mutex> lock(impl_->mu);
+    if (impl_->cb_write == nullptr) return false;
+    const std::string wire = line + "\n";
+    DWORD wrote = 0;
+    if (WriteFile(impl_->cb_write, wire.data(),
+                  static_cast<DWORD>(wire.size()), &wrote, nullptr) &&
+        wrote == wire.size()) {
+        return true;
+    }
+    lock.unlock();
+    // Broken reverse channel = broken child — same teardown a failed
+    // RoundTrip performs so the next request respawns cleanly.
+    impl_->Kill(/*deliberate=*/false);
+    return false;
+}
+
 WorkerPipe& SyncMediaPipe() {
     static WorkerPipe pipe(WorkerPipeSpec{
         "XERSyncMedia.exe", nullptr, "XER_VE_SYNC_WORKER"});
@@ -347,6 +518,13 @@ WorkerPipe& SyncMediaPipe() {
 WorkerPipe& FxScriptPipe() {
     static WorkerPipe pipe(WorkerPipeSpec{
         "XERFxScript.exe", nullptr, "XER_VE_FX_WORKER"});
+    return pipe;
+}
+
+WorkerPipe& ExtRuntimePipe() {
+    static WorkerPipe pipe(WorkerPipeSpec{
+        "VE.ExtensionsRuntime.exe", nullptr, "XER_VE_EXT_WORKER",
+        "XER_VE_EXT_HOST"});
     return pipe;
 }
 
@@ -371,12 +549,19 @@ bool WorkerPipe::RoundTrip(std::uint64_t, const std::string&, int,
 bool WorkerPipe::Ping(std::string*, int) { return false; }
 void WorkerPipe::KillWorker() {}
 int WorkerPipe::Deaths() const { return 0; }
+bool WorkerPipe::HasCallbackChannel() const { return false; }
+bool WorkerPipe::PopCallbackLine(std::string*) { return false; }
+bool WorkerPipe::WriteCallbackLine(const std::string&) { return false; }
 
 WorkerPipe& SyncMediaPipe() {
     static WorkerPipe pipe(WorkerPipeSpec{});
     return pipe;
 }
 WorkerPipe& FxScriptPipe() {
+    static WorkerPipe pipe(WorkerPipeSpec{});
+    return pipe;
+}
+WorkerPipe& ExtRuntimePipe() {
     static WorkerPipe pipe(WorkerPipeSpec{});
     return pipe;
 }

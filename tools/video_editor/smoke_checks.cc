@@ -19,20 +19,25 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
 
+#include <json/json.h>
+
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
 #include "audio_sync.h"
+#include "cef/cef_ext_scheme.h"
 #include "compositor.h"
 #include "content/video/video_info.h"
 #include "export_engine.h"
 #include "export_preset.h"
+#include "extensions/ext_host.h"
 #include "font_catalog.h"
 #include "frame.h"
 #include "frame_exporter.h"
@@ -53,6 +58,7 @@
 #include "timecode.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "tz/tz.h"
 #include "url_import.h"
 #include "worker_pipe.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
@@ -2365,7 +2371,1088 @@ std::string CheckUrlImport() {
     return {};
 }
 
-// ---- registry + runner ----------------------------------------------
+// Extensions panel data path: when assets/extensions/ holds .xexrj
+// packages, ExtHost::Shared().Scan() must surface them to the Ext
+// dock tab's list (id/name/version present) and a UI-declaring
+// extension must resolve a usable xer-ext:// URL + member bytes —
+// exactly what the panel's "Open" action consumes. Missing assets
+// are tolerated (fresh builds may deploy none).
+std::string CheckExtensionsPanelData() {
+    std::string status;
+    auto boot = AppRuntime::Boot(&status);  // resolves assets_dir
+    AppRuntime::SharedBootEngine() = nullptr;
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) {
+        return {};   // no assets deployed — nothing to list
+    }
+    const std::filesystem::path ext_dir =
+        cfg.assets_dir / "extensions";
+    std::error_code ec;
+    bool any_package = false;
+    if (std::filesystem::is_directory(ext_dir, ec)) {
+        for (const auto& de :
+             std::filesystem::directory_iterator(ext_dir, ec)) {
+            if (de.path().extension() == ".xexrj") {
+                any_package = true;
+                break;
+            }
+        }
+    }
+    if (!any_package) {
+        return {};   // tolerant: extensions are optional content
+    }
+    ExtHost::Shared().Scan(ext_dir.string());
+    const auto& entries = ExtHost::Shared().Entries();
+    if (entries.empty()) {
+        return "extensions present but scan listed none";
+    }
+    int verified = 0;
+    const Extension* with_ui = nullptr;
+    for (const Extension& e : entries) {
+        if (!e.verified) continue;
+        ++verified;
+        if (e.manifest.id.empty() || e.manifest.name.empty()) {
+            return "verified extension missing id/name in manifest";
+        }
+        if (!e.manifest.ui.empty() && with_ui == nullptr) {
+            with_ui = &e;
+        }
+    }
+    if (verified == 0) {
+        return "extensions present but none verified";
+    }
+    if (with_ui != nullptr) {
+        // The panel builds this URL for its Open action.
+        const std::string url =
+            XER::Cef::ExtSchemeUrl(with_ui->manifest.id,
+                                   with_ui->manifest.ui);
+        const std::string want_prefix =
+            "xer-ext://" + with_ui->manifest.id + "/";
+        if (url.rfind(want_prefix, 0) != 0) {
+            return "ExtSchemeUrl produced '" + url + "'";
+        }
+        if (ExtHost::Shared()
+                .ReadMember(with_ui->manifest.id, with_ui->manifest.ui)
+                .empty()) {
+            return "declared UI member unreadable: " +
+                   with_ui->manifest.ui;
+        }
+    }
+    return {};
+}
+
+// .xexrj native JIT payloads (tools/tz/xsjo_compile.*): ztzmake packs
+// extension C++ sources as COFF objects under mobjective/*.xsjo, each
+// wrapped in an XSJ1 header (magic, version, triple, source name).
+// The JIT loader trusts that header before executing the object, so
+// this check re-validates it on every deployed extension: well-formed
+// header + a COFF machine word matching the triple. No .xexrj or no
+// .xsjo member degrades gracefully (assets_icons owns missing-package
+// complaints, and non-Clang toolchains legitimately ship none); a
+// malformed .xsjo is a hard failure — the pipeline produced a broken
+// object.
+std::string CheckExtXsjo() {
+    std::string status;
+    AppRuntime::Boot(&status);   // resolves assets_dir
+    AppRuntime::SharedBootEngine() = nullptr;
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) {
+        return {};
+    }
+    const std::filesystem::path ext_dir = cfg.assets_dir / "extensions";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(ext_dir, ec)) {
+        return {};
+    }
+    const auto u16le = [](const std::uint8_t* p) {
+        return static_cast<unsigned>(p[0]) |
+               (static_cast<unsigned>(p[1]) << 8);
+    };
+    const auto u64le = [](const std::uint8_t* p) {
+        std::uint64_t x = 0;
+        for (int s = 0; s < 64; s += 8) {
+            x |= static_cast<std::uint64_t>(p[s / 8]) << s;
+        }
+        return x;
+    };
+    for (const auto& de :
+         std::filesystem::directory_iterator(ext_dir, ec)) {
+        if (de.path().extension() != ".xexrj") continue;
+        std::string open_err;
+        auto arc =
+            Tz::TzArchive::Open(Utf8Path(de.path()), &open_err);
+        if (!arc) {
+            return "cannot open " +
+                   Utf8Path(de.path().filename()) + ": " + open_err;
+        }
+        for (const auto& name : arc->Names()) {
+            if (name.rfind("mobjective/", 0) != 0 ||
+                name.size() < 6 ||
+                name.compare(name.size() - 5, 5, ".xsjo") != 0) {
+                continue;
+            }
+            std::vector<std::uint8_t> bytes;
+            if (!arc->Read(name, &bytes)) {
+                return "cannot read member " + name;
+            }
+            const std::uint8_t* p = bytes.data();
+            const std::size_t n = bytes.size();
+            const auto bad = [&](const char* why) {
+                return name + ": " + why;
+            };
+            if (n < 14 || p[0] != 'X' || p[1] != 'S' || p[2] != 'J' ||
+                p[3] != '1') {
+                return bad("bad XSJ1 magic");
+            }
+            if (u16le(p + 4) != 1) {
+                return bad("unsupported XSJ1 version");
+            }
+            std::size_t at = 6;
+            std::string triple;
+            for (int i = 0; i < 2; ++i) {   // triple, source name
+                if (at + 2 > n) return bad("truncated header");
+                const unsigned len = u16le(p + at);
+                at += 2;
+                if (at + len > n) return bad("truncated strings");
+                if (i == 0) {
+                    triple.assign(
+                        reinterpret_cast<const char*>(p + at), len);
+                }
+                at += len;
+            }
+            if (triple.empty()) return bad("empty triple");
+            if (at + 8 > n) return bad("missing payload size");
+            const std::uint64_t payload_size = u64le(p + at);
+            at += 8;
+            if (payload_size < 20 || payload_size > n - at) {
+                return bad("payload size out of range");
+            }
+            // COFF object file header starts with the machine type:
+            // x86_64 triples must carry IMAGE_FILE_MACHINE_AMD64.
+            if (triple.rfind("x86_64", 0) == 0 &&
+                u16le(p + at) != 0x8664) {
+                return bad("payload is not an x86_64 COFF object");
+            }
+        }
+    }
+    return {};
+}
+
+// VE.ExtensionsRuntime.exe (extensions/ext_runtime_server.cc) — the
+// dedicated native-extension JIT host: the exe must sit beside
+// video_editor.exe (build/deploy contract), ping must report the
+// VE.ExtensionsRuntime role, ext_list must surface the deployed
+// demo.xexrj, and ext_load on the JS-only demo must succeed
+// gracefully (native:false — no mobjective members → the in-editor
+// ExtHost owns it). Any listed extension that DOES carry
+// mobjective/*.xsjo is also ext_loaded — tolerated when the JIT is
+// unavailable or the reply is a clean ok:false engine error (the
+// ztzmake-side native demo may not be packed yet); transport silence
+// and malformed replies still count as failures.
+std::string CheckExtRuntime() {
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    if (!std::filesystem::exists(
+            bin_dir / "VE.ExtensionsRuntime.exe", ec)) {
+        return "VE.ExtensionsRuntime.exe missing beside "
+               "video_editor.exe";
+    }
+    WorkerPipe pipe(WorkerPipeSpec{
+        "VE.ExtensionsRuntime.exe", nullptr, "XER_VE_EXT_WORKER"});
+    if (!pipe.Available()) {
+        return "ext runtime spawn failed";
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "ext runtime ping failed";
+    }
+    if (role != "VE.ExtensionsRuntime") {
+        return "unexpected ext runtime role '" + role + "'";
+    }
+
+    const auto round_trip =
+        [&](const std::function<void(Json::Value&)>& fill,
+            std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            Json::Value req(Json::objectValue);
+            req["id"] = Json::UInt64(id);
+            fill(req);
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            return pipe.RoundTrip(id, Json::writeString(w, req), 15000,
+                                  reply);
+        };
+    const auto parse = [](const std::string& line, Json::Value* out) {
+        std::string errs;
+        Json::CharReaderBuilder r;
+        std::istringstream in(line);
+        return Json::parseFromStream(r, in, out, &errs) &&
+               out->isObject();
+    };
+
+    // ext_list — must find the deployed demo.xexrj.
+    const std::string ext_dir =
+        Utf8Path(bin_dir / "assets" / "extensions");
+    std::string reply;
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_list";
+                r["dir"] = ext_dir;
+            },
+            &reply)) {
+        return "ext_list got no reply";
+    }
+    Json::Value list;
+    if (!parse(reply, &list) || !list.get("ok", false).asBool()) {
+        return "ext_list failed: " +
+               list.get("err", "malformed reply").asString();
+    }
+    std::string demo_path;
+    std::vector<std::string> native_paths;
+    for (const auto& e : list["exts"]) {
+        if (e.get("id", "").asString() == "demo") {
+            demo_path = e.get("path", "").asString();
+        }
+        if (e.get("has_native", false).asBool()) {
+            native_paths.push_back(e.get("path", "").asString());
+        }
+    }
+    if (demo_path.empty()) {
+        return "demo.xexrj not reported by ext_list";
+    }
+
+    // ext_load demo — ok:true is required. native:true means the
+    // demo's mobjective/*.xsjo went through the real JIT path
+    // (XSJ1 parse → COFF → LLJIT link → module loaded); native:false
+    // is the graceful JS-only shape.
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_load";
+                r["path"] = demo_path;
+            },
+            &reply)) {
+        return "ext_load demo got no reply";
+    }
+    Json::Value load;
+    if (!parse(reply, &load)) {
+        return "ext_load demo reply is malformed";
+    }
+    if (!load.get("ok", false).asBool()) {
+        return "ext_load demo failed: " +
+               load.get("err", "?").asString();
+    }
+    if (!load.isMember("native")) {
+        return "ext_load demo reply lacks the native flag";
+    }
+
+    // When the demo packed native objects, drive one exported
+    // callable end to end — ext_call "ve_demo_name" exercises the
+    // JIT symbol lookup, the JIT'd call itself and the ve_ctx
+    // pass-through. ok:true with a non-empty result_json is
+    // asserted; ok:false is tolerated (the demo's exports may move).
+    if (load.get("native", false).asBool()) {
+        reply.clear();
+        if (!round_trip(
+                [&](Json::Value& r) {
+                    r["kind"] = "ext_call";
+                    r["ext_id"] = "demo";
+                    r["fn"] = "ve_demo_name";
+                    r["args"] = "{}";
+                },
+                &reply)) {
+            return "ext_call ve_demo_name got no reply";
+        }
+        Json::Value call;
+        if (!parse(reply, &call)) {
+            return "ext_call ve_demo_name reply is malformed";
+        }
+        if (call.get("ok", false).asBool() &&
+            call.get("result_json", "").asString().empty()) {
+            return "ext_call ve_demo_name returned an empty result";
+        }
+        // ok:false tolerated — the demo's exported callables may
+        // change; the JIT path already ran in ext_load.
+        reply.clear();
+        if (!round_trip(
+                [&](Json::Value& r) {
+                    r["kind"] = "ext_unload";
+                    r["ext_id"] = "demo";
+                },
+                &reply)) {
+            return "ext_unload got no reply";
+        }
+    }
+
+    // ext_events — drains the queued-event bridge; empty is fine.
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) { r["kind"] = "ext_events"; },
+            &reply)) {
+        return "ext_events got no reply";
+    }
+    Json::Value ev;
+    if (!parse(reply, &ev) || !ev.get("ok", false).asBool() ||
+        !ev["events"].isArray()) {
+        return "ext_events reply malformed";
+    }
+
+    // Tolerated JIT drive — see the comment above the function.
+    for (const auto& p : native_paths) {
+        reply.clear();
+        if (!round_trip(
+                [&](Json::Value& r) {
+                    r["kind"] = "ext_load";
+                    r["path"] = p;
+                },
+                &reply)) {
+            return "ext_load of a native extension got no reply";
+        }
+        if (!parse(reply, &load)) {
+            return "ext_load native reply malformed";
+        }
+        // ok:false tolerated until the native demo lands.
+    }
+    pipe.KillWorker();
+    return {};
+#else
+    return {};
+#endif
+}
+
+// ext_bridge — the v2 host channel (sdk/ve.core.h, worker_pipe's
+// callback_env reverse channel). Drives the REAL ExtRuntimePipe
+// singleton so the spawned VE.ExtensionsRuntime gets the
+// XER_VE_EXT_HOST_* handle handoff the editor would give it, then:
+//   1. ext_call "ve_demo_add_clip" — the fire-and-forget path; the
+//      reply's events[] must carry a well-formed "add_clip" event.
+//   2. ext_call "ve_demo_hostcall" on a SECOND thread while this one
+//      services the reverse channel — the extension's ve_call parks
+//      inside the runtime until our host_call reply unblocks it; the
+//      callable echoes the editor's result back through result_json.
+// Tolerated: missing exe/JIT, a demo packed before these exports
+// existed (ok:false symbol errors), or a worker spawned without the
+// channel. Hard failures: transport silence and malformed shapes.
+std::string CheckExtBridge() {
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    if (!std::filesystem::exists(
+            bin_dir / "VE.ExtensionsRuntime.exe", ec)) {
+        return {};   // ext_runtime owns the missing-exe complaint
+    }
+    WorkerPipe& pipe = ExtRuntimePipe();
+    if (!pipe.Available()) {
+        return {};   // tolerated — spawn may be disabled
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "ext runtime ping failed";
+    }
+    if (role != "VE.ExtensionsRuntime") {
+        return "unexpected ext runtime role '" + role + "'";
+    }
+
+    const auto round_trip =
+        [&](const std::function<void(Json::Value&)>& fill,
+            int timeout_ms, std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            Json::Value req(Json::objectValue);
+            req["id"] = Json::UInt64(id);
+            fill(req);
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            return pipe.RoundTrip(id, Json::writeString(w, req),
+                                  timeout_ms, reply);
+        };
+    const auto parse = [](const std::string& line, Json::Value* out) {
+        std::string errs;
+        Json::CharReaderBuilder r;
+        std::istringstream in(line);
+        return Json::parseFromStream(r, in, out, &errs) &&
+               out->isObject();
+    };
+
+    // Find + load the demo. native:false/ok:false both skip the rest
+    // gracefully (JS-only pack, or no LLVM in this toolchain).
+    const std::string ext_dir =
+        Utf8Path(bin_dir / "assets" / "extensions");
+    std::string reply;
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_list";
+                r["dir"] = ext_dir;
+            },
+            15000, &reply)) {
+        return "ext_list got no reply";
+    }
+    Json::Value list;
+    if (!parse(reply, &list) || !list.get("ok", false).asBool()) {
+        return "ext_list reply malformed";
+    }
+    std::string demo_path;
+    for (const auto& e : list["exts"]) {
+        if (e.get("id", "").asString() == "demo") {
+            demo_path = e.get("path", "").asString();
+        }
+    }
+    if (demo_path.empty()) {
+        return {};   // no demo deployed — nothing to bridge
+    }
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_load";
+                r["path"] = demo_path;
+            },
+            60000, &reply)) {
+        return "ext_load demo got no reply";
+    }
+    Json::Value load;
+    if (!parse(reply, &load) || !load.get("ok", false).asBool() ||
+        !load.get("native", false).asBool()) {
+        return {};   // JIT unavailable or JS-only pack — tolerated
+    }
+
+    // 1. Queued add_clip event — must arrive in the ext_call reply's
+    //    events[] with the exact shape the editor pump consumes.
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_call";
+                r["ext_id"] = "demo";
+                r["fn"] = "ve_demo_add_clip";
+                r["args"] = "{}";
+            },
+            30000, &reply)) {
+        return "ext_call ve_demo_add_clip got no reply";
+    }
+    Json::Value call;
+    if (!parse(reply, &call)) {
+        return "ext_call ve_demo_add_clip reply is malformed";
+    }
+    if (call.get("ok", false).asBool()) {
+        const Json::Value& events = call["events"];
+        if (!events.isArray()) {
+            return "ext_call reply carries no events array";
+        }
+        const Json::Value* add = nullptr;
+        for (const auto& e : events) {
+            if (e.get("type", "").asString() == "add_clip") {
+                add = &e;
+            }
+        }
+        if (add == nullptr) {
+            return "ve_demo_add_clip produced no add_clip event";
+        }
+        if (add->get("kind", "").asString() != "color" ||
+            std::fabs(add->get("start", 0.0).asDouble() - 1.0) >
+                1e-6 ||
+            std::fabs(add->get("duration", 0.0).asDouble() - 2.5) >
+                1e-6) {
+            return "add_clip event fields are wrong";
+        }
+    }
+    // ok:false tolerated — a demo packed before the export existed.
+
+    // 2. Synchronous host channel — ve_call parked in the runtime is
+    //    answered by OUR callback reply, proving the reverse channel
+    //    end to end without the editor UI.
+    if (!pipe.HasCallbackChannel()) {
+        return {};   // worker spawned without the channel — tolerated
+    }
+    {
+        std::atomic<bool> done{false};
+        std::string call_reply;
+        std::thread caller([&] {
+            std::string r;
+            static_cast<void>(round_trip(
+                [&](Json::Value& req) {
+                    req["kind"] = "ext_call";
+                    req["ext_id"] = "demo";
+                    req["fn"] = "ve_demo_hostcall";
+                    req["args"] = "{}";
+                },
+                120000, &r));
+            call_reply = std::move(r);
+            done.store(true, std::memory_order_release);
+        });
+        bool saw_host_call = false;
+        std::string failure;   // deferred — caller must join first
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(10);
+        while (!done.load(std::memory_order_acquire) &&
+               failure.empty() &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::string line;
+            if (!pipe.PopCallbackLine(&line)) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(5));
+                continue;
+            }
+            Json::Value req;
+            if (!parse(line, &req) ||
+                req.get("kind", "").asString() != "host_call") {
+                continue;
+            }
+            saw_host_call = true;
+            if (req.get("name", "").asString() != "project.info") {
+                failure = "host_call asked for an unexpected service";
+                break;
+            }
+            Json::Value rsp(Json::objectValue);
+            rsp["req_id"] = req["req_id"];
+            rsp["ok"] = true;
+            rsp["result"] = "{\"ok\":true,\"via\":\"smoke\"}";
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            if (!pipe.WriteCallbackLine(
+                    Json::writeString(w, rsp))) {
+                failure = "host_call reply write failed";
+            }
+        }
+        if (!done.load(std::memory_order_acquire)) {
+            // Unstick the parked RoundTrip before joining — a kill
+            // breaks every pipe and fails the wait fast.
+            pipe.KillWorker();
+        }
+        caller.join();
+        if (!failure.empty()) {
+            return failure;
+        }
+        if (!done.load(std::memory_order_acquire)) {
+            return saw_host_call
+                       ? "ve_call never returned after the host "
+                         "reply — bridge broken"
+                       : "ext_call hung with no host_call — demo "
+                         "stale?";
+        }
+        if (call_reply.empty()) {
+            return "ext_call ve_demo_hostcall got no reply";
+        }
+        Json::Value host;
+        if (!parse(call_reply, &host)) {
+            return "ve_demo_hostcall reply is malformed";
+        }
+        if (!host.get("ok", false).asBool()) {
+            return {};   // symbol absent in this pack — tolerated
+        }
+        // The demo echoes ve_call's raw result: our editor reply must
+        // be visible inside result_json.
+        const std::string result =
+            host.get("result_json", "").asString();
+        if (result.find("\"via\":\"smoke\"") == std::string::npos) {
+            return "ve_call did not return the editor's reply: " +
+                   result;
+        }
+    }
+
+    // Best-effort unload.
+    reply.clear();
+    static_cast<void>(round_trip(
+        [&](Json::Value& r) {
+            r["kind"] = "ext_unload";
+            r["ext_id"] = "demo";
+        },
+        15000, &reply));
+    return {};
+#else
+    return {};
+#endif
+}
+
+// ext_xejslib — the .xejslib library chain end to end (tools/tz/
+// xejslib.h, XSJOBuildX): when demo.xexrj carries
+// mobjective/lib_*.xsjo members — spliced in by ztzmake --dep from
+// libdemo.xejslib — ext_load must resolve the extension's own
+// undefined libdemo:: symbols against them (the runtime meshes all
+// of one extension's JITDylibs). Driving ve_demo_gain proves a
+// mangled C++ symbol crosses module boundaries: result_json must
+// carry libdemo's Version() string from the LIB module's rodata.
+// Tolerated: no demo, no lib_* members (packed without the dep),
+// missing runtime/JIT, or a stale pack where ve_demo_gain does not
+// resolve. A present-but-wrong result is a hard failure.
+std::string CheckExtXejslib() {
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    const std::filesystem::path ext_dir =
+        bin_dir / "assets" / "extensions";
+    const std::filesystem::path demo = ext_dir / "demo.xexrj";
+    if (!std::filesystem::is_regular_file(demo, ec)) {
+        return {};   // assets_icons owns the missing-package report
+    }
+    std::string open_err;
+    auto arc = Tz::TzArchive::Open(Utf8Path(demo), &open_err);
+    if (!arc) {
+        return "cannot open demo.xexrj: " + open_err;
+    }
+    bool has_lib_member = false;
+    for (const auto& name : arc->Names()) {
+        if (name.rfind("mobjective/lib_", 0) == 0 &&
+            name.size() > 5 &&
+            name.compare(name.size() - 5, 5, ".xsjo") == 0) {
+            has_lib_member = true;
+            break;
+        }
+    }
+    if (!has_lib_member) {
+        return {};   // packed without a dep — nothing to prove
+    }
+    if (!std::filesystem::exists(
+            bin_dir / "VE.ExtensionsRuntime.exe", ec)) {
+        return {};   // ext_runtime owns the missing-exe complaint
+    }
+    WorkerPipe pipe(WorkerPipeSpec{
+        "VE.ExtensionsRuntime.exe", nullptr, "XER_VE_EXT_WORKER"});
+    if (!pipe.Available()) {
+        return "ext runtime spawn failed";
+    }
+    const auto round_trip =
+        [&](const std::function<void(Json::Value&)>& fill,
+            std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            Json::Value req(Json::objectValue);
+            req["id"] = Json::UInt64(id);
+            fill(req);
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            return pipe.RoundTrip(id, Json::writeString(w, req),
+                                  30000, reply);
+        };
+    const auto parse = [](const std::string& line, Json::Value* out) {
+        std::string errs;
+        Json::CharReaderBuilder r;
+        std::istringstream in(line);
+        return Json::parseFromStream(r, in, out, &errs) &&
+               out->isObject();
+    };
+    std::string reply;
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_load";
+                r["path"] = Utf8Path(demo);
+            },
+            &reply)) {
+        return "ext_load demo got no reply";
+    }
+    Json::Value load;
+    if (!parse(reply, &load)) {
+        return "ext_load demo reply is malformed";
+    }
+    if (!load.get("ok", false).asBool() ||
+        !load.get("native", false).asBool()) {
+        return {};   // JIT unavailable — ext_runtime reports it
+    }
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_call";
+                r["ext_id"] = "demo";
+                r["fn"] = "ve_demo_gain";
+                r["args"] = "{}";
+            },
+            &reply)) {
+        return "ext_call ve_demo_gain got no reply";
+    }
+    // Best-effort unload before evaluating the reply.
+    std::string unreply;
+    static_cast<void>(round_trip(
+        [&](Json::Value& r) {
+            r["kind"] = "ext_unload";
+            r["ext_id"] = "demo";
+        },
+        &unreply));
+    Json::Value call;
+    if (!parse(reply, &call)) {
+        return "ext_call ve_demo_gain reply is malformed";
+    }
+    if (!call.get("ok", false).asBool()) {
+        return {};   // symbol absent in this pack — tolerated
+    }
+    const std::string result =
+        call.get("result_json", "").asString();
+    if (result.find("libdemo/1.0") == std::string::npos) {
+        return "ve_demo_gain did not report libdemo's version "
+               "(cross-module link failed?): " + result;
+    }
+    if (result.find("\"gain_q15\"") == std::string::npos ||
+        result.find("\"out\"") == std::string::npos) {
+        return "ve_demo_gain result lacks computed gain fields: " +
+               result;
+    }
+    pipe.KillWorker();
+    return {};
+#else
+    return {};
+#endif
+}
+
+// ve_core_v3 — the ve_call service-table contract (sdk/ve.core.h):
+//   1. VeServiceNames() coverage: every advertised namespace head is
+//      present, VeServiceKnown() agrees with the list, and the
+//      deliberate exclusions (app.quit, v2 aliases, garbage) stay
+//      unadvertised.
+//   2. The describe layer (project_store.cc) answers real project
+//      JSON for a fabricated project — the same builders
+//      DispatchExtHostCall serves editor-side, so the served shapes
+//      are asserted here without a window.
+//   3. Every Transition::Type round-trips
+//      TransitionTypeToString/FromString — .xerproj files and the
+//      "timeline.add_transition" arg vocabulary share that table.
+//   4. Protocol end to end: the demo extension's ve_call reaches a
+//      mini dispatcher over the REAL reverse channel (the same pump
+//      the editor's UI tick runs). "project.info" answers with the
+//      fabricated describe and "ve.services" with the real table —
+//      the extension's result_json must carry both back verbatim.
+// Tolerated on the pipe path: missing runtime/JIT, a stale demo
+// pack, no channel (ext_bridge owns the transport complaints).
+// The static parts always run.
+std::string CheckVeCoreV3() {
+    // 1. Service-table coverage + self-consistency.
+    const auto& names = VeServiceNames();
+    if (names.size() < 40) {
+        return "VeServiceNames is suspiciously short (" +
+               std::to_string(names.size()) + " entries)";
+    }
+    for (const char* required : {
+             "ve.services", "app.info",
+             "project.info", "project.new", "project.open",
+             "project.save", "project.markers",
+             "timeline.info", "timeline.tracks", "timeline.clips",
+             "timeline.add_track", "timeline.remove_track",
+             "timeline.rename_track", "timeline.set_track",
+             "timeline.add_clip", "timeline.move_clip",
+             "timeline.remove_clip", "timeline.trim_clip",
+             "timeline.split_clip", "timeline.add_transition",
+             "timeline.remove_transition",
+             "transport.info", "transport.play", "transport.pause",
+             "transport.stop", "transport.seek",
+             "transport.frame_step", "transport.set_loop",
+             "transport.set_rate",
+             "selection.get", "selection.set",
+             "media.list", "media.import", "media.refresh",
+             "fx.list", "fx.add", "fx.remove",
+             "export.start", "export.cancel", "export.status",
+             "ui.status", "ui.open_panel",
+             "edit.undo", "edit.redo",
+         }) {
+        if (!VeServiceKnown(required)) {
+            return std::string("service missing from VeServiceNames: ") +
+                   required;
+        }
+    }
+    for (const std::string& n : names) {
+        if (!VeServiceKnown(n)) {
+            return "VeServiceNames/VeServiceKnown disagree on " + n;
+        }
+        if (n != "ve.services" && n != "app.info" &&
+            n.find('.') == std::string::npos) {
+            return "unnamespaced service name " + n;
+        }
+    }
+    // The deliberate exclusions: quit never ships, and the v2
+    // aliases are still served but never advertised.
+    if (VeServiceKnown("app.quit") || VeServiceKnown("project.clips") ||
+        VeServiceKnown("status") || VeServiceKnown("bogus.service")) {
+        return "VeServiceKnown advertised an unserved name";
+    }
+
+    // 2. Describe layer answers real project state.
+    {
+        Project project = MakeRenderProject(160, 90, 15);
+        Marker marker;
+        marker.time = 0.25;
+        marker.name = "smoke-mark";
+        project.markers.push_back(marker);
+        const Json::Value info =
+            VeDescribeProject(project, "demo.xerproj", true);
+        if (info.get("width", 0).asInt() != 160 ||
+            info.get("height", 0).asInt() != 90 ||
+            info.get("fps_num", 0).asInt() != 15 ||
+            info.get("markers", Json::UInt64(0)).asUInt64() != 1 ||
+            !info.get("dirty", false).asBool()) {
+            return "VeDescribeProject fields are wrong";
+        }
+        const Json::Value clips = VeDescribeClips(project);
+        if (!clips["clips"].isArray() || clips["clips"].size() != 1 ||
+            clips["clips"][0].get("kind", "").asString() != "bars" ||
+            clips["clips"][0].get("id", "").asString() != "bars") {
+            return "VeDescribeClips fields are wrong";
+        }
+        const Json::Value tracks = VeDescribeTracks(project);
+        if (!tracks["tracks"].isArray() ||
+            tracks["tracks"].size() != 2 ||
+            tracks["tracks"][0].get("kind", "").asString() != "video" ||
+            tracks["tracks"][1].get("kind", "").asString() != "audio") {
+            return "VeDescribeTracks fields are wrong";
+        }
+        const Json::Value timeline =
+            VeDescribeTimeline(project, 0.5, "bars");
+        if (std::fabs(timeline.get("playhead", -1.0).asDouble() - 0.5) >
+                1e-9 ||
+            timeline.get("selected_clip", "").asString() != "bars" ||
+            std::fabs(timeline.get("frame_seconds", -1.0).asDouble() -
+                      1.0 / 15.0) > 1e-9) {
+            return "VeDescribeTimeline fields are wrong";
+        }
+        const Json::Value markers = VeDescribeMarkers(project);
+        if (!markers["markers"].isArray() ||
+            markers["markers"].size() != 1 ||
+            std::fabs(markers["markers"][0].get("time", -1.0)
+                          .asDouble() - 0.25) > 1e-9) {
+            return "VeDescribeMarkers fields are wrong";
+        }
+    }
+
+    // 3. Transition wire names round-trip for every enum value, and
+    //    garbage is rejected (add_transition's bad_type error).
+    for (Transition::Type t : {Transition::Type::Crossfade,
+                               Transition::Type::WipeLeft,
+                               Transition::Type::SlideDown,
+                               Transition::Type::DipToBlack,
+                               Transition::Type::AdditiveDissolve,
+                               Transition::Type::Script}) {
+        Transition::Type back = Transition::Type::Crossfade;
+        const char* text = TransitionTypeToString(t);
+        if (text == nullptr || *text == '\0' ||
+            !TransitionTypeFromString(text, &back) || back != t) {
+            return "transition wire-name round trip failed";
+        }
+    }
+    {
+        Transition::Type t;
+        if (TransitionTypeFromString("not_a_type", &t)) {
+            return "unknown transition name parsed";
+        }
+    }
+
+#if defined(_WIN32)
+    // 4. Protocol round trip + one REAL describe call through the
+    //    reverse channel (the demo's ve_demo_hostcall /
+    //    ve_demo_services exports drive the extension side).
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    if (!std::filesystem::exists(
+            bin_dir / "VE.ExtensionsRuntime.exe", ec)) {
+        return {};   // ext_runtime owns the missing-exe complaint
+    }
+    WorkerPipe& pipe = ExtRuntimePipe();
+    if (!pipe.Available()) {
+        return {};   // tolerated — spawn may be disabled
+    }
+    if (!pipe.HasCallbackChannel()) {
+        return {};   // worker spawned without the channel — tolerated
+    }
+    const auto round_trip =
+        [&](const std::function<void(Json::Value&)>& fill,
+            int timeout_ms, std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            Json::Value req(Json::objectValue);
+            req["id"] = Json::UInt64(id);
+            fill(req);
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            return pipe.RoundTrip(id, Json::writeString(w, req),
+                                  timeout_ms, reply);
+        };
+    const auto parse = [](const std::string& line, Json::Value* out) {
+        std::string errs;
+        Json::CharReaderBuilder r;
+        std::istringstream in(line);
+        return Json::parseFromStream(r, in, out, &errs) &&
+               out->isObject();
+    };
+    const std::string ext_dir =
+        Utf8Path(bin_dir / "assets" / "extensions");
+    std::string reply;
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_list";
+                r["dir"] = ext_dir;
+            },
+            15000, &reply)) {
+        return "ext_list got no reply";
+    }
+    Json::Value list;
+    if (!parse(reply, &list) || !list.get("ok", false).asBool()) {
+        return "ext_list reply malformed";
+    }
+    std::string demo_path;
+    for (const auto& e : list["exts"]) {
+        if (e.get("id", "").asString() == "demo") {
+            demo_path = e.get("path", "").asString();
+        }
+    }
+    if (demo_path.empty()) {
+        return {};   // no demo deployed — nothing to drive
+    }
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_load";
+                r["path"] = demo_path;
+            },
+            60000, &reply)) {
+        return "ext_load demo got no reply";
+    }
+    Json::Value load;
+    if (!parse(reply, &load) || !load.get("ok", false).asBool() ||
+        !load.get("native", false).asBool()) {
+        return {};   // JIT unavailable or JS-only pack — tolerated
+    }
+
+    // The mini dispatcher answers host_call lines the way
+    // DispatchExtHostCall does: "project.info" serves the fabricated
+    // project's describe, "ve.services" the real table, anything
+    // else the contract's {"ok":false,"error":"unknown_call"}.
+    const Project demo_project = MakeRenderProject(160, 90, 15);
+    const auto compact = [](const Json::Value& v) {
+        Json::StreamWriterBuilder w;
+        w["indentation"] = "";
+        return Json::writeString(w, v);
+    };
+    const auto answer = [&](const Json::Value& req) -> std::string {
+        Json::Value rsp(Json::objectValue);
+        rsp["req_id"] = req["req_id"];
+        rsp["ok"] = true;
+        const std::string svc = req.get("name", "").asString();
+        if (svc == "project.info") {
+            Json::Value body =
+                VeDescribeProject(demo_project, "", false);
+            body["ok"] = true;
+            rsp["result"] = compact(body);
+        } else if (svc == "ve.services") {
+            Json::Value body(Json::objectValue);
+            body["ok"] = true;
+            body["version"] = 3;
+            Json::Value arr(Json::arrayValue);
+            for (const std::string& s : names) arr.append(s);
+            body["services"] = std::move(arr);
+            rsp["result"] = compact(body);
+        } else {
+            rsp["result"] =
+                "{\"ok\":false,\"error\":\"unknown_call\"}";
+        }
+        return compact(rsp);
+    };
+
+    // Two ext_calls on the caller thread — each blocks the runtime
+    // inside ve_call until this pump services its host_call.
+    std::atomic<bool> done{false};
+    std::string host_reply, services_reply;
+    std::thread caller([&] {
+        std::string r;
+        static_cast<void>(round_trip(
+            [&](Json::Value& req) {
+                req["kind"] = "ext_call";
+                req["ext_id"] = "demo";
+                req["fn"] = "ve_demo_hostcall";
+                req["args"] = "{}";
+            },
+            120000, &r));
+        host_reply = r;
+        r.clear();
+        static_cast<void>(round_trip(
+            [&](Json::Value& req) {
+                req["kind"] = "ext_call";
+                req["ext_id"] = "demo";
+                req["fn"] = "ve_demo_services";
+                req["args"] = "{}";
+            },
+            120000, &r));
+        services_reply = r;
+        done.store(true, std::memory_order_release);
+    });
+    std::string failure;
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(20);
+    while (!done.load(std::memory_order_acquire) &&
+           failure.empty() &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::string line;
+        if (!pipe.PopCallbackLine(&line)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+        Json::Value req;
+        if (!parse(line, &req) ||
+            req.get("kind", "").asString() != "host_call") {
+            continue;
+        }
+        if (!pipe.WriteCallbackLine(answer(req))) {
+            failure = "host_call reply write failed";
+        }
+    }
+    if (!done.load(std::memory_order_acquire)) {
+        pipe.KillWorker();   // unstick the parked RoundTrip
+    }
+    caller.join();
+    if (!failure.empty()) {
+        return failure;
+    }
+    if (!done.load(std::memory_order_acquire)) {
+        return "ext_calls hung — bridge pump starved";
+    }
+
+    // ve_demo_hostcall echoes the ve_call result verbatim: the
+    // fabricated project's describe must be inside result_json.
+    Json::Value host;
+    if (host_reply.empty() || !parse(host_reply, &host)) {
+        return "ve_demo_hostcall reply missing/malformed";
+    }
+    if (host.get("ok", false).asBool()) {
+        const std::string result =
+            host.get("result_json", "").asString();
+        if (result.find("\"width\":160") == std::string::npos ||
+            result.find("\"fps_num\":15") == std::string::npos) {
+            return "ve_call did not return the describe payload: " +
+                   result;
+        }
+    }
+    // ok:false tolerated — stale pack without the export.
+
+    // ve_demo_services echoes the ve.services table.
+    Json::Value services;
+    if (!services_reply.empty() && parse(services_reply, &services) &&
+        services.get("ok", false).asBool()) {
+        const std::string result =
+            services.get("result_json", "").asString();
+        if (result.find("\"version\":3") == std::string::npos ||
+            result.find("timeline.info") == std::string::npos ||
+            result.find("export.status") == std::string::npos) {
+            return "ve.services answer lost the v3 table: " + result;
+        }
+    }
+    // absent/malformed tolerated — ve_demo_services is new in the
+    // demo; the transport already proved itself above.
+
+    // Best-effort unload.
+    reply.clear();
+    static_cast<void>(round_trip(
+        [&](Json::Value& r) {
+            r["kind"] = "ext_unload";
+            r["ext_id"] = "demo";
+        },
+        15000, &reply));
+    return {};
+#else
+    return {};
+#endif
+}
 
 using CheckFn = std::string (*)();
 struct CheckEntry {
@@ -2405,7 +3492,13 @@ constexpr CheckEntry kChecks[] = {
     {"media_worker", &CheckMediaWorker},
     {"sync_worker", &CheckSyncMediaWorker},
     {"fx_worker", &CheckFxScriptWorker},
+    {"ext_runtime", &CheckExtRuntime},
+    {"ext_bridge", &CheckExtBridge},
+    {"ext_xejslib", &CheckExtXejslib},
+    {"ve_core_v3", &CheckVeCoreV3},
     {"assets_icons", &CheckAssetsIcons},
+    {"extensions_panel", &CheckExtensionsPanelData},
+    {"ext_xsjo", &CheckExtXsjo},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };

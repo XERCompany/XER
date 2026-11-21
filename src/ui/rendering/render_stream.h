@@ -19,7 +19,8 @@ namespace XER::UI::Rendering {
 // Wire format per message: [u32 op][op payload]. One transport message
 // carries exactly one op. Layout::Point/Rect/Size, Theme::Color and
 // TextStyle serialize as little-endian IEEE-754 floats (plus u32
-// weight) — fixed-layout PODs, no padding assumptions.
+// weight and a u32 flags word — bit0 = monospace) — fixed-layout
+// PODs, no padding assumptions.
 namespace Stream {
 
 enum class Op : std::uint32_t {

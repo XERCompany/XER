@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -54,67 +55,6 @@ bool TrackKindFromString(const std::string& text, TrackKind* out) {
     if (text == "audio") {
         *out = TrackKind::Audio;
         return true;
-    }
-    return false;
-}
-
-const char* TransitionTypeToString(Transition::Type type) {
-    switch (type) {
-        case Transition::Type::Crossfade:
-            return "crossfade";
-        case Transition::Type::WipeLeft:
-            return "wipe_left";
-        case Transition::Type::WipeRight:
-            return "wipe_right";
-        case Transition::Type::WipeUp:
-            return "wipe_up";
-        case Transition::Type::WipeDown:
-            return "wipe_down";
-        case Transition::Type::SlideLeft:
-            return "slide_left";
-        case Transition::Type::SlideRight:
-            return "slide_right";
-        case Transition::Type::SlideUp:
-            return "slide_up";
-        case Transition::Type::SlideDown:
-            return "slide_down";
-        case Transition::Type::DipToBlack:
-            return "dip_to_black";
-        case Transition::Type::DipToWhite:
-            return "dip_to_white";
-        case Transition::Type::AdditiveDissolve:
-            return "additive_dissolve";
-        case Transition::Type::Script:
-            return "script";
-    }
-    return "crossfade";  // unreachable
-}
-
-bool TransitionTypeFromString(const std::string& text,
-                              Transition::Type* out) {
-    static const struct {
-        const char* name;
-        Transition::Type type;
-    } kTypes[] = {
-        {"crossfade", Transition::Type::Crossfade},
-        {"wipe_left", Transition::Type::WipeLeft},
-        {"wipe_right", Transition::Type::WipeRight},
-        {"wipe_up", Transition::Type::WipeUp},
-        {"wipe_down", Transition::Type::WipeDown},
-        {"slide_left", Transition::Type::SlideLeft},
-        {"slide_right", Transition::Type::SlideRight},
-        {"slide_up", Transition::Type::SlideUp},
-        {"slide_down", Transition::Type::SlideDown},
-        {"dip_to_black", Transition::Type::DipToBlack},
-        {"dip_to_white", Transition::Type::DipToWhite},
-        {"additive_dissolve", Transition::Type::AdditiveDissolve},
-        {"script", Transition::Type::Script},
-    };
-    for (const auto& entry : kTypes) {
-        if (text == entry.name) {
-            *out = entry.type;
-            return true;
-        }
     }
     return false;
 }
@@ -1195,6 +1135,70 @@ Json::Value ProjectToJson(const Project& project) {
 
 }  // namespace
 
+// Transition type <-> wire name — exported (project_store.h): the
+// ve.core v3 service table consumes the same tokens the .xerproj
+// vocabulary uses, so both sides share this table.
+const char* TransitionTypeToString(Transition::Type type) {
+    switch (type) {
+        case Transition::Type::Crossfade:
+            return "crossfade";
+        case Transition::Type::WipeLeft:
+            return "wipe_left";
+        case Transition::Type::WipeRight:
+            return "wipe_right";
+        case Transition::Type::WipeUp:
+            return "wipe_up";
+        case Transition::Type::WipeDown:
+            return "wipe_down";
+        case Transition::Type::SlideLeft:
+            return "slide_left";
+        case Transition::Type::SlideRight:
+            return "slide_right";
+        case Transition::Type::SlideUp:
+            return "slide_up";
+        case Transition::Type::SlideDown:
+            return "slide_down";
+        case Transition::Type::DipToBlack:
+            return "dip_to_black";
+        case Transition::Type::DipToWhite:
+            return "dip_to_white";
+        case Transition::Type::AdditiveDissolve:
+            return "additive_dissolve";
+        case Transition::Type::Script:
+            return "script";
+    }
+    return "crossfade";  // unreachable
+}
+
+bool TransitionTypeFromString(const std::string& text,
+                              Transition::Type* out) {
+    static const struct {
+        const char* name;
+        Transition::Type type;
+    } kTypes[] = {
+        {"crossfade", Transition::Type::Crossfade},
+        {"wipe_left", Transition::Type::WipeLeft},
+        {"wipe_right", Transition::Type::WipeRight},
+        {"wipe_up", Transition::Type::WipeUp},
+        {"wipe_down", Transition::Type::WipeDown},
+        {"slide_left", Transition::Type::SlideLeft},
+        {"slide_right", Transition::Type::SlideRight},
+        {"slide_up", Transition::Type::SlideUp},
+        {"slide_down", Transition::Type::SlideDown},
+        {"dip_to_black", Transition::Type::DipToBlack},
+        {"dip_to_white", Transition::Type::DipToWhite},
+        {"additive_dissolve", Transition::Type::AdditiveDissolve},
+        {"script", Transition::Type::Script},
+    };
+    for (const auto& entry : kTypes) {
+        if (text == entry.name) {
+            *out = entry.type;
+            return true;
+        }
+    }
+    return false;
+}
+
 bool ProjectStore::Save(const Project& project,
                         const std::string& utf8_path,
                         std::string* error_out) {
@@ -1269,6 +1273,246 @@ bool ProjectStore::Load(const std::string& utf8_path,
                                  parse_errors);
     }
     return ProjectFromJson(root, project_out, error_out);
+}
+
+// ---- ve.core v3 describe layer (project_store.h) ---------------------
+// JSON projections of live editor state for the ve_call service
+// table — kept next to the .xerproj serializer so the served shapes
+// and the file shapes evolve together (same wire names everywhere).
+
+Json::Value VeDescribeProject(const Project& project,
+                              const std::string& project_path,
+                              bool dirty) {
+    Json::Value v(Json::objectValue);
+    v["width"] = project.width;
+    v["height"] = project.height;
+    v["fps_num"] = project.fps_num;
+    v["fps_den"] = project.fps_den;
+    Json::Value bg(Json::arrayValue);
+    for (const std::uint8_t c : project.bg_color) {
+        bg.append(Json::UInt(c));
+    }
+    v["bg_color"] = std::move(bg);
+    v["duration"] = project.duration();
+    v["tracks"] = static_cast<Json::UInt64>(project.tracks.size());
+    v["clips"] = static_cast<Json::UInt64>(project.clips.size());
+    v["transitions"] =
+        static_cast<Json::UInt64>(project.transitions.size());
+    v["markers"] = static_cast<Json::UInt64>(project.markers.size());
+    v["work_in"] = project.work_in;
+    v["work_out"] = project.work_out;
+    v["master_gain_db"] = static_cast<double>(project.master_gain_db);
+    v["path"] = project_path;
+    v["untitled"] = project_path.empty();
+    v["dirty"] = dirty;
+    return v;
+}
+
+Json::Value VeDescribeTimeline(const Project& project, double playhead,
+                               const std::string& selected_clip_id) {
+    Json::Value v(Json::objectValue);
+    v["playhead"] = playhead;
+    v["duration"] = project.duration();
+    v["tracks"] = static_cast<Json::UInt64>(project.tracks.size());
+    v["clips"] = static_cast<Json::UInt64>(project.clips.size());
+    v["transitions"] =
+        static_cast<Json::UInt64>(project.transitions.size());
+    v["markers"] = static_cast<Json::UInt64>(project.markers.size());
+    v["selected_clip"] = selected_clip_id;
+    v["work_in"] = project.work_in;
+    v["work_out"] = project.work_out;
+    v["fps_num"] = project.fps_num;
+    v["fps_den"] = project.fps_den;
+    v["frame_seconds"] =
+        project.fps_num > 0
+            ? static_cast<double>(project.fps_den) / project.fps_num
+            : 1.0 / 30.0;
+    return v;
+}
+
+Json::Value VeDescribeTracks(const Project& project) {
+    Json::Value tracks(Json::arrayValue);
+    for (std::size_t i = 0; i < project.tracks.size(); ++i) {
+        const Track& t = project.tracks[i];
+        Json::Value j(Json::objectValue);
+        j["index"] = static_cast<Json::UInt64>(i);
+        j["kind"] = TrackKindToString(t.kind);
+        j["name"] = t.name;
+        j["muted"] = t.muted;
+        j["hidden"] = t.hidden;
+        j["locked"] = t.locked;
+        j["gain_db"] = static_cast<double>(t.gain_db);
+        j["pan"] = static_cast<double>(t.pan);
+        std::size_t count = 0;
+        for (const Clip& c : project.clips) {
+            count += c.track == static_cast<int>(i) ? 1 : 0;
+        }
+        j["clips"] = static_cast<Json::UInt64>(count);
+        tracks.append(std::move(j));
+    }
+    Json::Value v(Json::objectValue);
+    v["tracks"] = std::move(tracks);
+    v["count"] = static_cast<Json::UInt64>(project.tracks.size());
+    return v;
+}
+
+Json::Value VeDescribeClip(const Project& project,
+                           const std::string& clip_id) {
+    const Clip* c = FindClip(project, clip_id);
+    if (c == nullptr) return Json::Value(Json::objectValue);
+    Json::Value j(Json::objectValue);
+    j["id"] = c->id;
+    j["name"] = c->name;
+    j["track"] = c->track;
+    j["start"] = c->timeline_start;
+    j["end"] = ClipEndSeconds(*c);
+    j["duration"] = c->duration;
+    j["in_point"] = c->in_point;
+    j["rate"] = c->playback_rate;
+    j["source"] = c->source_path;
+    j["muted"] = c->muted;
+    j["gain_db"] = static_cast<double>(c->gain_db);
+    j["pan"] = static_cast<double>(c->pan);
+    j["fade_in"] = c->fade_in;
+    j["fade_out"] = c->fade_out;
+    j["link_group"] = c->link_group;
+    j["adjustment"] = c->is_adjustment;
+    switch (c->source.kind) {
+        case SourceKind::Media:      j["kind"] = "media"; break;
+        case SourceKind::ColorMatte: j["kind"] = "color"; break;
+        case SourceKind::ColorBars:  j["kind"] = "bars";  break;
+        case SourceKind::Text:       j["kind"] = "text";  break;
+    }
+    if (c->source.kind != SourceKind::Media) {
+        j["param"] = c->source.param;
+    }
+    j["effects"] = static_cast<Json::UInt64>(c->effects.size());
+    j["audio_fx"] = static_cast<Json::UInt64>(c->audio_fx.size());
+    return j;
+}
+
+Json::Value VeDescribeClips(const Project& project) {
+    Json::Value clips(Json::arrayValue);
+    for (const Clip& c : project.clips) {
+        clips.append(VeDescribeClip(project, c.id));
+    }
+    Json::Value v(Json::objectValue);
+    v["clips"] = std::move(clips);
+    v["count"] = static_cast<Json::UInt64>(project.clips.size());
+    return v;
+}
+
+Json::Value VeDescribeTransitions(const Project& project) {
+    Json::Value transitions(Json::arrayValue);
+    for (const Transition& t : project.transitions) {
+        Json::Value j(Json::objectValue);
+        j["from"] = t.from_clip;
+        j["to"] = t.to_clip;
+        j["type"] = TransitionTypeToString(t.type);
+        j["duration"] = t.duration;
+        if (!t.script.empty()) j["script"] = t.script;
+        transitions.append(std::move(j));
+    }
+    Json::Value v(Json::objectValue);
+    v["transitions"] = std::move(transitions);
+    v["count"] = static_cast<Json::UInt64>(project.transitions.size());
+    return v;
+}
+
+Json::Value VeDescribeMarkers(const Project& project) {
+    Json::Value markers(Json::arrayValue);
+    for (const Marker& m : project.markers) {
+        Json::Value j(Json::objectValue);
+        j["time"] = m.time;
+        j["name"] = m.name;
+        char color[16];
+        std::snprintf(color, sizeof color, "#%02x%02x%02x%02x",
+                      m.color[0], m.color[1], m.color[2], m.color[3]);
+        j["color"] = color;
+        markers.append(std::move(j));
+    }
+    Json::Value v(Json::objectValue);
+    v["markers"] = std::move(markers);
+    v["count"] = static_cast<Json::UInt64>(project.markers.size());
+    return v;
+}
+
+Json::Value VeDescribeCatalog(const std::vector<CatalogEntry>& entries) {
+    Json::Value list(Json::arrayValue);
+    for (const CatalogEntry& e : entries) {
+        Json::Value j(Json::objectValue);
+        j["id"] = Json::Int64(e.id);
+        j["path"] = e.path;
+        j["duration"] = e.duration_seconds;
+        j["width"] = e.width;
+        j["height"] = e.height;
+        j["fps"] = e.fps;
+        j["has_video"] = e.HasVideo();
+        j["has_audio"] = e.has_audio;
+        j["video_codec"] = e.video_codec;
+        j["audio_codec"] = e.audio_codec;
+        j["file_size"] = Json::Int64(e.file_size_bytes);
+        j["poster"] = e.poster_path;
+        list.append(std::move(j));
+    }
+    Json::Value v(Json::objectValue);
+    v["entries"] = std::move(list);
+    v["count"] = static_cast<Json::UInt64>(entries.size());
+    return v;
+}
+
+const std::vector<std::string>& VeServiceNames() {
+    // Keep in EXACT sync with DispatchExtHostCall in
+    // ui/video_editor_app.cc — the dispatcher rejects anything not
+    // listed here with "unknown_call". v2 aliases (project.clips,
+    // status) are intentionally absent: still served, not advertised.
+    static const std::vector<std::string> names = {
+        "ve.services",
+        "app.info",
+        // project.*
+        "project.info", "project.path", "project.new", "project.open",
+        "project.save", "project.settings", "project.markers",
+        "project.add_marker", "project.remove_marker",
+        "project.rename_marker", "project.set_work_area",
+        // timeline.*
+        "timeline.info", "timeline.tracks", "timeline.clips",
+        "timeline.transitions", "timeline.add_track",
+        "timeline.remove_track", "timeline.rename_track",
+        "timeline.set_track", "timeline.add_clip", "timeline.move_clip",
+        "timeline.remove_clip", "timeline.trim_clip",
+        "timeline.split_clip", "timeline.ripple_delete",
+        "timeline.lift_range", "timeline.slip", "timeline.slide",
+        "timeline.set_rate", "timeline.nudge", "timeline.select_clip",
+        "timeline.add_transition", "timeline.remove_transition",
+        // transport.*
+        "transport.info", "transport.play", "transport.pause",
+        "transport.stop", "transport.seek", "transport.frame_step",
+        "transport.set_loop", "transport.set_rate", "transport.shuttle",
+        "transport.shuttle_stop", "transport.goto_marker",
+        "transport.set_quality",
+        // selection.*
+        "selection.get", "selection.set", "selection.clear",
+        // media.*
+        "media.list", "media.import", "media.refresh", "media.select",
+        "media.add_to_timeline", "media.bounds",
+        // fx.*
+        "fx.list", "fx.add", "fx.remove", "fx.clear",
+        // export.*
+        "export.presets", "export.start", "export.cancel",
+        "export.status",
+        // ui.*
+        "ui.status", "ui.open_panel", "ui.list_extensions",
+        "ui.open_extension_ui", "ui.run_extension",
+        "ui.rescan_extensions",
+        // edit.*
+        "edit.undo", "edit.redo", "edit.history",
+    };
+    return names;
+}
+
+bool VeServiceKnown(const std::string& name) {
+    const auto& names = VeServiceNames();
+    return std::find(names.begin(), names.end(), name) != names.end();
 }
 
 }  // namespace XER::VideoEditor

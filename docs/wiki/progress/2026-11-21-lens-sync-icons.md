@@ -238,3 +238,70 @@ Smoke 32/32 + XER_VideoEditor_Tests 20 fails -> 0.
 - **Test suite**: stale bitmap-font expectations branched on
   XER_VE_HAS_SKIA (propagated to test target); stale "XER Studio"
   title expectation updated.
+
+
+## Native extensions JIT batch (same day, uncommitted)
+
+Smoke **36/36** (new: `ext_xsjo`, `ext_runtime`, `extensions_panel`).
+
+- **ztzmake** compiles `native/*.cc` via Clang API in-process
+  (CompilerInstance+EmitObjAction, no subprocess) -> `mobjective/
+  *.xsjo` in .xexrj; XSJ1 = magic+triple+srcname+COFF. manifest
+  `[native] sources=[...]`, `[pack] keep_sources`. LLVM 23.1.5
+  installed via pacman (mingw-w64-clang-x86_64-llvm).
+- **ve.core.h** C99 ABI v1 (sdk/): ve_log/set_status/project_info/
+  add_clip/call/post + ve_ext_entry/shutdown/api_version; results are
+  extension-owned storage (no free).
+- **XsjoJit**: orc::LLJIT, ve_* resolved via absolute SymbolMap (NOT
+  process lookup); triple checked vs jit target; LLVM linked ONLY
+  into the worker exe (kept out of the core dll).
+- **VE.ExtensionsRuntime.exe**: worker_pipe ext_load/ext_call/
+  ext_unload/ext_list/ext_events; queued-events bridge for
+  log/status/add_clip; ve_call returns not-bridged synchronously.
+  FileDescription "Extensions Runtime - XER Creative Suite".
+- **UI**: Web tab -> Ext tab (extensions_panel listing ext
+  id/name/version/verified + Open/Run/Reveal), top-level Extensions
+  menu, CEF xer-ext:// for static UIs; tab-strip reveal fix.
+- Verified end-to-end: demo xexrj -> hello.xsjo -> JIT ->
+  ext_call ve_demo_name through the pipe.
+
+
+## CEF crash fix (Extensions Open)
+
+Reproduced live: GPU child exit 0xC0000139 -> FATAL -> process crash.
+
+- Root: stale `xer_browser_shell.exe` imported old 3-arg
+  URLRequestJob::Run from rebuilt YA.Fetch.dll (effective_url added
+  -> silent ABI break; loader killed every CEF child).
+- `RuntimeOptions::disable_gpu` added; browser panels set it (gpu
+  child also trapped during hw init on this build).
+- `xer-ext://` 404 fixed: ext scheme registry static lived in
+  YA.VideoEditor-Core.dll copy while Cef factory ran in the exe —
+  provider bridge added.
+- Wiki-worthy risk: ABI-breaking changes to YA.* DLLs need full
+  relink of dependents; ninja alone leaves stale binaries.
+- bootstrap.exe fallback on this CEF 156 requires --module and
+  FATALs — noted, unaddressed.
+
+
+## Env + ext-bridge batch (same day, uncommitted)
+
+Smoke **37/37** (new: `ext_bridge`).
+
+- `tools/scripts/ui_drive.ps1` — reusable GUI driver
+  (click/shot/wait verbs); wiki `architecture/live-ui-testing.md`.
+- `disable_gpu` also set in xbrowser.cc + vst3_cef.cc demos.
+- **Delay-load staging fixed**: xer_stage_runtime_dlls only saw
+  regular imports — now seeds delay-load list too; shaderc/whisper/
+  spirv-cross staged, `--diag` missing=0.
+- `bootstrap.exe` fallback removed (CEF>=139 needs --module) ->
+  honest Initialize error when shell missing.
+- **ve_call bridge**: reverse anon-pipe channel via env-handoff
+  (XER_VE_EXT_HOST_REQ/RSP); runtime blocks on host_call reply on
+  second transport; editor services host_calls on UI thread via
+  WorkerPipe callback-reader + Tick pump; ext ops ride Lab::AsyncOp
+  to avoid UI-thread RoundTrip deadlock. Dispatch table: project.*/
+  timeline.*/transport.*/status. ve_add_clip applied via
+  AddGeneratedClipAt. VE_CORE_API_VERSION=2.
+- Limits: ve_call no timeout; add_clip fire-and-forget; JS
+  native_call async-only.

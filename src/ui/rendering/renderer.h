@@ -21,6 +21,10 @@ struct TextStyle {
     // Font weight in the DirectWrite range (100..900). 400 = regular,
     // 500 = medium, 600+ = semibold/bold.
     int weight = 400;
+    // Fixed-pitch font request (code editors, terminals, numeric
+    // columns). Renderers map this to the platform monospace face
+    // (Consolas on Windows); false keeps the proportional UI font.
+    bool monospace = false;
 };
 
 class Renderer {

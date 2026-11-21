@@ -13,10 +13,12 @@
 // compiled out.
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace XER::Tz { class TzArchive; }
 
@@ -34,6 +36,20 @@ std::shared_ptr<Tz::TzArchive> ExtSchemeLookup(const std::string& ext_id);
 // Builds the canonical URL for a member: xer-ext://<id>/<member>.
 std::string ExtSchemeUrl(const std::string& ext_id,
                          const std::string& member);
+
+// Fallback byte source the scheme handler consults when the id is not
+// in the registered-archive map (or the member read fails). Needed
+// because XER_Cef is a STATIC library: a caller living in a different
+// binary module — e.g. the extension host inside YA.VideoEditor-
+// Core.dll — gets its own copy of the map, so archives registered
+// there never reach the browser-process handler (which lives in the
+// module that called Initialize). Install the provider from the same
+// module that calls Cef::Initialize, once, before pages load.
+// Return true when bytes_out was filled; false = 404.
+using ExtSchemeProvider = bool (*)(const std::string& ext_id,
+                                   const std::string& member,
+                                   std::vector<std::uint8_t>* bytes_out);
+void ExtSchemeSetProvider(ExtSchemeProvider provider);
 
 // Called from XERCefApp::OnContextInitialized — registers the scheme
 // handler factory for xer-ext on the global request context. No-op

@@ -12,3 +12,19 @@ requires = ["scripts/helper.js", "static/index.html", "static/style.css"]
 dlls = []
 lua = []
 py = []
+# JIT-compilable C++ sources — ztzmake compiles each into
+# mobjective/<stem>.xsjo inside the .xexrj. Must stay an array: the
+# extension host rejects non-array values in [native].
+sources = ["native/hello.cc"]
+# .xejslib library deps (XSJOBuildX output): modules land as
+# mobjective/lib_<stem>.xsjo, dep headers feed the compile's -I.
+# Entries are member paths relative to this dir — or simply drop the
+# .xejslib into libs/ for auto-consume, or pass --dep to ztzmake.
+# The in-tree build wires libdemo via --dep instead (the built lib
+# lives in <build>/xejslib/, not the source tree).
+#deps = ["libs/libdemo.xejslib"]
+
+[pack]
+# Packer-only options (ignored by the extension host).
+# keep_sources = true would also pack the raw .cc next to the .xsjo.
+keep_sources = false

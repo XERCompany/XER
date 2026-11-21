@@ -1510,6 +1510,7 @@ void VulkanRenderer::DrawText(std::string_view text, Layout::Rect rect,
     const std::string key =
         std::to_string(w_px) + "x" + std::to_string(h_px) + "|" +
         std::to_string(style.weight) + "|" +
+        (style.monospace ? "m|" : "p|") +
         std::to_string(static_cast<int>(style.size * s + 0.5f)) + "|" +
         std::string(text);
     GpuTexture* tex = nullptr;

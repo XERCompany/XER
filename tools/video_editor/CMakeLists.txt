@@ -22,6 +22,12 @@ file(GLOB VIDEO_EDITOR_CORE_SOURCES CONFIGURE_DEPENDS
 # Exclude the exe's main() from the core lib glob (it must not be
 # compiled into XER_VideoEditor_Core).
 list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX "/main\\.cc$")
+# extensions/xsjo_jit.cc and extensions/ext_runtime_server.cc belong
+# ONLY to the VE.ExtensionsRuntime worker exe (built below): the JIT
+# host links LLVM, and the editor talks to it over worker_pipe — the
+# core lib must stay LLVM-free.
+list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX
+    "/extensions/(xsjo_jit|ext_runtime_server)\\.cc$")
 
 set(_ve_core_deps
     XER_Video          # video::Frame / FrameExporter (clip_poster)
@@ -294,21 +300,61 @@ if(WIN32)
                 "$<TARGET_FILE_DIR:video_editor>/assets"
         COMMENT "Deploying app assets (icons, yaml, runtime.js)"
         VERBATIM)
-    # .xexrj extensions: every dir under assets/extensions_src/ is
-    # packed by ztzmake into <exe>/assets/extensions/<name>.xexrj
-    # — the same artifact a user gets from running ztzmake.exe.
+    # .xexrj extensions: every dir under assets/extensions_src/ that
+    # carries a manifest.toml is packed by ztzmake into
+    # <exe>/assets/extensions/<name>.xexrj — the same artifact a user
+    # gets from running ztzmake.exe. Dirs without a manifest are
+    # library sources (libdemo/), not extensions, and are skipped.
+    #
+    # .xejslib deps (tools/tz/xejslib.h): when XSJOBuildX was built
+    # with real Clang support, libdemo/ is compiled into
+    # <build>/xejslib/libdemo.xejslib and the demo pack consumes it
+    # via ztzmake --dep — modules land as mobjective/lib_*.xsjo and
+    # the lib's headers feed the demo's compile -I. Without Clang
+    # the demo packs cleanly anyway (hello.cc's __has_include guard).
+    set(_libdemo_xejslib "")
+    if(TARGET XSJOBuildX AND XER_ZTZ_HAS_CLANG)
+        set(_libdemo_src
+            "${CMAKE_CURRENT_SOURCE_DIR}/assets/extensions_src/libdemo")
+        if(IS_DIRECTORY "${_libdemo_src}")
+            set(_libdemo_xejslib
+                "${CMAKE_BINARY_DIR}/xejslib/libdemo.xejslib")
+            file(GLOB_RECURSE _libdemo_inputs CONFIGURE_DEPENDS
+                 "${_libdemo_src}/*.cc" "${_libdemo_src}/*.cpp"
+                 "${_libdemo_src}/*.h" "${_libdemo_src}/*.hpp")
+            add_custom_command(
+                OUTPUT "${_libdemo_xejslib}"
+                COMMAND $<TARGET_FILE:XSJOBuildX>
+                        "${_libdemo_src}"
+                        -o "${_libdemo_xejslib}"
+                        --name libdemo
+                DEPENDS XSJOBuildX ${_libdemo_inputs}
+                COMMENT "XSJOBuildX libdemo.xejslib"
+                VERBATIM)
+            add_custom_target(xejslib_libdemo
+                DEPENDS "${_libdemo_xejslib}")
+            add_dependencies(video_editor_assets xejslib_libdemo)
+        endif()
+    endif()
     if(TARGET ztzmake)
         file(GLOB XER_EXT_SRC_DIRS CONFIGURE_DEPENDS
              LIST_DIRECTORIES true
              "${CMAKE_CURRENT_SOURCE_DIR}/assets/extensions_src/*")
         foreach(ext_src IN LISTS XER_EXT_SRC_DIRS)
-            if(IS_DIRECTORY "${ext_src}")
+            if(IS_DIRECTORY "${ext_src}" AND
+               EXISTS "${ext_src}/manifest.toml")
                 get_filename_component(ext_name "${ext_src}" NAME)
+                set(_ext_pack_args)
+                if(ext_name STREQUAL "demo" AND _libdemo_xejslib)
+                    list(APPEND _ext_pack_args
+                         --dep "${_libdemo_xejslib}")
+                endif()
                 add_custom_command(TARGET video_editor_assets
                     POST_BUILD
                     COMMAND $<TARGET_FILE:ztzmake>
                             "${ext_src}"
                             -o "$<TARGET_FILE_DIR:video_editor>/assets/extensions/${ext_name}.xexrj"
+                            ${_ext_pack_args}
                     COMMENT "Packing ${ext_name}.xexrj"
                     VERBATIM)
             endif()
@@ -357,7 +403,84 @@ endif()
 add_executable(XERVideoLoader workers/video_loader_main.cc)
 add_executable(XERSyncMedia workers/sync_media_main.cc)
 add_executable(XERFxScript workers/fx_script_main.cc)
-foreach(_worker IN ITEMS XERVideoLoader XERSyncMedia XERFxScript)
+
+# VE.ExtensionsRuntime.exe — the out-of-process native-extension
+# host: opens verified .xexrj archives, JIT-links mobjective/*.xsjo
+# COFF objects with ORC LLJIT (extensions/xsjo_jit.cc) and serves
+# ext_load/ext_call/ext_unload/ext_list/ext_events over the shared
+# JSON-lines worker protocol (extensions/ext_runtime_server.cc —
+# both files excluded from the core glob above). A crashing native
+# extension kills this worker, never the editor.
+add_executable(VE.ExtensionsRuntime
+    workers/ext_runtime_main.cc
+    extensions/ext_runtime_server.cc
+    extensions/xsjo_jit.cc)
+target_include_directories(VE.ExtensionsRuntime PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../src)
+# The server's own TUs read TZ archives (XER_Tz) and encode JSON
+# (XER_JsonCpp) directly — link them beside the core bundle.
+target_link_libraries(VE.ExtensionsRuntime PRIVATE
+    XER_VideoEditor_Core XER_Tz XER_JsonCpp)
+
+# LLVM dev package (MSYS2 mingw-w64-clang-x86_64-llvm): headers under
+# clang64/include, link the monolithic -lLLVM-23 import lib. Missing
+# package → the exe still builds with XER_VE_HAS_LLVM=0 and answers
+# ping/info/ext_list (ext_load of native payloads reports the JIT
+# unavailable) so deployment never hard-fails.
+find_package(LLVM CONFIG QUIET)
+if(LLVM_FOUND)
+    message(STATUS "VE.ExtensionsRuntime: LLVM ${LLVM_PACKAGE_VERSION} "
+                   "(${LLVM_TOOLS_BINARY_DIR})")
+    target_include_directories(VE.ExtensionsRuntime SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    # LLVM_DEFINITIONS is a space-separated string, not a list —
+    # split it or it lands as one malformed compile flag.
+    separate_arguments(_ve_llvm_defs NATIVE_COMMAND
+        "${LLVM_DEFINITIONS}")
+    target_compile_definitions(VE.ExtensionsRuntime PRIVATE
+        XER_VE_HAS_LLVM=1 ${_ve_llvm_defs})
+    if(TARGET LLVM)
+        target_link_libraries(VE.ExtensionsRuntime PRIVATE LLVM)
+    else()
+        # Monolithic dylib without an imported target — link the
+        # import lib by name (-lLLVM-<major>).
+        target_link_directories(VE.ExtensionsRuntime PRIVATE
+            ${LLVM_LIBRARY_DIRS})
+        target_link_libraries(VE.ExtensionsRuntime PRIVATE
+            LLVM-${LLVM_VERSION_MAJOR})
+    endif()
+    if(MINGW)
+        # Stage the monolithic libLLVM-*.dll beside the exe (it is an
+        # import-lib link, not static). Delay-load is NOT possible:
+        # the dll carries __declspec(dllimport) data symbols
+        # (llvm::ErrorList::ID) which lld cannot delay-bind, so the
+        # import resolves eagerly at load — the staged copy is what
+        # keeps the exe self-contained. XsjoJit::Available still
+        # LoadLibrary-probes so a missing DLL reports cleanly.
+        file(GLOB _ve_llvm_dlls "${LLVM_TOOLS_BINARY_DIR}/libLLVM*.dll")
+        if(_ve_llvm_dlls)
+            list(GET _ve_llvm_dlls 0 _ve_llvm_dll)
+            get_filename_component(_ve_llvm_dll_name "${_ve_llvm_dll}" NAME)
+            target_compile_definitions(VE.ExtensionsRuntime PRIVATE
+                "XER_VE_LLVM_DLL=\"${_ve_llvm_dll_name}\"")
+            add_custom_command(TARGET VE.ExtensionsRuntime POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${_ve_llvm_dll}"
+                    "$<TARGET_FILE_DIR:VE.ExtensionsRuntime>/${_ve_llvm_dll_name}"
+                COMMENT "Deploying ${_ve_llvm_dll_name}"
+                VERBATIM)
+        endif()
+    endif()
+else()
+    message(STATUS "VE.ExtensionsRuntime: LLVM not found — building "
+                   "without JIT (XER_VE_HAS_LLVM=0)")
+    target_compile_definitions(VE.ExtensionsRuntime PRIVATE
+        XER_VE_HAS_LLVM=0)
+endif()
+
+foreach(_worker IN ITEMS XERVideoLoader XERSyncMedia XERFxScript
+        VE.ExtensionsRuntime)
     target_link_libraries(${_worker} PRIVATE XER_VideoEditor_Core)
     target_compile_features(${_worker} PRIVATE cxx_std_23)
     set_target_properties(${_worker} PROPERTIES
@@ -371,6 +494,7 @@ foreach(_worker IN ITEMS XERVideoLoader XERSyncMedia XERFxScript)
 endforeach()
 # Building the editor always produces its workers alongside — the
 # smoke checks and the out-of-process paths (MediaPrep, audio sync,
-# js fx) expect the sibling exes (they degrade gracefully when one
-# is absent).
-add_dependencies(video_editor XERVideoLoader XERSyncMedia XERFxScript)
+# js fx, native extensions) expect the sibling exes (they degrade
+# gracefully when one is absent).
+add_dependencies(video_editor XERVideoLoader XERSyncMedia XERFxScript
+    VE.ExtensionsRuntime)

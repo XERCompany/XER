@@ -19,13 +19,21 @@ namespace XER::Cef {
 struct RuntimeOptions {
     std::string resources_dir;   // default: <exe>/cef or <exe>
     std::string locales_dir;     // default: <resources>/locales
-    std::string subprocess_path; // default: <exe>/bootstrap.exe
+    std::string subprocess_path; // default: <exe>/xer_browser_shell.exe
+                                 // (init fails when it is missing — CEF
+                                 // >=139's bootstrap.exe is a --module
+                                 // launcher, not a subprocess host)
     std::string cache_dir;       // empty -> in-memory cache
     std::string log_file;        // empty -> debug.log; set to a path to
                                  // redirect the Chromium log
     int log_severity = -1;       // -1 -> WARNING; else cef_log_severity_t
                                  // (LOGSEVERITY_DISABLE silences stderr too)
     bool headless = false;       // windowless rendering (no GPU browser)
+    // Passes "disable-gpu" to Chromium: the GPU process still launches
+    // in software mode but skips hardware init — the right default for
+    // embedded panels that only host static/extension pages, and it
+    // sidesteps GPU-driver probing entirely.
+    bool disable_gpu = false;
     bool enable_remote_debug = false;
     int remote_debug_port = 0;
     // Extra Chromium switches applied via OnBeforeCommandLineProcessing.
@@ -34,7 +42,8 @@ struct RuntimeOptions {
 };
 
 // Must be invoked before anything else in main(): CEF subprocesses
-// (renderer/GPU/utility launched via bootstrap.exe) never return from it.
+// (renderer/GPU/utility launched via browser_subprocess_path) never
+// return from it.
 // Returns the process exit code when this invocation IS a subprocess —
 // caller returns it immediately; returns -1 for the browser process.
 int RunSubprocessIfAny(int argc, char** argv);

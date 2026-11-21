@@ -22,6 +22,10 @@ function(xer_target_desc target out_var)
         set(_desc "Media Sync Engine")
     elseif(target STREQUAL "XERFxScript")
         set(_desc "FX Script Engine")
+    elseif(target STREQUAL "VE.ExtensionsRuntime")
+        set(_desc "Extensions Runtime - XER Creative Suite")
+    elseif(target STREQUAL "IDEXEJSO")
+        set(_desc "Extension IDE - XER Creative Suite")
     elseif(target STREQUAL "xer_engine_ui_render")
         set(_desc "Engine UI Renderer")
     elseif(target STREQUAL "EngineScanVST3")
@@ -929,6 +933,9 @@ endif()
 # 1C/1D inside this same directory.
 add_subdirectory(tools/tz)
 add_subdirectory(tools/video_editor)
+# IDEXEJSO.exe — the .xexrj extension IDE (same app framework as
+# video_editor; shells out to ztzmake/VE.ExtensionsRuntime siblings).
+add_subdirectory(tools/ide_xejso)
 
 include(CTest)
 if(BUILD_TESTING)
@@ -1011,7 +1018,7 @@ endif()
 foreach(_t EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
         SecurityFlashService ControllAccountsWindows ServerAudio
         ArchiveManager sd HubCivitAIBrowser audioconvert
-        audioapplyeffect audioprobe audioplayer preview Editor)
+        audioapplyeffect audioprobe audioplayer preview Editor IDEXEJSO)
     if(TARGET ${_t})
         xer_link_msys2_static(${_t})
     endif()
@@ -1024,7 +1031,8 @@ endforeach()
 foreach(_app EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
         SecurityFlashService ControllAccountsWindows ServerAudio
         ArchiveManager HubCivitAIBrowser Editor video_editor
-        XERVideoLoader XERSyncMedia XERFxScript
+        XERVideoLoader XERSyncMedia XERFxScript VE.ExtensionsRuntime
+        IDEXEJSO
         XBrowser XER_VST3_CEF xer_browser_shell)
     if(TARGET ${_app})
         xer_app_win32(${_app})

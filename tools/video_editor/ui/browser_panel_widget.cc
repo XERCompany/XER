@@ -20,6 +20,7 @@
 #include "cef/cef_runtime.h"
 #include "rendering/renderer.h"
 #include "widgets/button.h"
+#include "widgets/button_group.h"
 #include "widgets/label.h"
 #include "widgets/text_input.h"
 
@@ -70,9 +71,15 @@ BrowserPanelWidget::BrowserPanelWidget(void* parent_hwnd)
     url_input_->SetOnSubmit([this] { Navigate(url_input_->GetValue()); });
     status_label_ =
         std::make_shared<XER::UI::Widgets::Label>("", /*muted=*/true);
-    AddChild(back_btn_);
-    AddChild(fwd_btn_);
-    AddChild(reload_btn_);
+    // Joined nav strip: the three buttons render edge-to-edge inside
+    // one bordered surface (ButtonGroup), matching the grouped
+    // transport rows elsewhere in the chrome.
+    nav_group_ = std::make_shared<XER::UI::Widgets::ButtonGroup>(
+        XER::UI::Widgets::ButtonGroup::Orientation::Horizontal);
+    nav_group_->AddChild(back_btn_);
+    nav_group_->AddChild(fwd_btn_);
+    nav_group_->AddChild(reload_btn_);
+    AddChild(nav_group_);
     AddChild(url_input_);
     AddChild(status_label_);
 }
@@ -97,7 +104,13 @@ void BrowserPanelWidget::EnsureBrowser() {
         status_ = "Chromium runtime not compiled in";
         return;
     }
-    if (!XER::Cef::Initialize({}, &error)) {
+    // disable_gpu: the panel hosts extension pages — no WebGL/game
+    // content — and the GPU subprocess skips hardware probing entirely
+    // (a software-composited Chromium child is cheaper and driver-
+    // independent).
+    XER::Cef::RuntimeOptions cef_options;
+    cef_options.disable_gpu = true;
+    if (!XER::Cef::Initialize(cef_options, &error)) {
         status_ = "Chromium runtime unavailable: " + error;
         return;
     }
@@ -136,10 +149,25 @@ void BrowserPanelWidget::EnsureBrowser() {
         status_ = "Failed to create browser window";
         cef_.reset();
     }
+    // A navigate that arrived before Create (extension UI opened
+    // before this panel's first layout) replays now that the browser
+    // exists — Navigate() re-runs its scheme heuristics on it.
+    if (cef_ && !pending_url_.empty()) {
+        const std::string url = std::move(pending_url_);
+        pending_url_.clear();
+        Navigate(url);
+    }
 }
 
 void BrowserPanelWidget::Navigate(const std::string& input) {
-    if (input.empty() || !cef_) {
+    if (input.empty()) {
+        return;
+    }
+    if (!cef_) {
+        // Browser not created yet — stash it; EnsureBrowser loads it
+        // right after Create (extension xer-ext:// opens can race
+        // the first layout).
+        pending_url_ = input;
         return;
     }
     std::string url = input;
@@ -199,12 +227,8 @@ void BrowserPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const float bx = bounds.x + kPad;
     float y = bounds.y + kPad;
     const float btn_w = 26.0f;
-    back_btn_->Layout({bx, y, btn_w, kChromeH - 6.0f}, tokens);
-    fwd_btn_->Layout({bx + btn_w + 4.0f, y, btn_w, kChromeH - 6.0f},
-                     tokens);
-    reload_btn_->Layout(
-        {bx + 2.0f * (btn_w + 4.0f), y, btn_w, kChromeH - 6.0f}, tokens);
-    const float input_x = bx + 3.0f * (btn_w + 4.0f) + 4.0f;
+    nav_group_->Layout({bx, y, btn_w * 3.0f, kChromeH - 6.0f}, tokens);
+    const float input_x = bx + btn_w * 3.0f + 8.0f;
     url_input_->Layout(
         {input_x, y, bounds.x + bounds.width - kPad - input_x,
          kChromeH - 6.0f},

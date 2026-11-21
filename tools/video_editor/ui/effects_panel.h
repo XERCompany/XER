@@ -64,14 +64,21 @@ public:
         return {100000.0f, 100000.0f};
     }
 
-private:
+    // One catalog entry — ClipEffect.type + the default parameter
+    // list the panel's Add button emits ("script:id" carries the JS
+    // fx catalog ids).
     struct EffectInfo {
         std::string type;               // ClipEffect.type ("script:id" for JS)
         std::vector<float> default_params;
         std::string description;
     };
 
+    // The searchable built-in + JS effect catalog backing the panel —
+    // also what the ve.core v3 "fx.list" service answers with (one
+    // implementation, two consumers). UI thread.
     static const std::vector<EffectInfo>& Catalog();
+
+private:
 
     // ScrollArea content hosting the row Items and painting the
     // selection/hover chrome — defined in the .cc (incomplete type is
