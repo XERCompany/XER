@@ -53,6 +53,7 @@
 #include "plugin_host.h"
 #include "project_store.h"
 #include "extensions/ext_host.h"
+#include "cef/cef_ext_scheme.h"
 #include "rendering/renderer.h"
 #include "video/frame_exporter.h"
 #include "theme/tokens.h"
@@ -1192,17 +1193,21 @@ void VideoEditorAppWidget::EnsureChildren() {
     right_tabs_ = std::make_shared<Widgets::Tabs>();
     right_tabs_->SetStyle(Widgets::Tabs::Style::Underline);
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Web, 10 Lyr — the right_tab_ indexing documented in
+    // 8 Color, 9 Ext, 10 Lyr — the right_tab_ indexing documented in
     // the header.
     for (const char* label :
          {"Insp", "FX", "Mkr", "Lab", "Hist", "Mix", "Q", "Plg",
-          "Color", "Web", "Lyr"}) {
+          "Color", "Ext", "Lyr"}) {
         right_tabs_->AddTab(label);
     }
     right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 10));
     right_tabs_->SetOnChanged(
         [this](int index) { SetRightTab(index); });
     tab_strip_ = std::make_shared<TabStripScroll>(right_tabs_);
+    // A layout-seeded right_tab_ bypasses SetRightTab, so the strip
+    // never scrolled — reveal the active tab here instead.
+    tab_strip_->RevealFraction(
+        (std::clamp(right_tab_, 0, 10) + 0.5f) / 11.0f);
 
     PluginsPanelWidget::Hooks plugin_hooks;
     plugin_hooks.on_add_effect = [this](const std::string& type) {
@@ -1243,9 +1248,33 @@ void VideoEditorAppWidget::EnsureChildren() {
     });
     color_panel_->Refresh();
 
-    // Embedded Chromium tab (src/cef): graceful placeholder when the
-    // CEF binary distribution is not installed next to the exe.
-    browser_panel_ = std::make_shared<BrowserPanelWidget>(parent_hwnd_);
+    // Extensions dock tab (ui/extensions_panel.h): the .xexrj list
+    // plus the embedded CEF surface their xer-ext:// pages render
+    // into — the panel owns the browser widget that used to be the
+    // standalone "Web" tab. Graceful placeholder behavior when the
+    // CEF distribution is absent is unchanged.
+    ExtensionsPanelWidget::Hooks ext_panel_hooks;
+    ext_panel_hooks.on_status =
+        [this](const std::string& text, bool err) {
+            SetStatus(text, err);
+        };
+    ext_panel_hooks.on_reveal = [this](const std::string& path) {
+#ifdef _WIN32
+        // explorer /select,<path> — same reveal the media bin uses.
+        const std::wstring wpath =
+            Path::FromUtf8(Path::NormalizeUtf8Path(path)).wstring();
+        const std::wstring args = L"/select,\"" + wpath + L"\"";
+        ShellExecuteW(nullptr, L"open", L"explorer.exe", args.c_str(),
+                      nullptr, SW_SHOWNORMAL);
+        SetStatus("Revealed " + Basename(path));
+#else
+        (void)path;
+        SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+    };
+    ext_panel_hooks.on_rescan = [this] { RescanExtensions(); };
+    extensions_panel_ = std::make_shared<ExtensionsPanelWidget>(
+        parent_hwnd_, ext_panel_hooks);
 
     // VST3 editor popup (ui/vst3_editor.h): when its session ends,
     // commit the edited parameters back into the bound clip's fx
@@ -1254,7 +1283,8 @@ void VideoEditorAppWidget::EnsureChildren() {
 
     // .xexrj extension host: verified TZ archives under
     // assets/extensions/ whose main.js runs in the shared V8 engine;
-    // extension UI renders via xer-ext:// inside the Web tab.
+    // extension UI renders via xer-ext:// inside the Ext tab's
+    // embedded CEF view.
     ExtHost::Shared().SetActionFn(
         [this](const std::string& action, const std::string& arg_json) {
             return DispatchExtensionAction(action, arg_json);
@@ -1262,10 +1292,25 @@ void VideoEditorAppWidget::EnsureChildren() {
     ExtHost::Shared().SetOpenUiFn([this](const std::string& url) {
         right_panel_visible_ = true;
         SetRightTab(9);
-        if (browser_panel_) browser_panel_->OpenUrl(url);
+        if (extensions_panel_) extensions_panel_->OpenUrl(url);
         RequestLayout();
         Invalidate();
     });
+    // xer-ext:// member bridge: ExtHost lives inside
+    // YA.VideoEditor-Core.dll, which carries its own static XER_Cef —
+    // archives it registers never reach THIS module's scheme handler
+    // (the CEF runtime is initialized by video_editor.exe). The
+    // provider answers with member bytes across the boundary.
+    XER::Cef::ExtSchemeSetProvider(
+        [](const std::string& ext_id, const std::string& member,
+           std::vector<std::uint8_t>* bytes_out) {
+            auto bytes = ExtHost::Shared().ReadMember(ext_id, member);
+            if (bytes.empty()) {
+                return false;
+            }
+            *bytes_out = std::move(bytes);
+            return true;
+        });
     {
         const auto ext_dir =
             AppRuntime::SharedAssetsConfig().assets_dir / "extensions";
@@ -1297,6 +1342,9 @@ void VideoEditorAppWidget::EnsureChildren() {
             }
         }
     }
+    // The Ext tab's list mirrors whatever the scan left in Entries()
+    // (empty included) — Reload snapshots it into rows.
+    if (extensions_panel_) extensions_panel_->Reload();
 
     TimelineWidget::Hooks timeline_hooks;
     timeline_hooks.on_select_clip = [this](const std::string& id) {
@@ -1461,7 +1509,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(export_queue_);
     AddChild(plugins_panel_);
     AddChild(color_panel_);
-    AddChild(browser_panel_);
+    AddChild(extensions_panel_);
     AddChild(layers_panel_);
     AddChild(waveform_panel_);
     AddChild(status_toast_);
@@ -1674,7 +1722,7 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
              right_tab_ == 5),
         item("Color", "", [this] { SetRightTab(8); }, true,
              right_tab_ == 8),
-        item("Browser", "", [this] {
+        item("Extensions", "", [this] {
             right_panel_visible_ = true;
             SetRightTab(9);
         }, true, right_tab_ == 9),
@@ -1691,7 +1739,51 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             item("Workspace: " + ws.name, "",
                  [this, ws] { ApplyWorkspace(ws); }));
     }
-    title_bar_->SetMenus({file, edit, tools, timeline, view});
+    // Extensions menu mirrors ExtHost::Shared().Entries() — rebuilt
+    // by RebuildTitleBarMenus() whenever RescanExtensions() runs.
+    Menu exts_menu;
+    exts_menu.label = "Extensions";
+    {
+        const auto& entries = ExtHost::Shared().Entries();
+        if (entries.empty()) {
+            exts_menu.items.push_back(
+                item("(no extensions found)", "", [] {}, false));
+        }
+        for (const Extension& e : entries) {
+            const std::string id = e.manifest.id;
+            const bool has_ui = e.verified && !e.manifest.ui.empty();
+            std::string label =
+                e.manifest.name.empty() ? id : e.manifest.name;
+            if (!e.manifest.version.empty()) {
+                label += " v" + e.manifest.version;
+            }
+            exts_menu.items.push_back(item(
+                has_ui ? label + " — Open UI" : label + " — Run", "",
+                [this, id, has_ui] {
+                    if (has_ui) {
+                        OpenExtensionUi(id);
+                    } else {
+                        RunExtensionById(id);
+                    }
+                },
+                e.verified));
+        }
+        exts_menu.items.push_back(item("Show Extensions Panel", "",
+                                     [this] {
+                                         right_panel_visible_ = true;
+                                         SetRightTab(9);
+                                     },
+                                     true,
+                                     right_panel_visible_ &&
+                                         right_tab_ == 9,
+                                     false, true));
+        exts_menu.items.push_back(item(
+            "Reload Extensions", "", [this] { RescanExtensions(); }));
+        exts_menu.items.push_back(item(
+            "Open Extensions Folder", "",
+            [this] { RevealExtensionsFolder(); }));
+    }
+    title_bar_->SetMenus({file, edit, tools, timeline, view, exts_menu});
 }
 
 void VideoEditorAppWidget::ShowProjectSettingsDialog() {
@@ -4699,6 +4791,66 @@ std::string VideoEditorAppWidget::DispatchExtensionAction(
     return "{\"error\":\"unknown extension action: " + action + "\"}";
 }
 
+std::string VideoEditorAppWidget::ExtensionsDir() const {
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) return {};
+    return (cfg.assets_dir / "extensions").string();
+}
+
+void VideoEditorAppWidget::OpenExtensionUi(const std::string& id) {
+    right_panel_visible_ = true;
+    SetRightTab(9);
+    if (extensions_panel_) extensions_panel_->OpenExtension(id);
+    RequestLayout();
+    Invalidate();
+}
+
+void VideoEditorAppWidget::RunExtensionById(const std::string& id) {
+    const auto r = ExtHost::Shared().Run(id);
+    if (r.ok) {
+        SetStatus("ran " + id);
+    } else {
+        SetStatus(id + ": " + r.error, true);
+    }
+}
+
+void VideoEditorAppWidget::RescanExtensions() {
+    const std::string dir = ExtensionsDir();
+    if (dir.empty()) {
+        SetStatus("assets dir unresolved — cannot rescan extensions",
+                  true);
+        return;
+    }
+    ExtHost::Shared().Scan(dir);
+    if (extensions_panel_) extensions_panel_->Reload();
+    const auto& exts = ExtHost::Shared().Entries();
+    std::size_t good = 0;
+    for (const auto& e : exts) good += e.verified ? 1 : 0;
+    SetStatus("extensions rescanned: " + std::to_string(good) + "/" +
+              std::to_string(exts.size()) + " verified");
+    // The Extensions top menu mirrors Entries() — rebuild it so the
+    // rescan's adds/removals show up on next open.
+    RebuildTitleBarMenus();
+}
+
+void VideoEditorAppWidget::RevealExtensionsFolder() {
+    const std::string dir = ExtensionsDir();
+    if (dir.empty()) {
+        SetStatus("assets dir unresolved — no extensions folder", true);
+        return;
+    }
+#ifdef _WIN32
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const std::wstring wpath =
+        Path::FromUtf8(Path::NormalizeUtf8Path(dir)).wstring();
+    ShellExecuteW(nullptr, L"open", L"explorer.exe", wpath.c_str(),
+                  nullptr, SW_SHOWNORMAL);
+#else
+    SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+}
+
 MediaBounds VideoEditorAppWidget::BoundsForPath(
     const std::string& path) const {
     if (const CatalogEntry* entry = FindCatalogEntry(path)) {
@@ -4950,7 +5102,7 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     export_queue_->SetVisible(right_eff && right_tab_ == 6);
     plugins_panel_->SetVisible(right_eff && right_tab_ == 7);
     color_panel_->SetVisible(right_eff && right_tab_ == 8);
-    browser_panel_->SetVisible(right_eff && right_tab_ == 9);
+    extensions_panel_->SetVisible(right_eff && right_tab_ == 9);
     if (layers_panel_) {
         layers_panel_->SetVisible(right_eff && right_tab_ == 10);
     }
@@ -4965,7 +5117,7 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         std::shared_ptr<Widgets::Widget> panels[] = {
             inspector_,  effects_panel_, markers_panel_, lab_panel_,
             history_panel_, mixer_panel_, export_queue_,
-            plugins_panel_, color_panel_, browser_panel_,
+            plugins_panel_, color_panel_, extensions_panel_,
             layers_panel_};
         panels[std::clamp(right_tab_, 0, 10)]->Layout(
             {inspector_x, panel_y + tab_h, right_w - gap,

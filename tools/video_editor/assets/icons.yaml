@@ -34,6 +34,9 @@ Icons:
   tab.mixer: equalizer.svg
   tab.export: ios_share.svg
   tab.plugins: extension.svg
+  tab.extensions: extension.svg
+  ext.ui: web_asset.svg
+  ext.folder: file_open.svg
   action.undo: undo.svg
   action.redo: redo.svg
   action.delete: delete_forever.svg

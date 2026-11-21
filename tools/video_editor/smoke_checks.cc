@@ -19,20 +19,25 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
 
+#include <json/json.h>
+
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
 #include "audio_sync.h"
+#include "cef/cef_ext_scheme.h"
 #include "compositor.h"
 #include "content/video/video_info.h"
 #include "export_engine.h"
 #include "export_preset.h"
+#include "extensions/ext_host.h"
 #include "font_catalog.h"
 #include "frame.h"
 #include "frame_exporter.h"
@@ -53,6 +58,7 @@
 #include "timecode.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "tz/tz.h"
 #include "url_import.h"
 #include "worker_pipe.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
@@ -2365,6 +2371,359 @@ std::string CheckUrlImport() {
     return {};
 }
 
+// Extensions panel data path: when assets/extensions/ holds .xexrj
+// packages, ExtHost::Shared().Scan() must surface them to the Ext
+// dock tab's list (id/name/version present) and a UI-declaring
+// extension must resolve a usable xer-ext:// URL + member bytes —
+// exactly what the panel's "Open" action consumes. Missing assets
+// are tolerated (fresh builds may deploy none).
+std::string CheckExtensionsPanelData() {
+    std::string status;
+    auto boot = AppRuntime::Boot(&status);  // resolves assets_dir
+    AppRuntime::SharedBootEngine() = nullptr;
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) {
+        return {};   // no assets deployed — nothing to list
+    }
+    const std::filesystem::path ext_dir =
+        cfg.assets_dir / "extensions";
+    std::error_code ec;
+    bool any_package = false;
+    if (std::filesystem::is_directory(ext_dir, ec)) {
+        for (const auto& de :
+             std::filesystem::directory_iterator(ext_dir, ec)) {
+            if (de.path().extension() == ".xexrj") {
+                any_package = true;
+                break;
+            }
+        }
+    }
+    if (!any_package) {
+        return {};   // tolerant: extensions are optional content
+    }
+    ExtHost::Shared().Scan(ext_dir.string());
+    const auto& entries = ExtHost::Shared().Entries();
+    if (entries.empty()) {
+        return "extensions present but scan listed none";
+    }
+    int verified = 0;
+    const Extension* with_ui = nullptr;
+    for (const Extension& e : entries) {
+        if (!e.verified) continue;
+        ++verified;
+        if (e.manifest.id.empty() || e.manifest.name.empty()) {
+            return "verified extension missing id/name in manifest";
+        }
+        if (!e.manifest.ui.empty() && with_ui == nullptr) {
+            with_ui = &e;
+        }
+    }
+    if (verified == 0) {
+        return "extensions present but none verified";
+    }
+    if (with_ui != nullptr) {
+        // The panel builds this URL for its Open action.
+        const std::string url =
+            XER::Cef::ExtSchemeUrl(with_ui->manifest.id,
+                                   with_ui->manifest.ui);
+        const std::string want_prefix =
+            "xer-ext://" + with_ui->manifest.id + "/";
+        if (url.rfind(want_prefix, 0) != 0) {
+            return "ExtSchemeUrl produced '" + url + "'";
+        }
+        if (ExtHost::Shared()
+                .ReadMember(with_ui->manifest.id, with_ui->manifest.ui)
+                .empty()) {
+            return "declared UI member unreadable: " +
+                   with_ui->manifest.ui;
+        }
+    }
+    return {};
+}
+
+// .xexrj native JIT payloads (tools/tz/xsjo_compile.*): ztzmake packs
+// extension C++ sources as COFF objects under mobjective/*.xsjo, each
+// wrapped in an XSJ1 header (magic, version, triple, source name).
+// The JIT loader trusts that header before executing the object, so
+// this check re-validates it on every deployed extension: well-formed
+// header + a COFF machine word matching the triple. No .xexrj or no
+// .xsjo member degrades gracefully (assets_icons owns missing-package
+// complaints, and non-Clang toolchains legitimately ship none); a
+// malformed .xsjo is a hard failure — the pipeline produced a broken
+// object.
+std::string CheckExtXsjo() {
+    std::string status;
+    AppRuntime::Boot(&status);   // resolves assets_dir
+    AppRuntime::SharedBootEngine() = nullptr;
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) {
+        return {};
+    }
+    const std::filesystem::path ext_dir = cfg.assets_dir / "extensions";
+    std::error_code ec;
+    if (!std::filesystem::is_directory(ext_dir, ec)) {
+        return {};
+    }
+    const auto u16le = [](const std::uint8_t* p) {
+        return static_cast<unsigned>(p[0]) |
+               (static_cast<unsigned>(p[1]) << 8);
+    };
+    const auto u64le = [](const std::uint8_t* p) {
+        std::uint64_t x = 0;
+        for (int s = 0; s < 64; s += 8) {
+            x |= static_cast<std::uint64_t>(p[s / 8]) << s;
+        }
+        return x;
+    };
+    for (const auto& de :
+         std::filesystem::directory_iterator(ext_dir, ec)) {
+        if (de.path().extension() != ".xexrj") continue;
+        std::string open_err;
+        auto arc =
+            Tz::TzArchive::Open(Utf8Path(de.path()), &open_err);
+        if (!arc) {
+            return "cannot open " +
+                   Utf8Path(de.path().filename()) + ": " + open_err;
+        }
+        for (const auto& name : arc->Names()) {
+            if (name.rfind("mobjective/", 0) != 0 ||
+                name.size() < 6 ||
+                name.compare(name.size() - 5, 5, ".xsjo") != 0) {
+                continue;
+            }
+            std::vector<std::uint8_t> bytes;
+            if (!arc->Read(name, &bytes)) {
+                return "cannot read member " + name;
+            }
+            const std::uint8_t* p = bytes.data();
+            const std::size_t n = bytes.size();
+            const auto bad = [&](const char* why) {
+                return name + ": " + why;
+            };
+            if (n < 14 || p[0] != 'X' || p[1] != 'S' || p[2] != 'J' ||
+                p[3] != '1') {
+                return bad("bad XSJ1 magic");
+            }
+            if (u16le(p + 4) != 1) {
+                return bad("unsupported XSJ1 version");
+            }
+            std::size_t at = 6;
+            std::string triple;
+            for (int i = 0; i < 2; ++i) {   // triple, source name
+                if (at + 2 > n) return bad("truncated header");
+                const unsigned len = u16le(p + at);
+                at += 2;
+                if (at + len > n) return bad("truncated strings");
+                if (i == 0) {
+                    triple.assign(
+                        reinterpret_cast<const char*>(p + at), len);
+                }
+                at += len;
+            }
+            if (triple.empty()) return bad("empty triple");
+            if (at + 8 > n) return bad("missing payload size");
+            const std::uint64_t payload_size = u64le(p + at);
+            at += 8;
+            if (payload_size < 20 || payload_size > n - at) {
+                return bad("payload size out of range");
+            }
+            // COFF object file header starts with the machine type:
+            // x86_64 triples must carry IMAGE_FILE_MACHINE_AMD64.
+            if (triple.rfind("x86_64", 0) == 0 &&
+                u16le(p + at) != 0x8664) {
+                return bad("payload is not an x86_64 COFF object");
+            }
+        }
+    }
+    return {};
+}
+
+// VE.ExtensionsRuntime.exe (extensions/ext_runtime_server.cc) — the
+// dedicated native-extension JIT host: the exe must sit beside
+// video_editor.exe (build/deploy contract), ping must report the
+// VE.ExtensionsRuntime role, ext_list must surface the deployed
+// demo.xexrj, and ext_load on the JS-only demo must succeed
+// gracefully (native:false — no mobjective members → the in-editor
+// ExtHost owns it). Any listed extension that DOES carry
+// mobjective/*.xsjo is also ext_loaded — tolerated when the JIT is
+// unavailable or the reply is a clean ok:false engine error (the
+// ztzmake-side native demo may not be packed yet); transport silence
+// and malformed replies still count as failures.
+std::string CheckExtRuntime() {
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    if (!std::filesystem::exists(
+            bin_dir / "VE.ExtensionsRuntime.exe", ec)) {
+        return "VE.ExtensionsRuntime.exe missing beside "
+               "video_editor.exe";
+    }
+    WorkerPipe pipe(WorkerPipeSpec{
+        "VE.ExtensionsRuntime.exe", nullptr, "XER_VE_EXT_WORKER"});
+    if (!pipe.Available()) {
+        return "ext runtime spawn failed";
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "ext runtime ping failed";
+    }
+    if (role != "VE.ExtensionsRuntime") {
+        return "unexpected ext runtime role '" + role + "'";
+    }
+
+    const auto round_trip =
+        [&](const std::function<void(Json::Value&)>& fill,
+            std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            Json::Value req(Json::objectValue);
+            req["id"] = Json::UInt64(id);
+            fill(req);
+            Json::StreamWriterBuilder w;
+            w["indentation"] = "";
+            return pipe.RoundTrip(id, Json::writeString(w, req), 15000,
+                                  reply);
+        };
+    const auto parse = [](const std::string& line, Json::Value* out) {
+        std::string errs;
+        Json::CharReaderBuilder r;
+        std::istringstream in(line);
+        return Json::parseFromStream(r, in, out, &errs) &&
+               out->isObject();
+    };
+
+    // ext_list — must find the deployed demo.xexrj.
+    const std::string ext_dir =
+        Utf8Path(bin_dir / "assets" / "extensions");
+    std::string reply;
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_list";
+                r["dir"] = ext_dir;
+            },
+            &reply)) {
+        return "ext_list got no reply";
+    }
+    Json::Value list;
+    if (!parse(reply, &list) || !list.get("ok", false).asBool()) {
+        return "ext_list failed: " +
+               list.get("err", "malformed reply").asString();
+    }
+    std::string demo_path;
+    std::vector<std::string> native_paths;
+    for (const auto& e : list["exts"]) {
+        if (e.get("id", "").asString() == "demo") {
+            demo_path = e.get("path", "").asString();
+        }
+        if (e.get("has_native", false).asBool()) {
+            native_paths.push_back(e.get("path", "").asString());
+        }
+    }
+    if (demo_path.empty()) {
+        return "demo.xexrj not reported by ext_list";
+    }
+
+    // ext_load demo — ok:true is required. native:true means the
+    // demo's mobjective/*.xsjo went through the real JIT path
+    // (XSJ1 parse → COFF → LLJIT link → module loaded); native:false
+    // is the graceful JS-only shape.
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) {
+                r["kind"] = "ext_load";
+                r["path"] = demo_path;
+            },
+            &reply)) {
+        return "ext_load demo got no reply";
+    }
+    Json::Value load;
+    if (!parse(reply, &load)) {
+        return "ext_load demo reply is malformed";
+    }
+    if (!load.get("ok", false).asBool()) {
+        return "ext_load demo failed: " +
+               load.get("err", "?").asString();
+    }
+    if (!load.isMember("native")) {
+        return "ext_load demo reply lacks the native flag";
+    }
+
+    // When the demo packed native objects, drive one exported
+    // callable end to end — ext_call "ve_demo_name" exercises the
+    // JIT symbol lookup, the JIT'd call itself and the ve_ctx
+    // pass-through. ok:true with a non-empty result_json is
+    // asserted; ok:false is tolerated (the demo's exports may move).
+    if (load.get("native", false).asBool()) {
+        reply.clear();
+        if (!round_trip(
+                [&](Json::Value& r) {
+                    r["kind"] = "ext_call";
+                    r["ext_id"] = "demo";
+                    r["fn"] = "ve_demo_name";
+                    r["args"] = "{}";
+                },
+                &reply)) {
+            return "ext_call ve_demo_name got no reply";
+        }
+        Json::Value call;
+        if (!parse(reply, &call)) {
+            return "ext_call ve_demo_name reply is malformed";
+        }
+        if (call.get("ok", false).asBool() &&
+            call.get("result_json", "").asString().empty()) {
+            return "ext_call ve_demo_name returned an empty result";
+        }
+        // ok:false tolerated — the demo's exported callables may
+        // change; the JIT path already ran in ext_load.
+        reply.clear();
+        if (!round_trip(
+                [&](Json::Value& r) {
+                    r["kind"] = "ext_unload";
+                    r["ext_id"] = "demo";
+                },
+                &reply)) {
+            return "ext_unload got no reply";
+        }
+    }
+
+    // ext_events — drains the queued-event bridge; empty is fine.
+    reply.clear();
+    if (!round_trip(
+            [&](Json::Value& r) { r["kind"] = "ext_events"; },
+            &reply)) {
+        return "ext_events got no reply";
+    }
+    Json::Value ev;
+    if (!parse(reply, &ev) || !ev.get("ok", false).asBool() ||
+        !ev["events"].isArray()) {
+        return "ext_events reply malformed";
+    }
+
+    // Tolerated JIT drive — see the comment above the function.
+    for (const auto& p : native_paths) {
+        reply.clear();
+        if (!round_trip(
+                [&](Json::Value& r) {
+                    r["kind"] = "ext_load";
+                    r["path"] = p;
+                },
+                &reply)) {
+            return "ext_load of a native extension got no reply";
+        }
+        if (!parse(reply, &load)) {
+            return "ext_load native reply malformed";
+        }
+        // ok:false tolerated until the native demo lands.
+    }
+    pipe.KillWorker();
+    return {};
+#else
+    return {};
+#endif
+}
+
 // ---- registry + runner ----------------------------------------------
 
 using CheckFn = std::string (*)();
@@ -2405,7 +2764,10 @@ constexpr CheckEntry kChecks[] = {
     {"media_worker", &CheckMediaWorker},
     {"sync_worker", &CheckSyncMediaWorker},
     {"fx_worker", &CheckFxScriptWorker},
+    {"ext_runtime", &CheckExtRuntime},
     {"assets_icons", &CheckAssetsIcons},
+    {"extensions_panel", &CheckExtensionsPanelData},
+    {"ext_xsjo", &CheckExtXsjo},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };

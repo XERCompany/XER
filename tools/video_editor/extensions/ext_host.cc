@@ -217,6 +217,13 @@ bool InList(const std::vector<std::string>& list,
 
 }  // namespace
 
+// ---- shared manifest parse (see ext_host.h) ------------------------------
+
+bool ExtManifestParse(const std::string& text, ExtManifest* out,
+                      std::string* error) {
+    return ParseManifest(text, out, error);
+}
+
 // ---- ExtHost ------------------------------------------------------------
 
 ExtHost& ExtHost::Shared() {

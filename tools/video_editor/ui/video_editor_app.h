@@ -25,10 +25,10 @@
 #include "url_import.h"
 #include "lab/async_op.h"
 #include "playback/preview_engine.h"
-#include "browser_panel_widget.h"
 #include "color_panel_widget.h"
 #include "effects_panel.h"
 #include "export_dialog.h"
+#include "extensions_panel.h"
 #include "export_queue_panel.h"
 #include "history_panel.h"
 #include "inspector_widget.h"
@@ -355,6 +355,18 @@ private:
     // — JSON in/out, scoped surface for extension scripts.
     std::string DispatchExtensionAction(const std::string& action,
                                         const std::string& arg_json);
+    // assets/extensions/ as a UTF-8 dir string ("" when the assets
+    // layer never resolved one) — shared by the boot scan, the panel
+    // refresh hook and the menu's folder/rescan items.
+    std::string ExtensionsDir() const;
+    // Menu/panel entry points: open `id`'s declared UI in the Ext
+    // tab's CEF view, re-run `id`'s entry point, rescan the dir
+    // (ExtHost::Scan + panel Reload + menu rebuild), Explorer-reveal
+    // the extensions dir.
+    void OpenExtensionUi(const std::string& id);
+    void RunExtensionById(const std::string& id);
+    void RescanExtensions();
+    void RevealExtensionsFolder();
     MediaBounds BoundsForPath(const std::string& path) const;
     const CatalogEntry* FindCatalogEntry(const std::string& path) const;
 
@@ -479,7 +491,9 @@ private:
     std::shared_ptr<EffectsPanelWidget> effects_panel_;
     std::shared_ptr<PluginsPanelWidget> plugins_panel_;
     std::shared_ptr<ColorPanelWidget> color_panel_;
-    std::shared_ptr<BrowserPanelWidget> browser_panel_;
+    // Extensions dock tab (replaces the old "Web" tab): owns the
+    // embedded CEF surface its xer-ext:// pages render into.
+    std::shared_ptr<ExtensionsPanelWidget> extensions_panel_;
     std::shared_ptr<MarkersPanelWidget> markers_panel_;
     std::shared_ptr<LabPanel> lab_panel_;
     std::shared_ptr<TimelineWidget> timeline_;
@@ -507,7 +521,7 @@ private:
     std::shared_ptr<XER::UI::Widgets::Tabs> right_tabs_;
     std::shared_ptr<TabStripScroll> tab_strip_;
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Web, 10 Lyr
+    // 8 Color, 9 Ext, 10 Lyr
     int right_tab_ = 0;
     double timeline_fraction_ = 0.32;  // workspace layout knob
     std::vector<ExportJobRow> export_jobs_;

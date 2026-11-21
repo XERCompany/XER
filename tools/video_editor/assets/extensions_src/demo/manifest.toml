@@ -12,3 +12,12 @@ requires = ["scripts/helper.js", "static/index.html", "static/style.css"]
 dlls = []
 lua = []
 py = []
+# JIT-compilable C++ sources — ztzmake compiles each into
+# mobjective/<stem>.xsjo inside the .xexrj. Must stay an array: the
+# extension host rejects non-array values in [native].
+sources = ["native/hello.cc"]
+
+[pack]
+# Packer-only options (ignored by the extension host).
+# keep_sources = true would also pack the raw .cc next to the .xsjo.
+keep_sources = false

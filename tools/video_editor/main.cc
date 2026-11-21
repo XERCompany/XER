@@ -245,7 +245,11 @@ int RunCefCheck() {
         return 1;
     }
     std::string error;
-    if (!XER::Cef::Initialize({}, &error)) {
+    // Same init options the Browser panel uses — the check must cover
+    // the code path users actually hit.
+    XER::Cef::RuntimeOptions cef_options;
+    cef_options.disable_gpu = true;
+    if (!XER::Cef::Initialize(cef_options, &error)) {
         std::cerr << "cef-check: init failed: " << error << "\n";
         return 1;
     }

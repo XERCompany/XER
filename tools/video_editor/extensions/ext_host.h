@@ -54,6 +54,15 @@ struct Extension {
     std::vector<std::string> verify_errors;
 };
 
+// Parses manifest.toml text into `out` — the same strict parser
+// ExtHost::Load runs. Exposed for the out-of-process extension
+// runtime (VE.ExtensionsRuntime.exe / ext_runtime_server.cc), which
+// opens the same .xexrj archives in its own address space and must
+// evaluate the manifest identically without dragging in the CEF/V8
+// host machinery.
+bool ExtManifestParse(const std::string& text, ExtManifest* out,
+                      std::string* error);
+
 class ExtHost {
 public:
     static ExtHost& Shared();

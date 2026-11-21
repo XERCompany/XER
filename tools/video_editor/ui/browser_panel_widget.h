@@ -13,6 +13,7 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class ButtonGroup;
 class Label;
 class TextInput;
 }
@@ -66,6 +67,9 @@ private:
     std::shared_ptr<CefEvents> cef_events_;
 
     void* parent_hwnd_ = nullptr;
+    // back/forward/reload joined into one segmented strip — the
+    // grouped-transport look the rest of the chrome uses.
+    std::shared_ptr<XER::UI::Widgets::ButtonGroup> nav_group_;
     std::shared_ptr<XER::UI::Widgets::Button> back_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> fwd_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> reload_btn_;
@@ -76,6 +80,10 @@ private:
     std::unique_ptr<XER::Cef::CefHost> cef_;
     XER::UI::Layout::Rect view_rect_{};
     std::string status_;   // UI thread only
+    // URL handed to OpenUrl/Navigate before the Chromium child exists
+    // (extension openUi ahead of the first layout) — EnsureBrowser
+    // loads it right after Create instead of dropping it.
+    std::string pending_url_;
     bool cef_tried_ = false;
     bool cef_ok_ = false;
 };

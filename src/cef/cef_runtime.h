@@ -26,6 +26,11 @@ struct RuntimeOptions {
     int log_severity = -1;       // -1 -> WARNING; else cef_log_severity_t
                                  // (LOGSEVERITY_DISABLE silences stderr too)
     bool headless = false;       // windowless rendering (no GPU browser)
+    // Passes "disable-gpu" to Chromium: the GPU process still launches
+    // in software mode but skips hardware init — the right default for
+    // embedded panels that only host static/extension pages, and it
+    // sidesteps GPU-driver probing entirely.
+    bool disable_gpu = false;
     bool enable_remote_debug = false;
     int remote_debug_port = 0;
     // Extra Chromium switches applied via OnBeforeCommandLineProcessing.

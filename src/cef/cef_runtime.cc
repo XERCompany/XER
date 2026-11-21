@@ -160,7 +160,11 @@ bool Initialize(const RuntimeOptions& options, std::string* error_out) {
         settings.remote_debugging_port = options.remote_debug_port;
     }
 
-    g_app = new XERCefApp(options.command_line_switches);
+    std::vector<std::string> switches = options.command_line_switches;
+    if (options.disable_gpu) {
+        switches.push_back("disable-gpu");
+    }
+    g_app = new XERCefApp(std::move(switches));
     CefMainArgs args(GetModuleHandle(nullptr));
     if (!CefInitialize(args, settings, g_app.get(), nullptr)) {
         g_last_error = "CEF: CefInitialize failed (resources or version "
