@@ -86,4 +86,23 @@ bool ComputeAudioSyncPlanWithPeaks(
     const AudioSyncPeaksProvider& peaks, AudioSyncReport* report,
     std::string* error_out);
 
+// Out-of-process variant: routes the SAME plan through
+// XERSyncMedia.exe (SyncMediaPipe) — the worker decodes the peaks and
+// runs the correlation off the editor process. Tri-state result:
+//   kPlanned     — report filled from the worker reply
+//   kUnavailable — worker not spawnable / transport failed / garbage
+//                  reply: the caller should run the in-process plan
+//   kFailed      — genuine failure (no clips, worker-reported error,
+//                  cancelled): error_out filled; do NOT fall back
+// Windows-only: always kUnavailable elsewhere.
+// CANCEL: a remote request cannot be polled mid-flight — the caller
+// cancels by killing the worker (WorkerPipe::KillWorker, job-grouped
+// and disposable); this call then returns kUnavailable/kFailed on its
+// own. See worker_pipe.h for the no-death-penalty kill semantics.
+enum class AudioSyncRoute { kPlanned, kUnavailable, kFailed };
+AudioSyncRoute ComputeAudioSyncPlanViaWorker(
+    const Project& project, const std::string& reference_clip_id,
+    AudioSyncReport* report, std::string* error_out,
+    std::atomic<bool>* cancel = nullptr);
+
 }  // namespace XER::VideoEditor

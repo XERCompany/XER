@@ -8,6 +8,8 @@
 #include <unordered_map>
 
 #include "media_catalog.h"
+#include "media_worker_protocol.h"
+#include "worker_pipe.h"
 
 namespace XER::VideoEditor {
 namespace {
@@ -32,6 +34,10 @@ constexpr double kMaxCorrelationProducts = 2.0e8;
 // ScanLags reports cancellation with this out-of-range confidence so
 // callers can distinguish abort from a genuine no-match (-1..1).
 constexpr double kCancelled = -2.0;
+// A remote sync plan decodes several files and sweeps the bounded
+// correlation inside one request — generous ceiling; the cancel path
+// kills the worker rather than waiting this out.
+constexpr int kSyncPlanTimeoutMs = 600000;
 
 // Mono energy envelope of a file's peaks: sqrt of channel-averaged
 // squared bucket magnitude (max(|min|,|max|)), decimated.
@@ -173,7 +179,48 @@ struct SyncSource {
     double start = 0.0;
     double in_point = 0.0;
     double rate = 1.0;
+    int track = 0;
 };
+
+// Media clips with a source path are the sync candidates — audio-
+// capable until the peaks provider proves otherwise (it fails cleanly
+// on video-only sources).
+std::vector<SyncSource> GatherSyncSources(const Project& project) {
+    std::vector<SyncSource> candidates;
+    for (const auto& clip : project.clips) {
+        if (clip.source_path.empty() ||
+            clip.source.kind != SourceKind::Media) {
+            continue;
+        }
+        candidates.push_back({clip.id, clip.source_path,
+                              clip.timeline_start, clip.in_point,
+                              clip.playback_rate, clip.track});
+    }
+    return candidates;
+}
+
+// Requested id wins; otherwise the earliest-starting clip on the
+// lowest track index (the "main" track by convention).
+const SyncSource* PickSyncReference(
+    const std::vector<SyncSource>& candidates,
+    const std::string& reference_clip_id) {
+    if (!reference_clip_id.empty()) {
+        for (const auto& c : candidates) {
+            if (c.clip_id == reference_clip_id) return &c;
+        }
+        return nullptr;
+    }
+    const SyncSource* best = nullptr;
+    int best_track = 1 << 30;
+    for (const auto& c : candidates) {
+        if (c.track < best_track ||
+            (c.track == best_track && best && c.start < best->start)) {
+            best = &c;
+            best_track = c.track;
+        }
+    }
+    return best;
+}
 
 }  // namespace
 
@@ -194,16 +241,8 @@ bool ComputeAudioSyncPlan(const Project& project,
 
     // Gather media clips (audio-capable until proven otherwise —
     // the peaks provider fails cleanly on video-only sources).
-    std::vector<SyncSource> candidates;
-    for (const auto& clip : project.clips) {
-        if (clip.source_path.empty() ||
-            clip.source.kind != SourceKind::Media) {
-            continue;
-        }
-        candidates.push_back({clip.id, clip.source_path,
-                              clip.timeline_start, clip.in_point,
-                              clip.playback_rate});
-    }
+    const std::vector<SyncSource> candidates =
+        GatherSyncSources(project);
     if (candidates.empty()) {
         if (error_out) *error_out = "no media clips on the timeline";
         return false;
@@ -211,27 +250,8 @@ bool ComputeAudioSyncPlan(const Project& project,
 
     // Reference: requested id, else the earliest-starting clip on the
     // lowest track index (the "main" track by convention).
-    auto pick_ref = [&]() -> const SyncSource* {
-        if (!reference_clip_id.empty()) {
-            for (const auto& c : candidates) {
-                if (c.clip_id == reference_clip_id) return &c;
-            }
-            return nullptr;
-        }
-        const SyncSource* best = nullptr;
-        int best_track = 1 << 30;
-        for (const auto& c : candidates) {
-            const Clip* clip = FindClip(project, c.clip_id);
-            const int ti = clip ? clip->track : 0;
-            if (ti < best_track ||
-                (ti == best_track && best && c.start < best->start)) {
-                best = &c;
-                best_track = ti;
-            }
-        }
-        return best;
-    };
-    const SyncSource* ref = pick_ref();
+    const SyncSource* ref =
+        PickSyncReference(candidates, reference_clip_id);
     if (!ref) {
         if (error_out) *error_out = "reference clip not found";
         return false;
@@ -362,6 +382,116 @@ bool ComputeAudioSyncPlanWithPeaks(
     options.peaks = peaks;
     return ComputeAudioSyncPlan(project, reference_clip_id, report,
                                 error_out, options);
+}
+
+AudioSyncRoute ComputeAudioSyncPlanViaWorker(
+    const Project& project, const std::string& reference_clip_id,
+    AudioSyncReport* report, std::string* error_out,
+    std::atomic<bool>* cancel) {
+#if defined(_WIN32)
+    if (report) *report = AudioSyncReport{};
+    auto cancelled = [&]() -> bool {
+        if (cancel != nullptr &&
+            cancel->load(std::memory_order_relaxed)) {
+            if (error_out) *error_out = "audio sync cancelled";
+            return true;
+        }
+        return false;
+    };
+    if (cancelled()) return AudioSyncRoute::kFailed;
+
+    const std::vector<SyncSource> candidates =
+        GatherSyncSources(project);
+    if (candidates.empty()) {
+        if (error_out) *error_out = "no media clips on the timeline";
+        return AudioSyncRoute::kFailed;
+    }
+    const SyncSource* ref =
+        PickSyncReference(candidates, reference_clip_id);
+    if (ref == nullptr) {
+        if (error_out) *error_out = "reference clip not found";
+        return AudioSyncRoute::kFailed;
+    }
+
+    // Dedicated engine subprocess: the whole decode + correlation runs
+    // in XERSyncMedia.exe. Spawn failure → caller runs the in-process
+    // plan instead.
+    WorkerPipe& pipe = SyncMediaPipe();
+    if (!pipe.Available()) return AudioSyncRoute::kUnavailable;
+
+    MediaWorker::SyncPlanRequestData data;
+    data.clips.reserve(candidates.size());
+    int ref_index = -1;
+    for (std::size_t i = 0; i < candidates.size(); ++i) {
+        const SyncSource& c = candidates[i];
+        if (&c == ref) ref_index = static_cast<int>(i);
+        MediaWorker::SyncPlanClip clip;
+        clip.clip_id = c.clip_id;
+        clip.path = c.canon_path;
+        clip.start = c.start;
+        clip.in_point = c.in_point;
+        // Source out consumed at `rate` speed — the clip's media span.
+        const Clip* model_clip = FindClip(project, c.clip_id);
+        clip.out_point =
+            c.in_point +
+            (model_clip != nullptr ? model_clip->duration : 0.0) *
+                c.rate;
+        clip.rate = c.rate;
+        data.clips.push_back(std::move(clip));
+    }
+    data.ref_index = ref_index;
+
+    const std::uint64_t id = pipe.NextId();
+    std::string reply;
+    if (!pipe.RoundTrip(
+            id, MediaWorker::EncodeSyncPlanRequest(id, data),
+            kSyncPlanTimeoutMs, &reply)) {
+        // Timeout/death — unless the editor cancelled (which is what
+        // killed the pipe), treat it as unavailable so the caller can
+        // finish the job in-process.
+        return cancelled() ? AudioSyncRoute::kFailed
+                           : AudioSyncRoute::kUnavailable;
+    }
+    std::uint64_t rid = 0;
+    bool ok = false;
+    std::string err;
+    if (!MediaWorker::DecodeReplyEnvelope(reply, &rid, &ok, &err)) {
+        return AudioSyncRoute::kUnavailable;   // garbage on the wire
+    }
+    if (!ok) {
+        if (error_out) {
+            *error_out = err.empty() ? "sync worker failed" : err;
+        }
+        return AudioSyncRoute::kFailed;
+    }
+    MediaWorker::SyncPlanResult result;
+    if (!MediaWorker::DecodeSyncPlanReply(reply, &rid, &result)) {
+        return AudioSyncRoute::kUnavailable;
+    }
+    if (report) {
+        report->reference_clip_id = result.reference_clip_id;
+        report->status = result.status;
+        report->entries.reserve(result.entries.size());
+        for (const auto& e : result.entries) {
+            AudioSyncEntry entry;
+            entry.clip_id = e.clip_id;
+            entry.new_timeline_start = e.new_timeline_start;
+            entry.delta_seconds = e.delta_seconds;
+            entry.confidence = e.confidence;
+            entry.matched = e.matched;
+            entry.note = e.note;
+            report->entries.push_back(std::move(entry));
+        }
+    }
+    return AudioSyncRoute::kPlanned;
+#else
+    (void)project;
+    (void)reference_clip_id;
+    (void)report;
+    (void)error_out;
+    (void)cancel;
+    return AudioSyncRoute::kUnavailable;
+#endif
 }
 
 }  // namespace XER::VideoEditor

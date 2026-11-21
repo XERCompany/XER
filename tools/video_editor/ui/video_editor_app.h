@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "audio_sync.h"
 #include "export_engine.h"
 #include "media_catalog.h"
 #include "media_prep.h"
@@ -211,8 +212,16 @@ private:
     void MoveClip(const std::string& clip_id, double start);
     // One-click waveform sync (audio_sync.h): correlate every
     // audio-bearing clip's envelope against the selected/first clip
-    // and apply matches as history-wrapped moves.
+    // and apply matches as history-wrapped moves. Runs on sync_op_ —
+    // the UI stays live so the Cancel affordance can abort a long
+    // multi-cam decode.
     void SyncAudioClips();
+    // Cancels the in-flight audio sync: flips the flag the in-process
+    // plan polls AND kills the disposable XERSyncMedia worker (a
+    // remote request can't be polled mid-flight — KillWorker fails
+    // the RoundTrip fast with no crash-death penalty). Bound to the
+    // status-strip Cancel button and the Esc key.
+    void RequestSyncCancel();
     void TrimClip(const std::string& clip_id, TrimEdge edge,
                   double point);
     void SplitClip(const std::string& clip_id, double at_seconds);
@@ -377,6 +386,20 @@ private:
     AiResult ai_result_;
     float ai_progress_shown_ = -1.0f;
 
+    // Audio-sync background job — the same AsyncOp/marshal pattern as
+    // ai_op_ but a dedicated slot so a sync never evicts an AI task.
+    // The worker reads a project snapshot (UI edits keep flowing
+    // while it runs); the report lands in sync_report_ via Tick().
+    // Declared after media_prep_ so the joining dtor runs while the
+    // prep pool is still alive.
+    Lab::AsyncOp sync_op_;
+    std::mutex sync_result_mutex_;
+    AudioSyncReport sync_report_;
+    std::atomic<bool> sync_cancel_{false};
+    std::atomic<int> sync_progress_done_{0};
+    std::atomic<int> sync_progress_total_{0};
+    int sync_progress_shown_ = -1;
+
     std::shared_ptr<XER::UI::Widgets::AppTitleBar> title_bar_;
     std::shared_ptr<XER::UI::Widgets::Button> import_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
@@ -388,6 +411,9 @@ private:
     std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> export_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> status_label_;
+    // Right-docked in the status strip — the "Syncing audio…
+    // [Cancel]" affordance; hidden whenever sync_op_ is idle.
+    std::shared_ptr<XER::UI::Widgets::Button> sync_cancel_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> zoom_label_;
     // Ordered toolbar row (button + slot width). EnsureChildren fills
     // it from SharedAssetsConfig().toolbar_ids order when the assets

@@ -20,6 +20,8 @@
 
 #include "app_runtime/js_engine.h"
 #include "frame.h"
+#include "media_worker_protocol.h"
+#include "worker_pipe.h"
 
 #if defined(XER_VE_HAS_V8)
 #include <libplatform/libplatform.h>
@@ -104,10 +106,82 @@ const JsFxRuntime::FxDesc* FindDesc(
     return nullptr;
 }
 
+// Appends `next` to the append-only snapshot deque and publishes it.
+void PublishCatalog(Catalog next) {
+    std::unique_lock lock(g_catalog_mu);
+    g_catalogs.push_back(std::move(next));
+    g_catalog = &g_catalogs.back();
+}
+
+constexpr int kFxListTimeoutMs = 30000;
+constexpr int kFxAudioTimeoutMs = 15000;
+
+#if defined(_WIN32)
+// Out-of-process manifest listing via XERFxScript.exe — the worker
+// answers fx_list with plain JSON (no V8), so this stays cheap while
+// still proving/warming the remote fx host before audio-eval calls
+// rely on it. Any failure → caller runs the local manifest parse.
+// The worker process itself disables FxScriptPipe (XER_VE_FX_WORKER)
+// so its own LoadCatalog can never recurse into a grandchild.
+bool LoadCatalogViaWorker(const std::string& fx_dir, Catalog* out) {
+    WorkerPipe& pipe = FxScriptPipe();
+    if (!pipe.Available()) return false;
+    const std::uint64_t id = pipe.NextId();
+    std::string reply;
+    if (!pipe.RoundTrip(
+            id, MediaWorker::EncodeFxListRequest(id, fx_dir),
+            kFxListTimeoutMs, &reply)) {
+        return false;
+    }
+    MediaWorker::FxListReply list;
+    std::uint64_t rid = 0;
+    if (!MediaWorker::DecodeFxListReply(reply, &rid, &list)) {
+        return false;
+    }
+    auto convert = [](const std::vector<MediaWorker::FxListItem>& src,
+                      std::vector<JsFxRuntime::FxDesc>* dst) {
+        for (const auto& item : src) {
+            JsFxRuntime::FxDesc desc;
+            desc.id = item.id;
+            desc.title = item.title;
+            desc.file = item.file;
+            for (const auto& p : item.params) {
+                JsFxRuntime::ParamDef def;
+                def.id = p.id;
+                def.label = p.label;
+                def.def = p.def;
+                def.min = p.min;
+                def.max = p.max;
+                desc.params.push_back(std::move(def));
+            }
+            dst->push_back(std::move(desc));
+        }
+    };
+    out->fx_dir = fx_dir;
+    convert(list.video, &out->video_fx);
+    convert(list.audio, &out->audio_fx);
+    convert(list.transitions, &out->transitions);
+    out->loaded = true;
+    return true;
+}
+#endif  // _WIN32
+
 }  // namespace
 
 bool JsFxRuntime::LoadCatalog(const std::string& fx_dir,
                               std::string* error) {
+#if defined(_WIN32)
+    // Prefer the worker's parse of the same manifest — identical
+    // contents, off-process. Falls through to the local read on any
+    // transport/spawn trouble.
+    {
+        Catalog remote;
+        if (LoadCatalogViaWorker(fx_dir, &remote)) {
+            PublishCatalog(std::move(remote));
+            return true;
+        }
+    }
+#endif
     Catalog next;
     next.fx_dir = fx_dir;
     const std::filesystem::path manifest =
@@ -117,9 +191,7 @@ bool JsFxRuntime::LoadCatalog(const std::string& fx_dir,
         if (error) *error = "fx.json not found: " + manifest.string();
         // Publish the empty snapshot — readers see "loaded=false",
         // never a torn list.
-        std::unique_lock lock(g_catalog_mu);
-        g_catalogs.push_back(std::move(next));
-        g_catalog = &g_catalogs.back();
+        PublishCatalog(std::move(next));
         return false;
     }
     std::stringstream ss;
@@ -135,9 +207,7 @@ bool JsFxRuntime::LoadCatalog(const std::string& fx_dir,
     ParseDescList(root["audio"], &next.audio_fx);
     ParseDescList(root["transitions"], &next.transitions);
     next.loaded = true;
-    std::unique_lock lock(g_catalog_mu);
-    g_catalogs.push_back(std::move(next));
-    g_catalog = &g_catalogs.back();
+    PublishCatalog(std::move(next));
     return true;
 }
 
@@ -438,25 +508,66 @@ std::string BudgetError(const std::string& id,
            "ms execution budget (terminated)";
 }
 
+#if defined(_WIN32)
+// Out-of-process script eval via XERFxScript.exe — see ProcessAudio.
+//   kDone        — worker applied the fx; pcm holds the result
+//   kRejected    — worker answered ok:false (`error` filled —
+//                  authoritative: it loaded the same catalog)
+//   kUnavailable — transport failure → caller falls back in-process
+enum class RemoteAudio { kDone, kRejected, kUnavailable };
+RemoteAudio ProcessAudioViaWorker(
+    const std::string& id, float* interleaved, int frames,
+    int sample_rate, const std::map<std::uint32_t, float>& params,
+    double time_s, const std::string& clip_id, std::string* error) {
+    const std::string dir = JsFxRuntime::FxDir();
+    if (dir.empty()) {
+        return RemoteAudio::kUnavailable;   // worker needs a catalog
+    }
+    WorkerPipe& pipe = FxScriptPipe();
+    if (!pipe.Available()) return RemoteAudio::kUnavailable;
+    const std::uint64_t rid = pipe.NextId();
+    std::string reply;
+    if (!pipe.RoundTrip(
+            rid,
+            MediaWorker::EncodeFxAudioRequest(
+                rid, dir, id, clip_id, interleaved, frames, 2,
+                sample_rate, params, time_s),
+            kFxAudioTimeoutMs, &reply)) {
+        return RemoteAudio::kUnavailable;
+    }
+    std::uint64_t env_id = 0;
+    bool ok = false;
+    std::string err;
+    if (!MediaWorker::DecodeReplyEnvelope(reply, &env_id, &ok,
+                                          &err)) {
+        return RemoteAudio::kUnavailable;   // garbage on the wire
+    }
+    if (!ok) {
+        if (error != nullptr) {
+            *error = err.empty() ? "fx worker failed" : err;
+        }
+        return RemoteAudio::kRejected;
+    }
+    std::vector<float> out_pcm;
+    if (!MediaWorker::DecodeFxAudioReply(reply, &env_id, &out_pcm) ||
+        out_pcm.size() != static_cast<std::size_t>(frames) * 2u) {
+        return RemoteAudio::kUnavailable;
+    }
+    std::memcpy(interleaved, out_pcm.data(),
+                out_pcm.size() * sizeof(float));
+    return RemoteAudio::kDone;
+}
+#endif  // _WIN32
+
 }  // namespace
 
 JsFxRuntime::JsFxRuntime() : impl_(std::make_unique<Impl>()) {}
 JsFxRuntime::~JsFxRuntime() = default;
 
-bool JsFxRuntime::EnsureLoaded(std::string* error) {
-    if (!impl_->engine) {
-        impl_->engine = AppRuntime::JsEngine::Create(error);
-        if (!impl_->engine) return false;
-    }
-    if (impl_->load_attempted) {
-        return true;
-    }
-    impl_->load_attempted = true;
-    const Catalog* catalog = CurrentCatalog();
-    if (catalog == nullptr || !catalog->loaded) {
-        if (error) *error = "js fx catalog not loaded";
-        return false;
-    }
+bool JsFxRuntime::EnsureEngineReady(std::string* error) {
+    if (impl_->engine) return true;
+    impl_->engine = AppRuntime::JsEngine::Create(error);
+    if (!impl_->engine) return false;
     Impl* impl = impl_.get();
     const bool installed = impl->engine->WithContext(
         [impl](v8::Isolate* iso, v8::Local<v8::Context> ctx) {
@@ -508,6 +619,20 @@ bool JsFxRuntime::EnsureLoaded(std::string* error) {
         if (error) *error = "js fx: could not install globals";
         return false;
     }
+    return true;
+}
+
+bool JsFxRuntime::EnsureLoaded(std::string* error) {
+    if (!EnsureEngineReady(error)) return false;
+    if (impl_->load_attempted) {
+        return true;
+    }
+    impl_->load_attempted = true;
+    const Catalog* catalog = CurrentCatalog();
+    if (catalog == nullptr || !catalog->loaded) {
+        if (error) *error = "js fx catalog not loaded";
+        return false;
+    }
     // Evaluate every file the catalog lists — each registers its own
     // descriptor. A failing file reports but does not stop the others.
     std::string first_error;
@@ -542,6 +667,46 @@ bool JsFxRuntime::EnsureLoaded(std::string* error) {
     run_files(catalog->transitions);
     if (!first_error.empty() && error != nullptr) {
         *error = first_error;   // reported once; fns that loaded work
+    }
+    return true;
+}
+
+bool JsFxRuntime::ValidateSource(const std::string& source,
+                                 std::string* error) {
+    if (!EnsureEngineReady(error)) return false;
+    const auto registered = [this] {
+        return impl_->video_fns.size() + impl_->audio_fns.size() +
+               impl_->transition_fns.size();
+    };
+    const std::size_t before = registered();
+    bool ran = false;
+    std::string run_error;
+    {
+        // Same budget as catalog loading — a file-scope while(1){}
+        // must terminate, not hang the validator.
+        FxWatchdog::Arm guard(impl_->engine->isolate(),
+                              kScriptLoadBudget);
+        ran = impl_->engine->RunSource(source, "fx_validate",
+                                       &run_error);
+        guard.Disarm();
+    }
+    v8::Isolate* iso = impl_->engine->isolate();
+    if (iso->IsExecutionTerminating()) {
+        iso->CancelTerminateExecution();
+        if (error != nullptr) {
+            *error = "execution budget exceeded (terminated)";
+        }
+        return false;
+    }
+    if (!ran) {
+        if (error != nullptr) *error = run_error;
+        return false;
+    }
+    if (registered() == before) {
+        if (error != nullptr) {
+            *error = "script registered no effect";
+        }
+        return false;
     }
     return true;
 }
@@ -644,6 +809,25 @@ bool JsFxRuntime::ProcessAudio(const std::string& id, float* interleaved,
                                double time_s, const std::string& clip_id,
                                std::string* error) {
     if (interleaved == nullptr || frames <= 0) return false;
+#if defined(_WIN32)
+    // Subprocess first — a runaway or crashing script then kills
+    // XERFxScript.exe, never the editor. kRejected is authoritative
+    // (the worker loaded the same catalog); only transport failures
+    // fall through to the in-process isolate below. Inside the worker
+    // itself the pipe is env-disabled, so this can never recurse.
+    std::string remote_error;
+    switch (ProcessAudioViaWorker(id, interleaved, frames, sample_rate,
+                                  params, time_s, clip_id,
+                                  &remote_error)) {
+        case RemoteAudio::kDone:
+            return true;
+        case RemoteAudio::kRejected:
+            if (error != nullptr) *error = remote_error;
+            return false;
+        case RemoteAudio::kUnavailable:
+            break;
+    }
+#endif
     const auto it = impl_->audio_fns.find(id);
     if (it == impl_->audio_fns.end()) return false;
     Impl* impl = impl_.get();
@@ -746,7 +930,16 @@ struct JsFxRuntime::Impl {};
 
 JsFxRuntime::JsFxRuntime() : impl_(std::make_unique<Impl>()) {}
 JsFxRuntime::~JsFxRuntime() = default;
+bool JsFxRuntime::EnsureEngineReady(std::string* error) {
+    if (error) *error = "built without V8";
+    return false;
+}
 bool JsFxRuntime::EnsureLoaded(std::string* error) {
+    if (error) *error = "built without V8";
+    return false;
+}
+bool JsFxRuntime::ValidateSource(const std::string&,
+                                 std::string* error) {
     if (error) *error = "built without V8";
     return false;
 }

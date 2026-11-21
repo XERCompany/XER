@@ -330,6 +330,12 @@ bool WidgetTree::HandleEvent(const Event& event) {
         const auto target = captured != nullptr
             ? captured
             : FindHitTarget(input_root, evt.position, true);
+        // Deliberately NOT bubbled (unlike Click/MouseWheel): hover state
+        // already reaches the deepest leaf via UpdateHover/SetHovered, so
+        // no parent fallback is needed; and move events are high
+        // frequency — walking ancestors on every unhandled move would run
+        // each parent's hover bookkeeping per pixel moved. Drag capture
+        // also relies on single-target routing.
         if (captured == nullptr) {
             UpdateHover(target);
         }
@@ -356,10 +362,7 @@ bool WidgetTree::HandleEvent(const Event& event) {
         if (target == nullptr) {
             return false;
         }
-        if (target->IsFocusable()) {
-            SetFocusedWidget(target);
-        }
-        return target->HandleEvent(evt);
+        return DispatchClick(target, evt);
     }
     case Event::Type::MouseDown: {
         last_pointer_position_ = evt.position;
@@ -411,7 +414,9 @@ bool WidgetTree::HandleEvent(const Event& event) {
         suppress_duplicate_click_ = true;
         synthesized_click_target_ = target;
         synthesized_click_position_ = evt.position;
-        return target->HandleEvent(click) || released;
+        // The synthesized click bubbles exactly like a real Click so
+        // behavior never depends on which path delivered it.
+        return DispatchClick(target, click) || released;
     }
     case Event::Type::KeyDown:
     case Event::Type::KeyUp:
@@ -445,6 +450,48 @@ bool WidgetTree::HandleEvent(const Event& event) {
         return key_handler_(evt);
     }
     return false;
+}
+
+bool WidgetTree::DispatchClick(
+    const std::shared_ptr<Widget>& target,
+    const Event& event) {
+    // Click bubbles up the GetParent() chain — the same rule MouseWheel
+    // already uses — so a leaf that doesn't handle clicks (a list Item,
+    // a decorative label, a drawn-row gap) lets its container react
+    // instead of the event dying at the leaf. The chain is a strict
+    // parent walk, so it always terminates at the root; a widget can
+    // never see the same click twice because only the first `true`
+    // stops the walk.
+    bool consumed = false;
+    for (std::shared_ptr<Widget> widget = target; widget != nullptr;
+         widget = widget->GetParent()) {
+        if (widget->HandleEvent(event)) {
+            consumed = true;
+            break;
+        }
+    }
+    if (!consumed) {
+        // Dead click — the pre-bubbling rule: a directly hit focusable
+        // widget still takes focus; anything else leaves focus alone.
+        if (target->IsFocusable()) {
+            SetFocusedWidget(target);
+        }
+        return false;
+    }
+    // The click was handled: focus the first focusable widget on the
+    // target→root path. Usually that's the target itself (same as
+    // before); for inert children (list Items) focus lands on the
+    // interactive container, so arrow-key navigation keeps working
+    // after a row click. Note MouseDown already focused a focusable
+    // target, so this only ever moves focus upward, never sideways.
+    for (std::shared_ptr<Widget> widget = target; widget != nullptr;
+         widget = widget->GetParent()) {
+        if (widget->IsFocusable()) {
+            SetFocusedWidget(widget);
+            break;
+        }
+    }
+    return true;
 }
 
 void WidgetTree::ClearFocus(const std::shared_ptr<Widget>& widget) {

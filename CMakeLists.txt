@@ -16,6 +16,12 @@ set(XER_APP_RC_IN "${CMAKE_CURRENT_SOURCE_DIR}/app.rc.in")
 function(xer_target_desc target out_var)
     if(target STREQUAL "video_editor")
         set(_desc "VideoEditor")
+    elseif(target STREQUAL "XERVideoLoader")
+        set(_desc "Video Loader")
+    elseif(target STREQUAL "XERSyncMedia")
+        set(_desc "Media Sync Engine")
+    elseif(target STREQUAL "XERFxScript")
+        set(_desc "FX Script Engine")
     elseif(target STREQUAL "xer_engine_ui_render")
         set(_desc "Engine UI Renderer")
     elseif(target STREQUAL "EngineScanVST3")
@@ -1018,6 +1024,7 @@ endforeach()
 foreach(_app EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
         SecurityFlashService ControllAccountsWindows ServerAudio
         ArchiveManager HubCivitAIBrowser Editor video_editor
+        XERVideoLoader XERSyncMedia XERFxScript
         XBrowser XER_VST3_CEF xer_browser_shell)
     if(TARGET ${_app})
         xer_app_win32(${_app})

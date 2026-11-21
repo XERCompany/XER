@@ -94,6 +94,10 @@ public:
     // Runs process() in place on interleaved stereo float samples.
     // `params` maps manifest-param ORDINAL -> value (ClipAudioFx
     // positional convention). `clip_id` -> ctx.clip_id.
+    // On Windows the call first tries the XERFxScript.exe subprocess
+    // (a runaway script kills the worker, not the editor); a transport
+    // failure falls back to this runtime's in-process isolate, while
+    // an answered error is authoritative.
     bool ProcessAudio(const std::string& id, float* interleaved,
                       int frames, int sample_rate,
                       const std::map<std::uint32_t, float>& params,
@@ -104,7 +108,19 @@ public:
     // back to linear progress — the transition still renders.
     double TransitionWeight(const std::string& id, double progress);
 
+    // Validates arbitrary script source: compiles and runs it in this
+    // runtime under the script-load budget (a file-scope while(1){}
+    // is terminated, not hung on) — true only when it registered at
+    // least one new effect/transition descriptor. The XERFxScript
+    // worker uses this for its fx_validate-by-source requests.
+    bool ValidateSource(const std::string& source, std::string* error);
+
 private:
+    // Lazily creates the JsEngine and installs the xerFx* registration
+    // globals — WITHOUT evaluating the catalog (ValidateSource needs
+    // engine+globals but no catalog). Called by EnsureLoaded.
+    bool EnsureEngineReady(std::string* error);
+
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

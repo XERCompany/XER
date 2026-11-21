@@ -16,7 +16,9 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
+#include <map>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -39,6 +41,8 @@
 #include "js_fx.h"
 #include "keyboard_map.h"
 #include "media_catalog.h"
+#include "media_worker_client.h"
+#include "media_worker_protocol.h"
 #include "poster_cache.h"
 #include "project_autosave.h"
 #include "project_store.h"
@@ -47,7 +51,12 @@
 #include "timecode.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "worker_pipe.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
+
+#if defined(_WIN32)
+#include <windows.h>   // GetModuleFileNameW — worker-exe sibling lookup
+#endif
 
 namespace XER::VideoEditor {
 namespace {
@@ -120,6 +129,98 @@ std::filesystem::path SmokeTempDir() {
 
 std::string Utf8Path(const std::filesystem::path& p) {
     return Path::ToUtf8(p);
+}
+
+// Checked-in pixel baselines live in the SOURCE tree at
+// tools/video_editor/tests/baselines — the exe sits under
+// out/build/<preset>/bin/, so the dir is located by walking ancestors
+// of the exe path (and the CWD as a fallback) until a directory that
+// contains tools/video_editor/CMakeLists.txt turns up; that anchor
+// keeps a stray same-named folder from fooling the search.
+// XER_VE_BASELINE_DIR overrides discovery entirely. Empty = not found.
+std::filesystem::path SmokeBaselineDir() {
+    if (const char* env = std::getenv("XER_VE_BASELINE_DIR");
+        env != nullptr && *env != '\0') {
+        return Path::FromUtf8(env);
+    }
+    std::error_code ec;
+    std::vector<std::filesystem::path> starts;
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    if (GetModuleFileNameW(nullptr, exe, MAX_PATH) != 0) {
+        starts.push_back(std::filesystem::path(exe).parent_path());
+    }
+#elif defined(__linux__)
+    const auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec) starts.push_back(self.parent_path());
+#endif
+    starts.push_back(std::filesystem::current_path(ec));
+    for (const auto& start : starts) {
+        std::filesystem::path dir = start;
+        for (int up = 0; up < 8; ++up) {
+            const auto ve = dir / "tools" / "video_editor";
+            if (std::filesystem::exists(ve / "CMakeLists.txt", ec)) {
+                return ve / "tests" / "baselines";
+            }
+            const auto parent = dir.parent_path();
+            if (parent == dir) break;
+            dir = parent;
+        }
+    }
+    return {};
+}
+
+// PNG -> packed RGB8 via the FFmpeg image2 decode path — the same
+// bridge FrameExporter wrote the file through, so encode/decode stay
+// version-paired. Handles the packed layouts the PNG decoder emits
+// (rgba/bgra/argb/abgr/rgb24/bgr24/gray); anything else (planar gbrp,
+// 16-bit, palette) fails loudly so the diff never silently compares
+// the wrong channels.
+bool DecodePngToRgb8(const std::string& path,
+                     std::vector<std::uint8_t>* rgb, int* width,
+                     int* height, std::string* err) {
+    std::vector<FFmpeg::VideoFrameInfo> frames;
+    if (!FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, err) ||
+        frames.empty()) {
+        if (err != nullptr && err->empty()) *err = "no frame decoded";
+        return false;
+    }
+    const FFmpeg::VideoFrameInfo& f = frames.front();
+    const std::string& fmt = f.pixel_format;
+    int ch = 0, r = 0, g = 0, b = 0;   // channels + byte offsets
+    if (fmt == "rgba")       { ch = 4; r = 0; g = 1; b = 2; }
+    else if (fmt == "bgra")  { ch = 4; r = 2; g = 1; b = 0; }
+    else if (fmt == "argb")  { ch = 4; r = 1; g = 2; b = 3; }
+    else if (fmt == "abgr")  { ch = 4; r = 3; g = 2; b = 1; }
+    else if (fmt == "rgb24" || fmt == "rgb")
+        { ch = 3; r = 0; g = 1; b = 2; }
+    else if (fmt == "bgr24" || fmt == "bgr")
+        { ch = 3; r = 2; g = 1; b = 0; }
+    else if (fmt == "gray" || fmt == "gray8") {
+        ch = 1;   // r/g/b all read offset 0
+    } else {
+        if (err != nullptr) {
+            *err = "unsupported decoded pixel format '" + fmt + "'";
+        }
+        return false;
+    }
+    const std::size_t pixels =
+        static_cast<std::size_t>(f.width) * f.height;
+    if (f.width <= 0 || f.height <= 0 ||
+        f.data.size() < pixels * static_cast<std::size_t>(ch)) {
+        if (err != nullptr) *err = "decoded buffer short for " + fmt;
+        return false;
+    }
+    rgb->resize(pixels * 3);
+    const std::uint8_t* src = f.data.data();
+    for (std::size_t i = 0; i < pixels; ++i) {
+        (*rgb)[3 * i + 0] = src[ch * i + r];
+        (*rgb)[3 * i + 1] = src[ch * i + g];
+        (*rgb)[3 * i + 2] = src[ch * i + b];
+    }
+    *width = f.width;
+    *height = f.height;
+    return true;
 }
 
 Clip MakeGeneratedClip(const std::string& id, int track, double start,
@@ -567,6 +668,146 @@ std::string CheckScreenshotPng() {
     return {};
 }
 
+// `ui_screenshot_diff` — pixel-diff regression for the --screenshot
+// pipeline. SCOPE NOTE (determinism): the diff covers the program-
+// frame path only — ProjectStore -> Compositor -> FrameExporter PNG
+// -> FFmpeg decode -> per-pixel compare. The full `--ui` chrome
+// capture is deliberately out of scope: it lives exe-side (the
+// core lib cannot link XER_UI_Core) and rasterizes fonts, panels and
+// toasts whose output varies with the host's text stack — far too
+// machine-dependent for a checked-in baseline. The program frame is
+// fully procedural (SMPTE-75 generated bars on a fixed 1280x720
+// canvas at t = 0.5, mid-clip), so it renders identically every run;
+// the tolerance below absorbs codec/rasterizer-version drift only —
+// content changes always exceed it.
+//
+// Baseline: tools/video_editor/tests/baselines/ui_default.png
+// (located via SmokeBaselineDir; XER_VE_BASELINE_DIR overrides).
+// A missing baseline is WRITTEN and the check passes — the first
+// run establishes it; XER_VE_UPDATE_BASELINE=1 force-refreshes.
+std::string CheckUiScreenshotDiff() {
+    if (!FFmpeg::IsAvailable()) {
+        return "ffmpeg bridge unavailable";
+    }
+    const std::filesystem::path baseline_dir = SmokeBaselineDir();
+    if (baseline_dir.empty()) {
+        return "tools/video_editor/tests/baselines not located "
+               "(set XER_VE_BASELINE_DIR)";
+    }
+    const std::filesystem::path baseline =
+        baseline_dir / "ui_default.png";
+
+    // Same steps as RunScreenshotProgram in main.cc: save -> load ->
+    // compositor -> RenderFrameAt -> PNG via FrameExporter.
+    Project project = MakeRenderProject(1280, 720, 30);
+    const std::string proj_path =
+        Utf8Path(SmokeTempDir() / "diff_project.xerproj");
+    std::string err;
+    if (!ProjectStore::Save(project, proj_path, &err)) {
+        return "project save failed: " + err;
+    }
+    Project loaded;
+    if (!ProjectStore::Load(proj_path, &loaded, &err)) {
+        return "project reload failed: " + err;
+    }
+    Compositor compositor;
+    if (!compositor.Init(loaded, {}, &err)) {
+        return "Compositor::Init failed: " + err;
+    }
+    std::vector<std::uint8_t> bgra;
+    const bool rendered = compositor.RenderFrameAt(0.5, &bgra, &err);
+    compositor.Shutdown();
+    if (!rendered) {
+        return "RenderFrameAt failed: " + err;
+    }
+    const bool any_pixels =
+        std::any_of(bgra.begin(), bgra.end(),
+                    [](std::uint8_t byte) { return byte != 0; });
+    if (!any_pixels) {
+        return "rendered frame is all zeros";
+    }
+    video::Frame frame;
+    if (!frame.Allocate(1280, 720, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    std::memcpy(frame.Data(), bgra.data(), bgra.size());
+    const std::string shot_path =
+        Utf8Path(SmokeTempDir() / "ui_default_actual.png");
+    video::FrameExporter exporter;
+    if (!exporter.ToFile(shot_path, frame)) {
+        return "PNG export failed";
+    }
+
+    std::error_code ec;
+    const bool have_baseline =
+        std::filesystem::exists(baseline, ec) &&
+        std::filesystem::file_size(baseline, ec) > 0;
+    const char* update_env = std::getenv("XER_VE_UPDATE_BASELINE");
+    const bool force_update =
+        update_env != nullptr &&
+        (std::string_view(update_env) == "1" ||
+         std::string_view(update_env) == "true");
+    if (!have_baseline || force_update) {
+        std::filesystem::create_directories(baseline_dir, ec);
+        if (!std::filesystem::copy_file(
+                Path::FromUtf8(shot_path), baseline,
+                std::filesystem::copy_options::overwrite_existing,
+                ec)) {
+            return "baseline write failed: " + ec.message();
+        }
+        std::fprintf(stderr,
+                     "  ui_screenshot_diff: baseline %s -> %s\n",
+                     force_update ? "refreshed" : "written",
+                     Utf8Path(baseline).c_str());
+        return {};
+    }
+
+    std::vector<std::uint8_t> actual_rgb, base_rgb;
+    int aw = 0, ah = 0, bw = 0, bh = 0;
+    if (!DecodePngToRgb8(shot_path, &actual_rgb, &aw, &ah, &err)) {
+        return "actual decode failed: " + err;
+    }
+    if (!DecodePngToRgb8(Utf8Path(baseline), &base_rgb, &bw, &bh,
+                         &err)) {
+        return "baseline decode failed: " + err;
+    }
+    if (aw != bw || ah != bh) {
+        return "size mismatch: actual " + std::to_string(aw) + "x" +
+               std::to_string(ah) + " vs baseline " +
+               std::to_string(bw) + "x" + std::to_string(bh);
+    }
+    // Tolerance: mean |delta| < 4.0 per channel-byte AND <1% of
+    // pixels differ by >16 on any channel. PNG is lossless, so a
+    // healthy run diffs at ~0; the slack only absorbs FFmpeg-version
+    // pixel-format/dither drift, never content changes.
+    std::uint64_t sum = 0;
+    std::size_t hot = 0;
+    const std::size_t pixels = static_cast<std::size_t>(aw) * ah;
+    for (std::size_t i = 0; i < pixels; ++i) {
+        int worst = 0;
+        for (int c = 0; c < 3; ++c) {
+            const int d = std::abs(
+                static_cast<int>(actual_rgb[3 * i + c]) -
+                static_cast<int>(base_rgb[3 * i + c]));
+            worst = std::max(worst, d);
+            sum += static_cast<std::uint64_t>(d);
+        }
+        if (worst > 16) ++hot;
+    }
+    const double mean =
+        static_cast<double>(sum) / static_cast<double>(pixels * 3);
+    const double hot_frac = static_cast<double>(hot) / pixels;
+    if (mean >= 4.0 || hot_frac >= 0.01) {
+        char stats[96];
+        std::snprintf(stats, sizeof(stats),
+                      "mean=%.3f hot=%.2f%%", mean, hot_frac * 100.0);
+        return std::string("diff too large: ") + stats +
+               " (baseline " + Utf8Path(baseline) +
+               "; set XER_VE_UPDATE_BASELINE=1 to refresh)";
+    }
+    return {};
+}
+
 
 // Curve easings + glass/lens kernels: new KeyEase curves must land on
 // their endpoints (Bounce/Elastic/Back overshoot mid-span only); the
@@ -841,6 +1082,32 @@ std::string CheckAudioMixer() {
     return {};
 }
 
+// Synthetic waveform peaks shared by the audio-sync checks: a
+// deterministic non-periodic energy pattern shifted by `shift`
+// buckets (positive = the audio lands later in this file's own
+// recording), noise floor off-pattern.
+AudioPeaks MakeSyncTestPeaks(int buckets, int shift) {
+    const auto pattern = [](int i) {
+        std::uint32_t h = static_cast<std::uint32_t>(i) * 2654435761u;
+        h ^= h >> 16;
+        return 0.05f + 0.9f * (h % 1024) / 1024.0f;
+    };
+    AudioPeaks peaks;
+    peaks.channels = 1;
+    peaks.samples_per_peak = 256;
+    peaks.buckets = static_cast<std::size_t>(buckets);
+    peaks.data.resize(static_cast<std::size_t>(buckets) * 2);
+    for (int b = 0; b < buckets; ++b) {
+        const int src = b - shift;
+        const float v = (src >= 0 && src < buckets)
+                            ? pattern(src)
+                            : 0.02f;  // noise floor off-pattern
+        peaks.data[2 * b] = -v;
+        peaks.data[2 * b + 1] = v;
+    }
+    return peaks;
+}
+
 // Audio-sync lag math (audio_sync.h): synthetic AudioPeaks driven
 // through the peaks-provider seam — no decoder, no media files. B is
 // A delayed by kShift buckets: the plan must recover that lag and
@@ -852,29 +1119,10 @@ std::string CheckAudioSync() {
     constexpr int kBuckets = 4096;   // ~21.8 s at 256/48k per bucket
     constexpr int kShift = 148;      // buckets; 37 envelope cells (x4)
     constexpr double kCell = 256.0 / 48000.0 * 4.0;  // env cell secs
-    const auto pattern = [](int i) {
-        // Deterministic non-periodic energy + quiet floor.
-        std::uint32_t h = static_cast<std::uint32_t>(i) * 2654435761u;
-        h ^= h >> 16;
-        return 0.05f + 0.9f * (h % 1024) / 1024.0f;
-    };
     // Peak buckets for the reference pattern shifted by `shift`
     // (positive = audio lands later in this file's own recording).
-    const auto make_peaks = [&](int shift) {
-        AudioPeaks peaks;
-        peaks.channels = 1;
-        peaks.samples_per_peak = 256;
-        peaks.buckets = kBuckets;
-        peaks.data.resize(static_cast<std::size_t>(kBuckets) * 2);
-        for (int b = 0; b < kBuckets; ++b) {
-            const int src = b - shift;
-            const float v = (src >= 0 && src < kBuckets)
-                                ? pattern(src)
-                                : 0.02f;  // noise floor off-pattern
-            peaks.data[2 * b] = -v;
-            peaks.data[2 * b + 1] = v;
-        }
-        return peaks;
+    const auto make_peaks = [](int shift) {
+        return MakeSyncTestPeaks(kBuckets, shift);
     };
     const AudioPeaks peaks_a = make_peaks(0);
     const AudioPeaks peaks_b = make_peaks(kShift);    // delayed copy
@@ -1321,6 +1569,333 @@ std::string CheckExportRender() {
     return {};
 }
 
+// Out-of-process media worker (media_worker_client.h): the client
+// spawns the dedicated XERVideoLoader.exe sitting NEXT TO this exe
+// when present — dev builds without it fall back to self-spawning
+// `--media-worker`. Either way the worker must answer a ping; the
+// dedicated case additionally checks the role string to prove the
+// named binary (not the fallback, not a PATH lookalike) replied.
+std::string CheckMediaWorker() {
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    const bool dedicated =
+        std::filesystem::exists(bin_dir / "XERVideoLoader.exe", ec);
+    auto& client = MediaWorkerClient::Shared();
+    if (!client.Available()) {
+        return "media worker spawn failed";
+    }
+    std::string role;
+    if (!client.Ping(&role)) {
+        return "media worker ping failed";
+    }
+    if (dedicated && role != "XERVideoLoader") {
+        return "XERVideoLoader.exe present but worker role is '" +
+               role + "'";
+    }
+    if (!dedicated && role != "media-worker") {
+        return "unexpected worker role '" + role + "'";
+    }
+    return {};
+#else
+    return {};   // the subprocess client is Windows-only
+#endif
+}
+
+// XERSyncMedia.exe (worker_pipe.h): the audio-sync plan computed
+// INSIDE the named worker — the same synthetic-peaks math as the
+// audio_sync check, but the peaks ride the sync_plan request's
+// injection seam so no decoder runs. Asserts the dedicated exe's
+// role string; when the exe is absent the documented in-process
+// fallback is exercised instead.
+std::string CheckSyncMediaWorker() {
+#if defined(_WIN32)
+    constexpr int kBuckets = 4096;
+    constexpr int kShift = 148;
+    constexpr double kCell = 256.0 / 48000.0 * 4.0;
+    const AudioPeaks peaks_a = MakeSyncTestPeaks(kBuckets, 0);
+    const AudioPeaks peaks_b = MakeSyncTestPeaks(kBuckets, kShift);
+
+    // The minimal in-process sanity proof used when the worker exe is
+    // not beside this binary (dev shells, partial builds).
+    auto in_process = [&]() -> std::string {
+        Project project;
+        project.tracks.push_back(Track{TrackKind::Audio, "A1"});
+        const auto media_clip = [](const std::string& id,
+                                   const std::string& path,
+                                   double start) {
+            Clip clip;
+            clip.id = id;
+            clip.source_path = path;
+            clip.source.kind = SourceKind::Media;
+            clip.track = 0;
+            clip.timeline_start = start;
+            clip.duration = 20.0;
+            return clip;
+        };
+        project.clips.push_back(media_clip("ref", "cam_a.mp4", 0.0));
+        project.clips.push_back(
+            media_clip("delayed", "cam_b.mp4", 5.0));
+        const auto provider = [&](const std::string& path,
+                                  AudioPeaks* out) -> bool {
+            *out = path == "cam_b.mp4" ? peaks_b : peaks_a;
+            return true;
+        };
+        AudioSyncReport report;
+        std::string err;
+        if (!ComputeAudioSyncPlanWithPeaks(project, "ref", provider,
+                                           &report, &err)) {
+            return "in-process fallback plan failed: " + err;
+        }
+        return {};
+    };
+
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const bool dedicated = std::filesystem::exists(
+        std::filesystem::path(exe).parent_path() /
+        "XERSyncMedia.exe");
+    WorkerPipe& pipe = SyncMediaPipe();
+    if (!dedicated || !pipe.Available()) {
+        return in_process();   // fallback tolerated
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "sync worker ping failed";
+    }
+    if (role != "XERSyncMedia") {
+        return "unexpected sync worker role '" + role + "'";
+    }
+
+    MediaWorker::SyncPlanRequestData data;
+    data.ref_index = 0;
+    const auto clip = [](const char* id, const char* path,
+                         double start, const AudioPeaks& peaks) {
+        MediaWorker::SyncPlanClip c;
+        c.clip_id = id;
+        c.path = path;
+        c.start = start;
+        c.out_point = 20.0;
+        c.rate = 1.0;
+        c.has_peaks = true;
+        c.peaks = peaks;
+        return c;
+    };
+    data.clips.push_back(clip("ref", "cam_a.mp4", 0.0, peaks_a));
+    data.clips.push_back(
+        clip("delayed", "cam_b.mp4", 5.0, peaks_b));
+    const std::uint64_t id = pipe.NextId();
+    std::string reply;
+    if (!pipe.RoundTrip(
+            id, MediaWorker::EncodeSyncPlanRequest(id, data), 60000,
+            &reply)) {
+        return "sync_plan request got no reply";
+    }
+    std::uint64_t rid = 0;
+    bool ok = false;
+    std::string err;
+    if (!MediaWorker::DecodeReplyEnvelope(reply, &rid, &ok, &err)) {
+        return "sync_plan reply is malformed";
+    }
+    if (!ok) {
+        return "sync_plan rejected: " + err;
+    }
+    MediaWorker::SyncPlanResult result;
+    if (!MediaWorker::DecodeSyncPlanReply(reply, &rid, &result)) {
+        return "sync_plan reply payload failed to decode";
+    }
+    if (result.reference_clip_id != "ref") {
+        return "sync_plan picked the wrong reference";
+    }
+    const MediaWorker::SyncPlanResultEntry* delayed = nullptr;
+    for (const auto& e : result.entries) {
+        if (e.clip_id == "delayed") delayed = &e;
+    }
+    if (delayed == nullptr || !delayed->matched) {
+        return "worker did not match the delayed clip";
+    }
+    // lag cells = kShift/4 = 37 → delta = -37 * kCell ≈ -0.789 s.
+    const double want_delta = -(kShift / 4.0) * kCell;
+    if (std::fabs(delayed->delta_seconds - want_delta) > 1e-3) {
+        return "worker shift has the wrong sign/magnitude: " +
+               std::to_string(delayed->delta_seconds);
+    }
+    if (delayed->confidence < 0.5) {
+        return "worker confidence too low";
+    }
+    return {};
+#else
+    return {};
+#endif
+}
+
+// XERFxScript.exe (worker_pipe.h): the JS fx host answers over the
+// pipe — fx_list must mirror the deployed catalog, fx_audio must
+// actually run a script (bitcrush on a sine block quantizes), and
+// fx_transition must return the smoothstep scalar. Asserts the role;
+// a missing exe or a dead engine falls back to pass — js_fx already
+// proves the in-process runtime.
+std::string CheckFxScriptWorker() {
+#if defined(_WIN32)
+    std::string status;
+    AppRuntime::Boot(&status);   // fills SharedAssetsConfig
+    const std::string fx_dir =
+        (AppRuntime::SharedAssetsConfig().assets_dir / "scripts" /
+         "fx")
+            .string();
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const bool dedicated = std::filesystem::exists(
+        std::filesystem::path(exe).parent_path() / "XERFxScript.exe");
+    WorkerPipe& pipe = FxScriptPipe();
+    if (!dedicated || !pipe.Available()) {
+        return {};   // fallback tolerated
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "fx worker ping failed";
+    }
+    if (role != "XERFxScript") {
+        return "unexpected fx worker role '" + role + "'";
+    }
+
+    const auto round_trip =
+        [&](const std::function<std::string(std::uint64_t)>& encode,
+            std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            return pipe.RoundTrip(id, encode(id), 30000, reply);
+        };
+    // Tolerate engine-side rejections (V8-less worker, undeployed
+    // catalog) but not transport silence — the worker answered ping.
+    const auto envelope_ok = [](const std::string& reply,
+                                std::string* err) -> int {
+        std::uint64_t id = 0;
+        bool ok = false;
+        if (!MediaWorker::DecodeReplyEnvelope(reply, &id, &ok,
+                                              err)) {
+            return -1;   // malformed
+        }
+        return ok ? 1 : 0;
+    };
+
+    // fx_list — pure JSON; a live worker must always answer it.
+    std::string reply;
+    if (!round_trip(
+            [&](std::uint64_t id) {
+                return MediaWorker::EncodeFxListRequest(id, fx_dir);
+            },
+            &reply)) {
+        return "fx_list got no reply";
+    }
+    MediaWorker::FxListReply list;
+    std::uint64_t rid = 0;
+    if (!MediaWorker::DecodeFxListReply(reply, &rid, &list)) {
+        return "fx_list reply failed to decode";
+    }
+    const auto has_id = [](const std::vector<MediaWorker::FxListItem>&
+                               items,
+                           const char* id) {
+        for (const auto& item : items) {
+            if (item.id == id) return true;
+        }
+        return false;
+    };
+    if (list.video.size() < 5 || list.audio.size() < 4 ||
+        list.transitions.size() < 5 ||
+        !has_id(list.video, "invert") ||
+        !has_id(list.audio, "bitcrush") ||
+        !has_id(list.transitions, "smoothstep")) {
+        return "fx_list does not mirror the deployed catalog";
+    }
+
+    // fx_audio — bitcrush (4 bits) on a stereo sine block must come
+    // back quantized.
+    constexpr int kFrames = 1024;
+    std::vector<float> pcm(static_cast<std::size_t>(kFrames) * 2);
+    for (int i = 0; i < kFrames; ++i) {
+        const float s = 0.8f * std::sin(
+            2.0f * 3.14159265f * 440.0f * i / 48000.0f);
+        pcm[2 * i] = s;
+        pcm[2 * i + 1] = s;
+    }
+    const std::map<std::uint32_t, float> params{{0, 4.0f}};
+    std::string audio_reply;
+    if (!round_trip(
+            [&](std::uint64_t id) {
+                return MediaWorker::EncodeFxAudioRequest(
+                    id, fx_dir, "bitcrush", "smoke-clip", pcm.data(),
+                    kFrames, 2, 48000, params, 0.0);
+            },
+            &audio_reply)) {
+        return {};   // transport died — tolerated fallback
+    }
+    std::string err;
+    const int audio_state = envelope_ok(audio_reply, &err);
+    if (audio_state < 0) {
+        return "fx_audio reply is malformed";
+    }
+    if (audio_state == 0) {
+        return {};   // engine unavailable (no V8/catalog) — tolerated
+    }
+    std::vector<float> out_pcm;
+    if (!MediaWorker::DecodeFxAudioReply(audio_reply, &rid,
+                                         &out_pcm) ||
+        out_pcm.size() != pcm.size()) {
+        return "fx_audio payload failed to decode";
+    }
+    // bits=4 → 16 levels → every sample is a multiple of 1/16, and a
+    // sine quantized to 16 levels differs from the input almost
+    // everywhere (proving the script actually ran).
+    int unquantized = 0;
+    int changed = 0;
+    for (std::size_t i = 0; i < out_pcm.size(); ++i) {
+        const float q16 = out_pcm[i] * 16.0f;
+        if (std::fabs(q16 - std::round(q16)) > 0.02f) {
+            ++unquantized;
+        }
+        if (std::fabs(out_pcm[i] - pcm[i]) > 1e-4f) {
+            ++changed;
+        }
+    }
+    if (unquantized > 0) {
+        return "fx_audio output is not bitcrush-quantized";
+    }
+    if (changed < static_cast<int>(out_pcm.size() / 2)) {
+        return "fx_audio left the block unchanged";
+    }
+
+    // fx_transition — smoothstep(0.5) == 0.5.
+    std::string trans_reply;
+    if (!round_trip(
+            [&](std::uint64_t id) {
+                return MediaWorker::EncodeFxTransitionRequest(
+                    id, fx_dir, "smoothstep", 0.5);
+            },
+            &trans_reply)) {
+        return {};   // tolerated
+    }
+    const int trans_state = envelope_ok(trans_reply, &err);
+    if (trans_state < 0) {
+        return "fx_transition reply is malformed";
+    }
+    if (trans_state == 0) {
+        return {};   // engine unavailable — tolerated
+    }
+    double weight = -1.0;
+    if (!MediaWorker::DecodeFxTransitionReply(trans_reply, &rid,
+                                              &weight) ||
+        std::fabs(weight - 0.5) > 0.01) {
+        return "fx_transition returned the wrong weight";
+    }
+    return {};
+#else
+    return {};
+#endif
+}
+
 // Shared import filter (smoke_checks.h) — the same predicate the
 // file dialog's pattern list and the OS file-drop filter are built
 // from: common video/audio/still extensions accept (any case),
@@ -1365,6 +1940,7 @@ constexpr CheckEntry kChecks[] = {
     {"generated_source", &CheckGeneratedSource},
     {"compositor_render", &CheckCompositorRender},
     {"screenshot_png", &CheckScreenshotPng},
+    {"ui_screenshot_diff", &CheckUiScreenshotDiff},
     {"curves_lens", &CheckCurvesAndLens},
     {"js_fx", &CheckJsFx},
     {"audio_mixer", &CheckAudioMixer},
@@ -1375,6 +1951,9 @@ constexpr CheckEntry kChecks[] = {
     {"media_import_filter", &CheckMediaImportFilter},
     {"probe_classification", &CheckProbeClassification},
     {"poster_cache_lru", &CheckPosterCacheLru},
+    {"media_worker", &CheckMediaWorker},
+    {"sync_worker", &CheckSyncMediaWorker},
+    {"fx_worker", &CheckFxScriptWorker},
     {"assets_icons", &CheckAssetsIcons},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},

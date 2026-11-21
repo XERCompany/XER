@@ -33,6 +33,7 @@
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/ui_manifest.h"
 #include "audio_sync.h"
+#include "worker_pipe.h"
 #include "content/video/video_info.h"
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
@@ -587,6 +588,15 @@ void VideoEditorAppWidget::EnsureChildren() {
         toolbar_row_ = std::move(ordered);
     }
     status_label_ = std::make_shared<Widgets::Label>("Ready", true);
+    // Status-strip cancel affordance — docked at the strip's right
+    // edge and visible only while the audio-sync job runs ("Syncing
+    // audio… [Cancel]"). Ghost keeps it an action link in the bar,
+    // not another toolbar button.
+    sync_cancel_btn_ = MakeButton(
+        "Cancel", Widgets::ButtonStyle::Ghost,
+        [this] { RequestSyncCancel(); },
+        "Cancel the running audio sync (Esc)");
+    sync_cancel_btn_->SetVisible(false);
     zoom_label_ = std::make_shared<Widgets::Label>(
         "Wheel: zoom  Shift+Wheel: scroll", true);
 
@@ -1328,6 +1338,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(play_btn_);
     AddChild(export_btn_);
     AddChild(status_label_);
+    AddChild(sync_cancel_btn_);
     AddChild(zoom_label_);
     AddChild(nav_rail_);
     AddChild(media_bin_);
@@ -2286,87 +2297,125 @@ void VideoEditorAppWidget::MoveClip(const std::string& clip_id,
 }
 
 void VideoEditorAppWidget::SyncAudioClips() {
-    // The whole plan (project read + O(n·m) correlation + peak waits)
-    // runs on a worker thread; this thread polls progress and keeps
-    // the status line current. Peak decodes go through media_prep_
-    // — worker pool, subprocess isolation, disk cache — instead of a
-    // direct DecodeAudioPeaks call: LookupPeaks is lookup-or-enqueue,
-    // so the provider below is a bounded, cancel-aware wait that also
-    // gives repeat syncs instant disk-cache hits.
-    std::atomic<bool> cancel{false};
-    std::atomic<bool> finished{false};
-    std::atomic<int> progress_done{0};
-    std::atomic<int> progress_total{0};
-    AudioSyncReport report;
-    std::string error;
-    bool ok = false;
-
-    AudioSyncPlanOptions options;
-    options.cancel = &cancel;
-    options.progress = [&](int done, int total) {
-        progress_done.store(done, std::memory_order_relaxed);
-        progress_total.store(total, std::memory_order_relaxed);
-    };
-    options.peaks = [&](const std::string& path,
-                        AudioPeaks* out) -> bool {
-        const auto deadline = std::chrono::steady_clock::now() +
-                              std::chrono::seconds(120);
-        for (;;) {
-            const MediaPrep::Lookup state =
-                media_prep_.LookupPeaks(path, out);
-            if (state == MediaPrep::Lookup::kReady) return true;
-            if (state == MediaPrep::Lookup::kFailed) return false;
-            if (cancel.load(std::memory_order_relaxed) ||
-                std::chrono::steady_clock::now() >= deadline) {
-                return false;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        }
-    };
-
+    // The whole plan (project read + O(n·m) correlation + peak
+    // decodes) runs on sync_op_ — never on the UI thread. A multi-cam
+    // sync decodes every take's peaks and can take tens of seconds;
+    // the old in-line poll loop froze the message pump for all of it
+    // AND made a cancel button impossible (clicks need a live pump).
+    // The job reads a project SNAPSHOT so timeline edits during the
+    // run can't race it; Tick() pops the finished plan and applies
+    // the moves here on the UI thread. Cancel affordance: the
+    // status-strip Cancel button (or Esc) -> RequestSyncCancel().
+    if (sync_op_.IsRunning() || sync_op_.HasResult()) {
+        SetStatus("Audio sync already running", true);
+        return;
+    }
+    Project snapshot = project_;
     // Selected clip is the reference when one is picked; otherwise the
     // earliest clip on the lowest track anchors the sync.
     const std::string reference = selected_clip_id_;
-    std::thread worker([&] {
-        ok = ComputeAudioSyncPlan(project_, reference, &report, &error,
-                                  options);
-        finished.store(true, std::memory_order_release);
-    });
-    int shown = -1;
-    while (!finished.load(std::memory_order_acquire)) {
-        const int done = progress_done.load(std::memory_order_relaxed);
-        const int total =
-            progress_total.load(std::memory_order_relaxed);
-        if (total > 0 && done != shown) {
-            shown = done;
-            SetStatus("Syncing audio... " + std::to_string(done) + "/" +
-                      std::to_string(total) + " clips");
+    sync_cancel_.store(false, std::memory_order_relaxed);
+    sync_progress_done_.store(0, std::memory_order_relaxed);
+    sync_progress_total_.store(0, std::memory_order_relaxed);
+    sync_progress_shown_ = -1;
+    {
+        std::lock_guard lock(sync_result_mutex_);
+        sync_report_ = AudioSyncReport{};
+    }
+    if (sync_cancel_btn_ != nullptr) {
+        sync_cancel_btn_->SetVisible(true);
+        Invalidate();
+    }
+    SetStatus("Syncing audio…");
+    const bool started = sync_op_.Start(
+        [this, snapshot = std::move(snapshot),
+         reference](const Lab::JobControl& ctl) {
+            AudioSyncPlanOptions options;
+            options.cancel = &sync_cancel_;
+            options.progress = [&](int done, int total) {
+                sync_progress_done_.store(done,
+                                          std::memory_order_relaxed);
+                sync_progress_total_.store(total,
+                                           std::memory_order_relaxed);
+            };
+            // In-process fallback path: peak decodes go through
+            // media_prep_ — worker pool, subprocess isolation, disk
+            // cache — instead of a direct DecodeAudioPeaks call:
+            // LookupPeaks is lookup-or-enqueue, so the provider below
+            // is a bounded, cancel-aware wait that also gives repeat
+            // syncs instant disk-cache hits.
+            options.peaks = [&](const std::string& path,
+                                AudioPeaks* out) -> bool {
+                const auto deadline =
+                    std::chrono::steady_clock::now() +
+                    std::chrono::seconds(120);
+                for (;;) {
+                    const MediaPrep::Lookup state =
+                        media_prep_.LookupPeaks(path, out);
+                    if (state == MediaPrep::Lookup::kReady) return true;
+                    if (state == MediaPrep::Lookup::kFailed) {
+                        return false;
+                    }
+                    if (sync_cancel_.load(std::memory_order_relaxed) ||
+                        std::chrono::steady_clock::now() >= deadline) {
+                        return false;
+                    }
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(20));
+                }
+            };
+            AudioSyncReport report;
+            std::string error;
+            bool ok = false;
+            // XERSyncMedia.exe first — the dedicated engine subprocess
+            // does its own peak decode + correlation, so heavy
+            // multi-cam syncs (and decoder faults) live entirely off
+            // this process. Spawn/transport failure falls back to the
+            // in-process plan; kFailed keeps `error` — no fallback.
+#if defined(_WIN32)
+            const AudioSyncRoute route = ComputeAudioSyncPlanViaWorker(
+                snapshot, reference, &report, &error, &sync_cancel_);
+            if (route == AudioSyncRoute::kPlanned) {
+                ok = true;
+            } else if (route == AudioSyncRoute::kUnavailable) {
+                // Worker absent/dead — the same plan runs in-process.
+                ok = ComputeAudioSyncPlan(snapshot, reference, &report,
+                                          &error, options);
+            }
+#else
+            ok = ComputeAudioSyncPlan(snapshot, reference, &report,
+                                      &error, options);
+#endif
+            {
+                std::lock_guard lock(sync_result_mutex_);
+                sync_report_ = std::move(report);
+            }
+            if (!ok) {
+                ctl.Fail(error.empty() ? std::string("sync failed")
+                                       : std::move(error));
+            }
+            return ok;
+        });
+    if (!started) {
+        if (sync_cancel_btn_ != nullptr) {
+            sync_cancel_btn_->SetVisible(false);
+            Invalidate();
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        SetStatus("Audio sync could not start — a task is finishing",
+                  true);
     }
-    worker.join();
-    if (!ok) {
-        SetStatus("Audio sync: " + error, true);
-        return;
-    }
-    int applied = 0;
-    // Every accepted move folds into ONE undo step ("Audio sync").
-    history_.BeginMacro("Audio sync");
-    for (const auto& e : report.entries) {
-        if (!e.matched) continue;
-        const Clip* clip = FindClip(project_, e.clip_id);
-        if (clip == nullptr) continue;
-        std::string move_err;
-        if (history_.MoveClip(e.clip_id, e.new_timeline_start,
-                              BoundsForPath(clip->source_path),
-                              &move_err)) {
-            ++applied;
-        }
-    }
-    history_.EndMacro();
-    SetStatus(report.status + " · " + std::to_string(applied) +
-              " moved");
-    if (applied > 0) NotifyProjectChanged();
+}
+
+void VideoEditorAppWidget::RequestSyncCancel() {
+    if (!sync_op_.IsRunning()) return;
+    sync_cancel_.store(true, std::memory_order_relaxed);
+    sync_op_.RequestCancel();   // PopResult reports cancelled=true
+    // A remote plan can't be polled mid-request — the worker is
+    // job-grouped and disposable, so cancel = kill it. No death
+    // penalty; the next sync respawns it. Harmless when the
+    // in-process path owns the run (the flag above aborts it).
+    SyncMediaPipe().KillWorker();
+    SetStatus("Cancelling audio sync…");
 }
 
 void VideoEditorAppWidget::TrimClip(const std::string& clip_id,
@@ -4678,8 +4727,16 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         // Click-through overlay spanning the whole window.
         status_toast_->Layout(bounds, tokens);
     }
+    // The strip's right edge always reserves the sync-cancel slot —
+    // hiding the button shifts nothing else around.
     status_label_->Layout({bounds.x + 12.0f, content_bottom + 4.0f,
-                           bounds.width - 24.0f, 20.0f}, tokens);
+                           bounds.width - 112.0f, 20.0f}, tokens);
+    if (sync_cancel_btn_) {
+        sync_cancel_btn_->Layout(
+            {bounds.x + bounds.width - 88.0f, content_bottom + 2.0f,
+             80.0f, 22.0f},
+            tokens);
+    }
 }
 
 bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
@@ -4899,6 +4956,13 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
         }
     }
     if (event.type != Event::Type::KeyDown) return false;
+    if (event.key == KeyCode::Escape && !event.is_ctrl &&
+        !event.is_alt && sync_op_.IsRunning()) {
+        // Esc = the status-strip Cancel button — same kill path
+        // (cancel flag + disposable-worker kill), one keystroke less.
+        RequestSyncCancel();
+        return true;
+    }
     if (event.is_ctrl && event.key == KeyCode::Z) {
         if (event.is_shift) Redo(); else Undo();
         return true;
@@ -5107,6 +5171,81 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                           std::to_string(static_cast<int>(p * 100.0f)) +
                           "%");
             }
+        }
+    }
+    // Audio-sync job: progress while it runs; the finished plan lands
+    // as history-wrapped clip moves on this thread (the worker only
+    // analysed a snapshot). The Cancel button mirrors the job's
+    // lifetime — hidden when idle.
+    {
+        bool ok = false, cancelled = false;
+        std::string sync_error;
+        if (sync_op_.PopResult(&ok, &cancelled, &sync_error)) {
+            sync_progress_shown_ = -1;
+            AudioSyncReport report;
+            {
+                std::lock_guard lock(sync_result_mutex_);
+                report = std::move(sync_report_);
+                sync_report_ = AudioSyncReport{};
+            }
+            // A cancel requested while the plan was mid-flight wins
+            // over a late kPlanned result — the plan never mutated
+            // the project, so dropping the report is safe.
+            if (cancelled ||
+                sync_cancel_.load(std::memory_order_relaxed)) {
+                SetStatus("Sync cancelled");
+            } else if (ok) {
+                int applied = 0;
+                // Every accepted move folds into ONE undo step
+                // ("Audio sync"). Clips are re-resolved against the
+                // LIVE project — edits made while the plan ran leave
+                // stale entries to be skipped, never moved blind.
+                history_.BeginMacro("Audio sync");
+                for (const auto& e : report.entries) {
+                    if (!e.matched) continue;
+                    const Clip* clip = FindClip(project_, e.clip_id);
+                    if (clip == nullptr) continue;
+                    std::string move_err;
+                    if (history_.MoveClip(
+                            e.clip_id, e.new_timeline_start,
+                            BoundsForPath(clip->source_path),
+                            &move_err)) {
+                        ++applied;
+                    }
+                }
+                history_.EndMacro();
+                SetStatus(report.status + " · " +
+                          std::to_string(applied) + " moved");
+                if (applied > 0) NotifyProjectChanged();
+            } else {
+                SetStatus("Audio sync: " + sync_error, true);
+            }
+        } else if (sync_op_.IsRunning()) {
+            const int done =
+                sync_progress_done_.load(std::memory_order_relaxed);
+            const int total =
+                sync_progress_total_.load(std::memory_order_relaxed);
+            if (total > 0 && done != sync_progress_shown_) {
+                sync_progress_shown_ = done;
+                SetStatus("Syncing audio… " + std::to_string(done) +
+                          "/" + std::to_string(total) + " clips");
+            }
+            // total == 0: the remote path reports no progress — the
+            // "Syncing audio…" text set at Start() stands.
+        }
+        const bool sync_running = sync_op_.IsRunning();
+        if (sync_running &&
+            sync_cancel_.load(std::memory_order_relaxed)) {
+            // Repeat the kill while the cancel is pending — the same
+            // 20 ms cadence the old in-line poll had, now on the tick:
+            // a KillWorker() that raced ahead of the lazy spawn would
+            // no-op and leave the remote plan running to completion.
+            SyncMediaPipe().KillWorker();
+        }
+        if (sync_cancel_btn_ != nullptr &&
+            sync_cancel_btn_->IsVisible() != sync_running) {
+            sync_cancel_btn_->SetVisible(sync_running);
+            Invalidate();
         }
     }
     // Autosave poll (every ~2 s of wall time; the manager itself

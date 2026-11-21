@@ -151,3 +151,26 @@ Smoke 24/24 OK after the batch.
   squircle on #1e1e24 matte.
 - Known limit: 16px wordmark illegible (source lockup has margins);
   future pass could use bare X glyph for small frames.
+
+
+## Process decomposition batch (same day, uncommitted)
+
+Smoke **26/26 OK** (new checks: `media_worker`, `sync_worker`, `fx_worker`).
+
+- **Dedicated worker exes** on XER_VideoEditor_Core:
+  `XERVideoLoader.exe` (posters/peaks/media-info — the old
+  --media-worker role), `XERSyncMedia.exe` (whole sync plan:
+  decodes peaks itself + bounded correlation), `XERFxScript.exe`
+  (V8 host: fx_list/fx_validate/fx_audio/fx_transition).
+- `worker_pipe.{h,cc}` — generic spawn-by-name JSON-lines client
+  extracted from MediaWorkerClient; sibling-exe lookup + self-spawn
+  fallback + env kill-switches (`XER_VE_SYNC_WORKER=0` etc.);
+  `KillWorker()` = the audio-sync cancel mechanism (deliberate kill
+  has no death penalty).
+- Fallbacks: missing exe -> self-spawn `--media-worker` (loader) /
+  in-process (sync plan, audio fx). Runaway JS now kills
+  XERFxScript, not the editor.
+- Limits: video-fx frames stay in-process (b64/pipe too slow);
+  transitions in-process in editor; fx_validate unused by UI yet.
+- All workers under WinJobGroup (die with editor); FileDescriptions
+  registered in xer_target_desc.

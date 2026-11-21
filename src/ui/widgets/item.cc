@@ -7,6 +7,12 @@
 #include "theme/tokens.h"
 
 namespace XER::UI::Widgets {
+namespace {
+
+// Same gesture window the list panels used for drawn rows.
+constexpr auto kDoubleClickWindow = std::chrono::milliseconds(450);
+
+}  // namespace
 
 Item::Item() {
     SetFocusable(false);
@@ -32,6 +38,14 @@ void Item::SetSelected(bool selected) {
     Invalidate();
 }
 
+void Item::SetOnClick(std::function<void()> callback) {
+    on_click_ = std::move(callback);
+}
+
+void Item::SetOnDoubleClick(std::function<void()> callback) {
+    on_double_click_ = std::move(callback);
+}
+
 void Item::Render(Rendering::Renderer& renderer,
                   const Theme::Tokens& tokens) {
     const auto bounds = GetBounds();
@@ -40,7 +54,9 @@ void Item::Render(Rendering::Renderer& renderer,
     }
 
     const auto& children = GetChildren();
-    const bool has_leading = children.size() >= 2;
+    // A lone child occupies the leading slot; with 2+ children the
+    // last one is the trailing slot (see Layout).
+    const bool has_leading = !children.empty();
     const bool has_trailing = children.size() >= 2;
 
     float text_x = bounds.x + tokens.spacing_medium;
@@ -78,18 +94,15 @@ void Item::Layout(const Layout::Rect& bounds) {
     const float pad = tokens.spacing_medium;
     const float vpad = tokens.spacing_small;
 
-    if (children.size() == 1) {
-        Layout::Rect inner{bounds.x + pad, bounds.y + vpad,
-                           bounds.width - 2.0f * pad,
-                           std::max(0.0f, bounds.height - 2.0f * vpad)};
-        children[0]->Layout(inner, tokens);
-        return;
-    }
-
-    // First child = leading slot, last child = trailing slot.
+    // First child = leading slot (a lone child included); with 2+
+    // children the last is the trailing slot and the rest fill the
+    // middle.
     Layout::Rect leading{bounds.x + pad, bounds.y + vpad, 28.0f,
                          std::max(0.0f, bounds.height - 2.0f * vpad)};
     children.front()->Layout(leading, tokens);
+    if (children.size() == 1) {
+        return;
+    }
 
     const auto& last = children.back();
     const float trail_w =
@@ -111,8 +124,27 @@ void Item::Layout(const Layout::Rect& bounds) {
     }
 }
 
-bool Item::HandleEvent(const Event&) {
-    return false;
+bool Item::HandleEvent(const Event& event) {
+    // Rows with no click hooks stay event-transparent: their clicks
+    // bubble to the parent chain (list panels own those).
+    if (event.type != Event::Type::Click ||
+        event.mouse_button != MouseButton::Left ||
+        (on_click_ == nullptr && on_double_click_ == nullptr)) {
+        return false;
+    }
+    // A second click inside the window additionally fires the
+    // double-click hook — single click selects, double click applies.
+    const auto now = std::chrono::steady_clock::now();
+    const bool double_click =
+        now - last_click_time_ < kDoubleClickWindow;
+    last_click_time_ = now;
+    if (on_click_ != nullptr) {
+        on_click_();
+    }
+    if (double_click && on_double_click_ != nullptr) {
+        on_double_click_();
+    }
+    return true;
 }
 
 Layout::Size Item::GetMinSize() const {

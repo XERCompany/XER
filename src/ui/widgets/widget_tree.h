@@ -152,6 +152,14 @@ private:
         const Layout::Point& position,
         bool ancestors_available
     ) const;
+    // Click dispatch with parent-chain bubbling (same rule MouseWheel
+    // already uses): the event walks from `target` toward the root until
+    // a widget consumes it. Shared by the real Click path and the
+    // MouseUp-synthesized click so both behave identically.
+    bool DispatchClick(
+        const std::shared_ptr<Widget>& target,
+        const Event& event
+    );
     bool MoveFocus(bool backwards);
     void SetFocusedWidget(const std::shared_ptr<Widget>& widget);
 
