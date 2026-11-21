@@ -2,11 +2,11 @@
 //
 //   HISTORY                          3 undo · 1 redo
 //   ┌──────────────────────────────────────────────┐
-//   │ Trim clip "intro"          <- newest undo    │  click = undo 1 step
-//   │ Move clip "b-roll"                           │  click = undo 2 steps
-//   │ Add clip                                     │  click = undo 3 steps
+//   │ Trim clip "intro"                    [-1]    │  click = undo 1 step
+//   │ Move clip "b-roll"                   [-2]    │  click = undo 2 steps
+//   │ Add clip                           [-3]    │  click = undo 3 steps
 //   │ ──────────── current state ────────────────  │
-//   │ Add marker                 <- next redo      │  dimmed, click = redo 1
+//   │ add marker                         [-1]    │  dimmed, click = redo 1
 //   └──────────────────────────────────────────────┘
 //
 // The host fills the stacks via SetEntries() after every history
@@ -20,9 +20,15 @@
 //   * redo_labels — next-to-redo FIRST (element 0 is what Redo() would
 //     re-apply). Clicking row j emits on_redo_steps(j + 1).
 //
-// Rows are drawn (not child widgets) so clicks land on the panel — the
-// list scrolls internally with the mouse wheel when it exceeds the
-// viewport (SetClipsChildren keeps rows inside the panel chrome).
+// Rows are Widgets::Item children (undo entries via the title slot,
+// redo via the muted description slot) with a trailing "-N" steps
+// Badge; the current-state divider is two Separators flanking a muted
+// Label. All row children are DISABLED — Click events do not bubble
+// from children to the panel, but disabled widgets are skipped by
+// hit-testing, so row clicks still land on the panel for the
+// jump-through-history gesture. The list scrolls internally with the
+// mouse wheel when it exceeds the viewport (SetClipsChildren keeps
+// rows inside the panel chrome).
 #pragma once
 
 #include <functional>
@@ -33,7 +39,10 @@
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {
+class Badge;
+class Item;
 class Label;
+class Separator;
 }
 
 namespace XER::VideoEditor::Ui {
@@ -77,7 +86,19 @@ public:
     }
 
 private:
+    struct Row {
+        // Both disabled: purely presentational — hit-testing skips
+        // them so row clicks reach the panel (no click bubbling).
+        std::shared_ptr<XER::UI::Widgets::Item> item;
+        std::shared_ptr<XER::UI::Widgets::Badge> steps;
+    };
+
     void EnsureChildren();
+    // Rebuilds the per-entry Item+Badge children. No retired-row
+    // graveyard is needed: every row child is disabled, so none can
+    // ever be the dispatching event target when the host calls back
+    // into SetEntries mid-click.
+    void RebuildRows();
     // Virtual row space: [0, undo_.size()) undo rows, then one divider
     // row, then redo rows. Returns -1 outside the list viewport.
     int RowAt(const XER::UI::Layout::Point& position) const;
@@ -96,7 +117,13 @@ private:
     float row_height_ = 26.0f;
     bool children_attached_ = false;
 
+    std::vector<Row> rows_;   // display order: undos, then redos
     std::shared_ptr<XER::UI::Widgets::Label> title_;
+    std::shared_ptr<XER::UI::Widgets::Label> counts_;
+    // Current-state divider row: rule — caption — rule.
+    std::shared_ptr<XER::UI::Widgets::Separator> divider_left_;
+    std::shared_ptr<XER::UI::Widgets::Label> divider_label_;
+    std::shared_ptr<XER::UI::Widgets::Separator> divider_right_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
 };
 

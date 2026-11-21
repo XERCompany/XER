@@ -10,6 +10,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -70,11 +71,30 @@ struct OcioProfile {
 bool LoadOcioProfiles(const std::filesystem::path& yaml_path,
                       std::vector<OcioProfile>* out, std::string* error);
 
-// Process-wide profile table, filled by Boot() from color.yaml.
+// Process-wide profile table, filled by Boot() from color.yaml and
+// appended by the LUT manager's scans. Raw access is only safe on the
+// single-threaded boot/UI paths — writers mutating AFTER engines may
+// be running must go through MutateOcioProfiles(), and readers on
+// engine threads must use FindOcioProfileCopy() (both lock the same
+// internal mutex; a raw pointer taken from this vector could dangle
+// across a concurrent rescan).
 std::vector<OcioProfile>& SharedOcioProfiles();
 
 // Finds a profile by name (case-insensitive). nullptr when unknown.
+// Single-threaded callers only (boot/tests/UI) — see the note above.
 const OcioProfile* FindOcioProfile(const std::string& name);
+
+// Runs `mutate` under the profile-table mutex — the write path for
+// dynamic registrations (the LUT manager's rescan erases its previous
+// entries and appends the fresh set here).
+void MutateOcioProfiles(
+    const std::function<void(std::vector<OcioProfile>&)>& mutate);
+
+// Thread-safe copy-out find for engine threads (the compositor): the
+// matching profile is copied out under the lock, so a concurrent
+// MutateOcioProfiles can never invalidate the returned data.
+// Returns false when the name is unknown (`out` untouched).
+bool FindOcioProfileCopy(const std::string& name, OcioProfile* out);
 
 // Applies a named profile in place on BGRA8 — LUT via OCIO
 // FileTransform, or colorspace via ColorSpaceTransform/DisplayView.

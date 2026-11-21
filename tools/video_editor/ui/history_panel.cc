@@ -7,18 +7,16 @@
 
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
+#include "widgets/badge.h"
+#include "widgets/item.h"
 #include "widgets/label.h"
+#include "widgets/separator.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
 using XER::UI::Layout::Rect;
-using XER::UI::Theme::Color;
-
-Color WithAlpha(Color color, float alpha) {
-    color.a *= alpha;
-    return color;
-}
 
 }  // namespace
 
@@ -33,9 +31,34 @@ void HistoryPanelWidget::EnsureChildren() {
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
     title_ = std::make_shared<Widgets::Label>("HISTORY");
+    // "N undo · M redo" — muted caption right of the title band.
+    counts_ = std::make_shared<Widgets::Label>("", true);
+    // Current-state divider: Separator — muted Label — Separator.
+    // All three disabled so they stay transparent to hit-testing.
+    divider_left_ = std::make_shared<Widgets::Separator>(
+        Widgets::Orientation::Horizontal);
+    divider_label_ =
+        std::make_shared<Widgets::Label>("current state", true);
+    divider_right_ = std::make_shared<Widgets::Separator>(
+        Widgets::Orientation::Horizontal);
+    divider_left_->SetEnabled(false);
+    divider_label_->SetEnabled(false);
+    divider_right_->SetEnabled(false);
     status_ = std::make_shared<Widgets::Label>("no history", true);
     AddChild(title_);
+    AddChild(counts_);
+    AddChild(divider_left_);
+    AddChild(divider_label_);
+    AddChild(divider_right_);
     AddChild(status_);
+    RebuildRows();
+    // EnsureChildren can run after the first SetEntries — sync the
+    // caption here too so it never lags one update behind.
+    char counts[48];
+    std::snprintf(counts, sizeof(counts), "%d undo \xc2\xb7 %d redo",
+                  static_cast<int>(undo_.size()),
+                  static_cast<int>(redo_.size()));
+    counts_->SetText(counts);
 }
 
 void HistoryPanelWidget::SetEntries(
@@ -46,11 +69,63 @@ void HistoryPanelWidget::SetEntries(
     hovered_ = -1;
     scroll_y_ = std::clamp(scroll_y_, 0.0f, ScrollRange());
     if (children_attached_) {
+        char counts[48];
+        std::snprintf(counts, sizeof(counts), "%d undo \xc2\xb7 %d redo",
+                      static_cast<int>(undo_.size()),
+                      static_cast<int>(redo_.size()));
+        counts_->SetText(counts);
         status_->SetText(undo_.empty() && redo_.empty()
                              ? "no history"
                              : "click an entry to jump");
+        RebuildRows();
     }
     Invalidate();
+}
+
+void HistoryPanelWidget::RebuildRows() {
+    namespace Widgets = XER::UI::Widgets;
+    for (Row& row : rows_) {
+        RemoveChild(row.item);
+        RemoveChild(row.steps);
+    }
+    rows_.clear();
+    rows_.reserve(undo_.size() + redo_.size());
+
+    const int undo_count = static_cast<int>(undo_.size());
+    const auto make_row = [this](const std::string& label, int steps,
+                                 bool redo) {
+        Row row;
+        row.item = std::make_shared<Widgets::Item>();
+        // Undo rows use the title slot (foreground, body); redo rows
+        // use the description slot (muted, small) so future entries
+        // read dimmed — the same hierarchy the drawn list had.
+        if (redo) {
+            row.item->SetDescription(label);
+        } else {
+            row.item->SetTitle(label);
+        }
+        row.item->SetEnabled(false);
+        char tag[8];
+        std::snprintf(tag, sizeof(tag), "-%d", steps);
+        row.steps = std::make_shared<Widgets::Badge>(
+            tag, Widgets::BadgeVariant::Outline);
+        // Disabled also gives the Badge its quiet disabled paint —
+        // right for a metadata tag — and keeps it out of hit-testing.
+        row.steps->SetEnabled(false);
+        AddChild(row.item);
+        AddChild(row.steps);
+        rows_.push_back(std::move(row));
+    };
+    // Undo stack renders newest on top (undo_.back() first); the row's
+    // distance from the divider is its step count.
+    for (int i = 0; i < undo_count; ++i) {
+        make_row(undo_[static_cast<std::size_t>(undo_count - 1 - i)],
+                 i + 1, false);
+    }
+    for (std::size_t i = 0; i < redo_.size(); ++i) {
+        make_row(redo_[i], static_cast<int>(i) + 1, true);
+    }
+    RequestLayout();
 }
 
 int HistoryPanelWidget::RowCount() const {
@@ -66,9 +141,10 @@ float HistoryPanelWidget::ScrollRange() const {
 
 Rect HistoryPanelWidget::RowRect(int row) const {
     const auto bounds = GetBounds();
-    return {bounds.x + 8.0f,
+    return {bounds.x + VeTheme::kSpaceSm,
             rows_top_ + static_cast<float>(row) * row_height_ - scroll_y_,
-            bounds.width - 16.0f, row_height_ - 3.0f};
+            bounds.width - VeTheme::kSpaceSm * 2.0f,
+            row_height_ - 3.0f};
 }
 
 int HistoryPanelWidget::RowAt(
@@ -97,17 +173,6 @@ void HistoryPanelWidget::Render(
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
 
-    // Header counts: "N undo · M redo" on the right of the title row.
-    char counts[48];
-    std::snprintf(counts, sizeof(counts), "%d undo \xc2\xb7 %d redo",
-                  static_cast<int>(undo_.size()),
-                  static_cast<int>(redo_.size()));
-    renderer.DrawText(counts,
-                      {bounds.x + bounds.width - 150.0f,
-                       bounds.y + 8.0f, 142.0f, 18.0f},
-                      XER::UI::Rendering::TextStyle{
-                          tokens.muted, tokens.font_small, 500});
-
     if (rows_top_ <= 0.0f) return;   // not yet laid out
     if (undo_.empty() && redo_.empty()) {
         renderer.DrawText("edits made through the timeline appear here",
@@ -118,54 +183,17 @@ void HistoryPanelWidget::Render(
         return;
     }
 
+    // Rows paint themselves (Item + Badge children); the panel only
+    // draws the hover wash behind the entry under the cursor. The
+    // divider row is Separator/Label children — nothing to draw.
     const int undo_count = static_cast<int>(undo_.size());
-    const int divider_row = undo_count;
     for (int row = 0; row < RowCount(); ++row) {
+        if (row == undo_count) continue;   // divider row
         const Rect r = RowRect(row);
         if (r.y + r.height < rows_top_ || r.y > rows_bottom_) continue;
-
-        if (row == divider_row) {
-            // Current-state divider: rule + centered caption. Not
-            // clickable — it marks where the project stands.
-            const float cy = r.y + r.height * 0.5f;
-            renderer.DrawLine({r.x + 4.0f, cy}, {r.Right() - 4.0f, cy},
-                              WithAlpha(tokens.accent, 0.6f), 1.0f);
-            renderer.DrawText("current state",
-                              {r.x, r.y + 2.0f, r.width,
-                               r.height - 4.0f},
-                              XER::UI::Rendering::TextStyle{
-                                  tokens.accent, tokens.font_small, 600});
-            continue;
-        }
-
-        const bool is_undo = row < divider_row;
         if (row == hovered_) {
             renderer.FillRect(r, tokens.hover, tokens.radius_small);
         }
-        // Entry label: undo stack is stored oldest-first so the newest
-        // (undo_.back()) draws on top; redo rows sit below the divider.
-        const std::string& label =
-            is_undo
-                ? undo_[static_cast<std::size_t>(undo_count - 1 - row)]
-                : redo_[static_cast<std::size_t>(row - divider_row - 1)];
-        const Color text_color =
-            is_undo ? tokens.foreground : tokens.muted;
-        renderer.DrawText(label,
-                          {r.x + 8.0f, r.y + 3.0f, r.width - 46.0f,
-                           r.height - 6.0f},
-                          XER::UI::Rendering::TextStyle{
-                              text_color, tokens.font_body, 400});
-        // Distance-from-now tag on the right edge.
-        const int steps =
-            is_undo ? row + 1 : row - divider_row;
-        char tag[8];
-        std::snprintf(tag, sizeof(tag), "-%d", steps);
-        renderer.DrawText(tag,
-                          {r.Right() - 36.0f, r.y + 4.0f, 32.0f,
-                           r.height - 8.0f},
-                          XER::UI::Rendering::TextStyle{
-                              WithAlpha(tokens.muted, 0.7f),
-                              tokens.font_small, 500});
     }
 }
 
@@ -178,12 +206,65 @@ void HistoryPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
                     bounds.width - pad * 2.0f, 24.0f},
                    tokens);
+    counts_->Layout({bounds.x + bounds.width - pad - 150.0f,
+                     bounds.y + pad * 0.6f, 150.0f, 24.0f},
+                    tokens);
     rows_top_ = bounds.y + 34.0f + tokens.spacing_small;
     rows_bottom_ = bounds.y + bounds.height - 30.0f;
     status_->Layout({bounds.x + pad, bounds.y + bounds.height - 26.0f,
                      bounds.width - pad * 2.0f, 20.0f},
                     tokens);
     scroll_y_ = std::clamp(scroll_y_, 0.0f, ScrollRange());
+
+    const int undo_count = static_cast<int>(undo_.size());
+    const bool has_entries = !undo_.empty() || !redo_.empty();
+
+    // rows_ is packed display order (undos then redos); display row
+    // space inserts the divider between them.
+    for (std::size_t i = 0; i < rows_.size(); ++i) {
+        const int display_row =
+            static_cast<int>(i) + (static_cast<int>(i) >= undo_count ? 1 : 0);
+        const Rect r = RowRect(display_row);
+        Row& row = rows_[i];
+        // Children of off-viewport rows hide — the panel clip covers
+        // the title/status bands too, so a scrolled-away child would
+        // otherwise paint (and hit-test) over the chrome.
+        const bool visible =
+            r.y + r.height > rows_top_ && r.y < rows_bottom_;
+        row.item->Layout({r.x, r.y,
+                          std::max(20.0f, r.width - 48.0f), r.height},
+                         tokens);
+        row.steps->Layout({r.Right() - 42.0f, r.y + 3.0f, 38.0f,
+                           r.height - 6.0f},
+                          tokens);
+        row.item->SetVisible(visible);
+        row.steps->SetVisible(visible);
+    }
+
+    // Divider row children sit at the undo/redo boundary.
+    const Rect div = RowRect(undo_count);
+    const bool div_visible =
+        has_entries &&
+        div.y + div.height > rows_top_ && div.y < rows_bottom_;
+    const float caption_w = 116.0f;
+    const float rule_w =
+        std::max(0.0f, (div.width - caption_w - VeTheme::kSpaceSm * 2.0f) *
+                           0.5f);
+    divider_left_->Layout(
+        {div.x + VeTheme::kSpaceSm,
+         div.y + div.height * 0.5f - 0.5f, rule_w, 1.0f},
+        tokens);
+    divider_label_->Layout(
+        {div.x + VeTheme::kSpaceSm + rule_w, div.y, caption_w,
+         div.height},
+        tokens);
+    divider_right_->Layout(
+        {div.x + VeTheme::kSpaceSm + rule_w + caption_w,
+         div.y + div.height * 0.5f - 0.5f, rule_w, 1.0f},
+        tokens);
+    divider_left_->SetVisible(div_visible);
+    divider_label_->SetVisible(div_visible);
+    divider_right_->SetVisible(div_visible);
 }
 
 bool HistoryPanelWidget::HandleEvent(
@@ -196,6 +277,7 @@ bool HistoryPanelWidget::HandleEvent(
                 scroll_y_ - static_cast<float>(event.wheel_delta) * 0.5f,
                 0.0f, range);
             Invalidate();
+            RequestLayout();   // row children track the scroll offset
             return true;
         }
         case XER::UI::Widgets::Event::Type::MouseMove: {

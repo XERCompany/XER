@@ -41,6 +41,7 @@
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {
+class Button;
 class Label;
 }
 
@@ -169,6 +170,11 @@ private:
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Label> hint_;
+    // Per-strip mute chip, parallel to strips_ (nullptr on the master
+    // strip — the host mutes the mix bus itself). Destructive while
+    // muted; rebuilt alongside strips_ in RebuildStrips().
+    std::vector<std::shared_ptr<XER::UI::Widgets::Button>>
+        mute_buttons_;
 };
 
 }  // namespace XER::VideoEditor::Ui

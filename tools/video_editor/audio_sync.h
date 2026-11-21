@@ -12,9 +12,12 @@
 // whole operation stays a normal undoable edit.
 #pragma once
 
+#include <atomic>
+#include <functional>
 #include <string>
 #include <vector>
 
+#include "media_catalog.h"   // AudioPeaks (provider seam)
 #include "timeline_model.h"
 
 namespace XER::VideoEditor {
@@ -34,19 +37,72 @@ struct AudioSyncReport {
     std::string status;               // summary for the status bar
 };
 
-// Pure analysis — reads the project, decodes peak envelopes, fills
-// `report` with per-clip moves. Does NOT mutate the project: the
-// caller applies entries (history-wrapped MoveClip or plain
+// Peaks-provider seam: called once per unique source path, must fill
+// `out` and return true when the file has usable audio. MAY BLOCK —
+// the plan invokes it inline, so callers that need the decode off the
+// UI thread run the whole plan on a worker. Production code wires
+// MediaPrep::LookupPeaks (bounded wait; subprocess-isolated and
+// disk-cached decodes); tests inject synthetic peaks and never touch
+// a decoder. Empty → the built-in DecodeAudioPeaks subprocess path.
+using AudioSyncPeaksProvider =
+    std::function<bool(const std::string& canon_path, AudioPeaks* out)>;
+
+struct AudioSyncPlanOptions {
+    AudioSyncPeaksProvider peaks;
+    // Polled between clips and inside the correlation sweep. Flipping
+    // it aborts the plan (returns false, error "audio sync
+    // cancelled") — nothing is half-applied since the plan never
+    // mutates the project.
+    std::atomic<bool>* cancel = nullptr;
+    // Called on the plan thread after each candidate clip resolves:
+    // (done, total). Keep it cheap — store to atomics; marshal UI
+    // updates from the polling side.
+    std::function<void(int done, int total)> progress;
+};
+
+// Pure analysis — reads the project, obtains peak envelopes (through
+// `options.peaks` when set, else DecodeAudioPeaks), fills `report`
+// with per-clip moves. Does NOT mutate the project: the caller
+// applies entries (history-wrapped MoveClip or plain
 // TimelineModel::MoveClip for batch/headless use) and decides what a
 // failed move means.
 //
 // If `reference_clip_id` is empty the earliest clip on the lowest
 // track index is used. Clips sharing the reference's source_path are
 // skipped (already the same take). Returns false only when there is
-// nothing to correlate at all (no reference / no decodable audio).
+// nothing to correlate at all (no reference / no decodable audio) or
+// the run was cancelled.
 bool ComputeAudioSyncPlan(const Project& project,
                           const std::string& reference_clip_id,
                           AudioSyncReport* report,
-                          std::string* error_out);
+                          std::string* error_out,
+                          const AudioSyncPlanOptions& options = {});
+
+// Headless/test convenience: the plan driven by `peaks` instead of a
+// decoder — no media files, no catalog, no subprocess. Exercises the
+// envelope math, the lag search, and the lag→timeline-shift sign.
+bool ComputeAudioSyncPlanWithPeaks(
+    const Project& project, const std::string& reference_clip_id,
+    const AudioSyncPeaksProvider& peaks, AudioSyncReport* report,
+    std::string* error_out);
+
+// Out-of-process variant: routes the SAME plan through
+// XERSyncMedia.exe (SyncMediaPipe) — the worker decodes the peaks and
+// runs the correlation off the editor process. Tri-state result:
+//   kPlanned     — report filled from the worker reply
+//   kUnavailable — worker not spawnable / transport failed / garbage
+//                  reply: the caller should run the in-process plan
+//   kFailed      — genuine failure (no clips, worker-reported error,
+//                  cancelled): error_out filled; do NOT fall back
+// Windows-only: always kUnavailable elsewhere.
+// CANCEL: a remote request cannot be polled mid-flight — the caller
+// cancels by killing the worker (WorkerPipe::KillWorker, job-grouped
+// and disposable); this call then returns kUnavailable/kFailed on its
+// own. See worker_pipe.h for the no-death-penalty kill semantics.
+enum class AudioSyncRoute { kPlanned, kUnavailable, kFailed };
+AudioSyncRoute ComputeAudioSyncPlanViaWorker(
+    const Project& project, const std::string& reference_clip_id,
+    AudioSyncReport* report, std::string* error_out,
+    std::atomic<bool>* cancel = nullptr);
 
 }  // namespace XER::VideoEditor

@@ -6,14 +6,9 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cmath>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
-#include <limits>
 #include <vector>
-
-#include "bitmap_font.h"
 
 namespace XER::VideoEditor {
 namespace {
@@ -21,15 +16,6 @@ namespace {
 // Hard ceiling on either generated-frame dimension — a text clip fed
 // a novel would otherwise allocate gigabytes.
 constexpr int kMaxGeneratedDim = 4096;
-
-// Text styling defaults: the ClipTextStyle face default is opaque
-// white ({255,255,255,255}, declared in the header) over a two-tap
-// soft drop shadow (a near full-strength tap plus a fainter far tap —
-// reads as a soft shadow without needing a blur pass). Offsets scale
-// with the glyph so the look holds at every canvas size. An explicit
-// outline= style replaces the shadow entirely.
-constexpr std::array<std::uint8_t, 4> kShadowNear{0, 0, 0, 120};
-constexpr std::array<std::uint8_t, 4> kShadowFar{0, 0, 0, 45};
 
 int HexDigit(char c) {
     if (c >= '0' && c <= '9') {
@@ -40,50 +26,6 @@ int HexDigit(char c) {
         return lower - 'a' + 10;
     }
     return -1;
-}
-
-std::string LowerAscii(const std::string& text) {
-    std::string out = text;
-    for (char& c : out) {
-        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-    }
-    return out;
-}
-
-// Cell scale a Text clip renders at: style.size_px is a nominal glyph
-// height (the bitmap glyph is kGlyphHeight cells tall) rounded to an
-// integer scale; 0 falls back to the canvas-proportional default.
-int ScaleForTextStyle(const ClipTextStyle& style, int canvas_h) {
-    if (style.size_px <= 0) {
-        return TextClipGlyphScale(canvas_h);
-    }
-    return std::clamp(
-        static_cast<int>(std::lround(
-            static_cast<double>(style.size_px) /
-            BitmapFont::kGlyphHeight)),
-        1, 64);
-}
-
-// Splits `utf8` into raw per-line substrings using the same break
-// rules as BitmapFont's decoder ('\n'; '\r' also breaks and a '\r\n'
-// pair collapses to one break), so alignment offsets line up exactly
-// with what DrawText would draw.
-std::vector<std::string> SplitTextLines(const std::string& utf8) {
-    std::vector<std::string> lines(1);
-    for (std::size_t i = 0; i < utf8.size(); ++i) {
-        const char c = utf8[i];
-        if (c == '\n') {
-            lines.emplace_back();
-        } else if (c == '\r') {
-            if (i + 1 < utf8.size() && utf8[i + 1] == '\n') {
-                ++i;   // swallow the LF of a CRLF pair
-            }
-            lines.emplace_back();
-        } else {
-            lines.back().push_back(c);
-        }
-    }
-    return lines;
 }
 
 // Ensures `out` is a valid w*h BGRA8 frame (reusing it when it
@@ -144,103 +86,6 @@ bool GenerateColorBars(const Clip& /*clip*/, int canvas_w, int canvas_h,
     return true;
 }
 
-bool GenerateText(const Clip& clip, int canvas_h, video::Frame* out) {
-    const ClipTextStyle style = ParseClipTextStyle(clip.source.param);
-    if (style.text.empty()) {
-        // Valid but invisible — a 1x1 transparent frame contributes
-        // nothing through the warp/blend stages.
-        if (!EnsureFrameSize(out, 1, 1)) {
-            return false;
-        }
-        std::memset(out->Data(), 0, out->DataSize());
-        return true;
-    }
-    const int scale = ScaleForTextStyle(style, canvas_h);
-    // Per-line metrics: alignment needs each line's own width so it
-    // can be shifted inside the block (the widest line). All sizing
-    // math runs in int64_t: a crafted text param (~1e5 newlines) used
-    // to overflow the int products to negative, which clamped to a
-    // silent 1-px "text" clip instead of rejecting (bug-audit fix).
-    const std::vector<std::string> lines = SplitTextLines(style.text);
-    std::vector<int> line_w(lines.size(), 0);
-    std::int64_t block_w = 0;
-    for (std::size_t i = 0; i < lines.size(); ++i) {
-        int line_h = 0;
-        if (!BitmapFont::MeasureText(lines[i], scale, &line_w[i],
-                                     &line_h)) {
-            return false;   // unreachable (scale >= 1) — belt & braces
-        }
-        block_w = std::max<std::int64_t>(block_w, line_w[i]);
-    }
-    // Same trim as MeasureText: the last line's leading is dropped.
-    const std::int64_t text_h =
-        (static_cast<std::int64_t>(lines.size()) *
-             BitmapFont::kLineAdvance - 2) *
-        scale;
-    // An outline REPLACES the drop shadow: `edge` is the stroke radius
-    // in px and pads every side; `shadow` is the two-tap shadow's
-    // +x/+y reach otherwise (the classic look, kept for edge == 0).
-    const std::int64_t edge =
-        style.outline_px > 0.0f
-            ? std::max<std::int64_t>(
-                  1, std::lround(
-                         static_cast<double>(style.outline_px)))
-            : 0;
-    const std::int64_t shadow = edge == 0 ? 2 * scale : 0;
-    const std::int64_t need_w = block_w + 2 * edge + shadow;
-    const std::int64_t need_h = text_h + 2 * edge + shadow;
-    // Oversized text is rejected outright — clamping it to the
-    // dimension cap would silently misrender (and clamping a negative
-    // overflow would produce a 1-px clip).
-    if (need_w > kMaxGeneratedDim || need_h > kMaxGeneratedDim) {
-        return false;
-    }
-    const int w = static_cast<int>(std::max<std::int64_t>(need_w, 1));
-    const int h = static_cast<int>(std::max<std::int64_t>(need_h, 1));
-    if (!EnsureFrameSize(out, w, h)) {
-        return false;
-    }
-    std::memset(out->Data(), 0, out->DataSize());
-
-    // Draws every line of one pass at offset (dx, dy). Per-line x is
-    // the alignment shift: Left -> 0, Center -> half the slack inside
-    // the block, Right -> all of it. y walks the fixed line advance.
-    const int edge_px = static_cast<int>(edge);
-    auto draw_pass = [&](int dx, int dy,
-                         const std::array<std::uint8_t, 4>& bgra) {
-        for (std::size_t i = 0; i < lines.size(); ++i) {
-            int xoff = 0;
-            if (style.align == ClipTextStyle::Align::Center) {
-                xoff = static_cast<int>((block_w - line_w[i]) / 2);
-            } else if (style.align == ClipTextStyle::Align::Right) {
-                xoff = static_cast<int>(block_w - line_w[i]);
-            }
-            BitmapFont::DrawText(
-                out, lines[i], edge_px + xoff + dx,
-                edge_px + dy + static_cast<int>(i) *
-                                   BitmapFont::kLineAdvance * scale,
-                scale, bgra);
-        }
-    };
-    if (edge_px > 0) {
-        // 8-direction offset draws fake a stroke around the glyphs.
-        static const int kDirs[8][2] = {
-            {-1, -1}, {0, -1}, {1, -1}, {-1, 0},
-            {1, 0},   {-1, 1}, {0, 1},  {1, 1},
-        };
-        for (const auto& dir : kDirs) {
-            draw_pass(dir[0] * edge_px, dir[1] * edge_px,
-                      style.outline_color);
-        }
-    } else {
-        // Far tap, near tap — the soft drop shadow.
-        draw_pass(2 * scale, 2 * scale, kShadowFar);
-        draw_pass(scale, scale, kShadowNear);
-    }
-    draw_pass(0, 0, style.color);
-    return true;
-}
-
 }  // namespace
 
 std::array<std::uint8_t, 4> ParseMatteColor(const std::string& param) {
@@ -272,69 +117,6 @@ std::array<std::uint8_t, 4> ParseMatteColor(const std::string& param) {
         out[3] = byte(6);   // A
     }
     return out;
-}
-
-ClipTextStyle ParseClipTextStyle(const std::string& param) {
-    ClipTextStyle style;
-    const std::size_t bar = param.find('|');
-    if (bar == std::string::npos) {
-        style.text = param;
-        return style;
-    }
-    style.text = param.substr(0, bar);
-    // A space before '|' is separator padding, not title text — the
-    // space glyph draws nothing but still pads the measured width.
-    while (!style.text.empty() &&
-           (style.text.back() == ' ' || style.text.back() == '\t')) {
-        style.text.pop_back();
-    }
-    // Whitespace-separated key=value tokens; unknown keys and
-    // malformed values are ignored (lenient — a style typo must never
-    // kill the title).
-    const std::string spec = param.substr(bar + 1);
-    std::size_t i = 0;
-    while (i < spec.size()) {
-        while (i < spec.size() &&
-               std::isspace(static_cast<unsigned char>(spec[i]))) {
-            ++i;
-        }
-        const std::size_t start = i;
-        while (i < spec.size() &&
-               !std::isspace(static_cast<unsigned char>(spec[i]))) {
-            ++i;
-        }
-        const std::string token = spec.substr(start, i - start);
-        const std::size_t eq = token.find('=');
-        if (eq == std::string::npos) {
-            continue;
-        }
-        const std::string key = LowerAscii(token.substr(0, eq));
-        const std::string value = token.substr(eq + 1);
-        if (key == "size") {
-            const long v = std::strtol(value.c_str(), nullptr, 10);
-            if (v > 0) {
-                style.size_px =
-                    static_cast<int>(std::min<long>(v, 4096));
-            }
-        } else if (key == "color") {
-            style.color = ParseMatteColor(value);
-        } else if (key == "outline") {
-            style.outline_px = std::max(
-                0.0f, std::strtof(value.c_str(), nullptr));
-        } else if (key == "outline_color") {
-            style.outline_color = ParseMatteColor(value);
-        } else if (key == "align") {
-            const std::string a = LowerAscii(value);
-            if (a == "center") {
-                style.align = ClipTextStyle::Align::Center;
-            } else if (a == "right") {
-                style.align = ClipTextStyle::Align::Right;
-            } else if (a == "left") {
-                style.align = ClipTextStyle::Align::Left;
-            }
-        }
-    }
-    return style;
 }
 
 const std::array<std::array<std::uint8_t, 4>, 7>& Smpte75Bars() {
@@ -375,7 +157,10 @@ bool GenerateSourceFrame(const Clip& clip, double /*clip_local_t*/,
         case SourceKind::ColorBars:
             return GenerateColorBars(clip, canvas_w, canvas_h, out);
         case SourceKind::Text:
-            return GenerateText(clip, canvas_h, out);
+            // Parse + rasterize lives in text_style.cc (Skia path,
+            // BitmapFont fallback) — see text_style.h for the tokens.
+            return RenderClipText(
+                ParseClipTextStyle(clip.source.param), canvas_h, out);
         case SourceKind::Media:
         default:
             return false;   // Media decodes; unknown kinds are errors

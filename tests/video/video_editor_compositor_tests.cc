@@ -404,6 +404,79 @@ bool VecPxNear(const std::vector<std::uint8_t>& bgra, int w, int x, int y,
            std::abs(static_cast<int>(p[3]) - a) <= tol;
 }
 
+#if defined(XER_VE_HAS_SKIA)
+// Skia-path text probes — the rasterizer draws a real system font, so
+// glyph coordinates/dims depend on the installed font metrics and can
+// only be asserted structurally ("some face ink exists", "a blurred
+// shadow is present"), never glyph-exact.
+
+// Any pixel within `tol` of the target BGRA — detects face ink of the
+// requested fill color without pinning a coordinate.
+bool FrameHasPxNear(const video::Frame& f, std::uint8_t b,
+                    std::uint8_t g, std::uint8_t r, std::uint8_t a,
+                    int tol) {
+    for (int y = 0; y < f.Height(); ++y) {
+        for (int x = 0; x < f.Width(); ++x) {
+            const std::uint8_t* p = FramePx(f, x, y);
+            if (std::abs(static_cast<int>(p[0]) - b) <= tol &&
+                std::abs(static_cast<int>(p[1]) - g) <= tol &&
+                std::abs(static_cast<int>(p[2]) - r) <= tol &&
+                std::abs(static_cast<int>(p[3]) - a) <= tol) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// A blurred drop shadow reads as near-black pixels with PARTIAL
+// alpha — the transparent pad and the opaque face both fail this.
+bool FrameHasShadowPx(const video::Frame& f) {
+    for (int y = 0; y < f.Height(); ++y) {
+        for (int x = 0; x < f.Width(); ++x) {
+            const std::uint8_t* p = FramePx(f, x, y);
+            if (p[3] > 0 && p[3] < 255 && p[0] < 40 && p[1] < 40 &&
+                p[2] < 40) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool VecHasPxNear(const std::vector<std::uint8_t>& bgra, int w, int h,
+                  std::uint8_t b, std::uint8_t g, std::uint8_t r,
+                  std::uint8_t a, int tol) {
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::uint8_t* p = VecPx(bgra, w, x, y);
+            if (std::abs(static_cast<int>(p[0]) - b) <= tol &&
+                std::abs(static_cast<int>(p[1]) - g) <= tol &&
+                std::abs(static_cast<int>(p[2]) - r) <= tol &&
+                std::abs(static_cast<int>(p[3]) - a) <= tol) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Any canvas pixel darker (per channel) than `ceiling` — shadow
+// evidence when the project bg is brighter than the ceiling.
+bool VecHasDarkerThan(const std::vector<std::uint8_t>& bgra, int w,
+                      int h, int ceiling) {
+    for (int y = 0; y < h; ++y) {
+        for (int x = 0; x < w; ++x) {
+            const std::uint8_t* p = VecPx(bgra, w, x, y);
+            if (p[0] < ceiling && p[1] < ceiling && p[2] < ceiling) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+#endif  // XER_VE_HAS_SKIA
+
 bool HasWarning(const Compositor& compositor,
                 const std::string& needle) {
     for (const auto& w : compositor.Warnings()) {
@@ -1870,13 +1943,22 @@ void TestGeneratedSourceHelpers() {
         XER_VE_CHECK(!GenerateSourceFrame(c, 0.0, 16, 16, nullptr));
     }
 
-    // Text at scale 1 (16px canvas): "A" measures 5x7 + 2px shadow
-    // margin -> 7x9. 'A' = {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}.
+    // Text clip "A" — geometry depends on the rasterizer: BitmapFont
+    // measures the 5x7 cell glyph + 2px shadow tail (7x9, 'A' =
+    // {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}); the Skia path draws a
+    // real font, so only structure is asserted (ink + soft shadow +
+    // transparent pad).
     {
         Clip c = MakeGeneratedClip("t", 0, 0.0, 1.0,
                                    SourceKind::Text, "A");
         video::Frame f;
         XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+#if defined(XER_VE_HAS_SKIA)
+        XER_VE_CHECK(f.Width() >= 7 && f.Height() >= 9);
+        XER_VE_CHECK(FrameHasPxNear(f, 255, 255, 255, 255, 30));  // ink
+        XER_VE_CHECK(FramePx(f, 0, 0)[3] == 0);            // empty pad
+        XER_VE_CHECK(FrameHasShadowPx(f));                 // soft shadow
+#else
         XER_VE_CHECK(f.Width() == 7 && f.Height() == 9);
         XER_VE_CHECK(FramePxIs(f, 2, 0, 255, 255, 255, 255));   // ink
         XER_VE_CHECK(FramePxIs(f, 0, 1, 255, 255, 255, 255));   // ink
@@ -1886,26 +1968,38 @@ void TestGeneratedSourceHelpers() {
         const std::uint8_t* sh = FramePx(f, 5, 7);
         XER_VE_CHECK(sh[0] == 0 && sh[1] == 0 && sh[2] == 0);
         XER_VE_CHECK(sh[3] > 80 && sh[3] < 180);
-        // Multi-line: "A\nB" -> height 16 + 2 margin, 'B' row at y=9.
+#endif
+        // Multi-line "A\nB" — a second line always adds height.
         Clip c2 = MakeGeneratedClip("t2", 0, 0.0, 1.0,
                                     SourceKind::Text, "A\nB");
         video::Frame f2;
         XER_VE_CHECK(GenerateSourceFrame(c2, 0.0, 16, 16, &f2));
+#if defined(XER_VE_HAS_SKIA)
+        XER_VE_CHECK(f2.Height() > f.Height());
+        XER_VE_CHECK(FrameHasPxNear(f2, 255, 255, 255, 255, 30));
+#else
+        // height 16 + 2 margin, 'B' row at y=9.
         XER_VE_CHECK(f2.Height() == 18);
         XER_VE_CHECK(FramePxIs(f2, 1, 9, 255, 255, 255, 255));  // 'B' ink
-        // Empty text -> 1x1 transparent, still valid.
+#endif
+        // Empty text -> 1x1 transparent, still valid (both paths).
         Clip c3 = MakeGeneratedClip("t3", 0, 0.0, 1.0,
                                     SourceKind::Text, "");
         video::Frame f3;
         XER_VE_CHECK(GenerateSourceFrame(c3, 0.0, 16, 16, &f3));
         XER_VE_CHECK(f3.Width() == 1 && f3.Height() == 1);
         XER_VE_CHECK(FramePxIs(f3, 0, 0, 0, 0, 0, 0));
-        // Non-ASCII UTF-8 resolves to '?' (which has ink), never fails.
+        // Non-ASCII UTF-8 never fails: Skia draws 'é' from the real
+        // font, BitmapFont falls back to '?' — either way it inks.
         Clip c4 = MakeGeneratedClip("t4", 0, 0.0, 1.0,
                                     SourceKind::Text, "\xC3\xA9");  // é
         video::Frame f4;
         XER_VE_CHECK(GenerateSourceFrame(c4, 0.0, 16, 16, &f4));
+#if defined(XER_VE_HAS_SKIA)
+        XER_VE_CHECK(FrameHasPxNear(f4, 255, 255, 255, 255, 30));
+#else
         XER_VE_CHECK(f4.Width() == 7 && f4.Height() == 9);
+#endif
     }
 }
 
@@ -1975,8 +2069,10 @@ void TestGeneratedSourcesComposited() {
         XER_VE_CHECK(TotalOpens(*rig.bank) == 0);
     }
 
-    // Text clip: 'A' ink lands at canvas (2,0); gray bg makes the
-    // soft drop shadow observable at (5,7) as ~53.
+    // Text clip: 'A' ink lands inside the canvas over a gray bg; the
+    // soft drop shadow darkens pixels near the glyph. BitmapFont puts
+    // ink at exactly (2,0) with a ~53 gray shadow tap at (5,7); the
+    // Skia raster places by font metrics, so assert structure.
     {
         Project p = MakeCanvasProject();
         p.bg_color = {100, 100, 100, 255};
@@ -1987,10 +2083,18 @@ void TestGeneratedSourcesComposited() {
         std::vector<std::uint8_t> out;
         std::string err;
         XER_VE_CHECK(rig.comp->RenderFrameAt(0.5, &out, &err));
+#if defined(XER_VE_HAS_SKIA)
+        XER_VE_CHECK(VecHasPxNear(out, 16, 16, 255, 255, 255, 255, 10));
+        XER_VE_CHECK(VecPxIs(out, 16, 0, 0, 100, 100, 100, 255));
+        XER_VE_CHECK(VecHasPxNear(out, 16, 16, 100, 100, 100, 255, 5));
+        // Shadow: some canvas pixel darker than the 100-gray bg.
+        XER_VE_CHECK(VecHasDarkerThan(out, 16, 16, 95));
+#else
         XER_VE_CHECK(VecPxIs(out, 16, 2, 0, 255, 255, 255, 255));
         XER_VE_CHECK(VecPxIs(out, 16, 0, 0, 100, 100, 100, 255));
         XER_VE_CHECK(VecPxIs(out, 16, 15, 15, 100, 100, 100, 255));
         XER_VE_CHECK(VecPxNear(out, 16, 5, 7, 53, 53, 53, 255, 6));
+#endif
     }
 
     // Effect + transform stack on a matte: grayscale then

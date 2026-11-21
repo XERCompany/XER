@@ -12,8 +12,9 @@ name: CI
 #      reorders mirrors (mirror.msys2.org stalls on runners) and installs
 #      the toolchain + ~70 dependency packages (mirrors InstallTools.ps1).
 #   2. cmake --preset windows-clang-msys2 configures the build.
-#   3. Ninja builds video_editor (+ POST_BUILD DLL deploy via CopyDLL.ps1)
-#      and the XER_VideoEditor_Tests runner.
+#   3. Ninja builds video_editor and the XER_VideoEditor_Tests runner
+#      (all-MSYS2 deps link statically; runtime DLL staging is done by
+#      cmake/YaDll.cmake + CEF POST_BUILD targets — CopyDLL.ps1 is gone).
 #   4. Tests + CLI smoke checks.
 #   5. video_editor_dist produces the portable package -> artifact.
 #
@@ -217,9 +218,13 @@ jobs:
           -DCMAKE_C_COMPILER_LAUNCHER=ccache
           -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
-      # POST_BUILD deploys runtime DLLs next to video_editor.exe via
-      # CopyDLL.ps1 (llvm-objdump import scan), so bin/ is immediately
-      # runnable — including inside this job's test/smoke steps.
+      # The few runtime DLLs that stay dynamic (libskia set, CEF,
+      # delay-loaded OCIO/OIIO closure) are staged next to the exes by
+      # xer_stage_runtime_dlls (configure-time objdump import walk in
+      # cmake/YaDll.cmake) + CEF POST_BUILD deploy targets, so bin/ is
+      # immediately runnable — including inside this job's test/smoke
+      # steps. CopyDLL.ps1 was removed; see
+      # docs/wiki/architecture/static-link-state.md.
       - name: Build
         shell: msys2 {0}
         run: >
@@ -243,12 +248,17 @@ jobs:
           $BIN/ztzvertfy.exe "$BIN/demo_smoke.xexrj" \
             -r manifest.toml -r main.js -r static/index.html -l
 
-      - name: Smoke — CLI help + DLL check
+      # --smoke runs the headless self-check suite; an internal
+      # watchdog hard-caps the run (kWatchdogSeconds, smoke_checks.cc)
+      # so a hung decoder can't stall the job.
+      - name: Smoke — CLI help + smoke suite + DLL check
         shell: msys2 {0}
         run: |
           set -e
           BIN=out/build/windows-clang-msys2/bin
           "$BIN/video_editor.exe" --help
+          "$BIN/video_editor.exe" --smoke-list
+          "$BIN/video_editor.exe" --smoke
           echo "deployed dlls: $(ls "$BIN"/*.dll | wc -l)"
 
       - name: Package dist zip

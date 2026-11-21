@@ -7,6 +7,53 @@ project(Editor LANGUAGES C CXX RC)
 # windres/llvm-windres into a version+icon resource.
 set(XER_APP_RC_IN "${CMAKE_CURRENT_SOURCE_DIR}/app.rc.in")
 
+# Friendly FileDescription per target — Task Manager shows this string
+# for GUI processes, so raw target names (video_editor, ALL-CAPS exe
+# names) get a Title-Case product name instead. Unlisted targets fall
+# back to the target name unchanged. InternalName/OriginalFilename in
+# app.rc.in deliberately stay the real exe name — they must match the
+# shipped binary.
+function(xer_target_desc target out_var)
+    if(target STREQUAL "video_editor")
+        set(_desc "VideoEditor")
+    elseif(target STREQUAL "XERVideoLoader")
+        set(_desc "Video Loader")
+    elseif(target STREQUAL "XERSyncMedia")
+        set(_desc "Media Sync Engine")
+    elseif(target STREQUAL "XERFxScript")
+        set(_desc "FX Script Engine")
+    elseif(target STREQUAL "xer_engine_ui_render")
+        set(_desc "Engine UI Renderer")
+    elseif(target STREQUAL "EngineScanVST3")
+        set(_desc "VST3 Engine Scanner")
+    elseif(target STREQUAL "XERVac")
+        set(_desc "Virtual Cable")
+    elseif(target STREQUAL "XERVacUI")
+        set(_desc "VacUI")
+    elseif(target STREQUAL "XBrowser")
+        set(_desc "XBrowser")
+    elseif(target STREQUAL "XER_VST3_CEF")
+        set(_desc "VST3+CEF Demo")
+    elseif(target STREQUAL "xer_browser_shell")
+        set(_desc "Browser Shell")
+    elseif(target STREQUAL "SecurityFlashService")
+        set(_desc "Security Flash Service")
+    elseif(target STREQUAL "ControllAccountsWindows")
+        set(_desc "Account Control")
+    elseif(target STREQUAL "ServerAudio")
+        set(_desc "Audio Server")
+    elseif(target STREQUAL "ArchiveManager")
+        set(_desc "Archive Manager")
+    elseif(target STREQUAL "HubCivitAIBrowser")
+        set(_desc "CivitAI Browser")
+    elseif(target STREQUAL "Editor")
+        set(_desc "Editor")
+    else()
+        set(_desc "${target}")
+    endif()
+    set(${out_var} "${_desc}" PARENT_SCOPE)
+endfunction()
+
 # xer_app_win32(target): icon+version resource (Author: Matvey
 # Vladimirovich (Yoshi Arasaka & LXXV), Company: XERLab — app.rc.in,
 # configured per target so InternalName/OriginalFilename match the
@@ -21,6 +68,7 @@ function(xer_app_win32 target)
             set(_out ${target})
         endif()
         set(TARGET_NAME ${_out})
+        xer_target_desc(${_out} TARGET_DESC)
         set(XER_ICON_PATH "${CMAKE_CURRENT_SOURCE_DIR}/icon.ico")
         set(_rc "${CMAKE_CURRENT_BINARY_DIR}/app_${_out}.rc")
         configure_file(${XER_APP_RC_IN} ${_rc} @ONLY)
@@ -976,6 +1024,7 @@ endforeach()
 foreach(_app EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
         SecurityFlashService ControllAccountsWindows ServerAudio
         ArchiveManager HubCivitAIBrowser Editor video_editor
+        XERVideoLoader XERSyncMedia XERFxScript
         XBrowser XER_VST3_CEF xer_browser_shell)
     if(TARGET ${_app})
         xer_app_win32(${_app})

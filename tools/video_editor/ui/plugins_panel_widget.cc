@@ -1,58 +1,28 @@
 #include "plugins_panel_widget.h"
 
 #include <algorithm>
-#include <cmath>
-#include <cstdint>
 #include <utility>
 
-#include "app_runtime/icon_pack.h"
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/item.h"
 #include "widgets/label.h"
+#include "widgets/scroll_area.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
-using XER::UI::Theme::Color;
-
-constexpr float kRowHeight = 38.0f;
-constexpr float kHeaderHeight = 24.0f;
-constexpr float kHeaderIcon = 14.0f;
-constexpr float kRowIcon = 16.0f;
-constexpr auto kDoubleClickWindow = std::chrono::milliseconds(450);
-
-Color WithAlpha(Color color, float alpha) {
-    color.a *= alpha;
-    return color;
-}
-
-// Theme float color → packed AARRGGBB tint for the icon pack.
-std::uint32_t ToArgb(Color color) {
-    const auto byte = [](float v) {
-        return static_cast<std::uint32_t>(
-            std::clamp(std::lround(v * 255.0f), 0L, 255L));
-    };
-    return (byte(color.a) << 24) | (byte(color.r) << 16) |
-           (byte(color.g) << 8) | byte(color.b);
-}
-
-// Rasterized SVG icon from the shared pack, drawn centered in `box`.
-// Returns false when the icon is missing or the renderer can't blit
-// it — the caller then keeps the text-only fallback layout.
-bool DrawIcon(XER::UI::Rendering::Renderer& renderer, const char* name,
-              int px, Color tint, const XER::UI::Layout::Rect& box) {
-    const auto* bmp =
-        AppRuntime::SharedIconPack().Get(name, px, ToArgb(tint));
-    if (bmp == nullptr) return false;
-    const XER::UI::Layout::Rect dst{
-        box.x + (box.width - bmp->width) * 0.5f,
-        box.y + (box.height - bmp->height) * 0.5f,
-        static_cast<float>(bmp->width),
-        static_cast<float>(bmp->height)};
-    return renderer.DrawFrameBgra(bmp->bgra.data(), bmp->width,
-                                  bmp->height, dst, 1.0f);
-}
+// Two-line catalog row: body-size name over a caption-size vendor tag.
+constexpr float kRowHeight = VeTheme::kFontBody * 1.4f +
+                             VeTheme::kFontCaption * 1.4f +
+                             VeTheme::kSpaceXs;
+constexpr float kHeaderHeight = VeTheme::kRowHeight;
+constexpr float kHeaderIcon = VeTheme::kFontBody;
+constexpr float kRowIcon = VeTheme::kSpaceLg;
+constexpr float kActionWidth = 100.0f;   // "Add to Clip" button
 
 std::string TagFor(const PluginDesc& desc) {
     if (desc.vendor.empty()) return desc.file;
@@ -60,12 +30,195 @@ std::string TagFor(const PluginDesc& desc) {
     return desc.vendor + " · " + desc.file;
 }
 
+// Leading-slot glyph for a row Item: draws its section's pack icon
+// centered in the slot. Disabled so hit-testing skips it (the same
+// convention as MarkersPanelWidget::MarkerSwatch) — row clicks and
+// hover land on the Item itself.
+class RowIcon final : public XER::UI::Widgets::Widget {
+public:
+    explicit RowIcon(std::string name) : name_(std::move(name)) {
+        SetFocusable(false);
+        SetEnabled(false);
+    }
+
+    void Render(XER::UI::Rendering::Renderer& renderer,
+                const XER::UI::Theme::Tokens& tokens) override {
+        VeIcons::DrawIcon(renderer, name_.c_str(),
+                          static_cast<int>(kRowIcon), tokens.foreground,
+                          GetBounds());
+    }
+    void Layout(const XER::UI::Layout::Rect& bounds) override {
+        SetBounds(bounds);
+    }
+    bool HandleEvent(const XER::UI::Widgets::Event&) override {
+        return false;
+    }
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {kRowIcon, kRowIcon};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return {kRowIcon, kRowIcon};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {kRowIcon, kRowIcon};
+    }
+
+private:
+    std::string name_;
+};
+
 }  // namespace
+
+// The ScrollArea's content: drawn section headers interleaved with
+// Item rows, plus the selection/hover chrome painted behind rows —
+// children render after this widget's own pass, so the chrome reads
+// as the rows' background exactly like the old drawn list.
+// Deliberately not focusable: click focus must climb to the panel so
+// arrow-key navigation keeps working after a row click.
+class PluginsPanelWidget::RowList final : public XER::UI::Widgets::Widget {
+public:
+    RowList() {
+        SetFocusable(false);
+    }
+
+    // One display line: either a drawn header (icon + muted caption)
+    // or a row Item.
+    struct Line {
+        bool header = false;
+        std::string header_text;
+        std::string header_icon;
+        std::shared_ptr<XER::UI::Widgets::Item> item;   // rows only
+    };
+
+    // Adopts the row Items as children and swaps the line model.
+    void SetLines(std::vector<Line> lines) {
+        // Retire the previous generation — disable first so a stale
+        // mouse capture can't fire a detached row, then keep them
+        // alive one rebuild (the MarkersPanelWidget pattern).
+        retired_.clear();
+        for (Line& line : lines_) {
+            if (line.item == nullptr) continue;
+            line.item->SetEnabled(false);
+            RemoveChild(line.item);
+            retired_.push_back(line.item);
+        }
+        lines_ = std::move(lines);
+        for (const Line& line : lines_) {
+            if (line.item != nullptr) AddChild(line.item);
+        }
+        RequestLayout();
+        Invalidate();
+    }
+
+    // Selected index into lines_ (-1 = none); header indices are
+    // simply never passed.
+    void SetSelected(int index) {
+        if (selected_ == index) return;
+        selected_ = index;
+        Invalidate();
+    }
+
+    void Render(XER::UI::Rendering::Renderer& renderer,
+                const XER::UI::Theme::Tokens& tokens) override {
+        const float sub_h = tokens.font_small * 1.4f;
+        for (std::size_t i = 0; i < lines_.size(); ++i) {
+            const Line& line = lines_[i];
+            const auto& r = line_rects_[i];
+            if (line.header) {
+                // Section header — the inspector's drawn-label
+                // convention: muted, small, weight 600, centered.
+                float label_x = r.x + VeTheme::kSpaceMd;
+                if (!line.header_icon.empty() &&
+                    VeIcons::DrawIcon(
+                        renderer, line.header_icon.c_str(),
+                        static_cast<int>(kHeaderIcon), tokens.muted,
+                        {label_x,
+                         r.y + (kHeaderHeight - kHeaderIcon) * 0.5f,
+                         kHeaderIcon, kHeaderIcon})) {
+                    label_x += kHeaderIcon + VeTheme::kSpaceXs;
+                }
+                renderer.DrawText(
+                    line.header_text,
+                    {label_x, r.y + (kHeaderHeight - sub_h) * 0.5f,
+                     r.x + r.width - label_x - VeTheme::kSpaceMd, sub_h},
+                    XER::UI::Rendering::TextStyle{
+                        tokens.muted, tokens.font_small, 600});
+                continue;
+            }
+            const auto row = line.item->GetBounds();
+            if (static_cast<int>(i) == selected_) {
+                renderer.FillRect(row, tokens.selection,
+                                  tokens.radius_small);
+                renderer.StrokeRect(
+                    row, VeTheme::WithAlpha(tokens.accent, 0.5f), 1.0f,
+                    tokens.radius_small);
+            } else if (line.item->IsHovered()) {
+                renderer.FillRect(row, tokens.hover, tokens.radius_small);
+            }
+        }
+    }
+
+    void Layout(const XER::UI::Layout::Rect& bounds) override {
+        SetBounds(bounds);
+        const auto& tokens = CachedLayoutTokens();
+        line_rects_.clear();
+        line_rects_.reserve(lines_.size());
+        float y = bounds.y;
+        for (Line& line : lines_) {
+            const float h = line.header ? kHeaderHeight : kRowHeight;
+            line_rects_.push_back({bounds.x, y, bounds.width, h});
+            if (line.item != nullptr) {
+                line.item->Layout(
+                    {bounds.x + VeTheme::kSpaceSm,
+                     y + VeTheme::kSpaceXxs,
+                     std::max(0.0f,
+                              bounds.width - VeTheme::kSpaceSm * 2.0f),
+                     kRowHeight - VeTheme::kSpaceXs},
+                    tokens);
+            }
+            y += h;
+        }
+    }
+    using Widget::Layout;
+
+    // Rows consume their own clicks (Item::SetOnClick); headers and
+    // gaps stay transparent so clicks bubble like the drawn list's.
+    bool HandleEvent(const XER::UI::Widgets::Event&) override {
+        return false;
+    }
+
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {0.0f, 0.0f};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return {0.0f, GetContentHeight()};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {100000.0f, 100000.0f};
+    }
+    float GetContentHeight() const override {
+        float h = 0.0f;
+        for (const Line& line : lines_) {
+            h += line.header ? kHeaderHeight : kRowHeight;
+        }
+        return h;
+    }
+
+private:
+    std::vector<Line> lines_;
+    // Row Items removed by the last SetLines — kept alive one rebuild
+    // in case an event was mid-dispatch through them.
+    std::vector<std::shared_ptr<XER::UI::Widgets::Item>> retired_;
+    std::vector<XER::UI::Layout::Rect> line_rects_;
+    int selected_ = -1;
+};
+
+PluginsPanelWidget::~PluginsPanelWidget() = default;
 
 PluginsPanelWidget::PluginsPanelWidget(Hooks hooks)
     : hooks_(std::move(hooks)) {
     SetFocusable(true);
-    SetClipsChildren(true);   // list scrolls inside the panel
+    SetClipsChildren(true);   // the list scrolls inside the panel
     Reload();
 }
 
@@ -81,11 +234,16 @@ void PluginsPanelWidget::EnsureChildren() {
     add_btn_->SetOnClick([this] { AddSelected(); });
     status_ = std::make_shared<Widgets::Label>("Select a plugin", true);
 
+    list_ = std::make_shared<RowList>();
+    scroll_area_ = std::make_shared<Widgets::ScrollArea>(list_);
+
     AddChild(title_);
+    AddChild(scroll_area_);
     AddChild(add_btn_);
     AddChild(status_);
     status_->SetText(entries_.empty() ? "No plugins found"
                                     : "Select a plugin");
+    RebuildList();
     UpdateAddEnabled();
 }
 
@@ -115,18 +273,9 @@ void PluginsPanelWidget::Reload() {
             ++effect_count;
         }
     };
-    append_kind(XER_PLUGIN_VIDEO_FX, "Video Effects", "nav.fx");
-    append_kind(XER_PLUGIN_AUDIO_FX, "Audio Effects", "nav.audio");
-
-    content_height_ = 0.0f;
-    for (const Entry& entry : entries_) {
-        content_height_ +=
-            entry.header ? kHeaderHeight : kRowHeight;
-    }
-    scroll_y_ = std::clamp(scroll_y_, 0.0f,
-                           std::max(0.0f, content_height_));
-    hovered_ = -1;
-    last_click_row_ = -1;
+    // Section labels uppercase — the inspector's drawn-header style.
+    append_kind(XER_PLUGIN_VIDEO_FX, "VIDEO EFFECTS", "nav.fx");
+    append_kind(XER_PLUGIN_AUDIO_FX, "AUDIO EFFECTS", "nav.audio");
 
     selected_ = -1;
     if (!keep.empty()) {
@@ -138,12 +287,41 @@ void PluginsPanelWidget::Reload() {
         }
     }
     if (children_attached_) {
+        RebuildList();
         UpdateAddEnabled();
         status_->SetText(effect_count == 0
                              ? "No plugins found"
                              : std::to_string(effect_count) + " effect(s)");
     }
     Invalidate();
+}
+
+void PluginsPanelWidget::RebuildList() {
+    std::vector<RowList::Line> lines;
+    lines.reserve(entries_.size());
+    // The section icon travels from the header into each row's leading
+    // slot — same sharing the drawn list had via section_icon.
+    std::string section_icon;
+    for (std::size_t i = 0; i < entries_.size(); ++i) {
+        const Entry& entry = entries_[i];
+        if (entry.header) {
+            section_icon = entry.tag;
+            lines.push_back({true, entry.text, entry.tag, nullptr});
+            continue;
+        }
+        auto item = std::make_shared<XER::UI::Widgets::Item>();
+        item->SetTitle(entry.text);
+        item->SetDescription(entry.tag);
+        item->SetTooltip(entry.text);
+        item->AddChild(std::make_shared<RowIcon>(
+            section_icon.empty() ? "tab.plugins" : section_icon));
+        const int index = static_cast<int>(i);
+        item->SetOnClick([this, index] { SelectRow(index); });
+        item->SetOnDoubleClick([this] { AddSelected(); });
+        lines.push_back({false, {}, {}, std::move(item)});
+    }
+    list_->SetLines(std::move(lines));
+    list_->SetSelected(selected_);
 }
 
 void PluginsPanelWidget::UpdateAddEnabled() {
@@ -165,20 +343,25 @@ float PluginsPanelWidget::EntryTop(int index) const {
     return y;
 }
 
-int PluginsPanelWidget::RowAt(
-    const XER::UI::Layout::Point& position) const {
-    if (position.y < rows_top_ || position.y >= rows_bottom_) {
-        return -1;
+void PluginsPanelWidget::SelectRow(int entry_index) {
+    if (selected_ == entry_index) return;
+    selected_ = entry_index;
+    UpdateAddEnabled();
+    if (children_attached_) list_->SetSelected(selected_);
+    Invalidate();
+}
+
+void PluginsPanelWidget::EnsureSelectionVisible() {
+    if (scroll_area_ == nullptr || selected_ < 0) return;
+    const float view_h = scroll_area_->GetBounds().height;
+    const float top = EntryTop(selected_);
+    const float bottom = top + EntryHeight(selected_);
+    const float scroll = scroll_area_->GetScrollY();
+    if (top < scroll) {
+        scroll_area_->ScrollTo(top);
+    } else if (bottom > scroll + view_h) {
+        scroll_area_->ScrollTo(bottom - view_h);
     }
-    float y = rows_top_ - scroll_y_;
-    for (std::size_t i = 0; i < entries_.size(); ++i) {
-        const float h = entries_[i].header ? kHeaderHeight : kRowHeight;
-        if (position.y >= y && position.y < y + h) {
-            return entries_[i].header ? -1 : static_cast<int>(i);
-        }
-        y += h;
-    }
-    return -1;
 }
 
 void PluginsPanelWidget::AddSelected() {
@@ -215,89 +398,22 @@ void PluginsPanelWidget::Render(
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
     if (entries_.empty()) {
+        const auto list_bounds =
+            scroll_area_ != nullptr ? scroll_area_->GetBounds()
+                                    : XER::UI::Layout::Rect{};
+        const float hint_y = list_bounds.height > 0.0f
+            ? list_bounds.y + VeTheme::kSpaceXs
+            : bounds.y + VeTheme::kSpaceMd * 3.0f + VeTheme::kSpaceXs;
         renderer.DrawText(
             "No plugins found in <exe>/plugins",
-            {bounds.x + 12.0f,
-             std::max(rows_top_, bounds.y + 40.0f) + 6.0f,
-             bounds.width - 24.0f, 20.0f},
+            {bounds.x + VeTheme::kSpaceMd, hint_y,
+             bounds.width - VeTheme::kSpaceMd * 2.0f,
+             tokens.font_body * 1.4f},
             XER::UI::Rendering::TextStyle{tokens.muted, tokens.font_small,
                                           400});
-        return;
     }
-
-    // Rows are drawn (not child widgets) so clicks land on the panel —
-    // widget-tree Click events do not bubble up from Label children.
-    if (rows_top_ <= 0.0f) return;   // not yet laid out
-    const float width = bounds.width - 24.0f;
-    float y = rows_top_ - scroll_y_;
-    // Icon of the section currently being walked — headers carry it in
-    // `tag`; rows reuse it so a group and its items share a glyph.
-    const char* section_icon = nullptr;
-    for (std::size_t i = 0; i < entries_.size(); ++i) {
-        const Entry& entry = entries_[i];
-        const float h = EntryHeight(static_cast<int>(i));
-        if (y + h < rows_top_ || y > rows_bottom_) {
-            // Keep tracking the section even for clipped headers.
-            if (entry.header && !entry.tag.empty()) {
-                section_icon = entry.tag.c_str();
-            }
-            y += h;
-            continue;
-        }
-        if (entry.header) {
-            float label_x = bounds.x + 12.0f;
-            if (!entry.tag.empty()) {
-                section_icon = entry.tag.c_str();
-                if (DrawIcon(renderer, section_icon,
-                             static_cast<int>(kHeaderIcon), tokens.muted,
-                             {label_x,
-                              y + (kHeaderHeight - kHeaderIcon) * 0.5f,
-                              kHeaderIcon, kHeaderIcon})) {
-                    label_x += kHeaderIcon + 6.0f;
-                }
-            }
-            renderer.DrawText(entry.text,
-                              {label_x, y + 7.0f,
-                               bounds.x + bounds.width - label_x - 12.0f,
-                               14.0f},
-                              XER::UI::Rendering::TextStyle{
-                                  tokens.muted, tokens.font_small, 600});
-        } else {
-            const int idx = static_cast<int>(i);
-            const XER::UI::Layout::Rect row{bounds.x + 8.0f, y, width,
-                                            kRowHeight - 3.0f};
-            if (idx == selected_) {
-                renderer.FillRect(row, WithAlpha(tokens.accent, 0.16f),
-                                  tokens.radius_small);
-                renderer.StrokeRect(row, WithAlpha(tokens.accent, 0.5f),
-                                    1.0f, tokens.radius_small);
-            } else if (idx == hovered_) {
-                renderer.FillRect(row, tokens.hover, tokens.radius_small);
-            }
-            float text_x = row.x + 8.0f;
-            const char* row_icon =
-                section_icon != nullptr ? section_icon : "tab.plugins";
-            if (DrawIcon(renderer, row_icon, static_cast<int>(kRowIcon),
-                         tokens.foreground,
-                         {row.x + 6.0f,
-                          row.y + (row.height - kRowIcon) * 0.5f,
-                          kRowIcon, kRowIcon})) {
-                text_x = row.x + 6.0f + kRowIcon + 8.0f;
-            }
-            renderer.DrawText(entry.text,
-                              {text_x, row.y + 3.0f,
-                               row.x + row.width - text_x - 8.0f, 16.0f},
-                              XER::UI::Rendering::TextStyle{
-                                  tokens.foreground, tokens.font_body,
-                                  500});
-            renderer.DrawText(entry.tag,
-                              {text_x, row.y + 20.0f,
-                               row.x + row.width - text_x - 8.0f, 14.0f},
-                              XER::UI::Rendering::TextStyle{
-                                  tokens.muted, tokens.font_small, 400});
-        }
-        y += h;
-    }
+    // Rows paint themselves — Item children inside the ScrollArea;
+    // the RowList draws headers + selection/hover chrome.
 }
 
 void PluginsPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -306,107 +422,62 @@ void PluginsPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
     const float gap = tokens.spacing_small;
+    const float inner_x = bounds.x + pad;
+    const float inner_w = bounds.width - pad * 2.0f;
+    float y = bounds.y + pad * 0.6f;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f},
-                   tokens);
-    rows_top_ = bounds.y + 34.0f + gap;
-    const float footer_y = bounds.y + bounds.height - 30.0f;
-    rows_bottom_ = footer_y - gap;
-    add_btn_->Layout({bounds.x + pad, footer_y, 100.0f, 26.0f}, tokens);
-    status_->Layout({bounds.x + pad + 108.0f, footer_y + 2.0f,
-                     std::max(40.0f, bounds.width - pad * 2.0f - 108.0f),
-                     22.0f},
-                    tokens);
-    // Keep the list viewport out of the footer.
-    const float view_h = footer_y - rows_top_ - gap;
-    scroll_y_ = std::clamp(
-        scroll_y_, 0.0f,
-        std::max(0.0f, content_height_ - std::max(view_h, 0.0f)));
+    title_->Layout({inner_x, y, inner_w, VeTheme::kRowHeight}, tokens);
+    y += VeTheme::kRowHeight + gap;
+
+    const float footer_h = VeTheme::kControlHeight;
+    const float footer_y =
+        bounds.y + bounds.height - footer_h - VeTheme::kSpaceXs;
+    scroll_area_->Layout(
+        {inner_x, y, inner_w, std::max(0.0f, footer_y - gap - y)},
+        tokens);
+    add_btn_->Layout({inner_x, footer_y, kActionWidth, footer_h}, tokens);
+    status_->Layout(
+        {inner_x + kActionWidth + gap, footer_y + VeTheme::kSpaceXxs,
+         std::max(40.0f, inner_w - kActionWidth - gap),
+         footer_h - VeTheme::kSpaceXs},
+        tokens);
 }
 
 bool PluginsPanelWidget::HandleEvent(
     const XER::UI::Widgets::Event& event) {
-    switch (event.type) {
-        case XER::UI::Widgets::Event::Type::MouseWheel: {
-            const float view_h = rows_bottom_ - rows_top_;
-            const float range =
-                std::max(0.0f, content_height_ - std::max(view_h, 0.0f));
-            if (range <= 0.0f) return false;
-            scroll_y_ = std::clamp(
-                scroll_y_ - static_cast<float>(event.wheel_delta) * 0.5f,
-                0.0f, range);
-            Invalidate();
+    // Row clicks are consumed by the Items themselves; this panel only
+    // still owns keyboard navigation. Clicks bubbling up from dead
+    // children land in `default` and stay unhandled — the same dead
+    // zone the drawn list's gaps were.
+    if (event.type == XER::UI::Widgets::Event::Type::KeyDown) {
+        if (event.key == XER::UI::Widgets::KeyCode::Enter) {
+            AddSelected();
             return true;
         }
-        case XER::UI::Widgets::Event::Type::MouseMove: {
-            const int row = RowAt(event.position);
-            if (row != hovered_) {
-                hovered_ = row;
-                Invalidate();
-            }
-            return false;
-        }
-        case XER::UI::Widgets::Event::Type::Click: {
-            const int row = RowAt(event.position);
-            if (row < 0) return false;
-            const auto now = std::chrono::steady_clock::now();
-            const bool double_click =
-                row == last_click_row_ &&
-                (now - last_click_time_) < kDoubleClickWindow;
-            last_click_row_ = row;
-            last_click_time_ = now;
-            selected_ = row;
-            UpdateAddEnabled();
-            Invalidate();
-            if (double_click) AddSelected();
-            return true;
-        }
-        case XER::UI::Widgets::Event::Type::KeyDown: {
-            if (event.key == XER::UI::Widgets::KeyCode::Enter) {
-                AddSelected();
-                return true;
-            }
-            if (event.key == XER::UI::Widgets::KeyCode::ArrowDown ||
-                event.key == XER::UI::Widgets::KeyCode::ArrowUp) {
-                if (!entries_.empty()) {
-                    const int count =
-                        static_cast<int>(entries_.size());
-                    const int dir = event.key ==
-                            XER::UI::Widgets::KeyCode::ArrowDown
+        if (event.key == XER::UI::Widgets::KeyCode::ArrowDown ||
+            event.key == XER::UI::Widgets::KeyCode::ArrowUp) {
+            if (!entries_.empty()) {
+                const int count = static_cast<int>(entries_.size());
+                const int dir =
+                    event.key == XER::UI::Widgets::KeyCode::ArrowDown
                         ? 1
                         : -1;
-                    // Step over section headers until a row is found.
-                    int i = selected_;
-                    for (int step = 0; step < count; ++step) {
-                        i = i < 0 ? (dir > 0 ? 0 : count - 1)
-                                  : (i + dir + count) % count;
-                        if (!entries_[static_cast<std::size_t>(i)]
-                                 .header) {
-                            selected_ = i;
-                            break;
-                        }
+                // Step over section headers until a row is found.
+                int i = selected_;
+                for (int step = 0; step < count; ++step) {
+                    i = i < 0 ? (dir > 0 ? 0 : count - 1)
+                              : (i + dir + count) % count;
+                    if (!entries_[static_cast<std::size_t>(i)].header) {
+                        SelectRow(i);
+                        break;
                     }
-                    if (selected_ >= 0) {
-                        // Keep the selection visible.
-                        const float view_h = rows_bottom_ - rows_top_;
-                        const float top = EntryTop(selected_);
-                        const float h = EntryHeight(selected_);
-                        if (top < scroll_y_) scroll_y_ = top;
-                        if (top + h > scroll_y_ + view_h) {
-                            scroll_y_ = top + h - view_h;
-                        }
-                    }
-                    UpdateAddEnabled();
-                    Invalidate();
                 }
-                return true;
+                EnsureSelectionVisible();
             }
-            return false;
+            return true;
         }
-        default:
-            return false;
     }
+    return false;
 }
 
 void PluginsPanelWidget::Tick(double dt_seconds) { (void)dt_seconds; }

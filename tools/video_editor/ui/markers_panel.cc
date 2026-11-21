@@ -7,7 +7,9 @@
 
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/item.h"
 #include "widgets/label.h"
 #include "widgets/text_input.h"
 
@@ -37,6 +39,47 @@ Color MarkerColor(const Marker& marker) {
     return {marker.color[0] / 255.0f, marker.color[1] / 255.0f,
             marker.color[2] / 255.0f, 1.0f};
 }
+
+// Leading color chip for a marker Item row. Decorative only — created
+// DISABLED so hit-testing skips it (disabled widgets never become the
+// event target) and row clicks keep landing on the panel. Rendering
+// ignores the disabled flag, so the swatch keeps its full color.
+class MarkerSwatch final : public XER::UI::Widgets::Widget {
+public:
+    explicit MarkerSwatch(Color color) : color_(color) {
+        SetFocusable(false);
+        SetEnabled(false);
+    }
+
+    void Render(XER::UI::Rendering::Renderer& renderer,
+                const XER::UI::Theme::Tokens& tokens) override {
+        const auto b = GetBounds();
+        const float side =
+            std::min({10.0f, b.width, b.height});
+        const Rect swatch{b.x + (b.width - side) * 0.5f,
+                          b.y + (b.height - side) * 0.5f, side, side};
+        renderer.FillRect(swatch, color_, tokens.radius_small);
+        // Hairline keeps pale marker colors readable on the row fill.
+        renderer.StrokeRect(swatch, tokens.border, 1.0f,
+                            tokens.radius_small);
+    }
+    void Layout(const Rect& bounds) override { SetBounds(bounds); }
+    bool HandleEvent(const XER::UI::Widgets::Event&) override {
+        return false;
+    }
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {10.0f, 10.0f};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return {14.0f, 14.0f};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {14.0f, 14.0f};
+    }
+
+private:
+    Color color_;
+};
 
 }  // namespace
 
@@ -100,19 +143,31 @@ void MarkersPanelWidget::RebuildRows() {
     retired_rows_.clear();
     for (Row& row : rows_) {
         // Disable first so a stale mouse-capture can't fire a detached
-        // button's action, then retire it alive one rebuild (see
+        // widget's action, then retire it alive one rebuild (see
         // retired_rows_ in the header).
-        for (const auto& button : {row.jump, row.remove}) {
-            button->SetEnabled(false);
-            RemoveChild(button);
-            retired_rows_.push_back(button);
+        const std::shared_ptr<Widgets::Widget> children[] = {
+            row.swatch, row.item, row.jump, row.remove};
+        for (const auto& child : children) {
+            child->SetEnabled(false);
+            RemoveChild(child);
+            retired_rows_.push_back(child);
         }
     }
     rows_.clear();
     rows_.reserve(markers_.size());
     for (std::size_t i = 0; i < markers_.size(); ++i) {
         Row row;
-        const double time = markers_[i].time;
+        const Marker& marker = markers_[i];
+        const double time = marker.time;
+        row.swatch = std::make_shared<MarkerSwatch>(MarkerColor(marker));
+        // Item carries name (title) + time (description). Disabled:
+        // Click/MouseMove do not bubble, so the row must stay
+        // transparent to hit-testing for the panel's click-to-seek
+        // and double-click rename to keep working.
+        row.item = std::make_shared<Widgets::Item>();
+        row.item->SetTitle(marker.name);
+        row.item->SetDescription(FormatMarkerTime(time));
+        row.item->SetEnabled(false);
         row.jump = std::make_shared<Widgets::Button>(
             "Go", Widgets::ButtonStyle::Ghost);
         row.jump->SetTooltip("Seek to marker");
@@ -125,6 +180,8 @@ void MarkersPanelWidget::RebuildRows() {
         row.remove->SetOnClick([this, time] {
             if (hooks_.on_remove_marker) hooks_.on_remove_marker(time);
         });
+        AddChild(row.swatch);
+        AddChild(row.item);
         AddChild(row.jump);
         AddChild(row.remove);
         rows_.push_back(std::move(row));
@@ -134,22 +191,33 @@ void MarkersPanelWidget::RebuildRows() {
 
 Rect MarkersPanelWidget::RowRect(int row) const {
     const auto bounds = GetBounds();
-    return {bounds.x + 8.0f,
+    return {bounds.x + VeTheme::kSpaceSm,
             rows_top_ + static_cast<float>(row) * row_height_ - scroll_y_,
-            bounds.width - 16.0f, row_height_ - 3.0f};
+            bounds.width - VeTheme::kSpaceSm * 2.0f,
+            row_height_ - VeTheme::kSpaceXxs};
 }
 
 Rect MarkersPanelWidget::NameRect(int row) const {
     const Rect r = RowRect(row);
-    // After swatch (12px) + time column (~92px), before [Go][x] (~64px).
-    return {r.x + 112.0f, r.y + 4.0f,
-            std::max(20.0f, r.width - 112.0f - 66.0f), r.height - 8.0f};
+    const auto& tokens = CachedLayoutTokens();
+    // The Item's title band: after the swatch column, before the
+    // [Go][x] button column.
+    const float text_x = r.x + 24.0f + tokens.spacing_medium;
+    return {text_x, r.y + tokens.spacing_small,
+            std::max(40.0f, r.Right() - 70.0f - tokens.spacing_medium -
+                                text_x),
+            tokens.font_body * 1.4f + 4.0f};
+}
+
+float MarkersPanelWidget::RowsViewportBottom() const {
+    const auto bounds = GetBounds();
+    return bounds.y + bounds.height - 34.0f;
 }
 
 int MarkersPanelWidget::RowAt(
     const XER::UI::Layout::Point& position) const {
     const auto bounds = GetBounds();
-    if (position.y < rows_top_ || position.y >= bounds.y + bounds.height - 34.0f ||
+    if (position.y < rows_top_ || position.y >= RowsViewportBottom() ||
         position.x < bounds.x || position.x >= bounds.x + bounds.width) {
         return -1;
     }
@@ -161,6 +229,10 @@ int MarkersPanelWidget::RowAt(
 void MarkersPanelWidget::BeginRename(int row) {
     if (row < 0 || row >= static_cast<int>(markers_.size())) return;
     rename_row_ = row;
+    // Clear the Item's title while the TextInput covers its band.
+    if (row < static_cast<int>(rows_.size())) {
+        rows_[static_cast<std::size_t>(row)].item->SetTitle("");
+    }
     rename_input_->SetValue(markers_[static_cast<std::size_t>(row)].name);
     rename_input_->SetVisible(true);
     RequestLayout();
@@ -185,6 +257,14 @@ void MarkersPanelWidget::CommitRename() {
 
 void MarkersPanelWidget::CancelRename() {
     if (rename_row_ >= 0) {
+        // Restore the title cleared by BeginRename (the row may be
+        // gone already if the hook rebuilt the list mid-commit).
+        if (children_attached_ &&
+            rename_row_ < static_cast<int>(rows_.size()) &&
+            rename_row_ < static_cast<int>(markers_.size())) {
+            rows_[static_cast<std::size_t>(rename_row_)].item->SetTitle(
+                markers_[static_cast<std::size_t>(rename_row_)].name);
+        }
         rename_row_ = -1;
         if (children_attached_) rename_input_->SetVisible(false);
         Invalidate();
@@ -213,38 +293,24 @@ void MarkersPanelWidget::Render(
         return;
     }
 
-    // Time/name/swatch are drawn (not Label children) so row clicks hit
-    // the panel — Click events do not bubble up from child widgets.
-    const float view_bottom = bounds.y + bounds.height - 34.0f;
+    // Rows are Item children now — the panel only paints the row
+    // chrome behind them: hover wash plus the playhead-proximity tick
+    // (the Item's own selected wash stays unused so hover tracking is
+    // driven by the panel's single hovered_ index).
+    const float view_bottom = RowsViewportBottom();
     for (std::size_t i = 0; i < markers_.size(); ++i) {
         const Rect row = RowRect(static_cast<int>(i));
         if (row.y + row.height < rows_top_ || row.y > view_bottom) {
             continue;
         }
-        const Marker& marker = markers_[i];
         if (static_cast<int>(i) == hovered_) {
             renderer.FillRect(row, tokens.hover, tokens.radius_small);
         }
-        // Color swatch.
-        renderer.FillRect({row.x + 4.0f, row.y + row.height * 0.5f - 5.0f,
-                           10.0f, 10.0f},
-                          MarkerColor(marker), 2.0f);
-        // Playhead proximity tick.
+        const Marker& marker = markers_[i];
         if (std::fabs(marker.time - playhead_) < 1e-3) {
             renderer.FillRect({row.x - 4.0f, row.y + 4.0f, 2.0f,
                                row.height - 8.0f},
                               tokens.accent, 1.0f);
-        }
-        renderer.DrawText(FormatMarkerTime(marker.time),
-                          {row.x + 20.0f, row.y + 4.0f, 90.0f,
-                           row.height - 8.0f},
-                          XER::UI::Rendering::TextStyle{
-                              tokens.muted, tokens.font_small, 400});
-        if (static_cast<int>(i) != rename_row_) {
-            const Rect name = NameRect(static_cast<int>(i));
-            renderer.DrawText(marker.name, name,
-                              XER::UI::Rendering::TextStyle{
-                                  tokens.foreground, tokens.font_body, 400});
         }
     }
 }
@@ -258,12 +324,14 @@ void MarkersPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
                     bounds.width - pad * 2.0f, 24.0f},
                    tokens);
-    add_btn_->Layout({bounds.x + pad, bounds.y + 34.0f, 120.0f, 26.0f},
+    add_btn_->Layout({bounds.x + pad, bounds.y + 34.0f, 132.0f,
+                      VeTheme::kControlHeight},
                      tokens);
-    rows_top_ = bounds.y + 34.0f + 26.0f + tokens.spacing_small;
+    rows_top_ = bounds.y + 34.0f + VeTheme::kControlHeight +
+                tokens.spacing_small;
 
-    const float view_h =
-        bounds.y + bounds.height - 34.0f - rows_top_;
+    const float view_bottom = RowsViewportBottom();
+    const float view_h = view_bottom - rows_top_;
     const float content =
         static_cast<float>(markers_.size()) * row_height_;
     scroll_y_ = std::clamp(scroll_y_, 0.0f,
@@ -271,12 +339,31 @@ void MarkersPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
 
     for (std::size_t i = 0; i < rows_.size(); ++i) {
         const Rect row = RowRect(static_cast<int>(i));
-        rows_[i].jump->Layout({row.Right() - 62.0f, row.y + 2.0f, 34.0f,
-                               row.height - 4.0f},
-                              tokens);
-        rows_[i].remove->Layout({row.Right() - 26.0f, row.y + 2.0f,
-                                 24.0f, row.height - 4.0f},
-                                tokens);
+        Row& r = rows_[i];
+        // Hide children of rows scrolled outside the viewport — the
+        // panel clip rect covers the title/status bands too, so
+        // without this an off-viewport child would paint (and
+        // hit-test) over the chrome.
+        const bool visible =
+            row.y + row.height > rows_top_ && row.y < view_bottom;
+        r.swatch->Layout({row.x + 6.0f,
+                          row.y + row.height * 0.5f - 7.0f, 14.0f, 14.0f},
+                         tokens);
+        r.item->Layout({row.x + 24.0f, row.y,
+                        std::max(20.0f, row.width - 24.0f - 70.0f),
+                        row.height},
+                       tokens);
+        r.jump->Layout({row.Right() - 64.0f,
+                        row.y + row.height * 0.5f - 13.0f, 36.0f, 26.0f},
+                       tokens);
+        r.remove->Layout({row.Right() - 26.0f,
+                          row.y + row.height * 0.5f - 13.0f, 24.0f,
+                          26.0f},
+                        tokens);
+        r.swatch->SetVisible(visible);
+        r.item->SetVisible(visible);
+        r.jump->SetVisible(visible);
+        r.remove->SetVisible(visible);
     }
     if (rename_row_ >= 0) {
         rename_input_->Layout(NameRect(rename_row_), tokens);
@@ -291,8 +378,7 @@ bool MarkersPanelWidget::HandleEvent(
     const XER::UI::Widgets::Event& event) {
     switch (event.type) {
         case XER::UI::Widgets::Event::Type::MouseWheel: {
-            const float view_h =
-                GetBounds().height - (rows_top_ - GetBounds().y) - 34.0f;
+            const float view_h = RowsViewportBottom() - rows_top_;
             const float range = std::max(
                 0.0f, static_cast<float>(markers_.size()) * row_height_ -
                           std::max(view_h, 0.0f));
@@ -301,6 +387,7 @@ bool MarkersPanelWidget::HandleEvent(
                 scroll_y_ - static_cast<float>(event.wheel_delta) * 0.5f,
                 0.0f, range);
             Invalidate();
+            RequestLayout();   // row children track the scroll offset
             return true;
         }
         case XER::UI::Widgets::Event::Type::MouseMove: {

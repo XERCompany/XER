@@ -4,13 +4,15 @@
 #include <cmath>
 
 #include "rendering/renderer.h"
+#include "ve_theme.h"
+#include "widgets/button.h"
+#include "widgets/button_group.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
 namespace Layout = XER::UI::Layout;
 namespace Rendering = XER::UI::Rendering;
-using XER::UI::Theme::Color;
 
 // Fixed scope bitmap size — Render() stretches it into the overlay.
 constexpr int kBmpW = 256;
@@ -19,11 +21,6 @@ constexpr auto kMinComputeInterval = std::chrono::milliseconds(100);
 
 // BT.601 integer luma.
 int Luma(int r, int g, int b) { return (77 * r + 150 * g + 29 * b) >> 8; }
-
-Color WithAlpha(Color c, float a) {
-    c.a = a;
-    return c;
-}
 
 // Merges a pixel into the bitmap by per-channel max (additive-ish) so
 // traces/graticule never darken existing content.
@@ -90,9 +87,57 @@ void ScopesWidget::SetFrame(const std::uint8_t* bgra, int width,
     Invalidate();
 }
 
+void ScopesWidget::EnsureChildren() {
+    if (children_attached_) return;
+    children_attached_ = true;
+    namespace Widgets = XER::UI::Widgets;
+
+    // Mode switch as a segmented strip (lab_panel convention): the
+    // active scope keeps the Primary fill, the rest drop to
+    // Secondary. Short labels — the strip overlays the monitor frame.
+    mode_group_ = std::make_shared<Widgets::ButtonGroup>(
+        Widgets::ButtonGroup::Orientation::Horizontal);
+    wfm_btn_ = std::make_shared<Widgets::Button>(
+        "WFM", Widgets::ButtonStyle::Primary);
+    wfm_btn_->SetTooltip("Waveform — luma");
+    wfm_btn_->SetOnClick([this] { SetMode(Mode::Waveform); });
+    parade_btn_ = std::make_shared<Widgets::Button>(
+        "PAR", Widgets::ButtonStyle::Secondary);
+    parade_btn_->SetTooltip("RGB parade");
+    parade_btn_->SetOnClick([this] { SetMode(Mode::RgbParade); });
+    hist_btn_ = std::make_shared<Widgets::Button>(
+        "HIST", Widgets::ButtonStyle::Secondary);
+    hist_btn_->SetTooltip("Histogram — R/G/B overlay");
+    hist_btn_->SetOnClick([this] { SetMode(Mode::Histogram); });
+    vscope_btn_ = std::make_shared<Widgets::Button>(
+        "VSC", Widgets::ButtonStyle::Secondary);
+    vscope_btn_->SetTooltip("Vectorscope — chroma");
+    vscope_btn_->SetOnClick([this] { SetMode(Mode::Vectorscope); });
+    mode_group_->AddChild(wfm_btn_);
+    mode_group_->AddChild(parade_btn_);
+    mode_group_->AddChild(hist_btn_);
+    mode_group_->AddChild(vscope_btn_);
+    AddChild(mode_group_);
+    SyncModeButtons();
+}
+
+void ScopesWidget::SyncModeButtons() {
+    if (!children_attached_) return;
+    namespace Widgets = XER::UI::Widgets;
+    const auto style = [this](Mode mode) {
+        return mode_ == mode ? Widgets::ButtonStyle::Primary
+                             : Widgets::ButtonStyle::Secondary;
+    };
+    wfm_btn_->SetStyle(style(Mode::Waveform));
+    parade_btn_->SetStyle(style(Mode::RgbParade));
+    hist_btn_->SetStyle(style(Mode::Histogram));
+    vscope_btn_->SetStyle(style(Mode::Vectorscope));
+}
+
 void ScopesWidget::SetMode(Mode mode) {
     if (mode_ == mode) return;
     mode_ = mode;
+    if (children_attached_) SyncModeButtons();
     dirty_ = true;  // next SetFrame() recomputes on a live pointer
     Invalidate();
 }
@@ -285,37 +330,18 @@ void ScopesWidget::ComputeVectorscope() {
 
 // ---- geometry / render / input ----
 
-Layout::Rect ScopesWidget::TabRect(int index) const {
-    const auto b = GetBounds();
-    const float pad = 4.0f, gap = 4.0f;
-    const float w = (b.width - pad * 2.0f - gap * 3.0f) / 4.0f;
-    return {b.x + pad + index * (w + gap), b.y + 3.0f, w, 15.0f};
-}
-
 Layout::Rect ScopesWidget::ScopeAreaRect() const {
     const auto b = GetBounds();
-    return {b.x + 4.0f, b.y + 22.0f,
+    return {b.x + 4.0f, b.y + 30.0f,
             std::max(0.0f, b.width - 8.0f),
-            std::max(0.0f, b.height - 26.0f)};
+            std::max(0.0f, b.height - 34.0f)};
 }
 
 void ScopesWidget::Render(Rendering::Renderer& renderer,
                           const XER::UI::Theme::Tokens& tokens) {
+    EnsureChildren();
     const auto bounds = GetBounds();
     if (bounds.width < 40.0f || bounds.height < 30.0f) return;
-
-    static const char* kLabels[4] = {"WFM", "PAR", "HIST", "VSC"};
-    for (int i = 0; i < 4; ++i) {
-        const auto rect = TabRect(i);
-        const bool active = static_cast<int>(mode_) == i;
-        renderer.FillRect(rect,
-                          active ? tokens.accent : Color{1.0f, 1.0f, 1.0f, 0.08f},
-                          tokens.radius_small);
-        renderer.DrawText(
-            kLabels[i], rect,
-            {active ? tokens.accent_foreground : tokens.muted,
-             tokens.font_small, 600});
-    }
 
     const auto area = ScopeAreaRect();
     renderer.FillRect(area, {0.0f, 0.0f, 0.0f, 0.45f},
@@ -324,22 +350,40 @@ void ScopesWidget::Render(Rendering::Renderer& renderer,
         renderer.DrawFrameBgra(bitmap_.data(), kBmpW, kBmpH, area,
                                0.95f);
     }
-    renderer.StrokeRect(area, WithAlpha(tokens.border, 0.8f), 1.0f,
-                        0.0f);
+    renderer.StrokeRect(area, VeTheme::WithAlpha(tokens.border, 0.8f),
+                        1.0f, 0.0f);
+
+    // Off-tree host: the monitor renders this widget directly, so the
+    // strip's children are painted by hand — a WidgetTree would do
+    // this walk for a child it owned.
+    mode_group_->Render(renderer, tokens);
+    for (const auto& child : mode_group_->GetChildren()) {
+        child->Render(renderer, tokens);
+    }
 }
 
 void ScopesWidget::Layout(const Layout::Rect& bounds) {
+    EnsureChildren();
     SetBounds(bounds);
+    // Segmented strip across the top; the scope bitmap sits below it.
+    mode_group_->Layout({bounds.x + 4.0f, bounds.y + 4.0f,
+                         std::max(0.0f, bounds.width - 8.0f), 22.0f},
+                        CachedLayoutTokens());
 }
 
 bool ScopesWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     using XER::UI::Widgets::Event;
     using XER::UI::Widgets::MouseButton;
+    EnsureChildren();
     if (event.type == Event::Type::Click &&
         event.mouse_button == MouseButton::Left) {
-        for (int i = 0; i < 4; ++i) {
-            if (TabRect(i).Contains(event.position)) {
-                SetMode(static_cast<Mode>(i));
+        // Manual child dispatch — same off-tree caveat as Render().
+        // Buttons fire their OnClick on a left Click, which is the
+        // only event type the monitor forwards into the overlay.
+        for (const auto& child : mode_group_->GetChildren()) {
+            if (child->IsVisible() &&
+                child->GetBounds().Contains(event.position)) {
+                child->HandleEvent(event);
                 return true;
             }
         }

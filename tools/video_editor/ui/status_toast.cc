@@ -4,6 +4,7 @@
 
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
@@ -64,7 +65,7 @@ void StatusToastWidget::Render(
         }
         const Rect card{bounds.x + bounds.width - kEdgePad - card_w, y,
                         card_w, kCardHeight};
-        renderer.FillRect(card, WithAlpha(tokens.panel, 0.96f * alpha),
+        renderer.FillRect(card, WithAlpha(VeTheme::kOverlayChip, alpha),
                           tokens.radius_medium);
         renderer.StrokeRect(card, WithAlpha(tokens.border, alpha), 1.0f,
                             tokens.radius_medium);

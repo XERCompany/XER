@@ -19,9 +19,13 @@ public:
     // request.max_redirects when request.follow_redirects is set,
     // decodes chunked bodies, and applies the context's TLS policy
     // (cert storage, skip_ssl_verify, SNI) to the connection.
+    // `effective_url` (optional) receives the URL the final response
+    // came from — request.url unchanged when no redirect was followed,
+    // or the last attempted URL when RunOnce failed mid-chain.
     bool Run(const URLRequest& request,
              URLResponse* response,
-             std::string* error);
+             std::string* error,
+             std::string* effective_url = nullptr);
 
     bool ParseURL(const std::string& url,
                   std::string* scheme,

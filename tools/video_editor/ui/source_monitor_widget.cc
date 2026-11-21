@@ -10,10 +10,12 @@
 #include <iterator>
 
 #include "app_runtime/app_runtime.h"
-#include "app_runtime/icon_pack.h"
 #include "app_runtime/ui_manifest.h"
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "widgets/button.h"
+#include "widgets/label.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
@@ -25,30 +27,6 @@ using XER::UI::Theme::Color;
 Color WithAlpha(Color c, float alpha) {
     c.a = alpha;
     return c;
-}
-
-// Theme float color -> packed AARRGGBB tint for the icon pack (same
-// helper the program monitor uses).
-std::uint32_t ToArgb(Color color) {
-    const auto byte = [](float v) {
-        return static_cast<std::uint32_t>(
-            std::clamp(std::lround(v * 255.0f), 0L, 255L));
-    };
-    return (byte(color.a) << 24) | (byte(color.r) << 16) |
-           (byte(color.g) << 8) | byte(color.b);
-}
-
-bool DrawIcon(Rendering::Renderer& renderer, const char* name, int px,
-              Color tint, const Layout::Rect& box) {
-    const auto* bmp =
-        AppRuntime::SharedIconPack().Get(name, px, ToArgb(tint));
-    if (bmp == nullptr) return false;
-    const Layout::Rect dst{box.x + (box.width - bmp->width) * 0.5f,
-                           box.y + (box.height - bmp->height) * 0.5f,
-                           static_cast<float>(bmp->width),
-                           static_cast<float>(bmp->height)};
-    return renderer.DrawFrameBgra(bmp->bgra.data(), bmp->width,
-                                  bmp->height, dst, 1.0f);
 }
 
 std::string FormatTime(double seconds) {
@@ -96,6 +74,128 @@ SourceMonitorWidget::SourceMonitorWidget(Hooks hooks)
     SetFocusable(true);
     SetTooltip("Source monitor — double-click a bin clip to load; "
                "I/O mark, ,/. insert/overwrite");
+}
+
+void SourceMonitorWidget::EnsureChildren() {
+    if (transport_children_) return;
+    transport_children_ = true;
+    namespace Widgets = XER::UI::Widgets;
+    // Icon-capable buttons resolve through the pack (idempotent).
+    VeIcons::InstallButtonIconResolver();
+
+    // Every transport press also reports on_activate — the host uses
+    // it to route keyboard transport at this monitor (a button's own
+    // click never reaches the widget's MouseDown path).
+    const auto activate = [this] {
+        if (hooks_.on_activate) hooks_.on_activate();
+    };
+    const auto make = [this](const char* text,
+                             const char* icon,
+                             const char* tooltip) {
+        auto button = std::make_shared<Widgets::Button>(
+            text != nullptr ? text : "",
+            Widgets::ButtonStyle::Secondary);
+        // JKL/I-O keys stay app-level — the row's buttons take
+        // pointer input only, never keyboard focus.
+        button->SetFocusable(false);
+        if (icon != nullptr) button->SetIcon(icon);
+        button->SetTooltip(tooltip);
+        AddChild(button);
+        return button;
+    };
+
+    play_btn_ = make(nullptr, "transport.play", "Play / pause (Space)");
+    play_btn_->SetOnClick([this, activate] {
+        activate();
+        if (hooks_.on_play_toggle) hooks_.on_play_toggle();
+    });
+    prev_btn_ = make(nullptr, "transport.prev", "Previous frame");
+    prev_btn_->SetOnClick([this, activate] {
+        activate();
+        if (hooks_.on_frame_step) hooks_.on_frame_step(-1);
+    });
+    next_btn_ = make(nullptr, "transport.next", "Next frame");
+    next_btn_->SetOnClick([this, activate] {
+        activate();
+        if (hooks_.on_frame_step) hooks_.on_frame_step(1);
+    });
+    mark_in_btn_ = make("IN", nullptr, "Mark in (I)");
+    mark_in_btn_->SetOnClick([this, activate] {
+        activate();
+        if (hooks_.on_mark_in) hooks_.on_mark_in();
+    });
+    mark_out_btn_ = make("OUT", nullptr, "Mark out (O)");
+    mark_out_btn_->SetOnClick([this, activate] {
+        activate();
+        if (hooks_.on_mark_out) hooks_.on_mark_out();
+    });
+    insert_btn_ = make("INS", nullptr, "Insert edit (,)");
+    insert_btn_->SetOnClick([this, activate] {
+        activate();
+        if (hooks_.on_insert) hooks_.on_insert();
+    });
+    overwrite_btn_ = make("OVR", nullptr, "Overwrite edit (.)");
+    overwrite_btn_->SetOnClick([this, activate] {
+        activate();
+        if (hooks_.on_overwrite) hooks_.on_overwrite();
+    });
+
+    header_label_ = std::make_shared<Widgets::Label>("", true);
+    footer_label_ = std::make_shared<Widgets::Label>("", true);
+    AddChild(header_label_);
+    AddChild(footer_label_);
+}
+
+void SourceMonitorWidget::SyncTransportChildren() {
+    if (!transport_children_) return;
+    namespace Widgets = XER::UI::Widgets;
+    const bool enabled = HasSource();
+    const auto style = [enabled](bool active) {
+        return enabled && active ? Widgets::ButtonStyle::Primary
+                                 : Widgets::ButtonStyle::Secondary;
+    };
+    play_btn_->SetIcon(playing_ ? "transport.pause" : "transport.play");
+    play_btn_->SetStyle(style(playing_));
+    mark_in_btn_->SetStyle(style(mark_in_ >= 0.0));
+    mark_out_btn_->SetStyle(
+        style(mark_out_ > (mark_in_ >= 0.0 ? mark_in_ : 0.0)));
+    XER::UI::Widgets::Button* row[] = {
+        play_btn_.get(),     prev_btn_.get(), next_btn_.get(),
+        mark_in_btn_.get(),  mark_out_btn_.get(),
+        insert_btn_.get(),   overwrite_btn_.get()};
+    for (auto* btn : row) btn->SetEnabled(enabled);
+
+    // assets/ui/strings.ini — source_title overrides the header.
+    const std::string title =
+        name_.empty()
+            ? AppRuntime::SharedUiStrings().Get("source_title",
+                                                "SOURCE")
+            : AppRuntime::SharedUiStrings().Get("source_title",
+                                                "SOURCE") +
+                  " · " + name_;
+    header_label_->SetText(title);
+    footer_label_->SetText(FooterText());
+}
+
+std::string SourceMonitorWidget::FooterText() const {
+    // Source timecode + marked range — the "status/footer" readout the
+    // spec calls for ("00:00:01:10 — 00:00:04:20 · 3.1s marked" or the
+    // full-media range when nothing is marked).
+    if (path_.empty()) {
+        return "Double-click a bin clip to load it";
+    }
+    const double range_in = mark_in_ >= 0.0 ? mark_in_ : 0.0;
+    const double range_out =
+        mark_out_ > range_in ? mark_out_ : duration_;
+    char buffer[96];
+    const bool marked = mark_in_ >= 0.0 || mark_out_ > range_in;
+    std::snprintf(
+        buffer, sizeof(buffer), "%s  —  %s   ·   %.2fs%s",
+        FormatTimecode(range_in, fps_num_, fps_den_).c_str(),
+        FormatTimecode(range_out, fps_num_, fps_den_).c_str(),
+        std::max(0.0, range_out - range_in),
+        marked ? " marked" : " (unmarked)");
+    return buffer;
 }
 
 void SourceMonitorWidget::SetSource(const std::string& path,
@@ -272,24 +372,15 @@ void SourceMonitorWidget::EmitSeek(double t) {
 
 void SourceMonitorWidget::Render(Rendering::Renderer& renderer,
                                  const XER::UI::Theme::Tokens& tokens) {
+    EnsureChildren();
+    SyncTransportChildren();
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f,
                         tokens.radius_large);
-
-    const float pad = tokens.spacing_medium;
-    const Layout::Rect header{bounds.x + pad, bounds.y + pad * 0.6f,
-                              bounds.width - pad * 2.0f, 24.0f};
-    // assets/ui/strings.ini — source_title overrides the header.
-    const std::string title =
-        name_.empty()
-            ? AppRuntime::SharedUiStrings().Get("source_title",
-                                                "SOURCE")
-            : AppRuntime::SharedUiStrings().Get("source_title",
-                                                "SOURCE") +
-                  " · " + name_;
-    renderer.DrawText(title, header,
-                      {tokens.muted, tokens.font_small, 700});
+    // Header ("SOURCE · clip") and footer (timecode range) are Label
+    // children now — SyncTransportChildren() fed them above; they
+    // paint themselves after this pass.
 
     const auto video_area = VideoAreaRect();
     renderer.FillRect(video_area, tokens.background,
@@ -330,7 +421,6 @@ void SourceMonitorWidget::Render(Rendering::Renderer& renderer,
 
     DrawRuler(renderer, tokens, RulerRect());
     DrawTransport(renderer, tokens, TransportRect());
-    DrawFooter(renderer, tokens, FooterRect());
     if (IsFocused()) {
         // Focus ring: the same affordance other widgets get from the
         // shared RenderFocusRing helper — signals where I/O/JKL land.
@@ -381,18 +471,9 @@ void SourceMonitorWidget::DrawTransport(
     Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens,
     const Layout::Rect& row) {
-    DrawButton(renderer, tokens, Button::Play, nullptr, playing_);
-    DrawButton(renderer, tokens, Button::PrevFrame, nullptr, false);
-    DrawButton(renderer, tokens, Button::NextFrame, nullptr, false);
-    DrawButton(renderer, tokens, Button::MarkIn, "{ IN",
-               mark_in_ >= 0.0);
-    DrawButton(renderer, tokens, Button::MarkOut, "OUT }",
-               mark_out_ > (mark_in_ >= 0.0 ? mark_in_ : 0.0));
-    DrawButton(renderer, tokens, Button::Insert, "INS ,", false);
-    DrawButton(renderer, tokens, Button::Overwrite, "OVR .", false);
-
+    // The row's buttons are Widgets::Button children now — only the
     // "current / duration" readout, right-aligned (mirrors the
-    // program monitor's transport readout).
+    // program monitor's transport readout), stays drawn here.
     const std::string time_text =
         FormatTime(time_) + "  /  " + FormatTime(duration_);
     const Rendering::TextStyle style{tokens.muted, tokens.font_small,
@@ -405,118 +486,32 @@ void SourceMonitorWidget::DrawTransport(
         style);
 }
 
-void SourceMonitorWidget::DrawButton(
-    Rendering::Renderer& renderer,
-    const XER::UI::Theme::Tokens& tokens, Button button,
-    const char* label, bool active) {
-    const auto rect = ButtonRect(button);
-    const bool enabled = HasSource();
-    const Color fill = active ? tokens.accent : tokens.secondary;
-    const Color text_color =
-        !enabled ? WithAlpha(tokens.muted, 0.4f)
-                 : (active ? tokens.accent_foreground : tokens.muted);
-    renderer.FillRect(rect, fill, tokens.radius_small);
-    if (active) {
-        renderer.StrokeRect(rect, tokens.accent, 1.0f,
-                            tokens.radius_small);
-    }
-    const char* icon_name = nullptr;
-    switch (button) {
-        case Button::Play:
-            icon_name = playing_ ? "transport.pause"
-                                 : "transport.play";
-            break;
-        case Button::PrevFrame:
-            icon_name = "transport.prev";
-            break;
-        case Button::NextFrame:
-            icon_name = "transport.next";
-            break;
-        default:
-            break;
-    }
-    if (icon_name != nullptr &&
-        DrawIcon(renderer, icon_name, 16, text_color, rect)) {
-        return;
-    }
-    if (button == Button::Play) {
-        const float cx = rect.x + rect.width * 0.5f;
-        const float cy = rect.y + rect.height * 0.5f;
-        if (playing_) {
-            renderer.FillRect({cx - 5.0f, cy - 5.0f, 3.5f, 10.0f},
-                              text_color, 0.5f);
-            renderer.FillRect({cx + 1.5f, cy - 5.0f, 3.5f, 10.0f},
-                              text_color, 0.5f);
-        } else {
-            renderer.DrawLine({cx - 4.0f, cy - 6.0f},
-                              {cx + 5.0f, cy}, text_color, 1.6f);
-            renderer.DrawLine({cx + 5.0f, cy},
-                              {cx - 4.0f, cy + 6.0f}, text_color, 1.6f);
-            renderer.DrawLine({cx - 4.0f, cy + 6.0f},
-                              {cx - 4.0f, cy - 6.0f}, text_color, 1.6f);
-        }
-        return;
-    }
-    if (button == Button::PrevFrame || button == Button::NextFrame) {
-        const float cx = rect.x + rect.width * 0.5f;
-        const float cy = rect.y + rect.height * 0.5f;
-        const int dir = button == Button::NextFrame ? 1 : -1;
-        const float bar_x = cx - dir * 5.5f;
-        renderer.FillRect({bar_x, cy - 6.0f, 1.8f, 12.0f}, text_color,
-                          0.5f);
-        renderer.DrawLine({cx + dir * 4.0f, cy - 5.5f},
-                          {cx - dir * 3.0f, cy}, text_color, 1.5f);
-        renderer.DrawLine({cx - dir * 3.0f, cy},
-                          {cx + dir * 4.0f, cy + 5.5f}, text_color,
-                          1.5f);
-        renderer.DrawLine({cx + dir * 4.0f, cy + 5.5f},
-                          {cx + dir * 4.0f, cy - 5.5f}, text_color,
-                          1.5f);
-        return;
-    }
-    if (label != nullptr) {
-        renderer.DrawText(label, rect,
-                          {text_color, tokens.font_small, 600});
-    }
-}
-
-void SourceMonitorWidget::DrawFooter(
-    Rendering::Renderer& renderer,
-    const XER::UI::Theme::Tokens& tokens,
-    const Layout::Rect& row) {
-    // Source timecode + marked range — the "status/footer" readout the
-    // spec calls for ("00:00:01:10 — 00:00:04:20 · 3.1s marked" or the
-    // full-media range when nothing is marked).
-    std::string text;
-    if (path_.empty()) {
-        text = "Double-click a bin clip to load it";
-    } else {
-        const double range_in = mark_in_ >= 0.0 ? mark_in_ : 0.0;
-        const double range_out =
-            mark_out_ > range_in ? mark_out_ : duration_;
-        char buffer[96];
-        const bool marked = mark_in_ >= 0.0 || mark_out_ > range_in;
-        std::snprintf(
-            buffer, sizeof(buffer), "%s  —  %s   ·   %.2fs%s",
-            FormatTimecode(range_in, fps_num_, fps_den_).c_str(),
-            FormatTimecode(range_out, fps_num_, fps_den_).c_str(),
-            std::max(0.0, range_out - range_in),
-            marked ? " marked" : " (unmarked)");
-        text = buffer;
-    }
-    renderer.DrawText(text, row, {tokens.muted, tokens.font_small, 400});
-}
-
 // ---- events ----
 
 void SourceMonitorWidget::Layout(const Layout::Rect& bounds) {
+    EnsureChildren();
     SetBounds(bounds);
+    const auto& tokens = CachedLayoutTokens();
+    const float pad = tokens.spacing_medium;
+    header_label_->Layout(
+        {bounds.x + pad, bounds.y + pad * 0.6f,
+         bounds.width - pad * 2.0f, 24.0f},
+        tokens);
+    footer_label_->Layout(FooterRect(), tokens);
+    play_btn_->Layout(ButtonRect(Button::Play), tokens);
+    prev_btn_->Layout(ButtonRect(Button::PrevFrame), tokens);
+    next_btn_->Layout(ButtonRect(Button::NextFrame), tokens);
+    mark_in_btn_->Layout(ButtonRect(Button::MarkIn), tokens);
+    mark_out_btn_->Layout(ButtonRect(Button::MarkOut), tokens);
+    insert_btn_->Layout(ButtonRect(Button::Insert), tokens);
+    overwrite_btn_->Layout(ButtonRect(Button::Overwrite), tokens);
 }
 
 bool SourceMonitorWidget::HandleEvent(
     const XER::UI::Widgets::Event& event) {
     using XER::UI::Widgets::Event;
     using XER::UI::Widgets::MouseButton;
+    EnsureChildren();
 
     if (event.type == Event::Type::MouseDown &&
         event.mouse_button == MouseButton::Left) {
@@ -549,34 +544,8 @@ bool SourceMonitorWidget::HandleEvent(
         if (!HasSource()) {
             return GetBounds().Contains(p);
         }
-        if (ButtonRect(Button::Play).Contains(p)) {
-            if (hooks_.on_play_toggle) hooks_.on_play_toggle();
-            return true;
-        }
-        if (ButtonRect(Button::PrevFrame).Contains(p) ||
-            ButtonRect(Button::NextFrame).Contains(p)) {
-            const int dir = ButtonRect(Button::NextFrame).Contains(p)
-                                ? 1
-                                : -1;
-            if (hooks_.on_frame_step) hooks_.on_frame_step(dir);
-            return true;
-        }
-        if (ButtonRect(Button::MarkIn).Contains(p)) {
-            if (hooks_.on_mark_in) hooks_.on_mark_in();
-            return true;
-        }
-        if (ButtonRect(Button::MarkOut).Contains(p)) {
-            if (hooks_.on_mark_out) hooks_.on_mark_out();
-            return true;
-        }
-        if (ButtonRect(Button::Insert).Contains(p)) {
-            if (hooks_.on_insert) hooks_.on_insert();
-            return true;
-        }
-        if (ButtonRect(Button::Overwrite).Contains(p)) {
-            if (hooks_.on_overwrite) hooks_.on_overwrite();
-            return true;
-        }
+        // The transport row's Buttons own their clicks (hit-tested as
+        // children before the monitor sees the event).
         // Clicking the frame toggles playback like the program
         // monitor's video area.
         if (VideoAreaRect().Contains(p)) {

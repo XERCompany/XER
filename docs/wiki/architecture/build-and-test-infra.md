@@ -1,5 +1,13 @@
 # Build & test infrastructure — verified facts
 
+> **SUPERSEDED (2026-11-21):** Sections below describing the
+> vcpkg/MSVC `default` preset world (vcvars64, `C:\vcpkg`,
+> `x64-windows-release` triplets) are **historical**. The active
+> toolchain is **MSYS2 clang64** via preset `windows-clang-msys2` +
+> `Build.ps1` — see [static-link-state.md](static-link-state.md),
+> [windows-msys2-gotchas.md](windows-msys2-gotchas.md) and the
+> "MSYS2 era" section at the bottom of this page.
+
 Verified by explore subagent, 2026-11-15. Repo `D:\Developers\XER3`.
 
 ## Presets
@@ -98,3 +106,46 @@ Verified by explore subagent, 2026-11-15. Repo `D:\Developers\XER3`.
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src`, `cxx_std_23`,
   `target_link_libraries PRIVATE`, `RUNTIME_OUTPUT_DIRECTORY
   "${CMAKE_BINARY_DIR}/bin"`. Unconditional → builds in every preset.
+
+## Pitfall: running exes lock the build (seen 2026-11-21)
+
+`video_editor.exe` and orphaned `xer_engine_ui_render.exe` keep CEF
+DLLs + exe outputs open → `copy_directory failed after retries` /
+`ld.lld: failed to write output`. Before rebuilding:
+
+```powershell
+Get-Process video_editor,xer_engine_ui_render,xer_browser_shell,XBrowser,XERVacUI -EA SilentlyContinue | Stop-Process -Force
+```
+
+Orphaned render workers survive a killed parent — kill them by name,
+not only the editor.
+
+Superseded 2026-11-21: `Build.ps1` now runs this guard automatically
+(path-scoped `Stop-LockingProcesses` before clean/configure/build;
+`-KeepRunning` opts out), and `cmake/CopyDirRetry.cmake` names the
+suspect PIDs in its final FATAL_ERROR.
+
+## MSYS2 era — the current flow (2026-11-21)
+
+- **Preset**: `windows-clang-msys2` (Ninja, clang + libc++; no
+  vcvars64, no vcpkg). Configure cache at
+  `out/build/windows-clang-msys2/CMakeCache.txt`, binaries in
+  `out/build/windows-clang-msys2/bin/` (`lib/` for archives+dlls).
+- **Commands**:
+  - `.\Build.ps1` — configure (if no cache) + build `video_editor`.
+  - `.\Build.ps1 -Clean` / `-Configure` / `-Test` /
+    `-Target XER_VideoEditor_Tests` / `-Preset <name>`.
+  - `.\Build.ps1 -KeepRunning` — skip the lock guard (default: kill
+    known lockers whose path is under `bin\`: video_editor,
+    xer_engine_ui_render, xer_browser_shell, XBrowser, XERVacUI,
+    Editor, XER_VST3_CEF).
+  - Raw: `cmake --preset windows-clang-msys2 &&
+    cmake --build --preset windows-clang-msys2 --target video_editor`.
+- **Verification**: `pwsh tools/check_all.ps1` — PASS/FAIL/SKIP per
+  check, non-zero exit on failure; `-Quick` skips
+  `video_editor --smoke`.
+- **Toolchain resolution**: cmake/ninja from PATH first, then
+  `C:\tools\msys64\clang64\bin` (`$MsysClangBin` in Build.ps1).
+- **CI**: `.github/workflows/ci.yml` builds this preset, runs
+  XER_VideoEditor_Tests + `video_editor --smoke` (internal watchdog
+  bound), and uploads the dist zip.

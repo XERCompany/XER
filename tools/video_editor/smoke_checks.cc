@@ -13,9 +13,14 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <functional>
 #include <iterator>
+#include <map>
 #include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
 #include <vector>
@@ -23,15 +28,24 @@
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
+#include "audio_sync.h"
 #include "compositor.h"
+#include "content/video/video_info.h"
 #include "export_engine.h"
 #include "export_preset.h"
+#include "font_catalog.h"
 #include "frame.h"
+#include "frame_exporter.h"
 #include "generated_source.h"
 #include "helper/path_utils.h"
+#include "helper/string_utils.h"
 #include "js_fx.h"
 #include "keyboard_map.h"
+#include "lut_manager.h"
 #include "media_catalog.h"
+#include "media_worker_client.h"
+#include "media_worker_protocol.h"
+#include "poster_cache.h"
 #include "project_autosave.h"
 #include "project_store.h"
 #include "sequence_preset.h"
@@ -39,9 +53,64 @@
 #include "timecode.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "url_import.h"
+#include "worker_pipe.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
-namespace XER::VideoEditor::Smoke {
+#if defined(_WIN32)
+#include <windows.h>   // GetModuleFileNameW — worker-exe sibling lookup
+#endif
+
+namespace XER::VideoEditor {
+namespace {
+
+// Canonical importable-media extension list — the single source of
+// truth behind MediaImportExtensions(); see smoke_checks.h for why it
+// lives in the UI-free core.
+const std::string kMediaImportExtensions =
+    // video containers FFmpeg demuxes
+    "mp4;m4v;mkv;mov;qt;avi;divx;wmv;asf;webm;mpg;mpeg;mpe;m1v;m2v;mpv;"
+    "ts;mts;m2ts;vob;3gp;3g2;flv;f4v;mxf;dv;dif;ogv;rm;rmvb;y4m;nut;bik;amv;"
+    // audio-only containers
+    "wav;mp3;m4a;m4b;aac;flac;ogg;oga;opus;wma;aif;aiff;aifc;mka;ac3;"
+    "eac3;dts;amr;au;caf;wv;ape;tta;spx;voc;gsm;oma;"
+    // still images (FFmpeg image2 + OIIO set)
+    "png;jpg;jpeg;jpe;bmp;dib;gif;tif;tiff;webp;tga;ppm;pgm;pbm;pam;xpm;"
+    "avif;heic;exr;dpx;hdr;psd;pfm;raw;cr2;nef;arw;dng;ora";
+
+}  // namespace
+
+const std::string& MediaImportExtensions() {
+    return kMediaImportExtensions;
+}
+
+bool IsMediaImportPath(const std::string& utf8_path) {
+    // Extension after the last '.', unless a path separator follows
+    // it (a dot inside a directory name is not an extension).
+    const std::size_t dot = utf8_path.find_last_of('.');
+    if (dot == std::string::npos || dot + 1 >= utf8_path.size()) {
+        return false;
+    }
+    const std::size_t sep = utf8_path.find_last_of("/\\");
+    if (sep != std::string::npos && sep > dot) return false;
+    const std::string ext =
+        XER::Helper::String::ToLowerAscii(utf8_path.substr(dot + 1));
+    // Token-compare, never substring — "xmp4" must not match "mp4".
+    std::size_t pos = 0;
+    while (true) {
+        const std::size_t next = kMediaImportExtensions.find(';', pos);
+        const std::string_view token =
+            std::string_view(kMediaImportExtensions)
+                .substr(pos, next == std::string::npos
+                                 ? std::string::npos
+                                 : next - pos);
+        if (token == ext) return true;
+        if (next == std::string::npos) return false;
+        pos = next + 1;
+    }
+}
+
+namespace Smoke {
 namespace {
 
 namespace Path = XER::Helper::Path;
@@ -63,6 +132,98 @@ std::filesystem::path SmokeTempDir() {
 
 std::string Utf8Path(const std::filesystem::path& p) {
     return Path::ToUtf8(p);
+}
+
+// Checked-in pixel baselines live in the SOURCE tree at
+// tools/video_editor/tests/baselines — the exe sits under
+// out/build/<preset>/bin/, so the dir is located by walking ancestors
+// of the exe path (and the CWD as a fallback) until a directory that
+// contains tools/video_editor/CMakeLists.txt turns up; that anchor
+// keeps a stray same-named folder from fooling the search.
+// XER_VE_BASELINE_DIR overrides discovery entirely. Empty = not found.
+std::filesystem::path SmokeBaselineDir() {
+    if (const char* env = std::getenv("XER_VE_BASELINE_DIR");
+        env != nullptr && *env != '\0') {
+        return Path::FromUtf8(env);
+    }
+    std::error_code ec;
+    std::vector<std::filesystem::path> starts;
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    if (GetModuleFileNameW(nullptr, exe, MAX_PATH) != 0) {
+        starts.push_back(std::filesystem::path(exe).parent_path());
+    }
+#elif defined(__linux__)
+    const auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec) starts.push_back(self.parent_path());
+#endif
+    starts.push_back(std::filesystem::current_path(ec));
+    for (const auto& start : starts) {
+        std::filesystem::path dir = start;
+        for (int up = 0; up < 8; ++up) {
+            const auto ve = dir / "tools" / "video_editor";
+            if (std::filesystem::exists(ve / "CMakeLists.txt", ec)) {
+                return ve / "tests" / "baselines";
+            }
+            const auto parent = dir.parent_path();
+            if (parent == dir) break;
+            dir = parent;
+        }
+    }
+    return {};
+}
+
+// PNG -> packed RGB8 via the FFmpeg image2 decode path — the same
+// bridge FrameExporter wrote the file through, so encode/decode stay
+// version-paired. Handles the packed layouts the PNG decoder emits
+// (rgba/bgra/argb/abgr/rgb24/bgr24/gray); anything else (planar gbrp,
+// 16-bit, palette) fails loudly so the diff never silently compares
+// the wrong channels.
+bool DecodePngToRgb8(const std::string& path,
+                     std::vector<std::uint8_t>* rgb, int* width,
+                     int* height, std::string* err) {
+    std::vector<FFmpeg::VideoFrameInfo> frames;
+    if (!FFmpeg::DecodeVideoFrames(path, 0, 1, &frames, err) ||
+        frames.empty()) {
+        if (err != nullptr && err->empty()) *err = "no frame decoded";
+        return false;
+    }
+    const FFmpeg::VideoFrameInfo& f = frames.front();
+    const std::string& fmt = f.pixel_format;
+    int ch = 0, r = 0, g = 0, b = 0;   // channels + byte offsets
+    if (fmt == "rgba")       { ch = 4; r = 0; g = 1; b = 2; }
+    else if (fmt == "bgra")  { ch = 4; r = 2; g = 1; b = 0; }
+    else if (fmt == "argb")  { ch = 4; r = 1; g = 2; b = 3; }
+    else if (fmt == "abgr")  { ch = 4; r = 3; g = 2; b = 1; }
+    else if (fmt == "rgb24" || fmt == "rgb")
+        { ch = 3; r = 0; g = 1; b = 2; }
+    else if (fmt == "bgr24" || fmt == "bgr")
+        { ch = 3; r = 2; g = 1; b = 0; }
+    else if (fmt == "gray" || fmt == "gray8") {
+        ch = 1;   // r/g/b all read offset 0
+    } else {
+        if (err != nullptr) {
+            *err = "unsupported decoded pixel format '" + fmt + "'";
+        }
+        return false;
+    }
+    const std::size_t pixels =
+        static_cast<std::size_t>(f.width) * f.height;
+    if (f.width <= 0 || f.height <= 0 ||
+        f.data.size() < pixels * static_cast<std::size_t>(ch)) {
+        if (err != nullptr) *err = "decoded buffer short for " + fmt;
+        return false;
+    }
+    rgb->resize(pixels * 3);
+    const std::uint8_t* src = f.data.data();
+    for (std::size_t i = 0; i < pixels; ++i) {
+        (*rgb)[3 * i + 0] = src[ch * i + r];
+        (*rgb)[3 * i + 1] = src[ch * i + g];
+        (*rgb)[3 * i + 2] = src[ch * i + b];
+    }
+    *width = f.width;
+    *height = f.height;
+    return true;
 }
 
 Clip MakeGeneratedClip(const std::string& id, int track, double start,
@@ -412,6 +573,91 @@ std::string CheckGeneratedSource() {
     return {};
 }
 
+// Extended text-effect style set (text_style.h): a fully styled text
+// clip must render non-empty pixels, the param serializer must round
+// trip through the parser, and — when the build links Skia — the
+// system font catalog must enumerate at least one family.
+std::string CheckTextStyleExt() {
+    Clip styled = MakeGeneratedClip(
+        "styled", 0, 0.0, 1.0, SourceKind::Text,
+        "Smoke Extended | font=Arial weight=700 italic=1 underline=1 "
+        "size=28 tracking=1.5 align=center valign=middle x=4 y=2 "
+        "w=300 h=80 radius=8 color=#FF8800FF opacity=0.95 outline=1 "
+        "outline_color=#000000FF bg=#20202080 shadow=1 shadow_x=3 "
+        "shadow_y=3 shadow_blur=2 shadow_color=#000000AA baseline=0");
+    video::Frame styled_frame;
+    if (!GenerateSourceFrame(styled, 0.0, 320, 180, &styled_frame) ||
+        !styled_frame.IsValid()) {
+        return "extended text clip failed to generate";
+    }
+    const bool any_pixels =
+        std::any_of(styled_frame.Data(),
+                    styled_frame.Data() + styled_frame.DataSize(),
+                    [](std::uint8_t byte) { return byte != 0; });
+    if (!any_pixels) {
+        return "extended text clip rendered fully transparent";
+    }
+    // ...versus an empty text clip, which stays a 1x1 zero frame.
+    Clip empty = MakeGeneratedClip("empty", 0, 0.0, 1.0,
+                                   SourceKind::Text, "");
+    video::Frame empty_frame;
+    if (!GenerateSourceFrame(empty, 0.0, 320, 180, &empty_frame) ||
+        !empty_frame.IsValid()) {
+        return "empty text clip failed to generate";
+    }
+    if (empty_frame.DataSize() == styled_frame.DataSize() &&
+        std::memcmp(empty_frame.Data(), styled_frame.Data(),
+                    empty_frame.DataSize()) == 0) {
+        return "styled text renders identically to empty text";
+    }
+
+    // Parse -> Serialize -> Parse round trip on every new field.
+    const ClipTextStyle a = ParseClipTextStyle(styled.source.param);
+    const ClipTextStyle b =
+        ParseClipTextStyle(SerializeClipTextStyle(a));
+    if (b.text != a.text || b.font_family != a.font_family ||
+        b.font_weight != a.font_weight || b.italic != a.italic ||
+        b.underline != a.underline || b.strike != a.strike ||
+        b.size_px != a.size_px ||
+        std::fabs(b.letter_spacing - a.letter_spacing) > 0.01f ||
+        std::fabs(b.line_spacing - a.line_spacing) > 0.01f ||
+        b.align != a.align || b.valign != a.valign ||
+        std::fabs(b.pos_x - a.pos_x) > 0.01f ||
+        std::fabs(b.pos_y - a.pos_y) > 0.01f ||
+        std::fabs(b.box_w - a.box_w) > 0.01f ||
+        std::fabs(b.box_h - a.box_h) > 0.01f ||
+        std::fabs(b.corner_radius - a.corner_radius) > 0.01f ||
+        std::fabs(b.rotate_deg - a.rotate_deg) > 0.01f ||
+        std::fabs(b.baseline_px - a.baseline_px) > 0.01f ||
+        b.color != a.color ||
+        std::fabs(b.fill_opacity - a.fill_opacity) > 0.01f ||
+        std::fabs(b.outline_px - a.outline_px) > 0.01f ||
+        b.outline_color != a.outline_color || b.bg_color != a.bg_color ||
+        b.shadow_explicit != a.shadow_explicit ||
+        std::fabs(b.shadow_x - a.shadow_x) > 0.01f ||
+        std::fabs(b.shadow_y - a.shadow_y) > 0.01f ||
+        std::fabs(b.shadow_blur - a.shadow_blur) > 0.01f ||
+        b.shadow_color != a.shadow_color) {
+        return "text style round trip mismatch: " +
+               SerializeClipTextStyle(b);
+    }
+    // A family name with spaces must survive the token grammar.
+    const ClipTextStyle spaced = ParseClipTextStyle(
+        "T | font=Segoe%20UI weight=400");
+    if (spaced.font_family != "Segoe UI") {
+        return "percent-encoded font family mis-decoded: " +
+               spaced.font_family;
+    }
+
+    if (FontCatalog::Available() && FontCatalog::FamilyCount() <= 0) {
+        return "font catalog enumerated zero families";
+    }
+    std::fprintf(stderr, "  font catalog: %d families (skia %s)\n",
+                 FontCatalog::FamilyCount(),
+                 FontCatalog::Available() ? "on" : "off");
+    return {};
+}
+
 std::string CheckCompositorRender() {
     Project project = MakeRenderProject(160, 90, 15);
     Compositor compositor;
@@ -433,6 +679,219 @@ std::string CheckCompositorRender() {
                     [](std::uint8_t byte) { return byte != 0; });
     if (!any_pixels) {
         return "rendered frame is all zeros";
+    }
+    return {};
+}
+
+// The `--screenshot` pipeline in-process: a project round-trips
+// through ProjectStore, the program frame renders through the
+// headless Compositor and lands on disk as a PNG via
+// video::FrameExporter — the file must carry the PNG magic plus an
+// IHDR matching the canvas size.
+std::string CheckScreenshotPng() {
+    Project project = MakeRenderProject(160, 90, 15);
+    const std::string proj_path =
+        Utf8Path(SmokeTempDir() / "shot_project.xerproj");
+    std::string err;
+    if (!ProjectStore::Save(project, proj_path, &err)) {
+        return "project save failed: " + err;
+    }
+    Project loaded;
+    if (!ProjectStore::Load(proj_path, &loaded, &err)) {
+        return "project reload failed: " + err;
+    }
+    Compositor compositor;
+    if (!compositor.Init(loaded, {}, &err)) {
+        return "Compositor::Init failed: " + err;
+    }
+    std::vector<std::uint8_t> bgra;
+    const bool rendered = compositor.RenderFrameAt(0.5, &bgra, &err);
+    compositor.Shutdown();
+    if (!rendered) {
+        return "RenderFrameAt failed: " + err;
+    }
+    video::Frame frame;
+    if (!frame.Allocate(160, 90, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    std::memcpy(frame.Data(), bgra.data(), bgra.size());
+    const std::string png_path =
+        Utf8Path(SmokeTempDir() / "shot_project.png");
+    video::FrameExporter exporter;
+    if (!exporter.ToFile(png_path, frame)) {
+        return "PNG export failed";
+    }
+    std::ifstream in(Path::FromUtf8(png_path),
+                     std::ios::binary | std::ios::ate);
+    if (!in) {
+        return "PNG missing after export";
+    }
+    const auto size = in.tellg();
+    if (size < 64) {   // header alone is 33 bytes; bars need data too
+        return "PNG suspiciously small (" +
+               std::to_string(static_cast<long long>(size)) + " bytes)";
+    }
+    in.seekg(0);
+    std::uint8_t header[24] = {};
+    in.read(reinterpret_cast<char*>(header), sizeof(header));
+    static const std::uint8_t kMagic[8] = {0x89, 'P', 'N', 'G',
+                                           0x0D, 0x0A, 0x1A, 0x0A};
+    if (in.gcount() != static_cast<std::streamsize>(sizeof(header)) ||
+        std::memcmp(header, kMagic, 8) != 0) {
+        return "PNG magic mismatch";
+    }
+    // Bytes 8..11 = IHDR length (13 BE), 12..15 = "IHDR",
+    // 16..23 = width/height big-endian.
+    const auto be32 = [](const std::uint8_t* p) {
+        return (static_cast<std::uint32_t>(p[0]) << 24) |
+               (static_cast<std::uint32_t>(p[1]) << 16) |
+               (static_cast<std::uint32_t>(p[2]) << 8) |
+               static_cast<std::uint32_t>(p[3]);
+    };
+    if (be32(header + 8) != 13 ||
+        std::memcmp(header + 12, "IHDR", 4) != 0 ||
+        be32(header + 16) != 160 || be32(header + 20) != 90) {
+        return "IHDR dimensions mismatch";
+    }
+    return {};
+}
+
+// `ui_screenshot_diff` — pixel-diff regression for the --screenshot
+// pipeline. SCOPE NOTE (determinism): the diff covers the program-
+// frame path only — ProjectStore -> Compositor -> FrameExporter PNG
+// -> FFmpeg decode -> per-pixel compare. The full `--ui` chrome
+// capture is deliberately out of scope: it lives exe-side (the
+// core lib cannot link XER_UI_Core) and rasterizes fonts, panels and
+// toasts whose output varies with the host's text stack — far too
+// machine-dependent for a checked-in baseline. The program frame is
+// fully procedural (SMPTE-75 generated bars on a fixed 1280x720
+// canvas at t = 0.5, mid-clip), so it renders identically every run;
+// the tolerance below absorbs codec/rasterizer-version drift only —
+// content changes always exceed it.
+//
+// Baseline: tools/video_editor/tests/baselines/ui_default.png
+// (located via SmokeBaselineDir; XER_VE_BASELINE_DIR overrides).
+// A missing baseline is WRITTEN and the check passes — the first
+// run establishes it; XER_VE_UPDATE_BASELINE=1 force-refreshes.
+std::string CheckUiScreenshotDiff() {
+    if (!FFmpeg::IsAvailable()) {
+        return "ffmpeg bridge unavailable";
+    }
+    const std::filesystem::path baseline_dir = SmokeBaselineDir();
+    if (baseline_dir.empty()) {
+        return "tools/video_editor/tests/baselines not located "
+               "(set XER_VE_BASELINE_DIR)";
+    }
+    const std::filesystem::path baseline =
+        baseline_dir / "ui_default.png";
+
+    // Same steps as RunScreenshotProgram in main.cc: save -> load ->
+    // compositor -> RenderFrameAt -> PNG via FrameExporter.
+    Project project = MakeRenderProject(1280, 720, 30);
+    const std::string proj_path =
+        Utf8Path(SmokeTempDir() / "diff_project.xerproj");
+    std::string err;
+    if (!ProjectStore::Save(project, proj_path, &err)) {
+        return "project save failed: " + err;
+    }
+    Project loaded;
+    if (!ProjectStore::Load(proj_path, &loaded, &err)) {
+        return "project reload failed: " + err;
+    }
+    Compositor compositor;
+    if (!compositor.Init(loaded, {}, &err)) {
+        return "Compositor::Init failed: " + err;
+    }
+    std::vector<std::uint8_t> bgra;
+    const bool rendered = compositor.RenderFrameAt(0.5, &bgra, &err);
+    compositor.Shutdown();
+    if (!rendered) {
+        return "RenderFrameAt failed: " + err;
+    }
+    const bool any_pixels =
+        std::any_of(bgra.begin(), bgra.end(),
+                    [](std::uint8_t byte) { return byte != 0; });
+    if (!any_pixels) {
+        return "rendered frame is all zeros";
+    }
+    video::Frame frame;
+    if (!frame.Allocate(1280, 720, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    std::memcpy(frame.Data(), bgra.data(), bgra.size());
+    const std::string shot_path =
+        Utf8Path(SmokeTempDir() / "ui_default_actual.png");
+    video::FrameExporter exporter;
+    if (!exporter.ToFile(shot_path, frame)) {
+        return "PNG export failed";
+    }
+
+    std::error_code ec;
+    const bool have_baseline =
+        std::filesystem::exists(baseline, ec) &&
+        std::filesystem::file_size(baseline, ec) > 0;
+    const char* update_env = std::getenv("XER_VE_UPDATE_BASELINE");
+    const bool force_update =
+        update_env != nullptr &&
+        (std::string_view(update_env) == "1" ||
+         std::string_view(update_env) == "true");
+    if (!have_baseline || force_update) {
+        std::filesystem::create_directories(baseline_dir, ec);
+        if (!std::filesystem::copy_file(
+                Path::FromUtf8(shot_path), baseline,
+                std::filesystem::copy_options::overwrite_existing,
+                ec)) {
+            return "baseline write failed: " + ec.message();
+        }
+        std::fprintf(stderr,
+                     "  ui_screenshot_diff: baseline %s -> %s\n",
+                     force_update ? "refreshed" : "written",
+                     Utf8Path(baseline).c_str());
+        return {};
+    }
+
+    std::vector<std::uint8_t> actual_rgb, base_rgb;
+    int aw = 0, ah = 0, bw = 0, bh = 0;
+    if (!DecodePngToRgb8(shot_path, &actual_rgb, &aw, &ah, &err)) {
+        return "actual decode failed: " + err;
+    }
+    if (!DecodePngToRgb8(Utf8Path(baseline), &base_rgb, &bw, &bh,
+                         &err)) {
+        return "baseline decode failed: " + err;
+    }
+    if (aw != bw || ah != bh) {
+        return "size mismatch: actual " + std::to_string(aw) + "x" +
+               std::to_string(ah) + " vs baseline " +
+               std::to_string(bw) + "x" + std::to_string(bh);
+    }
+    // Tolerance: mean |delta| < 4.0 per channel-byte AND <1% of
+    // pixels differ by >16 on any channel. PNG is lossless, so a
+    // healthy run diffs at ~0; the slack only absorbs FFmpeg-version
+    // pixel-format/dither drift, never content changes.
+    std::uint64_t sum = 0;
+    std::size_t hot = 0;
+    const std::size_t pixels = static_cast<std::size_t>(aw) * ah;
+    for (std::size_t i = 0; i < pixels; ++i) {
+        int worst = 0;
+        for (int c = 0; c < 3; ++c) {
+            const int d = std::abs(
+                static_cast<int>(actual_rgb[3 * i + c]) -
+                static_cast<int>(base_rgb[3 * i + c]));
+            worst = std::max(worst, d);
+            sum += static_cast<std::uint64_t>(d);
+        }
+        if (worst > 16) ++hot;
+    }
+    const double mean =
+        static_cast<double>(sum) / static_cast<double>(pixels * 3);
+    const double hot_frac = static_cast<double>(hot) / pixels;
+    if (mean >= 4.0 || hot_frac >= 0.01) {
+        char stats[96];
+        std::snprintf(stats, sizeof(stats),
+                      "mean=%.3f hot=%.2f%%", mean, hot_frac * 100.0);
+        return std::string("diff too large: ") + stats +
+               " (baseline " + Utf8Path(baseline) +
+               "; set XER_VE_UPDATE_BASELINE=1 to refresh)";
     }
     return {};
 }
@@ -517,6 +976,108 @@ std::string CheckCurvesAndLens() {
     return {};
 }
 
+// Preview-quality hint: Compositor::SetPreviewQuality(<1) runs the
+// heavy glass/bokeh kernels on a downscaled frame and upsamples back
+// — the result must stay close to (but not identical with) the full
+// render, and at 1080p bokeh the preview pass must be measurably
+// faster. Quality 1.0 must be byte-identical to the untouched
+// default (the export/screenshot path depends on it).
+std::string CheckPreviewQualityScale() {
+    std::string err;
+
+    // 1) Identity: quality 1.0 == never-set — byte for byte.
+    {
+        Project small = MakeRenderProject(160, 90, 15);
+        small.clips[0].effects = {
+            {"bokeh_dof", {1.0f, 0.5f, 0.5f, 0.1f, 0.4f, 8.0f, 2.0f}},
+        };
+        Compositor def;
+        if (!def.Init(small, {}, &err)) {
+            return "identity compositor init failed: " + err;
+        }
+        std::vector<std::uint8_t> ref;
+        if (!def.RenderFrameAt(0.5, &ref, &err)) {
+            return "identity reference render failed: " + err;
+        }
+        def.SetPreviewQuality(1.0f);
+        std::vector<std::uint8_t> same;
+        if (!def.RenderFrameAt(0.5, &same, &err)) {
+            return "quality-1.0 render failed: " + err;
+        }
+        def.Shutdown();
+        if (ref.size() != same.size() ||
+            std::memcmp(ref.data(), same.data(), ref.size()) != 0) {
+            return "SetPreviewQuality(1.0) is not pixel-identical";
+        }
+    }
+
+    // 2) 1080p bokeh: preview render is faster and close-but-not-equal.
+    {
+        Project project = MakeRenderProject(1920, 1080, 30);
+        project.clips[0].effects = {
+            {"bokeh_dof", {1.0f, 0.5f, 0.5f, 0.12f, 0.3f, 18.0f, 3.0f}},
+        };
+        Compositor comp;
+        if (!comp.Init(project, {}, &err)) {
+            return "preview compositor init failed: " + err;
+        }
+        std::vector<std::uint8_t> full, half;
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!comp.RenderFrameAt(0.5, &full, &err)) {
+            return "full-quality render failed: " + err;
+        }
+        const double full_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+        comp.SetPreviewQuality(0.5f);
+        const auto t1 = std::chrono::steady_clock::now();
+        if (!comp.RenderFrameAt(0.5, &half, &err)) {
+            return "half-quality render failed: " + err;
+        }
+        const double half_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t1)
+                .count();
+        comp.Shutdown();
+        if (half.size() != full.size()) {
+            return "preview render changed the frame size";
+        }
+        // The reduced-res path must actually WIN — the whole point of
+        // the hint. The ~4x expected margin makes this robust to
+        // ordinary timing noise on a loaded machine.
+        if (half_ms >= full_ms) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                          "preview path no faster (full %.0f ms vs "
+                          "half %.0f ms)", full_ms, half_ms);
+            return buf;
+        }
+        // Close but not identical: resampling is lossy, so the frames
+        // must differ a little; if they matched exactly the hint
+        // didn't engage, and a wild divergence means a broken kernel.
+        std::uint64_t sum = 0;
+        for (std::size_t i = 0; i < full.size(); ++i) {
+            sum += static_cast<std::uint64_t>(std::abs(
+                static_cast<int>(full[i]) - static_cast<int>(half[i])));
+        }
+        const double mean =
+            static_cast<double>(sum) / static_cast<double>(full.size());
+        std::fprintf(stderr,
+                     "  preview_quality: full %.0f ms, half %.0f ms, "
+                     "mean|diff| %.3f/byte\n",
+                     full_ms, half_ms, mean);
+        if (mean <= 0.001) {
+            return "preview output identical to full — hint ignored?";
+        }
+        if (mean > 20.0) {
+            return "preview output diverged too far (mean " +
+                   std::to_string(mean) + ")";
+        }
+    }
+    return {};
+}
+
 // JS fx: the catalog must list our stock scripts, and — when V8 is
 // compiled in — a runtime must register + execute them. invert on a
 // black pixel yields 255; bitcrush quantizes; smoothstep(0.5) = 0.5.
@@ -552,7 +1113,7 @@ std::string CheckJsFx() {
     if (!frame.Allocate(4, 4, video::PixelFormat::BGRA8)) {
         return "frame allocate failed";
     }
-    if (!fx.ApplyVideo("invert", &frame, {}, 0.0, &err)) {
+    if (!fx.ApplyVideo("invert", &frame, {}, 0.0, "bars", &err)) {
         return "invert apply failed: " + err;
     }
     if (frame.Data()[0] != 255 || frame.Data()[1] != 255 ||
@@ -561,7 +1122,7 @@ std::string CheckJsFx() {
     }
     float pcm[4] = {0.1f, -0.1f, 0.9f, -0.9f};
     if (!fx.ProcessAudio("bitcrush", pcm, 2, 48000, {{0, 4.0f}}, 0.0,
-                         &err)) {
+                         "bars", &err)) {
         return "bitcrush process failed: " + err;
     }
     // 4-bit → 16 levels; 0.9 quantizes to a multiple of 1/16.
@@ -572,6 +1133,102 @@ std::string CheckJsFx() {
     const double w = fx.TransitionWeight("smoothstep", 0.5);
     if (std::fabs(w - 0.5) > 0.01) {
         return "smoothstep(0.5) != 0.5";
+    }
+
+    // ---- hardening: hostile scripts ----------------------------------
+    // A private catalog + runtime exercises the failure paths the
+    // stock scripts never hit: a throwing apply(), a runaway loop the
+    // watchdog must terminate, and a stateful counter proving
+    // ctx.clip_id scopes closure state per clip.
+    const auto hostile_dir = SmokeTempDir() / "fx_hostile";
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(hostile_dir, ec);
+        auto write = [&](const char* name, const char* text) {
+            std::ofstream(hostile_dir / name,
+                          std::ios::binary | std::ios::trunc)
+                << text;
+        };
+        write("fx.json",
+              "{\"video\":["
+              "{\"id\":\"thrower\",\"file\":\"thrower.js\",\"params\":[]},"
+              "{\"id\":\"runaway\",\"file\":\"runaway.js\",\"params\":[]},"
+              "{\"id\":\"ok\",\"file\":\"ok.js\",\"params\":[]}],"
+              "\"audio\":["
+              "{\"id\":\"counter\",\"file\":\"counter.js\",\"params\":[]}],"
+              "\"transitions\":[]}");
+        write("thrower.js",
+              "xerFxVideo({id:\"thrower\",apply(f,p,c){"
+              "throw new Error(\"smoke boom\");}});\n");
+        write("runaway.js",
+              "xerFxVideo({id:\"runaway\",apply(f,p,c){"
+              "while(true){}}});\n");
+        write("ok.js",
+              "xerFxVideo({id:\"ok\",apply(f,p,c){"
+              "f.data[0]=42;}});\n");
+        write("counter.js",
+              "xerFxAudio(function(){const counts={};return{"
+              "id:\"counter\",process(pcm,p,ctx){"
+              "const k=ctx.clip_id||\"\";"
+              "const c=(counts[k]=(counts[k]||0)+1);"
+              "for(let i=0;i<pcm.length;++i)pcm[i]=c;}};}());\n");
+    }
+    if (!JsFxRuntime::LoadCatalog(hostile_dir.string(), &err)) {
+        return "hostile fx catalog failed: " + err;
+    }
+    JsFxRuntime hostile;
+    if (!hostile.EnsureLoaded(&err)) {
+        return "hostile js runtime failed: " + err;
+    }
+    // (a) exception inside apply(): false + error text, no crash.
+    video::Frame f2;
+    if (!f2.Allocate(2, 2, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    if (hostile.ApplyVideo("thrower", &f2, {}, 0.0, "c1", &err)) {
+        return "throwing apply() reported success";
+    }
+    if (err.find("boom") == std::string::npos) {
+        return "apply() error text lost: " + err;
+    }
+    // (b) runaway apply(): the watchdog (500 ms budget) must kill it —
+    // generous 4 s ceiling for CI jitter. Returns false (identity).
+    const auto runaway_t0 = std::chrono::steady_clock::now();
+    const bool runaway_ok =
+        hostile.ApplyVideo("runaway", &f2, {}, 0.0, "c1", &err);
+    const auto runaway_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - runaway_t0)
+            .count();
+    if (runaway_ok) {
+        return "runaway apply() reported success";
+    }
+    if (runaway_ms > 4000) {
+        return "runaway script not terminated (" +
+               std::to_string(static_cast<long long>(runaway_ms)) +
+               "ms)";
+    }
+    // The isolate must stay usable — termination is per-call.
+    if (!hostile.ApplyVideo("ok", &f2, {}, 0.0, "c1", &err)) {
+        return "runtime stayed broken after termination: " + err;
+    }
+    if (f2.Data()[0] != 42) {
+        return "ok script did not run after termination";
+    }
+    // (c) ctx.clip_id scopes stateful audio closures: clipA counts
+    // 1,2 while clipB starts its own counter at 1.
+    float pcm_c[2] = {0.0f, 0.0f};
+    auto count_for = [&](const std::string& clip) {
+        pcm_c[0] = 0.0f;
+        if (!hostile.ProcessAudio("counter", pcm_c, 1, 48000, {}, 0.0,
+                                  clip, &err)) {
+            return -1.0f;
+        }
+        return pcm_c[0];
+    };
+    if (count_for("clipA") != 1.0f || count_for("clipA") != 2.0f ||
+        count_for("clipB") != 1.0f) {
+        return "ctx.clip_id did not isolate per-clip script state";
     }
     return {};
 }
@@ -611,6 +1268,140 @@ std::string CheckAudioMixer() {
                     [](std::uint8_t byte) { return byte == 0; });
     if (!silent) {
         return "decoderless project produced non-silent audio";
+    }
+    return {};
+}
+
+// Synthetic waveform peaks shared by the audio-sync checks: a
+// deterministic non-periodic energy pattern shifted by `shift`
+// buckets (positive = the audio lands later in this file's own
+// recording), noise floor off-pattern.
+AudioPeaks MakeSyncTestPeaks(int buckets, int shift) {
+    const auto pattern = [](int i) {
+        std::uint32_t h = static_cast<std::uint32_t>(i) * 2654435761u;
+        h ^= h >> 16;
+        return 0.05f + 0.9f * (h % 1024) / 1024.0f;
+    };
+    AudioPeaks peaks;
+    peaks.channels = 1;
+    peaks.samples_per_peak = 256;
+    peaks.buckets = static_cast<std::size_t>(buckets);
+    peaks.data.resize(static_cast<std::size_t>(buckets) * 2);
+    for (int b = 0; b < buckets; ++b) {
+        const int src = b - shift;
+        const float v = (src >= 0 && src < buckets)
+                            ? pattern(src)
+                            : 0.02f;  // noise floor off-pattern
+        peaks.data[2 * b] = -v;
+        peaks.data[2 * b + 1] = v;
+    }
+    return peaks;
+}
+
+// Audio-sync lag math (audio_sync.h): synthetic AudioPeaks driven
+// through the peaks-provider seam — no decoder, no media files. B is
+// A delayed by kShift buckets: the plan must recover that lag and
+// emit a NEGATIVE timeline shift of kShift bucket-seconds (the clip
+// moves earlier because its take's audio sits later in its own
+// recording). A leading copy proves the positive direction, and a
+// noise-only clip proves the confidence gate.
+std::string CheckAudioSync() {
+    constexpr int kBuckets = 4096;   // ~21.8 s at 256/48k per bucket
+    constexpr int kShift = 148;      // buckets; 37 envelope cells (x4)
+    constexpr double kCell = 256.0 / 48000.0 * 4.0;  // env cell secs
+    // Peak buckets for the reference pattern shifted by `shift`
+    // (positive = audio lands later in this file's own recording).
+    const auto make_peaks = [](int shift) {
+        return MakeSyncTestPeaks(kBuckets, shift);
+    };
+    const AudioPeaks peaks_a = make_peaks(0);
+    const AudioPeaks peaks_b = make_peaks(kShift);    // delayed copy
+    const AudioPeaks peaks_d = make_peaks(-kShift);   // leading copy
+    const AudioPeaks peaks_n = make_peaks(1 << 30);   // pure floor
+
+    const auto provider = [&](const std::string& path,
+                              AudioPeaks* out) -> bool {
+        if (path == "cam_a.mp4") { *out = peaks_a; return true; }
+        if (path == "cam_b.mp4") { *out = peaks_b; return true; }
+        if (path == "cam_d.mp4") { *out = peaks_d; return true; }
+        if (path == "cam_n.mp4") { *out = peaks_n; return true; }
+        return false;
+    };
+
+    Project project;
+    project.width = 320;
+    project.height = 180;
+    project.fps_num = 30;
+    project.fps_den = 1;
+    project.tracks.push_back(Track{TrackKind::Video, "V1"});
+    project.tracks.push_back(Track{TrackKind::Audio, "A1"});
+    project.tracks.push_back(Track{TrackKind::Audio, "A2"});
+    project.tracks.push_back(Track{TrackKind::Audio, "A3"});
+    const auto media_clip = [](const std::string& id,
+                               const std::string& path, int track,
+                               double start, double dur) {
+        Clip clip;
+        clip.id = id;
+        clip.source_path = path;
+        clip.source.kind = SourceKind::Media;
+        clip.track = track;
+        clip.timeline_start = start;
+        clip.duration = dur;
+        return clip;
+    };
+    project.clips.push_back(
+        media_clip("ref", "cam_a.mp4", 0, 0.0, 20.0));
+    project.clips.push_back(
+        media_clip("delayed", "cam_b.mp4", 1, 5.0, 20.0));
+    project.clips.push_back(
+        media_clip("leading", "cam_d.mp4", 2, 2.0, 20.0));
+    project.clips.push_back(
+        media_clip("noise", "cam_n.mp4", 3, 12.0, 10.0));
+
+    AudioSyncReport report;
+    std::string err;
+    if (!ComputeAudioSyncPlanWithPeaks(project, "ref", provider,
+                                       &report, &err)) {
+        return "plan failed: " + err;
+    }
+    if (report.reference_clip_id != "ref" || report.status.empty()) {
+        return "report missing reference/status";
+    }
+    const auto entry_for = [&](const std::string& id)
+        -> const AudioSyncEntry* {
+        for (const auto& e : report.entries) {
+            if (e.clip_id == id) return &e;
+        }
+        return nullptr;
+    };
+    // lag cells = kShift/4 = 37 → delta = -37 * kCell ≈ -0.789 s.
+    const double want_delta = -(kShift / 4.0) * kCell;
+    const AudioSyncEntry* delayed = entry_for("delayed");
+    if (delayed == nullptr || !delayed->matched) {
+        return "delayed clip did not match";
+    }
+    if (std::fabs(delayed->delta_seconds - want_delta) > 1e-3 ||
+        std::fabs(delayed->new_timeline_start -
+                  (5.0 + want_delta)) > 1e-3) {
+        return "delayed clip shift wrong: " +
+               std::to_string(delayed->delta_seconds);
+    }
+    if (delayed->confidence < 0.5) {
+        return "delayed clip confidence too low";
+    }
+    const AudioSyncEntry* leading = entry_for("leading");
+    if (leading == nullptr || !leading->matched) {
+        return "leading clip did not match";
+    }
+    if (std::fabs(leading->delta_seconds + want_delta) > 1e-3 ||
+        std::fabs(leading->new_timeline_start -
+                  (2.0 - want_delta)) > 1e-3) {
+        return "leading clip shift wrong (sign): " +
+               std::to_string(leading->delta_seconds);
+    }
+    const AudioSyncEntry* noise = entry_for("noise");
+    if (noise == nullptr || noise->matched) {
+        return "noise clip falsely matched";
     }
     return {};
 }
@@ -736,6 +1527,202 @@ std::string CheckMediaCatalog() {
     return {};
 }
 
+// IsAttachedPictureStream() — the exported seam ProbeVideo applies to
+// every "video"-typed stream to decide whether it is embedded cover
+// art (never the primary video) or real footage. Truth-table the real
+// contract: attached_pic disposition, "cover" metadata, any picture
+// stream in an audio-primary container, and a 1-2 frame image-codec
+// stream beside audio all classify as art — while MJPEG camera
+// footage with an unknown frame count and lone stills must stay video.
+std::string CheckProbeClassification() {
+    namespace CV = XER::Content::Video;
+    const std::string mp4 = "mov,mp4,m4a,3gp,3g2,mj2";
+
+    FFmpeg::StreamInfo base;
+    base.media_type = "video";
+    base.codec_name = "mjpeg";
+
+    // attached_pic disposition beside audio -> art.
+    FFmpeg::StreamInfo pic = base;
+    pic.attached_pic = true;
+    pic.frame_count = 1;
+    if (!CV::IsAttachedPictureStream(pic, true, mp4)) {
+        return "attached_pic stream not classified as art";
+    }
+    // "cover" metadata marker -> art even without an audio stream
+    // (the metadata check runs before the audio gate).
+    FFmpeg::StreamInfo meta = base;
+    meta.metadata.push_back({"comment", "Cover (front)"});
+    if (!CV::IsAttachedPictureStream(meta, false, mp4)) {
+        return "cover metadata not classified as art";
+    }
+    // mjpeg inside an audio-primary container (mp3) with 1-2 frames
+    // next to audio -> art even with no disposition/metadata tells.
+    FFmpeg::StreamInfo mp3_art = base;
+    for (const std::int64_t frames : {1, 2}) {
+        mp3_art.frame_count = frames;
+        if (!CV::IsAttachedPictureStream(mp3_art, true, "mp3")) {
+            return "mp3 picture stream (" + std::to_string(frames) +
+                   " frames) not classified as art";
+        }
+    }
+    // MJPEG camera footage: image codec but frame_count unknown (0)
+    // in a general container -> stays video.
+    FFmpeg::StreamInfo camera = base;  // frame_count stays 0
+    if (CV::IsAttachedPictureStream(camera, true, mp4)) {
+        return "uncounted MJPEG footage misclassified as art";
+    }
+    // Many image-codec frames -> a real video, not a cover.
+    camera.frame_count = 300;
+    if (CV::IsAttachedPictureStream(camera, true, mp4)) {
+        return "300-frame MJPEG stream misclassified as art";
+    }
+    // A 1-2 frame image-codec stream beside audio in a general
+    // container -> art by the frame-count heuristic.
+    FFmpeg::StreamInfo still = base;
+    still.codec_name = "png";
+    still.frame_count = 1;
+    if (!CV::IsAttachedPictureStream(still, true, mp4)) {
+        return "1-frame image stream beside audio not classified as art";
+    }
+    // The same lone still with no audio anywhere keeps counting as
+    // video — the audio gate keeps single pictures usable.
+    if (CV::IsAttachedPictureStream(still, false, mp4)) {
+        return "lone still without audio misclassified as art";
+    }
+    // A real video codec never classifies on frame count alone.
+    FFmpeg::StreamInfo h264 = base;
+    h264.codec_name = "h264";
+    h264.frame_count = 1;
+    if (CV::IsAttachedPictureStream(h264, true, mp4)) {
+        return "1-frame h264 stream misclassified as art";
+    }
+    return {};
+}
+
+// PosterCache (poster_cache.h) byte-budgeted LRU: an oversized frame
+// is never retained, many small frames evict LRU-first until
+// BytesUsed() fits the capacity, and a Get() hit promotes the key so
+// it survives further evictions. UI-free — frames only, no decoder.
+std::string CheckPosterCacheLru() {
+    constexpr std::size_t kCapacity = 1u * 1024u * 1024u;  // 1 MiB
+    PosterCache cache(kCapacity);
+
+    // Oversized: a 2 MiB frame exceeds the whole budget -> the cache
+    // drops it immediately instead of keeping it.
+    video::Frame big;
+    if (!big.Allocate(512, 1024, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    cache.Put("big.mp4", 0, std::move(big));
+    if (cache.Get("big.mp4", 0) != nullptr) {
+        return "oversized frame was retained";
+    }
+
+    // 64 KiB frames: 16 fit exactly in 1 MiB. One hot key plus 15 cold
+    // keys, touch the hot one, then churn 8 more — the promoted key
+    // must survive while the oldest cold keys evict.
+    video::Frame small;
+    if (!small.Allocate(128, 128, video::PixelFormat::BGRA8)) {
+        return "frame allocate failed";
+    }
+    cache.Put("hot.mp4", 0, small);
+    for (int i = 0; i < 15; ++i) {
+        cache.Put("clip.mp4", i, small);
+    }
+    if (cache.Get("hot.mp4", 0) == nullptr) {
+        return "hot key missing before the churn";
+    }
+    for (int i = 0; i < 8; ++i) {
+        cache.Put("filler.mp4", i, small);
+    }
+    const PosterCache::Stats stats = cache.GetStats();
+    if (stats.bytes > stats.capacity_bytes) {
+        return "BytesUsed() exceeds capacity";
+    }
+    if (stats.evictions == 0) {
+        return "no evictions recorded under pressure";
+    }
+    if (cache.Get("hot.mp4", 0) == nullptr) {
+        return "hot key evicted despite Get() promotion";
+    }
+    return {};
+}
+
+// Deployed assets audit: the app boots off <exe>/assets/app.yaml, the
+// icon pack rasterizes SVGs resolved through icons.yaml, and the
+// .xexrj extension host scans assets/extensions/. Everything the
+// runtime loads must actually be deployed — missing entries are
+// reported in the error string.
+std::string CheckAssetsIcons() {
+    std::string status;
+    auto boot = AppRuntime::Boot(&status);  // resolves assets_dir
+    // Same hygiene as app_boot: drop the published engine pointer
+    // before this result dies.
+    AppRuntime::SharedBootEngine() = nullptr;
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) {
+        return "assets dir not deployed (app.yaml not found)";
+    }
+    std::error_code ec;
+    std::vector<std::string> missing;
+    if (!std::filesystem::exists(cfg.assets_dir / "app.yaml", ec)) {
+        missing.push_back("app.yaml");
+    }
+    if (!std::filesystem::exists(cfg.assets_dir / "icons.yaml", ec)) {
+        missing.push_back("icons.yaml");
+    }
+    // Icons dir: the path Boot resolved, falling back to the
+    // conventional assets/icons layout.
+    const std::filesystem::path icons_dir =
+        !cfg.icons_dir.empty() ? cfg.icons_dir
+                               : cfg.assets_dir / "icons";
+    if (!std::filesystem::is_directory(icons_dir, ec)) {
+        missing.push_back("icons/");
+    } else {
+        int svg_count = 0;
+        for (const auto& de :
+             std::filesystem::directory_iterator(icons_dir, ec)) {
+            if (de.path().extension() == ".svg") {
+                ++svg_count;
+            }
+        }
+        if (svg_count == 0) {
+            missing.push_back("icons/*.svg");
+        }
+        // Every icons.yaml mapping must resolve under the icons dir —
+        // IconPack::Get() builds its path exactly this way.
+        for (const auto& [name, file] : cfg.icon_map) {
+            if (!std::filesystem::exists(icons_dir / file, ec)) {
+                missing.push_back("icon:" + name + "->" + file);
+            }
+        }
+    }
+    // .xexrj extension packages — the ext host rescans this dir.
+    const std::filesystem::path ext_dir = cfg.assets_dir / "extensions";
+    bool has_xexrj = false;
+    if (std::filesystem::is_directory(ext_dir, ec)) {
+        for (const auto& de :
+             std::filesystem::directory_iterator(ext_dir, ec)) {
+            if (de.path().extension() == ".xexrj") {
+                has_xexrj = true;
+                break;
+            }
+        }
+    }
+    if (!has_xexrj) {
+        missing.push_back("extensions/*.xexrj");
+    }
+    if (!missing.empty()) {
+        std::string reason = "missing:";
+        for (const std::string& entry : missing) {
+            reason += " " + entry;
+        }
+        return reason;
+    }
+    return {};
+}
+
 // End-to-end: compositor -> libx264 -> mp4 mux via the real FFmpeg
 // bridge, all on procedural clips — no media fixture required. Kept
 // last since it is the slowest check (~1 s typical).
@@ -772,6 +1759,612 @@ std::string CheckExportRender() {
     return {};
 }
 
+// Out-of-process media worker (media_worker_client.h): the client
+// spawns the dedicated XERVideoLoader.exe sitting NEXT TO this exe
+// when present — dev builds without it fall back to self-spawning
+// `--media-worker`. Either way the worker must answer a ping; the
+// dedicated case additionally checks the role string to prove the
+// named binary (not the fallback, not a PATH lookalike) replied.
+std::string CheckMediaWorker() {
+#if defined(_WIN32)
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const std::filesystem::path bin_dir =
+        std::filesystem::path(exe).parent_path();
+    std::error_code ec;
+    const bool dedicated =
+        std::filesystem::exists(bin_dir / "XERVideoLoader.exe", ec);
+    auto& client = MediaWorkerClient::Shared();
+    if (!client.Available()) {
+        return "media worker spawn failed";
+    }
+    std::string role;
+    if (!client.Ping(&role)) {
+        return "media worker ping failed";
+    }
+    if (dedicated && role != "XERVideoLoader") {
+        return "XERVideoLoader.exe present but worker role is '" +
+               role + "'";
+    }
+    if (!dedicated && role != "media-worker") {
+        return "unexpected worker role '" + role + "'";
+    }
+    return {};
+#else
+    return {};   // the subprocess client is Windows-only
+#endif
+}
+
+// XERSyncMedia.exe (worker_pipe.h): the audio-sync plan computed
+// INSIDE the named worker — the same synthetic-peaks math as the
+// audio_sync check, but the peaks ride the sync_plan request's
+// injection seam so no decoder runs. Asserts the dedicated exe's
+// role string; when the exe is absent the documented in-process
+// fallback is exercised instead.
+std::string CheckSyncMediaWorker() {
+#if defined(_WIN32)
+    constexpr int kBuckets = 4096;
+    constexpr int kShift = 148;
+    constexpr double kCell = 256.0 / 48000.0 * 4.0;
+    const AudioPeaks peaks_a = MakeSyncTestPeaks(kBuckets, 0);
+    const AudioPeaks peaks_b = MakeSyncTestPeaks(kBuckets, kShift);
+
+    // The minimal in-process sanity proof used when the worker exe is
+    // not beside this binary (dev shells, partial builds).
+    auto in_process = [&]() -> std::string {
+        Project project;
+        project.tracks.push_back(Track{TrackKind::Audio, "A1"});
+        const auto media_clip = [](const std::string& id,
+                                   const std::string& path,
+                                   double start) {
+            Clip clip;
+            clip.id = id;
+            clip.source_path = path;
+            clip.source.kind = SourceKind::Media;
+            clip.track = 0;
+            clip.timeline_start = start;
+            clip.duration = 20.0;
+            return clip;
+        };
+        project.clips.push_back(media_clip("ref", "cam_a.mp4", 0.0));
+        project.clips.push_back(
+            media_clip("delayed", "cam_b.mp4", 5.0));
+        const auto provider = [&](const std::string& path,
+                                  AudioPeaks* out) -> bool {
+            *out = path == "cam_b.mp4" ? peaks_b : peaks_a;
+            return true;
+        };
+        AudioSyncReport report;
+        std::string err;
+        if (!ComputeAudioSyncPlanWithPeaks(project, "ref", provider,
+                                           &report, &err)) {
+            return "in-process fallback plan failed: " + err;
+        }
+        return {};
+    };
+
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const bool dedicated = std::filesystem::exists(
+        std::filesystem::path(exe).parent_path() /
+        "XERSyncMedia.exe");
+    WorkerPipe& pipe = SyncMediaPipe();
+    if (!dedicated || !pipe.Available()) {
+        return in_process();   // fallback tolerated
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "sync worker ping failed";
+    }
+    if (role != "XERSyncMedia") {
+        return "unexpected sync worker role '" + role + "'";
+    }
+
+    MediaWorker::SyncPlanRequestData data;
+    data.ref_index = 0;
+    const auto clip = [](const char* id, const char* path,
+                         double start, const AudioPeaks& peaks) {
+        MediaWorker::SyncPlanClip c;
+        c.clip_id = id;
+        c.path = path;
+        c.start = start;
+        c.out_point = 20.0;
+        c.rate = 1.0;
+        c.has_peaks = true;
+        c.peaks = peaks;
+        return c;
+    };
+    data.clips.push_back(clip("ref", "cam_a.mp4", 0.0, peaks_a));
+    data.clips.push_back(
+        clip("delayed", "cam_b.mp4", 5.0, peaks_b));
+    const std::uint64_t id = pipe.NextId();
+    std::string reply;
+    if (!pipe.RoundTrip(
+            id, MediaWorker::EncodeSyncPlanRequest(id, data), 60000,
+            &reply)) {
+        return "sync_plan request got no reply";
+    }
+    std::uint64_t rid = 0;
+    bool ok = false;
+    std::string err;
+    if (!MediaWorker::DecodeReplyEnvelope(reply, &rid, &ok, &err)) {
+        return "sync_plan reply is malformed";
+    }
+    if (!ok) {
+        return "sync_plan rejected: " + err;
+    }
+    MediaWorker::SyncPlanResult result;
+    if (!MediaWorker::DecodeSyncPlanReply(reply, &rid, &result)) {
+        return "sync_plan reply payload failed to decode";
+    }
+    if (result.reference_clip_id != "ref") {
+        return "sync_plan picked the wrong reference";
+    }
+    const MediaWorker::SyncPlanResultEntry* delayed = nullptr;
+    for (const auto& e : result.entries) {
+        if (e.clip_id == "delayed") delayed = &e;
+    }
+    if (delayed == nullptr || !delayed->matched) {
+        return "worker did not match the delayed clip";
+    }
+    // lag cells = kShift/4 = 37 → delta = -37 * kCell ≈ -0.789 s.
+    const double want_delta = -(kShift / 4.0) * kCell;
+    if (std::fabs(delayed->delta_seconds - want_delta) > 1e-3) {
+        return "worker shift has the wrong sign/magnitude: " +
+               std::to_string(delayed->delta_seconds);
+    }
+    if (delayed->confidence < 0.5) {
+        return "worker confidence too low";
+    }
+    return {};
+#else
+    return {};
+#endif
+}
+
+// XERFxScript.exe (worker_pipe.h): the JS fx host answers over the
+// pipe — fx_list must mirror the deployed catalog, fx_audio must
+// actually run a script (bitcrush on a sine block quantizes), and
+// fx_transition must return the smoothstep scalar. Asserts the role;
+// a missing exe or a dead engine falls back to pass — js_fx already
+// proves the in-process runtime.
+std::string CheckFxScriptWorker() {
+#if defined(_WIN32)
+    std::string status;
+    AppRuntime::Boot(&status);   // fills SharedAssetsConfig
+    const std::string fx_dir =
+        (AppRuntime::SharedAssetsConfig().assets_dir / "scripts" /
+         "fx")
+            .string();
+    wchar_t exe[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exe, MAX_PATH);
+    const bool dedicated = std::filesystem::exists(
+        std::filesystem::path(exe).parent_path() / "XERFxScript.exe");
+    WorkerPipe& pipe = FxScriptPipe();
+    if (!dedicated || !pipe.Available()) {
+        return {};   // fallback tolerated
+    }
+    std::string role;
+    if (!pipe.Ping(&role)) {
+        return "fx worker ping failed";
+    }
+    if (role != "XERFxScript") {
+        return "unexpected fx worker role '" + role + "'";
+    }
+
+    const auto round_trip =
+        [&](const std::function<std::string(std::uint64_t)>& encode,
+            std::string* reply) {
+            const std::uint64_t id = pipe.NextId();
+            return pipe.RoundTrip(id, encode(id), 30000, reply);
+        };
+    // Tolerate engine-side rejections (V8-less worker, undeployed
+    // catalog) but not transport silence — the worker answered ping.
+    const auto envelope_ok = [](const std::string& reply,
+                                std::string* err) -> int {
+        std::uint64_t id = 0;
+        bool ok = false;
+        if (!MediaWorker::DecodeReplyEnvelope(reply, &id, &ok,
+                                              err)) {
+            return -1;   // malformed
+        }
+        return ok ? 1 : 0;
+    };
+
+    // fx_list — pure JSON; a live worker must always answer it.
+    std::string reply;
+    if (!round_trip(
+            [&](std::uint64_t id) {
+                return MediaWorker::EncodeFxListRequest(id, fx_dir);
+            },
+            &reply)) {
+        return "fx_list got no reply";
+    }
+    MediaWorker::FxListReply list;
+    std::uint64_t rid = 0;
+    if (!MediaWorker::DecodeFxListReply(reply, &rid, &list)) {
+        return "fx_list reply failed to decode";
+    }
+    const auto has_id = [](const std::vector<MediaWorker::FxListItem>&
+                               items,
+                           const char* id) {
+        for (const auto& item : items) {
+            if (item.id == id) return true;
+        }
+        return false;
+    };
+    if (list.video.size() < 5 || list.audio.size() < 4 ||
+        list.transitions.size() < 5 ||
+        !has_id(list.video, "invert") ||
+        !has_id(list.audio, "bitcrush") ||
+        !has_id(list.transitions, "smoothstep")) {
+        return "fx_list does not mirror the deployed catalog";
+    }
+
+    // fx_audio — bitcrush (4 bits) on a stereo sine block must come
+    // back quantized.
+    constexpr int kFrames = 1024;
+    std::vector<float> pcm(static_cast<std::size_t>(kFrames) * 2);
+    for (int i = 0; i < kFrames; ++i) {
+        const float s = 0.8f * std::sin(
+            2.0f * 3.14159265f * 440.0f * i / 48000.0f);
+        pcm[2 * i] = s;
+        pcm[2 * i + 1] = s;
+    }
+    const std::map<std::uint32_t, float> params{{0, 4.0f}};
+    std::string audio_reply;
+    if (!round_trip(
+            [&](std::uint64_t id) {
+                return MediaWorker::EncodeFxAudioRequest(
+                    id, fx_dir, "bitcrush", "smoke-clip", pcm.data(),
+                    kFrames, 2, 48000, params, 0.0);
+            },
+            &audio_reply)) {
+        return {};   // transport died — tolerated fallback
+    }
+    std::string err;
+    const int audio_state = envelope_ok(audio_reply, &err);
+    if (audio_state < 0) {
+        return "fx_audio reply is malformed";
+    }
+    if (audio_state == 0) {
+        return {};   // engine unavailable (no V8/catalog) — tolerated
+    }
+    std::vector<float> out_pcm;
+    if (!MediaWorker::DecodeFxAudioReply(audio_reply, &rid,
+                                         &out_pcm) ||
+        out_pcm.size() != pcm.size()) {
+        return "fx_audio payload failed to decode";
+    }
+    // bits=4 → 16 levels → every sample is a multiple of 1/16, and a
+    // sine quantized to 16 levels differs from the input almost
+    // everywhere (proving the script actually ran).
+    int unquantized = 0;
+    int changed = 0;
+    for (std::size_t i = 0; i < out_pcm.size(); ++i) {
+        const float q16 = out_pcm[i] * 16.0f;
+        if (std::fabs(q16 - std::round(q16)) > 0.02f) {
+            ++unquantized;
+        }
+        if (std::fabs(out_pcm[i] - pcm[i]) > 1e-4f) {
+            ++changed;
+        }
+    }
+    if (unquantized > 0) {
+        return "fx_audio output is not bitcrush-quantized";
+    }
+    if (changed < static_cast<int>(out_pcm.size() / 2)) {
+        return "fx_audio left the block unchanged";
+    }
+
+    // fx_transition — smoothstep(0.5) == 0.5.
+    std::string trans_reply;
+    if (!round_trip(
+            [&](std::uint64_t id) {
+                return MediaWorker::EncodeFxTransitionRequest(
+                    id, fx_dir, "smoothstep", 0.5);
+            },
+            &trans_reply)) {
+        return {};   // tolerated
+    }
+    const int trans_state = envelope_ok(trans_reply, &err);
+    if (trans_state < 0) {
+        return "fx_transition reply is malformed";
+    }
+    if (trans_state == 0) {
+        return {};   // engine unavailable — tolerated
+    }
+    double weight = -1.0;
+    if (!MediaWorker::DecodeFxTransitionReply(trans_reply, &rid,
+                                              &weight) ||
+        std::fabs(weight - 0.5) > 0.01) {
+        return "fx_transition returned the wrong weight";
+    }
+    return {};
+#else
+    return {};
+#endif
+}
+
+// `generated_layers` — the "Add Color Matte / Color Bars / Text"
+// flow headless end to end: clips are created through the MODEL ops
+// (AddTrack + AddClip with unbounded video bounds — the same calls
+// the app's AddGeneratedClipAt issues through TimelineHistory),
+// composited through the real Compositor (each kind must produce its
+// signature pixels — proving no clip took a decoder path), then the
+// project round-trips through ProjectStore so source.kind +
+// source.param + the Clip::name layer label all survive save/load.
+std::string CheckGeneratedLayers() {
+    Project project;
+    project.width = 160;
+    project.height = 90;
+    project.fps_num = 30;
+    project.fps_den = 1;
+    std::string err;
+    if (AddTrack(project, TrackKind::Video, "V1") != 0 ||
+        AddTrack(project, TrackKind::Video, "V2") != 1) {
+        return "AddTrack failed";
+    }
+
+    const MediaBounds gen_bounds{0.0, true};   // unbounded, has video
+    Clip matte = MakeGeneratedClip("matte", 0, 0.0, 6.0,
+                                   SourceKind::ColorMatte, "#3366CC");
+    matte.name = "Backdrop";
+    Clip bars = MakeGeneratedClip("bars", 1, 0.0, 3.0,
+                                  SourceKind::ColorBars, "smpte75");
+    Clip text = MakeGeneratedClip("title", 1, 3.0, 3.0,
+                                  SourceKind::Text, "Smoke | size=24");
+    text.name = "Smoke Title";
+    for (const Clip* clip : {&matte, &bars, &text}) {
+        if (!AddClip(project, *clip, gen_bounds, &err)) {
+            return "AddClip rejected a generated clip: " + err;
+        }
+    }
+
+    Compositor compositor;
+    if (!compositor.Init(project, {}, &err)) {
+        return "Compositor::Init failed: " + err;
+    }
+    std::vector<std::uint8_t> bgra;
+    const auto pixel = [](const std::vector<std::uint8_t>& buf,
+                          int x, int y) {
+        const auto* p =
+            buf.data() + (static_cast<std::size_t>(y) * 160 + x) * 4u;
+        return std::array<std::uint8_t, 4>{p[0], p[1], p[2], p[3]};
+    };
+
+    // t=1.5: V2 SMPTE-75 bars composite over the V1 matte — the first
+    // column is 191 gray, the last is blue (BGRA byte order).
+    if (!compositor.RenderFrameAt(1.5, &bgra, &err)) {
+        compositor.Shutdown();
+        return "RenderFrameAt(bars) failed: " + err;
+    }
+    if (bgra.size() != static_cast<std::size_t>(160) * 90 * 4) {
+        compositor.Shutdown();
+        return "rendered buffer has the wrong size";
+    }
+    if (pixel(bgra, 10, 45) !=
+            std::array<std::uint8_t, 4>{191, 191, 191, 255} ||
+        pixel(bgra, 159, 45) !=
+            std::array<std::uint8_t, 4>{191, 0, 0, 255}) {
+        compositor.Shutdown();
+        return "ColorBars pixels wrong at t=1.5";
+    }
+
+    // t=4.5: V2 text composites over the matte — a bottom-right pixel
+    // is the matte color (#3366CC -> BGRA CC,66,33 — hex parse proven
+    // end to end) while a bright glyph pixel must exist somewhere
+    // (the text actually drew).
+    if (!compositor.RenderFrameAt(4.5, &bgra, &err)) {
+        compositor.Shutdown();
+        return "RenderFrameAt(text) failed: " + err;
+    }
+    compositor.Shutdown();
+    if (pixel(bgra, 159, 89) !=
+        std::array<std::uint8_t, 4>{0xCC, 0x66, 0x33, 0xFF}) {
+        return "matte underlay pixel wrong at t=4.5";
+    }
+    const bool any_glyph = std::any_of(
+        bgra.begin(), bgra.end(),
+        [](std::uint8_t byte) { return byte >= 200; });
+    if (!any_glyph) {
+        return "text layer produced no glyph pixels";
+    }
+
+    // Persistence: kind + param + name + placement all survive a
+    // .xerproj round trip — the LAYERS panel reads Clip::name, so a
+    // silent drop would strip every user-facing label on reload.
+    const std::string path =
+        Utf8Path(SmokeTempDir() / "generated_layers.xerproj");
+    if (!ProjectStore::Save(project, path, &err)) {
+        return "Save failed: " + err;
+    }
+    Project loaded;
+    if (!ProjectStore::Load(path, &loaded, &err)) {
+        return "Load failed: " + err;
+    }
+    const struct {
+        const char* id;
+        SourceKind kind;
+        const char* param;
+        const char* name;
+        int track;
+        double start;
+        double duration;
+    } kExpect[] = {
+        {"matte", SourceKind::ColorMatte, "#3366CC", "Backdrop",
+         0, 0.0, 6.0},
+        {"bars", SourceKind::ColorBars, "smpte75", "", 1, 0.0, 3.0},
+        {"title", SourceKind::Text, "Smoke | size=24", "Smoke Title",
+         1, 3.0, 3.0},
+    };
+    for (const auto& expect : kExpect) {
+        const Clip* clip = FindClip(loaded, expect.id);
+        if (clip == nullptr || clip->source.kind != expect.kind ||
+            clip->source.param != expect.param ||
+            clip->name != expect.name || clip->track != expect.track ||
+            clip->timeline_start != expect.start ||
+            clip->duration != expect.duration) {
+            return "generated clip did not survive the round trip: " +
+                   std::string(expect.id);
+        }
+    }
+    return {};
+}
+
+// Shared import filter (smoke_checks.h) — the same predicate the
+// file dialog's pattern list and the OS file-drop filter are built
+// from: common video/audio/still extensions accept (any case),
+// obvious non-media and edge cases (no dot, trailing dot, dot inside
+// a directory name, near-miss extensions) reject.
+std::string CheckMediaImportFilter() {
+    for (const char* path :
+         {"a.mp4", "B.MP4", "x/song.flac", "pic.PNG", "clip.m2ts",
+          "still.dng", "C:\\dir\\clip.mkv"}) {
+        if (!IsMediaImportPath(path)) {
+            return std::string("rejected media path: ") + path;
+        }
+    }
+    for (const char* path :
+         {"a.txt", "b.xerproj", "c.exe", "noext", "trailing.",
+          "dir.name/file", "archive.mp4x", "xmp4"}) {
+        if (IsMediaImportPath(path)) {
+            return std::string("accepted non-media path: ") + path;
+        }
+    }
+    return {};
+}
+
+// LUT .cube parser (lut_manager.h) — synthetic strings only; no file
+// system or OCIO needed. TITLE/size/data extraction on a well-formed
+// 3D cube, tolerant-but-warned short bodies, hard reject on cubes with
+// no declared size or no data rows, and the 1D variant.
+std::string CheckLutManager() {
+    const std::string cube =
+        "# leading comment\n"
+        "TITLE \"Smoky Two\"\n"
+        "LUT_3D_SIZE 2\n"
+        "DOMAIN_MIN 0 0 0\n"
+        "DOMAIN_MAX 1 1 1\n"
+        "0 0 0\n1 0 0\n0 1 0\n0 0 1\n"
+        "1 1 0\n1 0 1\n0 1 1\n1 1 1 # trailing comment\n";
+    Lut::CubeData data;
+    std::string error;
+    if (!Lut::ParseCubeText(cube, &data, &error)) {
+        return "ParseCubeText rejected a valid cube: " + error;
+    }
+    if (data.title != "Smoky Two" || !data.is_3d || data.size != 2 ||
+        data.data.size() != 24) {
+        return "ParseCubeText produced wrong title/size/data";
+    }
+    // Short body: parse succeeds but surfaces the row-count warning.
+    error.clear();
+    if (!Lut::ParseCubeText("LUT_3D_SIZE 2\n0 0 0\n", &data, &error) ||
+        error.empty()) {
+        return "short cube body missed its warning";
+    }
+    // No declared size / no data rows are hard failures.
+    if (Lut::ParseCubeText("TITLE \"x\"\n0 0 0\n", &data, nullptr)) {
+        return "size-less cube accepted";
+    }
+    if (Lut::ParseCubeText("LUT_3D_SIZE 2\n", &data, nullptr)) {
+        return "empty-body cube accepted";
+    }
+    // 1D variant: size rows, not size^3.
+    error.clear();
+    if (!Lut::ParseCubeText("LUT_1D_SIZE 2\n0 0 0\n1 1 1\n", &data,
+                            &error) ||
+        data.is_3d || data.size != 2 || data.data.size() != 6) {
+        return "1D cube parse failed";
+    }
+    return {};
+}
+
+// URL import helpers (url_import.h) — table-driven classification
+// (platform host / direct / invalid) plus the filename machinery:
+// Content-Disposition extraction, URL basename, percent-decoding and
+// Windows filename sanitizing. No network — Download() itself is
+// exercised live, never in smoke.
+std::string CheckUrlImport() {
+    using UrlKind = UrlImport::UrlKind;
+    const struct {
+        const char* url;
+        UrlKind kind;
+    } cases[] = {
+        {"https://www.youtube.com/watch?v=abc", UrlKind::kPlatform},
+        {"https://youtu.be/abc", UrlKind::kPlatform},
+        {"https://m.youtube.com/watch?v=x", UrlKind::kPlatform},
+        {"https://vimeo.com/12345", UrlKind::kPlatform},
+        {"https://www.tiktok.com/@u/video/1", UrlKind::kPlatform},
+        {"https://www.instagram.com/reel/x/", UrlKind::kPlatform},
+        {"https://clips.twitch.tv/x", UrlKind::kPlatform},
+        {"HTTPS://YOUTUBE.COM/watch?v=x", UrlKind::kPlatform},
+        // Suffix lookalikes must NOT classify as the platform.
+        {"https://notyoutube.com/x", UrlKind::kDirect},
+        {"https://youtube.com.evil.com/x", UrlKind::kDirect},
+        {"https://cdn.example.com/clip.mp4", UrlKind::kDirect},
+        {"http://files.host/a.wav?dl=1", UrlKind::kDirect},
+        {"https://user@h.example.com/m.mkv", UrlKind::kDirect},
+        {"ftp://h/f.mp4", UrlKind::kInvalid},
+        {"file:///c:/a.mp4", UrlKind::kInvalid},
+        {"C:/media/a.mp4", UrlKind::kInvalid},
+        {"youtube.com/watch?v=x", UrlKind::kInvalid},
+        {"https:///x", UrlKind::kInvalid},
+        {"", UrlKind::kInvalid},
+    };
+    for (const auto& c : cases) {
+        if (UrlImport::ClassifyUrl(c.url) != c.kind) {
+            return std::string("ClassifyUrl(\"") + c.url +
+                   "\") wrong kind";
+        }
+    }
+    // Host extraction (used for status text + platform match).
+    if (UrlImport::HostOf("https://YouTube.COM:443/watch") !=
+        "youtube.com") {
+        return "HostOf failed port/case handling";
+    }
+    // Filename machinery.
+    if (UrlImport::FilenameFromContentDisposition(
+            "attachment; filename=\"clip final.mp4\"") !=
+        "clip final.mp4") {
+        return "Content-Disposition quoted filename failed";
+    }
+    if (UrlImport::FilenameFromContentDisposition(
+            "attachment; filename*=UTF-8''%E2%82%AC%20clip.mp4") !=
+        "\xE2\x82\xAC clip.mp4") {
+        return "Content-Disposition RFC5987 filename failed";
+    }
+    if (!UrlImport::FilenameFromContentDisposition("inline").empty()) {
+        return "Content-Disposition phantom filename";
+    }
+    if (UrlImport::UrlBasename(
+            "https://h/a/b/my%20clip.mp4?dl=1#f") != "my clip.mp4" ||
+        !UrlImport::UrlBasename("https://h/a/").empty() ||
+        !UrlImport::UrlBasename("https://h").empty()) {
+        return "UrlBasename failed";
+    }
+    if (UrlImport::PercentDecode("%41%42") != "AB") {
+        return "PercentDecode failed";
+    }
+    struct {
+        const char* in;
+        const char* want;
+    } sanitize[] = {
+        {"a<b>c:d\"e/f\\g|h?i*j", "a_b_c_d_e_f_g_h_i_j"},
+        {"clip.mp4", "clip.mp4"},
+        {"name.", "name"},
+        {"...", "download"},
+        {"", "download"},
+    };
+    for (const auto& c : sanitize) {
+        if (UrlImport::SanitizeFilename(c.in) != c.want) {
+            return std::string("SanitizeFilename(\"") + c.in +
+                   "\") wrong";
+        }
+    }
+    return {};
+}
+
 // ---- registry + runner ----------------------------------------------
 
 using CheckFn = std::string (*)();
@@ -791,13 +2384,28 @@ constexpr CheckEntry kChecks[] = {
     {"keyboard_map", &CheckKeyboardMap},
     {"export_presets", &CheckExportPresets},
     {"generated_source", &CheckGeneratedSource},
+    {"text_style_ext", &CheckTextStyleExt},
     {"compositor_render", &CheckCompositorRender},
+    {"screenshot_png", &CheckScreenshotPng},
+    {"ui_screenshot_diff", &CheckUiScreenshotDiff},
     {"curves_lens", &CheckCurvesAndLens},
+    {"preview_quality", &CheckPreviewQualityScale},
     {"js_fx", &CheckJsFx},
     {"audio_mixer", &CheckAudioMixer},
+    {"audio_sync", &CheckAudioSync},
     {"project_store", &CheckProjectStore},
+    {"generated_layers", &CheckGeneratedLayers},
     {"project_autosave", &CheckProjectAutosave},
     {"media_catalog", &CheckMediaCatalog},
+    {"media_import_filter", &CheckMediaImportFilter},
+    {"lut_manager", &CheckLutManager},
+    {"url_import", &CheckUrlImport},
+    {"probe_classification", &CheckProbeClassification},
+    {"poster_cache_lru", &CheckPosterCacheLru},
+    {"media_worker", &CheckMediaWorker},
+    {"sync_worker", &CheckSyncMediaWorker},
+    {"fx_worker", &CheckFxScriptWorker},
+    {"assets_icons", &CheckAssetsIcons},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };
@@ -871,4 +2479,5 @@ int RunAll() {
     return failures == 0 ? 0 : 1;
 }
 
-}  // namespace XER::VideoEditor::Smoke
+}  // namespace Smoke
+}  // namespace XER::VideoEditor

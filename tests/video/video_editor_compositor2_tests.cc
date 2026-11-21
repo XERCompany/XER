@@ -137,6 +137,64 @@ bool VecPxNear(const std::vector<std::uint8_t>& bgra, int w, int x,
            std::abs(static_cast<int>(p[3]) - a) <= tol;
 }
 
+#if defined(XER_VE_HAS_SKIA)
+// Skia-path text probes — the rasterizer draws a real system font, so
+// glyph coordinates/dims depend on the installed font metrics and can
+// only be asserted structurally ("some face ink exists", "a blurred
+// shadow is present"), never glyph-exact.
+
+// Any pixel within `tol` of the target BGRA — detects ink of the
+// requested color without pinning a coordinate.
+bool FrameHasPxNear(const video::Frame& f, std::uint8_t b,
+                    std::uint8_t g, std::uint8_t r, std::uint8_t a,
+                    int tol) {
+    for (int y = 0; y < f.Height(); ++y) {
+        for (int x = 0; x < f.Width(); ++x) {
+            const std::uint8_t* p = FramePx(f, x, y);
+            if (std::abs(static_cast<int>(p[0]) - b) <= tol &&
+                std::abs(static_cast<int>(p[1]) - g) <= tol &&
+                std::abs(static_cast<int>(p[2]) - r) <= tol &&
+                std::abs(static_cast<int>(p[3]) - a) <= tol) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// A blurred drop shadow reads as near-black pixels with PARTIAL
+// alpha — the transparent pad and the opaque face both fail this.
+bool FrameHasShadowPx(const video::Frame& f) {
+    for (int y = 0; y < f.Height(); ++y) {
+        for (int x = 0; x < f.Width(); ++x) {
+            const std::uint8_t* p = FramePx(f, x, y);
+            if (p[3] > 0 && p[3] < 255 && p[0] < 40 && p[1] < 40 &&
+                p[2] < 40) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Leftmost white-ink column in the frame's lower half — used to prove
+// align=right shifts the short second line without hardcoding glyph
+// coordinates (-1 = no ink found).
+int MinWhiteInkXLowerHalf(const video::Frame& f) {
+    int min_x = -1;
+    for (int y = f.Height() / 2; y < f.Height(); ++y) {
+        for (int x = 0; x < f.Width(); ++x) {
+            const std::uint8_t* p = FramePx(f, x, y);
+            if (p[3] > 200 && p[0] > 200 && p[1] > 200 && p[2] > 200) {
+                if (min_x < 0 || x < min_x) min_x = x;
+                break;
+            }
+        }
+    }
+    return min_x;
+}
+#endif  // XER_VE_HAS_SKIA
+
 // ------------------------------------------------------------------
 // Suite 1: chroma_key — {key_r, key_g, key_b, tolerance, softness}
 // ------------------------------------------------------------------
@@ -362,6 +420,76 @@ void TestClipTextStyleParse() {
 // Suite 5: styled text rendering via GenerateSourceFrame
 // ------------------------------------------------------------------
 void TestTextStyleRender() {
+#if defined(XER_VE_HAS_SKIA)
+    // Skia rasterizes a real system font — geometry is font-metric
+    // dependent, so every case asserts structure, not coordinates.
+
+    // Baseline "A": non-trivial frame, white face ink, transparent
+    // pad corner, and a partial-alpha blurred drop shadow.
+    {
+        Clip c = MakeGeneratedClip("t", 0, 0.0, 1.0, SourceKind::Text,
+                                   "A");
+        video::Frame f;
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+        XER_VE_CHECK(f.Width() >= 7 && f.Height() >= 9);
+        XER_VE_CHECK(FrameHasPxNear(f, 255, 255, 255, 255, 30));
+        XER_VE_CHECK(FramePx(f, 0, 0)[3] == 0);
+        XER_VE_CHECK(FrameHasShadowPx(f));
+    }
+
+    // size=21: a ~21px face plus padding must exceed both the glyph
+    // height and the default-size raster.
+    {
+        Clip c = MakeGeneratedClip("t", 0, 0.0, 1.0, SourceKind::Text,
+                                   "A | size=21");
+        video::Frame f;
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+        XER_VE_CHECK(f.Height() >= 21 && f.Width() >= 10);
+        XER_VE_CHECK(FrameHasPxNear(f, 255, 255, 255, 255, 30));
+    }
+
+    // color=#FF0000 tints the face red (BGRA 0,0,255).
+    {
+        Clip c = MakeGeneratedClip("t", 0, 0.0, 1.0, SourceKind::Text,
+                                   "A | color=#FF0000");
+        video::Frame f;
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+        XER_VE_CHECK(FrameHasPxNear(f, 0, 0, 255, 255, 30));
+    }
+
+    // align=right shifts the short second line rightward inside the
+    // block: the lower half's leftmost ink column moves right.
+    {
+        Clip left = MakeGeneratedClip("l", 0, 0.0, 1.0,
+                                      SourceKind::Text, "AA\nA");
+        Clip right = MakeGeneratedClip("r", 0, 0.0, 1.0,
+                                       SourceKind::Text,
+                                       "AA\nA | align=right");
+        video::Frame fl;
+        video::Frame fr;
+        XER_VE_CHECK(GenerateSourceFrame(left, 0.0, 16, 16, &fl));
+        XER_VE_CHECK(GenerateSourceFrame(right, 0.0, 16, 16, &fr));
+        const int lx = MinWhiteInkXLowerHalf(fl);
+        const int rx = MinWhiteInkXLowerHalf(fr);
+        XER_VE_CHECK(lx >= 0 && rx > lx);
+    }
+
+    // outline=1 replaces the implicit shadow with a stroke: outline-
+    // color ink and fill-color ink are both present, the dark
+    // partial-alpha shadow pixels are gone, and the pad stays empty.
+    {
+        Clip c = MakeGeneratedClip(
+            "t", 0, 0.0, 1.0, SourceKind::Text,
+            "A | color=#FF0000 outline=1 outline_color=#00FF00");
+        video::Frame f;
+        XER_VE_CHECK(GenerateSourceFrame(c, 0.0, 16, 16, &f));
+        XER_VE_CHECK(f.Width() >= 7 && f.Height() >= 9);
+        XER_VE_CHECK(FrameHasPxNear(f, 0, 255, 0, 255, 60));   // ring
+        XER_VE_CHECK(FrameHasPxNear(f, 0, 0, 255, 255, 60));   // face
+        XER_VE_CHECK(!FrameHasShadowPx(f));                    // no shadow
+        XER_VE_CHECK(FramePx(f, 0, 0)[3] == 0);                // empty pad
+    }
+#else   // !XER_VE_HAS_SKIA — BitmapFont raster, glyph-exact geometry.
     // Baseline (unchanged back-compat path): "A" at canvas 16 ->
     // glyph scale 1 -> 5x7 glyph + 2px shadow tail -> 7x9 frame.
     // 'A' row 0 (0x0E) sets columns 1..3 -> white face at (1,0).
@@ -429,6 +557,7 @@ void TestTextStyleRender() {
         XER_VE_CHECK(FramePxIs(f, 2, 1, 0, 0, 255, 255));   // face
         XER_VE_CHECK(FramePx(f, 0, 0)[3] == 0);             // no shadow
     }
+#endif  // XER_VE_HAS_SKIA
 }
 
 // ------------------------------------------------------------------

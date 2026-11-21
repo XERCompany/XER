@@ -27,6 +27,11 @@
 .EXAMPLE
     .\Build.ps1 -Preset default -Target XER_VideoEditor_Tests -Clean
     Reconfigure the vcpkg preset from scratch and build only the tests.
+
+.EXAMPLE
+    .\Build.ps1 -KeepRunning
+    Build without killing running exes from the build bin dir
+    (default: the pre-build lock guard stops them for you).
 #>
 [CmdletBinding()]
 param(
@@ -41,6 +46,10 @@ param(
 
     # Delete the preset binary dir before configuring.
     [switch]$Clean,
+
+    # Skip the pre-build lock guard — leave running exes from the
+    # build bin dir alone (their file locks may then fail the build).
+    [switch]$KeepRunning,
 
     # Run the video-editor test runner after building.
     [switch]$Test
@@ -66,6 +75,32 @@ function Step([string]$Message) {
     Write-Host "`n=== $Message" -ForegroundColor Cyan
 }
 
+function Stop-LockingProcesses {
+    # Running exes from the build bin dir keep CEF DLLs + link outputs
+    # open (copy_directory "failed after retries" / ld.lld "failed to
+    # write output"). Kill the known lockers ONLY when their image
+    # path lives under $BinaryDir\bin — a same-named process anywhere
+    # else is not ours and is left alone.
+    $binDir = Join-Path $BinaryDir 'bin'
+    $lockers = @('video_editor', 'xer_engine_ui_render', 'xer_browser_shell',
+                 'XBrowser', 'XERVacUI', 'Editor', 'XER_VST3_CEF')
+    $killed = 0
+    foreach ($p in Get-Process -Name $lockers -ErrorAction SilentlyContinue) {
+        $path = $null
+        try { $path = $p.Path } catch { continue }  # access denied etc.
+        if (-not $path) { continue }
+        # Trailing '\' so '...\bin_evil\foo.exe' does not match '...\bin'.
+        if ($path.StartsWith("$binDir\", [System.StringComparison]::OrdinalIgnoreCase)) {
+            Write-Host "kill  $($p.ProcessName) (PID $($p.Id))  $path"
+            Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+            ++$killed
+        }
+    }
+    if ($killed -eq 0) {
+        Write-Host "none  (no matching processes under $binDir)"
+    }
+}
+
 # ---------------------------------------------------------------- tools
 $cmake = Find-Tool 'cmake'
 # Ninja is used by every preset in this repo; resolve it so we can also
@@ -73,6 +108,14 @@ $cmake = Find-Tool 'cmake'
 $ninja = Find-Tool 'ninja'
 Write-Host "cmake : $cmake"
 Write-Host "ninja : $ninja"
+
+# ------------------------------------------------------------ lock guard
+# Must run before Clean too — a running exe also blocks deleting the
+# binary dir. -KeepRunning opts out entirely.
+if (-not $KeepRunning) {
+    Step "Stop processes locking $BinaryDir\bin"
+    Stop-LockingProcesses
+}
 
 # ---------------------------------------------------------------- clean
 if ($Clean -and (Test-Path $BinaryDir)) {

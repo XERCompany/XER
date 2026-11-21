@@ -372,6 +372,10 @@ struct PreviewEngine::Impl {
         if (!comp_open_) {
             return;
         }
+        // Preview-quality hint: <1.0 runs the heavy clip effects on a
+        // downscaled frame inside the compositor (export/screenshot
+        // compositors never set this — full quality stays bit-exact).
+        comp_.SetPreviewQuality(quality);
         std::string err;
         if (!comp_.RenderFrameAt(t, &bgra_, &err)) {
             WarnOnce("preview render failed at t=" +

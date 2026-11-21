@@ -3,23 +3,30 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
 #include "app_runtime/ui_manifest.h"
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
+#include "icon_helpers.h"
 #include "io/oiio_image.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/button_group.h"
 #include "widgets/context_menu.h"
 #include "widgets/label.h"
+#include "widgets/select.h"
 #include "widgets/table.h"
+#include "widgets/text_input.h"
 
 // video_engine.h pulls windows.h, which re-defines DrawText as
 // DrawTextA/W after renderer.h already undid it.
@@ -44,8 +51,69 @@ std::string FormatDuration(double seconds) {
     return buffer;
 }
 
+// Lowercased extension of a UTF-8 media path, no leading dot —
+// OiioHandlesExtension's documented input ("exr", "tiff", ...).
+std::string MediaExtensionLower(const std::string& utf8_path) {
+    std::string ext = XER::Helper::String::ToLowerAscii(
+        XER::Helper::Path::FromUtf8(utf8_path).extension().string());
+    if (!ext.empty() && ext.front() == '.') {
+        ext.erase(ext.begin());
+    }
+    return ext;
+}
+
+// Still-image extensions (the image2/OIIO tail of the shared import
+// filter): a HasVideo() entry whose file extension is a raster is an
+// Image tile, not a Video one — same classification the bin glyphs,
+// the Kind column and the Kind sort all share.
+bool IsStillMedia(const CatalogEntry& entry) {
+    if (!entry.HasVideo()) return false;
+    static const std::unordered_set<std::string> kStillExts = {
+        "png",  "jpg",  "jpeg", "jpe", "bmp", "dib", "gif", "tif",
+        "tiff", "webp", "tga",  "ppm", "pgm", "pbm", "pam", "xpm",
+        "avif", "heic", "exr",  "dpx", "hdr", "psd", "pfm", "raw",
+        "cr2",  "nef",  "arw",  "dng", "ora",
+    };
+    return kStillExts.count(MediaExtensionLower(entry.path)) != 0;
+}
+
+// Grouping rank for the Kind sort + tile glyph pick: Video first,
+// then Image, then Audio (each group name-sorted inside).
+int KindRank(const CatalogEntry& entry) {
+    if (!entry.HasVideo()) return 2;
+    return IsStillMedia(entry) ? 1 : 0;
+}
+
 std::string FormatKind(const CatalogEntry& entry) {
-    return entry.HasVideo() ? "Video" : "Audio";
+    if (!entry.HasVideo()) return "Audio";
+    return IsStillMedia(entry) ? "Image" : "Video";
+}
+
+// Logical icon-pack name for the tile's kind badge (icons.yaml).
+const char* KindIcon(const CatalogEntry& entry) {
+    if (!entry.HasVideo()) return "bin.kind.audio";
+    return IsStillMedia(entry) ? "bin.kind.image" : "bin.kind.video";
+}
+
+// Byte count -> "742 B" / "3.1 MB" / "12.4 GB" for the list column.
+std::string FormatSize(std::int64_t bytes) {
+    if (bytes <= 0) return "--";
+    static const char* kUnits[] = {"B", "KB", "MB", "GB", "TB"};
+    double value = static_cast<double>(bytes);
+    int unit = 0;
+    while (value >= 1024.0 && unit < 4) {
+        value /= 1024.0;
+        ++unit;
+    }
+    char buffer[24];
+    if (unit == 0) {
+        std::snprintf(buffer, sizeof(buffer), "%d %s",
+                      static_cast<int>(value), kUnits[unit]);
+    } else {
+        std::snprintf(buffer, sizeof(buffer), "%.1f %s", value,
+                      kUnits[unit]);
+    }
+    return buffer;
 }
 
 std::string FormatInfo(const CatalogEntry& entry) {
@@ -58,17 +126,6 @@ std::string FormatInfo(const CatalogEntry& entry) {
                       entry.has_audio ? "audio" : "unknown");
     }
     return buffer;
-}
-
-// Lowercased extension of a UTF-8 media path, no leading dot —
-// OiioHandlesExtension's documented input ("exr", "tiff", ...).
-std::string MediaExtensionLower(const std::string& utf8_path) {
-    std::string ext = XER::Helper::String::ToLowerAscii(
-        XER::Helper::Path::FromUtf8(utf8_path).extension().string());
-    if (!ext.empty() && ext.front() == '.') {
-        ext.erase(ext.begin());
-    }
-    return ext;
 }
 
 // OIIO decode results memoized by UTF-8 path — DrawGrid repaints on
@@ -106,19 +163,35 @@ void MediaBinWidget::EnsureChildren() {
     if (children_attached_) return;
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
+    // Icon-capable buttons resolve through the pack (idempotent).
+    VeIcons::InstallButtonIconResolver();
 
     // assets/ui/strings.ini — media_bin_title overrides the header.
     title_ = std::make_shared<Widgets::Label>(
         AppRuntime::SharedUiStrings().Get("media_bin_title",
                                           "MEDIA BIN"));
+    // Live substring filter over entry names/paths — every keystroke
+    // rebuilds the visible set (RebuildVisible does kind filter +
+    // search + sort in one pass).
+    search_input_ = std::make_shared<Widgets::TextInput>("");
+    search_input_->SetPlaceholder("Search media…");
+    search_input_->SetTooltip("Filter by file name or path");
+    search_input_->SetOnValueChanged([this](const std::string& value) {
+        if (search_ == value) return;
+        search_ = value;
+        grid_scroll_ = 0.0f;
+        RefreshRows();
+    });
     import_btn_ = std::make_shared<Widgets::Button>(
         "Import", Widgets::ButtonStyle::Primary);
+    import_btn_->SetIcon("bin.import");
     import_btn_->SetTooltip("Import media into the catalog");
     import_btn_->SetOnClick([this] {
         if (hooks_.on_import) hooks_.on_import();
     });
     add_btn_ = std::make_shared<Widgets::Button>(
         "Add to V1", Widgets::ButtonStyle::Secondary);
+    add_btn_->SetIcon("bin.add_timeline");
     add_btn_->SetTooltip("Insert selected media at the playhead");
     add_btn_->SetOnClick([this] {
         const std::string path = SelectedPath();
@@ -128,9 +201,10 @@ void MediaBinWidget::EnsureChildren() {
     });
     table_ = Widgets::Table::Create();
     table_->SetColumns({{"Name", 0.0f, false},
-                        {"Kind", 62.0f, false},
-                        {"Dur", 58.0f, false},
-                        {"Info", 92.0f, false}});
+                        {"Kind", 56.0f, false},
+                        {"Dur", 52.0f, false},
+                        {"Size", 64.0f, false},
+                        {"Info", 88.0f, false}});
     table_->SetRowHeight(28.0f);
     table_->SetOnRowClick([this](int row) {
         if (row >= 0 && row < static_cast<int>(visible_.size())) {
@@ -145,27 +219,93 @@ void MediaBinWidget::EnsureChildren() {
             MaybeOpenSource(selected_row_);
         }
     });
-    view_btn_ = std::make_shared<Widgets::Button>(
-        "Grid", Widgets::ButtonStyle::Ghost);
-    view_btn_->SetTooltip("Toggle grid / list view");
-    view_btn_->SetOnClick([this] {
-        grid_mode_ = !grid_mode_;
-        view_btn_->SetText(grid_mode_ ? "Grid" : "List");
-        Invalidate();
+    // Grid/List view toggle — a two-button icon ButtonGroup, same
+    // joined-strip convention as the kind filter below.
+    view_group_ = std::make_shared<Widgets::ButtonGroup>(
+        Widgets::ButtonGroup::Orientation::Horizontal);
+    grid_btn_ = std::make_shared<Widgets::Button>(
+        "", Widgets::ButtonStyle::Primary);
+    grid_btn_->SetIcon("bin.grid");
+    grid_btn_->SetTooltip("Grid view");
+    grid_btn_->SetOnClick([this] { SetView(true); });
+    list_btn_ = std::make_shared<Widgets::Button>(
+        "", Widgets::ButtonStyle::Secondary);
+    list_btn_->SetIcon("bin.list");
+    list_btn_->SetTooltip("List view");
+    list_btn_->SetOnClick([this] { SetView(false); });
+    view_group_->AddChild(grid_btn_);
+    view_group_->AddChild(list_btn_);
+
+    // Sort dropdown — index order IS the sort_ contract
+    // (0 Name, 1 Duration, 2 Size, 3 Kind, 4 Imported); sort_ is a
+    // plain member so the choice survives for the session.
+    sort_select_ = std::make_shared<Widgets::Select>(
+        std::vector<std::string>{"Name", "Duration", "Size", "Kind",
+                                 "Imported"},
+        sort_);
+    sort_select_->SetTooltip("Sort the bin");
+    sort_select_->SetOnChanged([this](int index) {
+        if (index < 0 || index == sort_) return;
+        sort_ = index;
+        RefreshRows();
     });
+
+    // Kind filter as a segmented strip — the lab_panel mode-strip
+    // pattern: ButtonGroup joins the three buttons edge-to-edge, the
+    // active filter keeps the Primary fill while the rest fall back
+    // to Secondary (SyncFilterButtons).
+    filter_group_ = std::make_shared<Widgets::ButtonGroup>(
+        Widgets::ButtonGroup::Orientation::Horizontal);
+    filter_all_btn_ = std::make_shared<Widgets::Button>(
+        "All", Widgets::ButtonStyle::Primary);
+    filter_all_btn_->SetTooltip("Show every catalog entry");
+    filter_all_btn_->SetOnClick([this] { SetFilter(0); });
+    filter_video_btn_ = std::make_shared<Widgets::Button>(
+        "Video", Widgets::ButtonStyle::Secondary);
+    filter_video_btn_->SetTooltip("Show only entries with video");
+    filter_video_btn_->SetOnClick([this] { SetFilter(1); });
+    filter_audio_btn_ = std::make_shared<Widgets::Button>(
+        "Audio", Widgets::ButtonStyle::Secondary);
+    filter_audio_btn_->SetTooltip("Show only audio entries");
+    filter_audio_btn_->SetOnClick([this] { SetFilter(2); });
+    filter_group_->AddChild(filter_all_btn_);
+    filter_group_->AddChild(filter_video_btn_);
+    filter_group_->AddChild(filter_audio_btn_);
+
     status_ = std::make_shared<Widgets::Label>("Import via button or File menu", true);
 
     AddChild(title_);
+    AddChild(search_input_);
     AddChild(import_btn_);
     AddChild(add_btn_);
-    AddChild(view_btn_);
+    AddChild(view_group_);
+    AddChild(sort_select_);
+    AddChild(filter_group_);
     AddChild(table_);
     AddChild(status_);
+
+    SyncFilterButtons();
+    SyncViewButtons();
 }
 
 void MediaBinWidget::SetEntries(std::vector<CatalogEntry> entries) {
     entries_ = std::move(entries);
+    // A refresh may have removed entries (or the same path may now
+    // resolve to changed media) — drop the peaks caches; ready paths
+    // re-answer instantly from media_prep's own warm cache.
+    peaks_cache_.clear();
+    peaks_lru_.clear();
+    peaks_missing_.clear();
+    peaks_missing_lru_.clear();
     RefreshRows();
+}
+
+void MediaBinWidget::NotifyMediaChanged() {
+    // Only permanent-miss bookkeeping resets — ready peaks stay valid
+    // for the session. A path that failed before the media pipeline
+    // landed real data gets one re-probe on the next paint.
+    peaks_missing_.clear();
+    peaks_missing_lru_.clear();
 }
 
 void MediaBinWidget::SetPreviewActive(bool /*active*/) {
@@ -176,12 +316,86 @@ void MediaBinWidget::SetPreviewActive(bool /*active*/) {
 void MediaBinWidget::RebuildVisible() {
     visible_.clear();
     visible_.reserve(entries_.size());
+    // Case-insensitive substring over the whole path (the basename is
+    // a suffix of it) — one pass covers name and directory matches.
+    const std::string needle =
+        XER::Helper::String::ToLowerAscii(search_);
     for (int i = 0; i < static_cast<int>(entries_.size()); ++i) {
         const CatalogEntry& entry = entries_[static_cast<std::size_t>(i)];
         const bool keep = filter_ == 0 ||
             (filter_ == 1 && entry.HasVideo()) ||
             (filter_ == 2 && !entry.HasVideo() && entry.has_audio);
-        if (keep) visible_.push_back(i);
+        if (!keep) continue;
+        if (!needle.empty() &&
+            XER::Helper::String::ToLowerAscii(entry.path)
+                    .find(needle) == std::string::npos) {
+            continue;
+        }
+        visible_.push_back(i);
+    }
+    // Sort — the dropdown's option order is the index contract:
+    // 0 Name, 1 Duration, 2 Size, 3 Kind, 4 Imported. Every key
+    // tie-breaks on name so reordering is stable and deterministic.
+    const auto name_of = [this](int index) {
+        return XER::Helper::String::ToLowerAscii(
+            Basename(entries_[static_cast<std::size_t>(index)].path));
+    };
+    const auto entry_of = [this](int index) -> const CatalogEntry& {
+        return entries_[static_cast<std::size_t>(index)];
+    };
+    const auto by_name = [&](int a, int b) {
+        const std::string na = name_of(a);
+        const std::string nb = name_of(b);
+        if (na != nb) return na < nb;
+        return entry_of(a).id < entry_of(b).id;
+    };
+    switch (sort_) {
+        case 1:   // Duration — longest first (pro-bin convention).
+            std::stable_sort(visible_.begin(), visible_.end(),
+                             [&](int a, int b) {
+                                 const double da =
+                                     entry_of(a).duration_seconds;
+                                 const double db =
+                                     entry_of(b).duration_seconds;
+                                 if (da != db) return da > db;
+                                 return by_name(a, b);
+                             });
+            break;
+        case 2:   // Size — largest first.
+            std::stable_sort(visible_.begin(), visible_.end(),
+                             [&](int a, int b) {
+                                 const auto sa =
+                                     entry_of(a).file_size_bytes;
+                                 const auto sb =
+                                     entry_of(b).file_size_bytes;
+                                 if (sa != sb) return sa > sb;
+                                 return by_name(a, b);
+                             });
+            break;
+        case 3:   // Kind — Video, Image, Audio groups; name inside.
+            std::stable_sort(visible_.begin(), visible_.end(),
+                             [&](int a, int b) {
+                                 const int ra = KindRank(entry_of(a));
+                                 const int rb = KindRank(entry_of(b));
+                                 if (ra != rb) return ra < rb;
+                                 return by_name(a, b);
+                             });
+            break;
+        case 4:   // Imported — newest first (added_at is seconds;
+                      // id breaks same-second ties deterministically).
+            std::stable_sort(visible_.begin(), visible_.end(),
+                             [&](int a, int b) {
+                                 const auto ta =
+                                     entry_of(a).added_at_unix;
+                                 const auto tb =
+                                     entry_of(b).added_at_unix;
+                                 if (ta != tb) return ta > tb;
+                                 return entry_of(a).id > entry_of(b).id;
+                             });
+            break;
+        default:  // 0 Name A->Z.
+            std::stable_sort(visible_.begin(), visible_.end(), by_name);
+            break;
     }
     if (selected_row_ >= 0 &&
         std::find(visible_.begin(), visible_.end(), selected_row_) ==
@@ -200,6 +414,7 @@ void MediaBinWidget::RefreshRows() {
             entries_[static_cast<std::size_t>(index)];
         rows.push_back({Basename(entry.path), FormatKind(entry),
                         FormatDuration(entry.duration_seconds),
+                        FormatSize(entry.file_size_bytes),
                         FormatInfo(entry)});
     }
     table_->SetRows(std::move(rows));
@@ -212,10 +427,27 @@ void MediaBinWidget::RefreshRows() {
         }
     }
     table_->SetSelectedRow(sel_row);
+    // In list mode an empty result hides the table so the panel's own
+    // drawn empty-state hint (Render) is what the user sees.
+    table_->SetVisible(!grid_mode_ && !visible_.empty());
     add_btn_->SetEnabled(selected_row_ >= 0);
-    status_->SetText(entries_.empty()
-                         ? "Import media to begin"
-                         : std::to_string(entries_.size()) + " item(s)");
+    // Status footer: "12 item(s)" unfiltered, "5 of 12 items · video ·
+    // \"clip\"" while a kind filter and/or search is narrowing the set.
+    std::string status;
+    if (entries_.empty()) {
+        status = "Import media to begin";
+    } else if (visible_.size() == entries_.size()) {
+        status = std::to_string(entries_.size()) + " item(s)";
+    } else {
+        status = std::to_string(visible_.size()) + " of " +
+                 std::to_string(entries_.size()) + " items";
+    }
+    if (!entries_.empty()) {
+        if (filter_ == 1) status += " · video";
+        if (filter_ == 2) status += " · audio";
+        if (!search_.empty()) status += " · \"" + search_ + "\"";
+    }
+    status_->SetText(status);
     Invalidate();
 }
 
@@ -239,6 +471,130 @@ void MediaBinWidget::MaybeOpenSource(int entry_index) {
         last_click_entry_ = -1;   // a third click is a new gesture
         hooks_.on_open_source(
             entries_[static_cast<std::size_t>(entry_index)].path);
+    }
+}
+
+void MediaBinWidget::SetFilter(int filter) {
+    if (filter_ == filter) return;
+    filter_ = filter;
+    grid_scroll_ = 0.0f;
+    if (children_attached_) SyncFilterButtons();
+    RefreshRows();
+}
+
+void MediaBinWidget::SyncFilterButtons() {
+    if (!children_attached_) return;
+    namespace Widgets = XER::UI::Widgets;
+    const auto style = [this](int index) {
+        return filter_ == index ? Widgets::ButtonStyle::Primary
+                                : Widgets::ButtonStyle::Secondary;
+    };
+    filter_all_btn_->SetStyle(style(0));
+    filter_video_btn_->SetStyle(style(1));
+    filter_audio_btn_->SetStyle(style(2));
+}
+
+void MediaBinWidget::SetView(bool grid) {
+    if (grid_mode_ == grid) return;
+    grid_mode_ = grid;
+    if (children_attached_) {
+        SyncViewButtons();
+        table_->SetVisible(!grid_mode_ && !visible_.empty());
+    }
+    Invalidate();
+}
+
+void MediaBinWidget::SyncViewButtons() {
+    if (!children_attached_) return;
+    namespace Widgets = XER::UI::Widgets;
+    grid_btn_->SetStyle(grid_mode_ ? Widgets::ButtonStyle::Primary
+                                   : Widgets::ButtonStyle::Secondary);
+    list_btn_->SetStyle(grid_mode_ ? Widgets::ButtonStyle::Secondary
+                                   : Widgets::ButtonStyle::Primary);
+}
+
+const AudioPeaks* MediaBinWidget::PeaksFor(const std::string& path) {
+    if (!hooks_.get_audio_peaks || path.empty()) return nullptr;
+    if (peaks_missing_.count(path) != 0u) return nullptr;
+    const auto it = peaks_cache_.find(path);
+    if (it != peaks_cache_.end()) return it->second.get();
+    auto fresh = std::make_shared<AudioPeaks>();
+    switch (hooks_.get_audio_peaks(path, fresh.get())) {
+        case PeaksLookup::kReady:
+            // Same payload guard the timeline applies — a short/corrupt
+            // min/max buffer must never reach the column math.
+            if (fresh->buckets > 0 && fresh->channels > 0 &&
+                fresh->data.size() /
+                            (2u * static_cast<std::size_t>(
+                                      fresh->channels)) >=
+                    fresh->buckets) {
+                peaks_cache_[path] = fresh;
+                peaks_lru_.push_back(path);
+                constexpr std::size_t kMaxPeaks = 48;
+                while (peaks_lru_.size() > kMaxPeaks) {
+                    peaks_cache_.erase(peaks_lru_.front());
+                    peaks_lru_.pop_front();
+                }
+                return fresh.get();
+            }
+            peaks_missing_.insert(path);
+            peaks_missing_lru_.push_back(path);
+            break;
+        case PeaksLookup::kPending:
+            return nullptr;   // worker decoding — re-asked next frame
+        case PeaksLookup::kFailed:
+            peaks_missing_.insert(path);
+            peaks_missing_lru_.push_back(path);
+            break;
+    }
+    constexpr std::size_t kMaxMissing = 256;
+    while (peaks_missing_lru_.size() > kMaxMissing) {
+        peaks_missing_.erase(peaks_missing_lru_.front());
+        peaks_missing_lru_.pop_front();
+    }
+    return nullptr;
+}
+
+void MediaBinWidget::DrawWaveStrip(
+    XER::UI::Rendering::Renderer& renderer, const AudioPeaks& peaks,
+    const XER::UI::Layout::Rect& strip,
+    XER::UI::Theme::Color color) {
+    if (strip.width < 8.0f || strip.height < 4.0f) return;
+    const std::size_t buckets = peaks.buckets;
+    const int channels = peaks.channels;
+    const int columns = std::clamp(
+        static_cast<int>(strip.width / 3.0f), 8, 96);
+    const float bar_w = strip.width / static_cast<float>(columns);
+    const float mid_y = strip.y + strip.height * 0.5f;
+    for (int c = 0; c < columns; ++c) {
+        const std::size_t b0 =
+            std::min(buckets - 1,
+                     static_cast<std::size_t>(c) * buckets /
+                         static_cast<std::size_t>(columns));
+        const std::size_t b1 = std::min(
+            buckets,
+            std::max(b0 + 1,
+                     static_cast<std::size_t>(c + 1) * buckets /
+                         static_cast<std::size_t>(columns)));
+        float mn = 1.0f, mx = -1.0f;
+        for (int ch = 0; ch < channels; ++ch) {
+            const std::size_t base =
+                static_cast<std::size_t>(ch) * buckets * 2u;
+            for (std::size_t b = b0; b < b1; ++b) {
+                mn = std::min(mn, peaks.data[base + b * 2u]);
+                mx = std::max(mx, peaks.data[base + b * 2u + 1u]);
+            }
+        }
+        if (!(mn <= mx)) { mn = 0.0f; mx = 0.0f; }
+        mn = std::clamp(mn, -1.0f, 1.0f);
+        mx = std::clamp(mx, -1.0f, 1.0f);
+        const float half =
+            std::max(0.75f, (mx - mn) * 0.5f * strip.height * 0.5f);
+        renderer.FillRect(
+            {strip.x + static_cast<float>(c) * bar_w,
+             mid_y - half,
+             std::max(1.0f, bar_w - 1.0f), half * 2.0f},
+            color, 0.0f);
     }
 }
 
@@ -325,26 +681,53 @@ void MediaBinWidget::DrawGrid(
         if (!drew_poster) {
             renderer.FillRect(thumb, tokens.panel,
                               tokens.radius_medium);
-            const float bars[] = {3.0f, 7.0f, 11.0f, 7.0f, 3.0f};
-            const float bcx = thumb.x + thumb.width * 0.5f;
-            const float bcy = thumb.y + thumb.height * 0.5f;
-            float bx = bcx - 8.0f;
-            for (const float b : bars) {
-                renderer.FillRect(
-                    {bx, bcy - b * 0.5f, 2.0f, b}, tokens.muted, 1.0f);
-                bx += 4.0f;
+            // Audio tiles: real min/max peaks across the thumb center
+            // once the media-prep cache answers (Premiere's audio
+            // thumbnail); the classic 5-bar glyph stays while the
+            // decode is pending or has permanently missed.
+            bool drew_wave = false;
+            if (!entry.HasVideo()) {
+                if (const AudioPeaks* peaks = PeaksFor(entry.path);
+                    peaks != nullptr) {
+                    DrawWaveStrip(
+                        renderer, *peaks,
+                        {thumb.x + 6.0f, thumb.y + 6.0f,
+                         thumb.width - 12.0f, thumb.height - 12.0f},
+                        VeTheme::kClipAudio);
+                    drew_wave = true;
+                }
+            }
+            if (!drew_wave) {
+                const float bars[] = {3.0f, 7.0f, 11.0f, 7.0f, 3.0f};
+                const float bcx = thumb.x + thumb.width * 0.5f;
+                const float bcy = thumb.y + thumb.height * 0.5f;
+                float bx = bcx - 8.0f;
+                for (const float b : bars) {
+                    renderer.FillRect(
+                        {bx, bcy - b * 0.5f, 2.0f, b}, tokens.muted,
+                        1.0f);
+                    bx += 4.0f;
+                }
             }
         }
+
+        // Kind badge, top-left of the thumb — a translucent chip with
+        // the pack glyph (film / image / audio) so card kinds read at
+        // a glance even when every tile has a poster.
+        const XER::UI::Layout::Rect kind_chip{
+            thumb.x + 5.0f, thumb.y + 5.0f, 20.0f, 18.0f};
+        renderer.FillRect(kind_chip, VeTheme::kOverlayChip,
+                          tokens.radius_small);
+        VeIcons::DrawIcon(renderer, KindIcon(entry), 12,
+                          tokens.foreground, kind_chip);
         if (hovered && !selected) {
             renderer.FillRect(
-                thumb, {tokens.hover.r, tokens.hover.g, tokens.hover.b,
-                        0.25f},
+                thumb, VeTheme::WithAlpha(tokens.hover, 0.25f),
                 tokens.radius_medium);
         }
         if (selected) {
             renderer.FillRect(thumb,
-                              {tokens.accent.r, tokens.accent.g,
-                               tokens.accent.b, 0.12f},
+                              VeTheme::WithAlpha(tokens.accent, 0.12f),
                               tokens.radius_medium);
             renderer.StrokeRect(thumb, tokens.accent, 1.5f,
                                 tokens.radius_medium);
@@ -380,14 +763,6 @@ void MediaBinWidget::DrawGrid(
              tokens.font_small, 400});
     }
     renderer.PopClip();
-
-    if (visible_.empty()) {
-        renderer.DrawText(entries_.empty()
-                              ? "No media — Import to begin"
-                              : "No items match the filter",
-                          grid_rect_,
-                          {tokens.muted, tokens.font_small, 400});
-    }
 }
 
 void MediaBinWidget::Render(
@@ -397,8 +772,21 @@ void MediaBinWidget::Render(
     const auto bounds = GetBounds();
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
-    DrawChips(renderer, tokens);
+    // Search icon in the input's left gutter — outside the
+    // TextInput's own rect so its fill can't paint over it.
+    if (search_icon_rect_.width > 0.0f) {
+        VeIcons::DrawIcon(renderer, "bin.search", 14, tokens.muted,
+                          search_icon_rect_);
+    }
     if (grid_mode_) DrawGrid(renderer, tokens);
+    // Empty state (both modes — the list hides its table when the
+    // visible set is empty, so this hint is what the user sees).
+    if (visible_.empty()) {
+        renderer.DrawText(
+            entries_.empty() ? "No media — Import to begin"
+                             : "No matches for the current filter",
+            grid_rect_, {tokens.muted, tokens.font_small, 400});
+    }
 }
 
 void MediaBinWidget::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -408,94 +796,66 @@ void MediaBinWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const float pad = tokens.spacing_medium;
     const float gap = tokens.spacing_small;
     const float row_h = 30.0f;
+    const float inner_x = bounds.x + pad;
+    const float inner_w = bounds.width - pad * 2.0f;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f}, tokens);
-    const float button_y = bounds.y + 34.0f;
-    const float add_w = 100.0f;
-    const float view_w = 44.0f;
-    import_btn_->Layout({bounds.x + pad, button_y, 78.0f, row_h}, tokens);
-    add_btn_->Layout({bounds.x + pad + 78.0f + gap, button_y, add_w,
-                      row_h}, tokens);
-    view_btn_->Layout(
-        {bounds.x + bounds.width - pad - view_w, button_y, view_w,
-         row_h},
+    title_->Layout({inner_x, bounds.y + pad * 0.6f, inner_w, 24.0f},
+                   tokens);
+
+    // Search row: pack icon in a left gutter, the TextInput takes the
+    // rest (its fill would cover an icon drawn inside its own rect).
+    const float search_y = bounds.y + pad * 0.6f + 24.0f + gap;
+    const float search_h = VeTheme::kControlHeight;
+    search_icon_rect_ = {inner_x + 2.0f,
+                         search_y + (search_h - 14.0f) * 0.5f,
+                         14.0f, 14.0f};
+    search_input_->Layout(
+        {inner_x + 22.0f, search_y, inner_w - 22.0f, search_h},
         tokens);
-    const float status_x =
-        bounds.x + pad + 78.0f + add_w + gap * 2.0f;
-    const float status_w =
-        bounds.x + bounds.width - pad - view_w - gap - status_x;
-    // Hide rather than overlap the panel edge on narrow bins.
-    status_->SetVisible(status_w >= 36.0f);
-    if (status_w > 0.0f) {
-        status_->Layout({status_x, button_y, status_w, row_h}, tokens);
-    }
-    const float content_top = button_y + row_h + gap;
-    // Filter chips row sits between the buttons and the content.
-    const float chip_h = 24.0f;
-    const float list_top = content_top + chip_h + gap;
+
+    // Actions row: Import + Add on the left, the grid/list icon group
+    // flush right.
+    const float button_y = search_y + search_h + gap;
+    const float add_w = 100.0f;
+    const float view_w = 56.0f;
+    import_btn_->Layout({inner_x, button_y, 78.0f, row_h}, tokens);
+    add_btn_->Layout({inner_x + 78.0f + gap, button_y, add_w, row_h},
+                     tokens);
+    view_group_->Layout(
+        {inner_x + inner_w - view_w, button_y + 2.0f, view_w,
+         row_h - 4.0f},
+        tokens);
+
+    // Filter chips + sort dropdown share the next strip — the chips
+    // take what the dropdown leaves.
+    const float strip_y = button_y + row_h + gap;
+    const float strip_h = 26.0f;
+    const float sort_w =
+        std::min(118.0f, std::max(84.0f, inner_w * 0.36f));
+    filter_group_->Layout(
+        {inner_x, strip_y, inner_w - sort_w - gap, strip_h}, tokens);
+    sort_select_->Layout(
+        {inner_x + inner_w - sort_w, strip_y, sort_w, strip_h},
+        tokens);
+
+    // Content fills down to the status footer.
+    const float footer_h = 18.0f;
+    const float footer_y =
+        bounds.y + bounds.height - pad - footer_h;
+    const float list_top = strip_y + strip_h + gap;
     const float content_h =
-        std::max(0.0f, bounds.y + bounds.height - pad - list_top);
-    // The content area belongs to the list/grid entirely — the bin
-    // preview monitor was removed, so no split is needed.
+        std::max(0.0f, footer_y - gap - list_top);
     const float table_h = std::max(80.0f, content_h);
-    table_->SetVisible(!grid_mode_);
+    table_->SetVisible(!grid_mode_ && !visible_.empty());
     if (!grid_mode_) {
-        table_->Layout({bounds.x + pad, list_top,
-                        bounds.width - pad * 2.0f, table_h}, tokens);
+        table_->Layout({inner_x, list_top, inner_w, table_h}, tokens);
     }
-    grid_rect_ = {bounds.x + pad, list_top,
-                  bounds.width - pad * 2.0f, table_h};
+    grid_rect_ = {inner_x, list_top, inner_w, table_h};
+    status_->Layout({inner_x, footer_y, inner_w, footer_h}, tokens);
 }
 
 XER::UI::Layout::Rect MediaBinWidget::GridRect() const {
     return grid_rect_;
-}
-
-namespace {
-constexpr const char* kChipLabels[] = {"All", "Video", "Audio"};
-}
-
-XER::UI::Layout::Rect MediaBinWidget::ChipRect(int index) const {
-    const auto& tokens = CachedLayoutTokens();
-    const float pad = tokens.spacing_medium;
-    const float gap = 6.0f;
-    const float widths[] = {44.0f, 52.0f, 52.0f};
-    const auto bounds = GetBounds();
-    float x = bounds.x + pad;
-    const float y = bounds.y + 34.0f + 30.0f + tokens.spacing_small;
-    for (int i = 0; i < index; ++i) x += widths[i] + gap;
-    return {x, y, widths[index], 24.0f};
-}
-
-void MediaBinWidget::DrawChips(
-    XER::UI::Rendering::Renderer& renderer,
-    const XER::UI::Theme::Tokens& tokens) {
-    for (int i = 0; i < 3; ++i) {
-        const auto rect = ChipRect(i);
-        const bool active = filter_ == i;
-        const bool hovered = chip_hovered_ == i;
-        if (active || hovered) {
-            renderer.FillRect(
-                rect,
-                active
-                    ? XER::UI::Theme::Color{tokens.accent.r,
-                                            tokens.accent.g,
-                                            tokens.accent.b, 0.22f}
-                    : XER::UI::Theme::Color{tokens.hover.r,
-                                            tokens.hover.g,
-                                            tokens.hover.b, 0.6f},
-                rect.height * 0.5f);   // pill
-        } else {
-            renderer.StrokeRect(rect, tokens.border, 1.0f,
-                                rect.height * 0.5f);
-        }
-        renderer.DrawText(kChipLabels[i],
-                          {rect.x, rect.y + 1.0f, rect.width,
-                           rect.height},
-                          {active ? tokens.accent : tokens.muted,
-                           tokens.font_small, active ? 600 : 400});
-    }
 }
 
 int MediaBinWidget::ItemAtPoint(
@@ -599,6 +959,14 @@ bool MediaBinWidget::ShowContextMenu(
     };
     items.push_back(std::move(import));
 
+    Widgets::ContextMenu::Item import_url;
+    import_url.label = "Import from URL…";
+    import_url.enabled = hooks_.on_import_url != nullptr;
+    import_url.action = [this] {
+        if (hooks_.on_import_url) hooks_.on_import_url();
+    };
+    items.push_back(std::move(import_url));
+
     Widgets::ContextMenu::Item beats;
     beats.label = "Detect Beats → Markers";
     beats.separator_before = true;
@@ -642,38 +1010,33 @@ bool MediaBinWidget::ShowContextMenu(
 
 bool MediaBinWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
     using Type = XER::UI::Widgets::Event::Type;
-    // Filter chips work in both grid and list modes.
-    if (event.type == Type::Click) {
-        for (int i = 0; i < 3; ++i) {
-            if (ChipRect(i).Contains(event.position)) {
-                filter_ = i;
-                grid_scroll_ = 0.0f;
-                RefreshRows();
-                Invalidate();
-                return true;
-            }
-        }
-    }
-    if (event.type == Type::MouseMove) {
-        int chip = -1;
-        for (int i = 0; i < 3; ++i) {
-            if (ChipRect(i).Contains(event.position)) chip = i;
-        }
-        if (chip != chip_hovered_) {
-            chip_hovered_ = chip;
-            Invalidate();
-        }
-    }
     if (!grid_mode_) return false;
     const bool inside = grid_rect_.Contains(event.position);
     switch (event.type) {
         case Type::MouseMove: {
+            // Drag promotion: past a small dead-zone the press becomes
+            // a drag and the shell's hover hook starts tracking the
+            // cursor (mouse capture keeps moves routed here even
+            // outside the bin's bounds).
+            if (drag_entry_ >= 0) {
+                constexpr float kDragDeadZone = 6.0f;
+                const float dx = event.position.x - drag_press_.x;
+                const float dy = event.position.y - drag_press_.y;
+                if (!drag_active_ &&
+                    dx * dx + dy * dy >
+                        kDragDeadZone * kDragDeadZone) {
+                    drag_active_ = true;
+                }
+                if (drag_active_ && hooks_.on_drag_hover) {
+                    hooks_.on_drag_hover(event.position, true);
+                }
+            }
             const int h = inside ? ItemAtPoint(event.position) : -1;
             if (h != grid_hovered_) {
                 grid_hovered_ = h;
                 Invalidate();
             }
-            return inside || chip_hovered_ >= 0;
+            return inside || drag_entry_ >= 0;
         }
         case Type::MouseWheel: {
             if (!inside) return false;
@@ -705,7 +1068,39 @@ bool MediaBinWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 XER::UI::Widgets::MouseButton::Right) {
                 return false;
             }
+            // Arm a possible card drag-out — promoted on the first
+            // MouseMove past the dead-zone (see MouseMove above).
+            drag_entry_ = inside ? ItemAtPoint(event.position) : -1;
+            drag_press_ = event.position;
+            drag_active_ = false;
             return inside;
+        case Type::MouseUp: {
+            if (event.mouse_button ==
+                    XER::UI::Widgets::MouseButton::Left &&
+                drag_entry_ >= 0) {
+                const int entry = drag_entry_;
+                const bool was_dragging = drag_active_;
+                drag_entry_ = -1;
+                drag_active_ = false;
+                if (was_dragging) {
+                    if (hooks_.on_drag_hover) {
+                        hooks_.on_drag_hover(event.position, false);
+                    }
+                    // Released outside the bin = a drop offer; the
+                    // shell decides what (if anything) sits under it.
+                    if (!GetBounds().Contains(event.position) &&
+                        hooks_.on_drop &&
+                        entry < static_cast<int>(entries_.size())) {
+                        hooks_.on_drop(
+                            entries_[static_cast<std::size_t>(entry)]
+                                .path,
+                            event.position);
+                    }
+                }
+                return true;
+            }
+            return inside;
+        }
         default:
             return inside;
     }

@@ -4,14 +4,15 @@
 // "Video Effects" first, then "Audio Effects" — and each row shows
 // the effect name plus a small vendor/file tag.
 //
-// Click selects a row; the "Add to Clip" button (Enter or a
-// double-click does the same) emits Hooks::on_add_effect with the
-// ClipEffect type string "plugin:<id>" — the app wraps the mutation
-// in TimelineHistory and applies it to the current selection.
+// Rows are real Widgets::Item children inside a ScrollArea (section
+// headers stay drawn, per the drawn-header convention): a click
+// selects (Item on_click), a double-click or the "Add to Clip" button
+// (Enter works too) emits Hooks::on_add_effect with the ClipEffect
+// type string "plugin:<id>" — the app wraps the mutation in
+// TimelineHistory and applies it to the current selection.
 // Reload() re-reads the host list after a plugin rescan.
 #pragma once
 
-#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -22,7 +23,9 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class Item;
 class Label;
+class ScrollArea;
 }
 
 namespace XER::VideoEditor::Ui {
@@ -36,6 +39,7 @@ public:
     };
 
     explicit PluginsPanelWidget(Hooks hooks = {});
+    ~PluginsPanelWidget() override;
 
     // Re-reads SharedPluginHost().Effects() and rebuilds the list —
     // call after the host has (re)scanned <exe>/plugins.
@@ -68,30 +72,33 @@ private:
         std::string id;     // plugin id (rows only)
     };
 
+    // ScrollArea content mixing drawn section headers with Item rows —
+    // defined in the .cc (incomplete type is fine: the destructor is
+    // out-of-line there).
+    class RowList;
+
     void EnsureChildren();
+    // (Re)builds the RowList lines from entries_ — Items keep their
+    // entry index through a rebuild via SetOnClick's capture.
+    void RebuildList();
     void UpdateAddEnabled();
     float EntryHeight(int index) const;
     float EntryTop(int index) const;   // content-space y of the line
-    int RowAt(const XER::UI::Layout::Point& position) const;
+    void SelectRow(int entry_index);
+    void EnsureSelectionVisible();
     void AddSelected();
     void SetStatus(const std::string& text);
 
     Hooks hooks_;
     std::vector<Entry> entries_;    // headers interleaved with rows
     int selected_ = -1;             // index into entries_ (rows only)
-    int hovered_ = -1;
-    float scroll_y_ = 0.0f;
-    float content_height_ = 0.0f;
-    float rows_top_ = 0.0f;         // y where the list begins (layout)
-    float rows_bottom_ = 0.0f;      // y where the list viewport ends
     bool children_attached_ = false;
-    // Double-click detection: second click on the same row adds it.
-    int last_click_row_ = -1;
-    std::chrono::steady_clock::time_point last_click_time_{};
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
+    std::shared_ptr<XER::UI::Widgets::ScrollArea> scroll_area_;
+    std::shared_ptr<RowList> list_;
 };
 
 }  // namespace XER::VideoEditor::Ui

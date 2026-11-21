@@ -125,6 +125,15 @@ public:
         std::function<bool(const std::string&, MediaBounds*)>
             get_media_bounds;
         std::function<void(const std::string&, bool)> on_status;
+        // Empty-lane context menu "Add … Here" items: create a
+        // generated clip of `kind` (matte/bars/text) on `track` at
+        // `at_seconds` timeline time. The shell owns any config
+        // dialog (matte color pick) and the clip creation itself.
+        std::function<void(int, SourceKind, double)> on_add_generated;
+        // Empty-lane context menu: pick a media file and place it on
+        // `track` at `at_seconds` (kind-mismatched/locked targets
+        // fall back to the shell's normal placement rules).
+        std::function<void(int, double)> on_add_media;
     };
 
     explicit TimelineWidget(Hooks hooks = {});
@@ -156,6 +165,17 @@ public:
     // through. Hit-tests marker lane / ruler / track headers / clips and
     // shows the matching menu. Returns true when a menu was shown.
     bool ShowContextMenu(XER::UI::Layout::Point position);
+
+    // Media-bin drag->drop target API (absolute-space points, same
+    // coordinates events/bounds use): TimeAtDropPoint maps a drop x to
+    // a timeline time (clamped >= 0); SetExternalDropHover toggles the
+    // accent-frame affordance while a bin drag hovers this widget.
+    double TimeAtDropPoint(XER::UI::Layout::Point point) const;
+    // Track index under the drop point's y (-1 above the lanes, past
+    // the last track, or on the ruler/header bands) — lets the shell
+    // land bin drops on the lane they were released over.
+    int TrackAtDropPoint(XER::UI::Layout::Point point) const;
+    void SetExternalDropHover(bool active);
 
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
@@ -305,6 +325,9 @@ private:
     // projects scroll under the fixed ruler/marker lanes.
     float track_scroll_ = 0.0f;
     bool ruler_scrub_ = false;   // ruler press-drag emits on_seek
+    // Media-bin drag hovering this widget — Render strokes an accent
+    // frame so the panel reads as a live drop target.
+    bool external_drop_hover_ = false;
 
     // Tool model — one instance per ToolId, active_tool_ picks the
     // receiver of pointer events.

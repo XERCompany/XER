@@ -11,7 +11,7 @@ namespace XER::VideoEditor::AppRuntime {
 
 // assets/window/window.yaml
 struct WindowConfig {
-    std::string title = "XER Video Editor";
+    std::string title = "VideoEditor - XER Creative Suite";
     int width = 1440;
     int height = 900;
     int min_width = 0;    // 0 = unconstrained

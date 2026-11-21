@@ -213,6 +213,31 @@ if(WIN32)
     target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope} ole32)
 endif()
 
+# Skia powers the Text-clip rasterizer (text_style.cc) and the system
+# font catalog (font_catalog.cc). Optional: without the port the same
+# sources compile against the BitmapFont fallback that renders the
+# legacy style subset, and FontCatalog::Available() reports false.
+find_package(unofficial-skia CONFIG QUIET)
+if(TARGET unofficial::skia::skia)
+    if(XER_YA_DLLS)
+        # objects: usage requirements (include dirs); module: the link.
+        target_link_libraries(YA_VideoEditor_Core_objs PRIVATE
+            unofficial::skia::skia)
+        target_link_libraries(YA_VideoEditor_Core PRIVATE
+            unofficial::skia::skia)
+        target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE
+            XER_VE_HAS_SKIA=1)
+    else()
+        target_link_libraries(XER_VideoEditor_Core ${_xer_ve_scope}
+            unofficial::skia::skia)
+    endif()
+    # Bundle/interface scope so dependents (the test suite) can tell
+    # which text rasterizer RenderClipText will use — same pattern as
+    # XER_VE_HAS_OCIO/XER_VE_HAS_RSVG above.
+    target_compile_definitions(XER_VideoEditor_Core ${_xer_ve_scope}
+        XER_VE_HAS_SKIA=1)
+endif()
+
 if(NOT XER_YA_DLLS)
     target_compile_features(XER_VideoEditor_Core PUBLIC cxx_std_23)
     if(MSVC)
@@ -317,3 +342,35 @@ if(MSVC)
 else()
     target_compile_options(video_editor PRIVATE -Wall -Wextra -Wpedantic -O3)
 endif()
+
+# Dedicated named worker processes — thin mains over the shared
+# JSON-lines worker loop (media_worker_server.cc + the role handlers
+# in sync_media_server.cc / fx_script_server.cc). XERVideoLoader is
+# the editor's out-of-process decode worker (MediaWorkerClient spawns
+# it from the exe's own directory; `video_editor --media-worker` is
+# the dev-build fallback); XERSyncMedia is the audio-sync engine
+# (peak decode + correlation via sync_plan); XERFxScript is the
+# sandboxed JS/V8 script-fx host (fx_list/fx_validate/fx_audio/
+# fx_transition). Output goes next to video_editor.exe so the
+# sibling-exe lookup in worker_pipe.cc works.
+# Workers/ is NOT in the core glob: these files carry main().
+add_executable(XERVideoLoader workers/video_loader_main.cc)
+add_executable(XERSyncMedia workers/sync_media_main.cc)
+add_executable(XERFxScript workers/fx_script_main.cc)
+foreach(_worker IN ITEMS XERVideoLoader XERSyncMedia XERFxScript)
+    target_link_libraries(${_worker} PRIVATE XER_VideoEditor_Core)
+    target_compile_features(${_worker} PRIVATE cxx_std_23)
+    set_target_properties(${_worker} PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+    if(MSVC)
+        target_compile_options(${_worker} PRIVATE /W4 /WX- /O2)
+    else()
+        target_compile_options(${_worker} PRIVATE
+            -Wall -Wextra -Wpedantic -O3)
+    endif()
+endforeach()
+# Building the editor always produces its workers alongside — the
+# smoke checks and the out-of-process paths (MediaPrep, audio sync,
+# js fx) expect the sibling exes (they degrade gracefully when one
+# is absent).
+add_dependencies(video_editor XERVideoLoader XERSyncMedia XERFxScript)

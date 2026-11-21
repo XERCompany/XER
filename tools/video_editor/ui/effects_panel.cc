@@ -2,60 +2,30 @@
 
 #include <algorithm>
 #include <cctype>
-#include <cmath>
-#include <cstdio>
-#include <cstdint>
 #include <utility>
 
 #include "app_runtime/app_runtime.h"
-#include "app_runtime/icon_pack.h"
+#include "icon_helpers.h"
 #include "js_fx.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/item.h"
 #include "widgets/label.h"
+#include "widgets/scroll_area.h"
 #include "widgets/text_input.h"
 
 namespace XER::VideoEditor::Ui {
 namespace {
 
-using XER::UI::Theme::Color;
-
-constexpr float kRowHeight = 38.0f;
-constexpr float kRowIcon = 16.0f;
-constexpr auto kDoubleClickWindow = std::chrono::milliseconds(450);
-
-Color WithAlpha(Color color, float alpha) {
-    color.a *= alpha;
-    return color;
-}
-
-// Theme float color → packed AARRGGBB tint for the icon pack.
-std::uint32_t ToArgb(Color color) {
-    const auto byte = [](float v) {
-        return static_cast<std::uint32_t>(
-            std::clamp(std::lround(v * 255.0f), 0L, 255L));
-    };
-    return (byte(color.a) << 24) | (byte(color.r) << 16) |
-           (byte(color.g) << 8) | byte(color.b);
-}
-
-// Rasterized SVG icon from the shared pack, drawn centered in `box`.
-// Returns false when the icon is missing or the renderer can't blit
-// it — the caller then keeps the text-only fallback layout.
-bool DrawIcon(XER::UI::Rendering::Renderer& renderer, const char* name,
-              int px, Color tint, const XER::UI::Layout::Rect& box) {
-    const auto* bmp =
-        AppRuntime::SharedIconPack().Get(name, px, ToArgb(tint));
-    if (bmp == nullptr) return false;
-    const XER::UI::Layout::Rect dst{
-        box.x + (box.width - bmp->width) * 0.5f,
-        box.y + (box.height - bmp->height) * 0.5f,
-        static_cast<float>(bmp->width),
-        static_cast<float>(bmp->height)};
-    return renderer.DrawFrameBgra(bmp->bgra.data(), bmp->width,
-                                  bmp->height, dst, 1.0f);
-}
+// Two-line catalog row: a body-size title line over a caption-size
+// subtitle — the height is the VeTheme type ramp + a tight inner gap.
+constexpr float kRowHeight = VeTheme::kFontBody * 1.4f +
+                             VeTheme::kFontCaption * 1.4f +
+                             VeTheme::kSpaceXs;
+constexpr float kRowIcon = VeTheme::kSpaceLg;
+constexpr float kActionWidth = 76.0f;   // "Add" button
 
 // Logical icon name (assets/icons.yaml) per built-in effect type.
 // Unmapped names fall back to "<name>.svg" — every file used here
@@ -77,7 +47,149 @@ std::string Lower(std::string text) {
     return text;
 }
 
+// Leading-slot glyph for a row Item: draws its logical pack icon
+// centered in the slot. Disabled so hit-testing skips it (the same
+// convention as MarkersPanelWidget::MarkerSwatch) — row clicks and
+// hover land on the Item itself.
+class RowIcon final : public XER::UI::Widgets::Widget {
+public:
+    explicit RowIcon(const char* name) : name_(name) {
+        SetFocusable(false);
+        SetEnabled(false);
+    }
+
+    void Render(XER::UI::Rendering::Renderer& renderer,
+                const XER::UI::Theme::Tokens& tokens) override {
+        VeIcons::DrawIcon(renderer, name_.c_str(),
+                          static_cast<int>(kRowIcon), tokens.foreground,
+                          GetBounds());
+    }
+    void Layout(const XER::UI::Layout::Rect& bounds) override {
+        SetBounds(bounds);
+    }
+    bool HandleEvent(const XER::UI::Widgets::Event&) override {
+        return false;
+    }
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {kRowIcon, kRowIcon};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return {kRowIcon, kRowIcon};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {kRowIcon, kRowIcon};
+    }
+
+private:
+    std::string name_;
+};
+
 }  // namespace
+
+// The ScrollArea's content: stacks the filtered Item rows at
+// kRowHeight and paints the selection/hover chrome behind them —
+// children render after this widget's own pass, so the chrome reads
+// as the rows' background exactly like the old drawn rows.
+// Deliberately not focusable: click focus must climb to the panel so
+// arrow-key navigation keeps working after a row click.
+class EffectsPanelWidget::RowList final : public XER::UI::Widgets::Widget {
+public:
+    RowList() {
+        SetFocusable(false);
+    }
+
+    // One Item per catalog entry, called once — the rows live as
+    // children; filtering only decides which ones get laid out.
+    void SetItems(
+        std::vector<std::shared_ptr<XER::UI::Widgets::Item>> items) {
+        items_ = std::move(items);
+        for (const auto& item : items_) {
+            AddChild(item);
+        }
+        RequestLayout();
+        Invalidate();
+    }
+
+    // Display order → items_ index (the panel's filtered_ vector).
+    void SetFiltered(std::vector<int> filtered) {
+        filtered_ = std::move(filtered);
+        RequestLayout();
+        Invalidate();
+    }
+
+    // Selected position inside filtered_ (-1 = none).
+    void SetSelected(int filtered_pos) {
+        if (selected_ == filtered_pos) return;
+        selected_ = filtered_pos;
+        Invalidate();
+    }
+
+    void Render(XER::UI::Rendering::Renderer& renderer,
+                const XER::UI::Theme::Tokens& tokens) override {
+        for (std::size_t i = 0; i < filtered_.size(); ++i) {
+            const auto& item = items_[static_cast<std::size_t>(filtered_[i])];
+            const auto row = item->GetBounds();
+            if (static_cast<int>(i) == selected_) {
+                renderer.FillRect(row, tokens.selection,
+                                  tokens.radius_small);
+                renderer.StrokeRect(
+                    row, VeTheme::WithAlpha(tokens.accent, 0.5f), 1.0f,
+                    tokens.radius_small);
+            } else if (item->IsHovered()) {
+                renderer.FillRect(row, tokens.hover, tokens.radius_small);
+            }
+        }
+    }
+
+    void Layout(const XER::UI::Layout::Rect& bounds) override {
+        SetBounds(bounds);
+        const auto& tokens = CachedLayoutTokens();
+        // Rows outside the filter keep their old bounds — hide them so
+        // they neither paint nor hit-test.
+        for (const auto& item : items_) {
+            item->SetVisible(false);
+        }
+        float y = bounds.y;
+        for (const int index : filtered_) {
+            const auto& item = items_[static_cast<std::size_t>(index)];
+            item->SetVisible(true);
+            item->Layout(
+                {bounds.x + VeTheme::kSpaceSm, y + VeTheme::kSpaceXxs,
+                 std::max(0.0f, bounds.width - VeTheme::kSpaceSm * 2.0f),
+                 kRowHeight - VeTheme::kSpaceXs},
+                tokens);
+            y += kRowHeight;
+        }
+    }
+    using Widget::Layout;
+
+    // Rows consume their own clicks (Item::SetOnClick); everything
+    // else — gaps, edges — stays transparent so the tree's bubbling
+    // reaches whatever wants it.
+    bool HandleEvent(const XER::UI::Widgets::Event&) override {
+        return false;
+    }
+
+    XER::UI::Layout::Size GetMinSize() const override {
+        return {0.0f, 0.0f};
+    }
+    XER::UI::Layout::Size GetPreferredSize() const override {
+        return {0.0f, GetContentHeight()};
+    }
+    XER::UI::Layout::Size GetMaxSize() const override {
+        return {100000.0f, 100000.0f};
+    }
+    float GetContentHeight() const override {
+        return kRowHeight * static_cast<float>(filtered_.size());
+    }
+
+private:
+    std::vector<std::shared_ptr<XER::UI::Widgets::Item>> items_;
+    std::vector<int> filtered_;
+    int selected_ = -1;
+};
+
+EffectsPanelWidget::~EffectsPanelWidget() = default;
 
 const std::vector<EffectsPanelWidget::EffectInfo>&
 EffectsPanelWidget::Catalog() {
@@ -143,7 +255,7 @@ EffectsPanelWidget::Catalog() {
 EffectsPanelWidget::EffectsPanelWidget(Hooks hooks)
     : hooks_(std::move(hooks)) {
     SetFocusable(true);
-    SetClipsChildren(true);   // list scrolls inside the panel
+    SetClipsChildren(true);   // the list scrolls inside the panel
     RecomputeFilter();
 }
 
@@ -166,8 +278,34 @@ void EffectsPanelWidget::EnsureChildren() {
     add_btn_->SetOnClick([this] { AddSelected(); });
     status_ = std::make_shared<Widgets::Label>("Select a clip", true);
 
+    // The scrollable list: one Item per catalog entry with a leading
+    // pack icon. Clicks select, double-clicks apply (Item hooks) —
+    // the panel keeps keyboard nav through its focused state, which
+    // click-bubbling restores to it after a row consumes the click.
+    list_ = std::make_shared<RowList>();
+    const auto& catalog = Catalog();
+    items_.reserve(catalog.size());
+    for (std::size_t c = 0; c < catalog.size(); ++c) {
+        const EffectInfo& info = catalog[c];
+        auto item = std::make_shared<Widgets::Item>();
+        item->SetTitle(info.type);
+        item->SetDescription(info.description);
+        item->SetTooltip(info.description);
+        item->AddChild(
+            std::make_shared<RowIcon>(IconForEffectType(info.type)));
+        const int index = static_cast<int>(c);
+        item->SetOnClick([this, index] { SelectCatalogRow(index); });
+        item->SetOnDoubleClick([this] { AddSelected(); });
+        items_.push_back(std::move(item));
+    }
+    list_->SetItems(items_);
+    list_->SetFiltered(filtered_);
+    list_->SetSelected(selected_);
+    scroll_area_ = std::make_shared<Widgets::ScrollArea>(list_);
+
     AddChild(title_);
     AddChild(search_);
+    AddChild(scroll_area_);
     AddChild(add_btn_);
     AddChild(status_);
     UpdateAddEnabled();
@@ -201,26 +339,45 @@ void EffectsPanelWidget::RecomputeFilter() {
             filtered_.push_back(static_cast<int>(i));
         }
     }
-    content_height_ = kRowHeight * static_cast<float>(filtered_.size());
-    // Clamp to the last page, not past it — Layout() uses the same
-    // content_height - view formula.
-    const float view_h = rows_bottom_ - rows_top_;
-    scroll_y_ = std::clamp(
-        scroll_y_, 0.0f,
-        std::max(0.0f, content_height_ - std::max(view_h, 0.0f)));
     if (selected_ >= static_cast<int>(filtered_.size())) selected_ = -1;
-    hovered_ = -1;
-    if (children_attached_) UpdateAddEnabled();
+    if (children_attached_) {
+        list_->SetFiltered(filtered_);
+        list_->SetSelected(selected_);
+        UpdateAddEnabled();
+        // The content height changed — the ScrollArea only re-reads it
+        // (and re-clamps its offset) during layout.
+        RequestLayout();
+    }
+    Invalidate();
 }
 
-int EffectsPanelWidget::RowAt(
-    const XER::UI::Layout::Point& position) const {
-    if (position.y < rows_top_ || position.y >= rows_bottom_) {
-        return -1;
+void EffectsPanelWidget::SelectRow(int filtered_pos) {
+    if (selected_ == filtered_pos) return;
+    selected_ = filtered_pos;
+    UpdateAddEnabled();
+    if (children_attached_) list_->SetSelected(selected_);
+    Invalidate();
+}
+
+void EffectsPanelWidget::SelectCatalogRow(int catalog_index) {
+    for (std::size_t i = 0; i < filtered_.size(); ++i) {
+        if (filtered_[i] == catalog_index) {
+            SelectRow(static_cast<int>(i));
+            return;
+        }
     }
-    const int row = static_cast<int>(
-        std::floor((position.y - rows_top_ + scroll_y_) / kRowHeight));
-    return row >= 0 && row < static_cast<int>(filtered_.size()) ? row : -1;
+}
+
+void EffectsPanelWidget::EnsureSelectionVisible() {
+    if (scroll_area_ == nullptr || selected_ < 0) return;
+    const float view_h = scroll_area_->GetBounds().height;
+    const float top = static_cast<float>(selected_) * kRowHeight;
+    const float scroll = scroll_area_->GetScrollY();
+    if (top < scroll) {
+        scroll_area_->ScrollTo(top);
+    } else if (top + kRowHeight > scroll + view_h) {
+        scroll_area_->ScrollTo(top + kRowHeight - view_h);
+    }
 }
 
 void EffectsPanelWidget::AddSelected() {
@@ -256,58 +413,26 @@ void EffectsPanelWidget::Render(
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f, tokens.radius_large);
     if (filtered_.empty()) {
+        // The hint sits where the list would — the ScrollArea's rect
+        // once laid out, the same offset arithmetic otherwise.
+        const auto list_bounds =
+            scroll_area_ != nullptr ? scroll_area_->GetBounds()
+                                    : XER::UI::Layout::Rect{};
+        const float hint_y = list_bounds.height > 0.0f
+            ? list_bounds.y + VeTheme::kSpaceXs
+            : bounds.y + VeTheme::kSpaceMd * 3.0f;
         renderer.DrawText(
             search_ != nullptr && !search_->GetValue().empty()
                 ? "no matches"
                 : "no effects",
-            {bounds.x + 12.0f, rows_top_ + 6.0f, bounds.width - 24.0f,
-             20.0f},
+            {bounds.x + VeTheme::kSpaceMd, hint_y,
+             bounds.width - VeTheme::kSpaceMd * 2.0f,
+             tokens.font_body * 1.4f},
             XER::UI::Rendering::TextStyle{tokens.muted, tokens.font_small,
                                           400});
-        return;
     }
-
-    // Rows are drawn (not child widgets) so clicks land on the panel —
-    // widget-tree Click events do not bubble up from Label children.
-    if (rows_top_ <= 0.0f) return;   // not yet laid out
-    const auto& catalog = Catalog();
-    const float width = bounds.width - 24.0f;
-    const float view_bottom = rows_bottom_;
-    for (std::size_t i = 0; i < filtered_.size(); ++i) {
-        const float y = rows_top_ + static_cast<float>(i) * kRowHeight -
-                        scroll_y_;
-        if (y + kRowHeight < rows_top_ || y > view_bottom) continue;
-        const EffectInfo& info = catalog[static_cast<std::size_t>(filtered_[i])];
-        const int idx = static_cast<int>(i);
-        const XER::UI::Layout::Rect row{bounds.x + 8.0f, y, width,
-                                        kRowHeight - 3.0f};
-        if (idx == selected_) {
-            renderer.FillRect(row, WithAlpha(tokens.accent, 0.16f),
-                              tokens.radius_small);
-            renderer.StrokeRect(row, WithAlpha(tokens.accent, 0.5f), 1.0f,
-                                tokens.radius_small);
-        } else if (idx == hovered_) {
-            renderer.FillRect(row, tokens.hover, tokens.radius_small);
-        }
-        float text_x = row.x + 8.0f;
-        if (DrawIcon(renderer, IconForEffectType(info.type),
-                     static_cast<int>(kRowIcon), tokens.foreground,
-                     {row.x + 6.0f,
-                      row.y + (row.height - kRowIcon) * 0.5f,
-                      kRowIcon, kRowIcon})) {
-            text_x = row.x + 6.0f + kRowIcon + 8.0f;
-        }
-        renderer.DrawText(info.type,
-                          {text_x, row.y + 3.0f,
-                           row.x + row.width - text_x - 8.0f, 16.0f},
-                          XER::UI::Rendering::TextStyle{
-                              tokens.foreground, tokens.font_body, 500});
-        renderer.DrawText(info.description,
-                          {text_x, row.y + 20.0f,
-                           row.x + row.width - text_x - 8.0f, 14.0f},
-                          XER::UI::Rendering::TextStyle{
-                              tokens.muted, tokens.font_small, 400});
-    }
+    // Rows paint themselves — Item children inside the ScrollArea;
+    // the RowList draws selection/hover chrome behind them.
 }
 
 void EffectsPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -316,100 +441,59 @@ void EffectsPanelWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
     const float gap = tokens.spacing_small;
+    const float inner_x = bounds.x + pad;
+    const float inner_w = bounds.width - pad * 2.0f;
+    float y = bounds.y + pad * 0.6f;
 
-    title_->Layout({bounds.x + pad, bounds.y + pad * 0.6f,
-                    bounds.width - pad * 2.0f, 24.0f},
-                   tokens);
-    search_->Layout({bounds.x + pad, bounds.y + 34.0f,
-                     bounds.width - pad * 2.0f, 30.0f},
+    title_->Layout({inner_x, y, inner_w, VeTheme::kRowHeight}, tokens);
+    y += VeTheme::kRowHeight + VeTheme::kSpaceXxs;
+    search_->Layout({inner_x, y, inner_w, VeTheme::kControlHeight},
                     tokens);
-    rows_top_ = bounds.y + 34.0f + 30.0f + gap;
-    const float footer_y = bounds.y + bounds.height - 30.0f;
-    rows_bottom_ = footer_y - gap;
-    add_btn_->Layout({bounds.x + pad, footer_y, 76.0f, 26.0f}, tokens);
-    status_->Layout({bounds.x + pad + 84.0f, footer_y + 2.0f,
-                     std::max(40.0f, bounds.width - pad * 2.0f - 84.0f),
-                     22.0f},
-                    tokens);
-    // Keep the list viewport out of the footer.
-    const float view_h = footer_y - rows_top_ - gap;
-    scroll_y_ = std::clamp(
-        scroll_y_, 0.0f,
-        std::max(0.0f, content_height_ - std::max(view_h, 0.0f)));
+    y += VeTheme::kControlHeight + gap;
+
+    const float footer_h = VeTheme::kControlHeight;
+    const float footer_y =
+        bounds.y + bounds.height - footer_h - VeTheme::kSpaceXs;
+    scroll_area_->Layout(
+        {inner_x, y, inner_w, std::max(0.0f, footer_y - gap - y)},
+        tokens);
+    add_btn_->Layout({inner_x, footer_y, kActionWidth, footer_h}, tokens);
+    status_->Layout(
+        {inner_x + kActionWidth + gap, footer_y + VeTheme::kSpaceXxs,
+         std::max(40.0f, inner_w - kActionWidth - gap),
+         footer_h - VeTheme::kSpaceXs},
+        tokens);
 }
 
 bool EffectsPanelWidget::HandleEvent(
     const XER::UI::Widgets::Event& event) {
-    switch (event.type) {
-        case XER::UI::Widgets::Event::Type::MouseWheel: {
-            const float view_h = rows_bottom_ - rows_top_;
-            const float range =
-                std::max(0.0f, content_height_ - std::max(view_h, 0.0f));
-            if (range <= 0.0f) return false;
-            scroll_y_ = std::clamp(
-                scroll_y_ - static_cast<float>(event.wheel_delta) * 0.5f,
-                0.0f, range);
-            Invalidate();
+    // Row clicks are consumed by the Items themselves; this panel only
+    // still owns keyboard navigation. Clicks that bubble up from dead
+    // children land in `default` and stay unhandled — exactly the
+    // behavior the drawn list had on chrome/gap clicks.
+    if (event.type == XER::UI::Widgets::Event::Type::KeyDown) {
+        if (event.key == XER::UI::Widgets::KeyCode::Enter) {
+            AddSelected();
             return true;
         }
-        case XER::UI::Widgets::Event::Type::MouseMove: {
-            const int row = RowAt(event.position);
-            if (row != hovered_) {
-                hovered_ = row;
-                Invalidate();
-            }
-            return false;
-        }
-        case XER::UI::Widgets::Event::Type::Click: {
-            const int row = RowAt(event.position);
-            if (row < 0) return false;
-            const auto now = std::chrono::steady_clock::now();
-            const bool double_click =
-                row == last_click_row_ &&
-                (now - last_click_time_) < kDoubleClickWindow;
-            last_click_row_ = row;
-            last_click_time_ = now;
-            selected_ = row;
-            UpdateAddEnabled();
-            Invalidate();
-            if (double_click) AddSelected();
-            return true;
-        }
-        case XER::UI::Widgets::Event::Type::KeyDown: {
-            if (event.key == XER::UI::Widgets::KeyCode::Enter) {
-                AddSelected();
-                return true;
-            }
-            if (event.key == XER::UI::Widgets::KeyCode::ArrowDown ||
-                event.key == XER::UI::Widgets::KeyCode::ArrowUp) {
-                if (!filtered_.empty()) {
-                    const int count =
-                        static_cast<int>(filtered_.size());
-                    const int dir = event.key ==
-                            XER::UI::Widgets::KeyCode::ArrowDown
+        if (event.key == XER::UI::Widgets::KeyCode::ArrowDown ||
+            event.key == XER::UI::Widgets::KeyCode::ArrowUp) {
+            if (!filtered_.empty()) {
+                const int count = static_cast<int>(filtered_.size());
+                const int dir =
+                    event.key == XER::UI::Widgets::KeyCode::ArrowDown
                         ? 1
                         : -1;
-                    selected_ = selected_ < 0
-                        ? 0
-                        : (selected_ + dir + count) % count;
-                    // Keep the selection visible.
-                    const float view_h = rows_bottom_ - rows_top_;
-                    const float top =
-                        static_cast<float>(selected_) * kRowHeight;
-                    if (top < scroll_y_) scroll_y_ = top;
-                    if (top + kRowHeight > scroll_y_ + view_h) {
-                        scroll_y_ = top + kRowHeight - view_h;
-                    }
-                    UpdateAddEnabled();
-                    Invalidate();
-                }
-                return true;
+                const int next = selected_ < 0
+                    ? 0
+                    : (selected_ + dir + count) % count;
+                SelectRow(next);
+                EnsureSelectionVisible();
             }
-            return false;
+            return true;
         }
-        default:
-            return false;
     }
+    return false;
 }
 
 void EffectsPanelWidget::Tick(double dt_seconds) { (void)dt_seconds; }

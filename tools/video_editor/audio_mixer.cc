@@ -1387,10 +1387,15 @@ struct AudioMixer::Impl {
                             std::string fx_error;
                             const double clip_t =
                                 t0 - session.clip_start;
+                            // ctx.clip_id scopes any script-side
+                            // closure state (delay lines, filter
+                            // memory) to THIS clip — two clips on the
+                            // same script must not share it.
                             if (!jfx->ProcessAudio(
                                     sfx->plugin_path.substr(7),
                                     contrib.data(), n, out_rate,
-                                    sfx->params, clip_t, &fx_error)) {
+                                    sfx->params, clip_t,
+                                    session.clip->id, &fx_error)) {
                                 Warn("js audio fx '" +
                                      sfx->plugin_path + "': " +
                                      (fx_error.empty()

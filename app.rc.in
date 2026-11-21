@@ -16,7 +16,7 @@ BEGIN
         BLOCK "040904b0"
         BEGIN
             VALUE "CompanyName",      "XERLab\0"
-            VALUE "FileDescription",  "@TARGET_NAME@ - XER Creative Suite\0"
+            VALUE "FileDescription",  "@TARGET_DESC@ - XER Creative Suite\0"
             VALUE "FileVersion",      "1.0.0.0\0"
             VALUE "InternalName",     "@TARGET_NAME@\0"
             VALUE "LegalCopyright",   "Matvey Vladimirovich (Yoshi Arasaka & LXXV)\0"

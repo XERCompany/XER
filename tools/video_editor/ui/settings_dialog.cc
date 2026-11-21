@@ -7,9 +7,13 @@
 #include <string>
 #include <utility>
 
+#include "icon_helpers.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/button_group.h"
+#include "widgets/field.h"
 #include "widgets/label.h"
 #include "widgets/text_input.h"
 
@@ -21,8 +25,54 @@ namespace Rendering = XER::UI::Rendering;
 using XER::UI::Theme::Color;
 
 constexpr float kPanelWidth = 520.0f;
-constexpr float kPanelHeight = 340.0f;
+constexpr float kPanelHeight = 360.0f;
 constexpr float kPanelPad = 22.0f;
+
+// Finds the first direct child of `parent` of type T — the dialog
+// reaches its non-member children (ButtonGroup, Field) this way so
+// the header's member set stays unchanged.
+template <typename T>
+T* FindChild(XER::UI::Widgets::Widget* parent) {
+    if (parent == nullptr) return nullptr;
+    for (const auto& child : parent->GetChildren()) {
+        if (auto* typed = dynamic_cast<T*>(child.get())) {
+            return typed;
+        }
+    }
+    return nullptr;
+}
+
+// The Field whose inner control is `control` (the Field owns the
+// widget it captions).
+XER::UI::Widgets::Field* FieldHosting(
+    XER::UI::Widgets::Widget* parent,
+    const XER::UI::Widgets::Widget* control) {
+    if (parent == nullptr || control == nullptr) return nullptr;
+    for (const auto& child : parent->GetChildren()) {
+        auto* field = dynamic_cast<XER::UI::Widgets::Field*>(child.get());
+        if (field == nullptr) continue;
+        for (const auto& inner : field->GetChildren()) {
+            if (inner.get() == control) return field;
+        }
+    }
+    return nullptr;
+}
+
+// Keeps the fps strip's active-preset highlight in sync: selected is
+// Primary, the rest Secondary — same convention as lab_panel's mode
+// buttons.
+void SyncFpsButtons(XER::UI::Widgets::Widget* parent, int selected) {
+    namespace Widgets = XER::UI::Widgets;
+    auto* group = FindChild<Widgets::ButtonGroup>(parent);
+    if (group == nullptr) return;
+    const auto& buttons = group->GetChildren();
+    for (std::size_t i = 0; i < buttons.size(); ++i) {
+        static_cast<Widgets::Button*>(buttons[i].get())
+            ->SetStyle(static_cast<int>(i) == selected
+                           ? Widgets::ButtonStyle::Primary
+                           : Widgets::ButtonStyle::Secondary);
+    }
+}
 
 // Frame-rate presets; the last entry is the "Custom" chip which reveals
 // the num/den fields instead of supplying a rate.
@@ -93,18 +143,16 @@ void SettingsDialog::EnsureChildren() {
     if (children_attached_) return;
     children_attached_ = true;
     namespace Widgets = XER::UI::Widgets;
+    // Icon-capable buttons resolve through the pack (idempotent).
+    VeIcons::InstallButtonIconResolver();
     title_ = std::make_shared<Widgets::Label>("Project settings");
     name_label_ = std::make_shared<Widgets::Label>(
         project_name_.empty() ? "Untitled project"
                               : "Project: " + project_name_,
         true);
-    width_label_ = std::make_shared<Widgets::Label>("W", true);
     width_input_ = std::make_shared<Widgets::TextInput>("1920");
-    height_label_ = std::make_shared<Widgets::Label>("H", true);
     height_input_ = std::make_shared<Widgets::TextInput>("1080");
-    fps_num_label_ = std::make_shared<Widgets::Label>("num", true);
     fps_num_input_ = std::make_shared<Widgets::TextInput>("30");
-    fps_den_label_ = std::make_shared<Widgets::Label>("den", true);
     fps_den_input_ = std::make_shared<Widgets::TextInput>("1");
     // Enter inside any numeric field applies the dialog.
     const auto submit = [this] { Apply(); };
@@ -112,6 +160,34 @@ void SettingsDialog::EnsureChildren() {
     height_input_->SetOnSubmit(submit);
     fps_num_input_->SetOnSubmit(submit);
     fps_den_input_->SetOnSubmit(submit);
+
+    // Each input sits under its Field caption (lab_panel convention).
+    const auto wrap_field =
+        [this](const char* caption,
+               const std::shared_ptr<Widgets::TextInput>& input) {
+            auto field = std::make_shared<Widgets::Field>();
+            field->SetLabel(caption);
+            field->AddChild(input);
+            AddChild(field);
+        };
+    wrap_field("Width (px)", width_input_);
+    wrap_field("Height (px)", height_input_);
+    wrap_field("num", fps_num_input_);
+    wrap_field("den", fps_den_input_);
+
+    // Frame-rate presets as a segmented strip (the lab_panel mode
+    // convention): ButtonGroup joins the buttons edge-to-edge; the
+    // selected preset keeps Primary while the rest drop to Secondary.
+    auto fps_group = std::make_shared<Widgets::ButtonGroup>(
+        Widgets::ButtonGroup::Orientation::Horizontal);
+    for (int i = 0; i < kFpsPresetCount; ++i) {
+        auto button = std::make_shared<Widgets::Button>(
+            kFpsPresets[i].label, Widgets::ButtonStyle::Secondary);
+        button->SetOnClick([this, i] { SelectFpsPreset(i); });
+        fps_group->AddChild(button);
+    }
+    AddChild(fps_group);
+
     ok_button_ = std::make_shared<Widgets::Button>(
         "OK", Widgets::ButtonStyle::Primary);
     ok_button_->SetOnClick([this] { Apply(); });
@@ -120,16 +196,9 @@ void SettingsDialog::EnsureChildren() {
     cancel_button_->SetOnClick([this] { Cancel(); });
     AddChild(title_);
     AddChild(name_label_);
-    AddChild(width_label_);
-    AddChild(width_input_);
-    AddChild(height_label_);
-    AddChild(height_input_);
-    AddChild(fps_num_label_);
-    AddChild(fps_num_input_);
-    AddChild(fps_den_label_);
-    AddChild(fps_den_input_);
     AddChild(ok_button_);
     AddChild(cancel_button_);
+    SyncFpsButtons(this, fps_preset_);
 }
 
 void SettingsDialog::SetProjectName(const std::string& name) {
@@ -163,10 +232,13 @@ void SettingsDialog::SetSettings(const ProjectSettings& settings) {
     fps_den_input_->SetValue(IntToString(settings.fps_den));
     bg_ = settings.bg;
     const bool custom = FpsCustomSelected();
-    fps_num_label_->SetVisible(custom);
-    fps_num_input_->SetVisible(custom);
-    fps_den_label_->SetVisible(custom);
-    fps_den_input_->SetVisible(custom);
+    if (auto* field = FieldHosting(this, fps_num_input_.get())) {
+        field->SetVisible(custom);
+    }
+    if (auto* field = FieldHosting(this, fps_den_input_.get())) {
+        field->SetVisible(custom);
+    }
+    SyncFpsButtons(this, fps_preset_);
     Invalidate();
 }
 
@@ -199,12 +271,13 @@ void SettingsDialog::SelectFpsPreset(int index) {
     }
     fps_preset_ = index;
     const bool custom = FpsCustomSelected();
-    if (fps_num_label_) {
-        fps_num_label_->SetVisible(custom);
-        fps_num_input_->SetVisible(custom);
-        fps_den_label_->SetVisible(custom);
-        fps_den_input_->SetVisible(custom);
+    if (auto* field = FieldHosting(this, fps_num_input_.get())) {
+        field->SetVisible(custom);
     }
+    if (auto* field = FieldHosting(this, fps_den_input_.get())) {
+        field->SetVisible(custom);
+    }
+    SyncFpsButtons(this, fps_preset_);
     Invalidate();
 }
 
@@ -241,25 +314,9 @@ Layout::Rect SettingsDialog::PanelRect() const {
             width, kPanelHeight};
 }
 
-std::vector<Layout::Rect> SettingsDialog::FpsChipRects() const {
-    std::vector<Layout::Rect> rects;
-    const auto panel = PanelRect();
-    const float px = panel.x + kPanelPad;
-    const float pw = panel.width - kPanelPad * 2.0f;
-    const float gap = 5.0f;
-    const float chip_w =
-        (pw - gap * (kFpsPresetCount - 1)) / kFpsPresetCount;
-    const float y = panel.y + 146.0f;
-    for (int i = 0; i < kFpsPresetCount; ++i) {
-        rects.push_back(
-            {px + i * (chip_w + gap), y, chip_w, 24.0f});
-    }
-    return rects;
-}
-
 Layout::Rect SettingsDialog::BgSwatchRect() const {
     const auto panel = PanelRect();
-    return {panel.x + kPanelPad, panel.y + 236.0f, 26.0f, 26.0f};
+    return {panel.x + kPanelPad, panel.y + 278.0f, 26.0f, 26.0f};
 }
 
 void SettingsDialog::Render(
@@ -267,35 +324,26 @@ void SettingsDialog::Render(
     const XER::UI::Theme::Tokens& tokens) {
     EnsureChildren();
     const auto bounds = GetBounds();
-    renderer.FillRect(bounds, {0.0f, 0.0f, 0.0f, 0.58f}, 0.0f);
+    renderer.FillRect(bounds, VeTheme::kScrim, 0.0f);
+    // Card chrome per the panel convention: surface fill + hairline
+    // border at the large radius, accent edge bar.
     const auto panel = PanelRect();
     renderer.FillRect(panel, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(panel, tokens.border, 1.0f, tokens.radius_large);
     renderer.FillRect({panel.x, panel.y, 4.0f, panel.height},
                       tokens.accent, tokens.radius_large);
 
+    // Section headers — the drawn-header convention: muted, small,
+    // weight 600, drawn at the rects Layout() uses for the rows below.
     const float px = panel.x + kPanelPad;
     const Rendering::TextStyle caption{tokens.muted, tokens.font_small,
                                        600};
-    renderer.DrawText("Canvas", {px, panel.y + 68.0f, 200.0f, 16.0f},
+    renderer.DrawText("Canvas", {px, panel.y + 66.0f, 200.0f, 16.0f},
                       caption);
     renderer.DrawText("Frame rate",
-                      {px, panel.y + 126.0f, 200.0f, 16.0f}, caption);
+                      {px, panel.y + 144.0f, 200.0f, 16.0f}, caption);
     renderer.DrawText("Background",
-                      {px, panel.y + 216.0f, 200.0f, 16.0f}, caption);
-
-    // Frame-rate preset chips.
-    const auto chips = FpsChipRects();
-    for (int i = 0; i < kFpsPresetCount; ++i) {
-        const bool selected = i == fps_preset_;
-        renderer.FillRect(chips[i],
-                          selected ? tokens.accent : tokens.secondary,
-                          tokens.radius_small);
-        renderer.DrawText(
-            kFpsPresets[i].label, chips[i],
-            {selected ? tokens.accent_foreground : tokens.muted,
-             tokens.font_small, 600});
-    }
+                      {px, panel.y + 258.0f, 200.0f, 16.0f}, caption);
 
     // Background swatch (click cycles the palette) + hex readout.
     const auto swatch = BgSwatchRect();
@@ -334,20 +382,33 @@ void SettingsDialog::Layout(const XER::UI::Layout::Rect& bounds) {
     title_->Layout({px, panel.y + 14.0f, pw, 26.0f}, tokens);
     name_label_->Layout({px, panel.y + 42.0f, pw, 18.0f}, tokens);
 
-    const float field_y = panel.y + 88.0f;
-    width_label_->Layout({px, field_y + 6.0f, 16.0f, 20.0f}, tokens);
-    width_input_->Layout({px + 20.0f, field_y, 96.0f, 32.0f}, tokens);
-    height_label_->Layout({px + 132.0f, field_y + 6.0f, 16.0f, 20.0f},
-                          tokens);
-    height_input_->Layout({px + 152.0f, field_y, 96.0f, 32.0f}, tokens);
+    // Field = caption band (font_small*1.4 + half the small gap) + the
+    // 32px control — same math lab_panel uses for its field rows.
+    const float caption_h =
+        tokens.font_small * 1.4f + tokens.spacing_small * 0.5f;
+    const float field_h = caption_h + 32.0f;
+    const float field_y = panel.y + 86.0f;
+    if (auto* field = FieldHosting(this, width_input_.get())) {
+        field->Layout({px, field_y, 110.0f, field_h}, tokens);
+    }
+    if (auto* field = FieldHosting(this, height_input_.get())) {
+        field->Layout({px + 130.0f, field_y, 110.0f, field_h}, tokens);
+    }
 
-    const float custom_y = panel.y + 178.0f;
-    fps_num_label_->Layout({px, custom_y + 5.0f, 30.0f, 18.0f}, tokens);
-    fps_num_input_->Layout({px + 34.0f, custom_y, 72.0f, 30.0f}, tokens);
-    fps_den_label_->Layout({px + 118.0f, custom_y + 5.0f, 30.0f, 18.0f},
-                           tokens);
-    fps_den_input_->Layout({px + 152.0f, custom_y, 72.0f, 30.0f},
-                           tokens);
+    // Frame-rate preset strip under the "Frame rate" drawn header.
+    if (auto* group =
+            FindChild<XER::UI::Widgets::ButtonGroup>(this)) {
+        group->Layout({px, panel.y + 164.0f, pw, 28.0f}, tokens);
+    }
+
+    // Custom num/den fields (hidden unless the Custom preset is up).
+    const float custom_y = panel.y + 198.0f;
+    if (auto* field = FieldHosting(this, fps_num_input_.get())) {
+        field->Layout({px, custom_y, 100.0f, field_h}, tokens);
+    }
+    if (auto* field = FieldHosting(this, fps_den_input_.get())) {
+        field->Layout({px + 120.0f, custom_y, 100.0f, field_h}, tokens);
+    }
 
     const float button_y = panel.y + panel.height - 48.0f;
     cancel_button_->Layout({panel.x + panel.width - kPanelPad - 196.0f,
@@ -368,13 +429,8 @@ bool SettingsDialog::HandleEvent(const XER::UI::Widgets::Event& event) {
     }
     if (event.type == Event::Type::Click &&
         event.mouse_button == MouseButton::Left) {
-        const auto chips = FpsChipRects();
-        for (int i = 0; i < kFpsPresetCount; ++i) {
-            if (chips[i].Contains(event.position)) {
-                SelectFpsPreset(i);
-                return true;
-            }
-        }
+        // The fps strip buttons handle their own clicks now; the
+        // background swatch stays a drawn hit region.
         if (BgSwatchRect().Contains(event.position)) {
             CycleBackground();
             return true;

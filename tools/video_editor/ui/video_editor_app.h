@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -13,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "audio_sync.h"
 #include "export_engine.h"
 #include "media_catalog.h"
 #include "media_prep.h"
@@ -20,6 +22,7 @@
 #include "source_edit.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "url_import.h"
 #include "lab/async_op.h"
 #include "playback/preview_engine.h"
 #include "browser_panel_widget.h"
@@ -30,12 +33,15 @@
 #include "history_panel.h"
 #include "inspector_widget.h"
 #include "lab_panel.h"
+#include "layers_panel.h"
 #include "markers_panel.h"
 #include "media_bin_widget.h"
 #include "mixer_panel.h"
 #include "monitor_widget.h"
 #include "nav_rail_widget.h"
+#include "new_layer_dialog.h"
 #include "plugins_panel_widget.h"
+#include "font_manager.h"
 #include "settings_dialog.h"
 #include "shortcuts_overlay.h"
 #include "source_monitor_widget.h"
@@ -43,6 +49,7 @@
 #include "status_toast.h"
 #include "timeline_widget.h"
 #include "title_editor.h"
+#include "url_import_dialog.h"
 #include "waveform_panel.h"
 #include "workspace_layout.h"
 #include "vst3_editor.h"
@@ -52,9 +59,30 @@ namespace XER::UI::Widgets {
 class AppTitleBar;
 class Button;
 class Label;
+class Tabs;
 }
 
 namespace XER::VideoEditor::Ui {
+
+// Bound thunks the window subclass proc reads via its ref_data
+// pointer — keeps the Win32 hook (and windows.h types) out of the
+// class definition. The same proc that vetoes WM_CLOSE also drains
+// WM_DROPFILES, so both callbacks travel in one payload. Both must be
+// set before SetWindowSubclass installs the proc.
+struct WindowSubclassHooks {
+    // WM_CLOSE veto — ConfirmDiscardChanges.
+    std::function<bool()> close_guard;
+    // WM_DROPFILES — OS file/directory drop -> media import. Paths
+    // arrive wide (DragQueryFileW); conversion happens in the callee.
+    std::function<void(const std::vector<std::wstring>&)> file_drop;
+};
+
+// Clip + horizontal wheel-scroll host for the right-panel tab strip —
+// defined in video_editor_app.cc. Widgets::Tabs lays cells out at
+// natural text width, which can exceed a narrow docked panel; the
+// host clips the strip (ClipsChildren cuts rendering AND hit-testing)
+// and scrolls it so every tab stays reachable.
+class TabStripScroll;
 
 class VideoEditorAppWidget final : public XER::UI::Widgets::Widget {
 public:
@@ -70,6 +98,16 @@ public:
     using Widget::Layout;
     bool HandleEvent(const XER::UI::Widgets::Event& event) override;
     void Tick(double dt_seconds) override;
+
+    // Headless capture seam (`--screenshot --ui`): seeks the playhead
+    // to `seconds`, spins the program preview engine up and pumps
+    // Tick() until the first composited frame has been marshalled
+    // into the program monitor (bounded by `timeout_ms`). Engine or
+    // audio-sink failures degrade to the monitor's empty placeholder
+    // and return false — the caller still gets a valid chrome/layout
+    // capture. Call AFTER the widget has joined a WidgetTree (the
+    // Seek/SetPlayhead fan-out expects attached children).
+    bool PrepareUiCapture(double seconds, int timeout_ms = 3000);
 
     XER::UI::Layout::Size GetMinSize() const override {
         return {960.0f, 620.0f};
@@ -102,11 +140,44 @@ private:
     bool LoadProject(const std::string& utf8_path);
     bool SaveProject(bool choose_path = false);
     void ImportMedia();
+    // Media-bin/File "Import from URL…" — shows the URL dialog;
+    // StartUrlImport runs the download on url_op_ and Tick() lands
+    // the file through the shared catalog-import path.
+    void ImportFromUrl();
+    void StartUrlImport(const std::string& url);
+    // Per-file catalog import shared by the file dialog and OS drops:
+    // Open + Import + selection update. No status-bar writes, no
+    // RefreshCatalog/poster requests — callers batch those and own
+    // the status wording.
+    bool ImportMediaFile(const std::string& path, std::string* error);
+    // WM_DROPFILES thunk body (window subclass): expands dropped
+    // directories one level deep, filters to the shared media
+    // extension list, then batch-imports what remains.
+    void OnOsFilesDropped(const std::vector<std::wstring>& wide_paths);
+    // Batch catalog import + summary status for OnOsFilesDropped —
+    // "Importing N files…" up front, "imported N, skipped M" after.
+    void ImportDroppedPaths(const std::vector<std::string>& paths,
+                            int skipped);
     void AddSelectedToTimeline();
     // Inserts the catalog entry for `path` at the playhead — the
     // media-bin context menu passes its row path; falls back to the
     // bin selection when the path isn't in the catalog.
     void AddMediaToTimeline(const std::string& path);
+    // Same placement rules as AddMediaToTimeline but at an explicit
+    // timeline position — the media-bin drag->drop path lands the
+    // clip under the cursor instead of at the playhead.
+    // preferred_track >= 0 wins when its kind matches the media and
+    // it is unlocked (bin drop on an empty lane); a mismatched or
+    // locked target falls back to the first free track of the kind.
+    void AddMediaToTimelineAt(const std::string& path,
+                              double at_seconds,
+                              int preferred_track = -1);
+    // Media-bin drag hooks: on_drop fires when a card drag releases
+    // over the timeline bounds (clip lands at the drop time);
+    // on_drag_hover drives the timeline's drop-target affordance.
+    void OnBinMediaDrop(const std::string& path,
+                        XER::UI::Layout::Point position);
+    void OnBinDragHover(XER::UI::Layout::Point position, bool active);
     void StartExport();          // opens the configured export dialog
     void BeginConfiguredExport();  // dialog "Export" -> engine start
     // Shared export kick-off: engine start + queue row + option
@@ -155,8 +226,16 @@ private:
     void MoveClip(const std::string& clip_id, double start);
     // One-click waveform sync (audio_sync.h): correlate every
     // audio-bearing clip's envelope against the selected/first clip
-    // and apply matches as history-wrapped moves.
+    // and apply matches as history-wrapped moves. Runs on sync_op_ —
+    // the UI stays live so the Cancel affordance can abort a long
+    // multi-cam decode.
     void SyncAudioClips();
+    // Cancels the in-flight audio sync: flips the flag the in-process
+    // plan polls AND kills the disposable XERSyncMedia worker (a
+    // remote request can't be polled mid-flight — KillWorker fails
+    // the RoundTrip fast with no crash-death penalty). Bound to the
+    // status-strip Cancel button and the Esc key.
+    void RequestSyncCancel();
     void TrimClip(const std::string& clip_id, TrimEdge edge,
                   double point);
     void SplitClip(const std::string& clip_id, double at_seconds);
@@ -204,9 +283,29 @@ private:
     void RenameMarkerAt(double t, const std::string& name);
     void SetWorkAreaRange(double in_s, double out_s);
     void SetTrackFlag(int track, char which, bool on);  // 'm','h','l'
-    void SetRightTab(int tab);                          // 0..9
+    void SetRightTab(int tab);                          // 0..10
     void ApplyProjectSettings(const ProjectSettings& settings);
+    // "New Item" placements: a generated clip on the target video
+    // track at the playhead (menu) or an explicit lane+time (timeline
+    // context menu). track < 0 picks TargetVideoTrack(); t < 0 the
+    // playhead; empty name/param fall back to the kind defaults.
     void AddGeneratedClip(SourceKind kind);
+    void AddGeneratedClipAt(SourceKind kind, int track, double at_seconds,
+                            const std::string& name,
+                            const std::string& param, double duration);
+    // Track for "New Item" inserts: the selected clip's track when it
+    // is an unlocked video lane, else the first unlocked video track,
+    // else -1 (caller creates one). Same rule for the LAYERS panel's
+    // active-track display.
+    int TargetVideoTrack() const;
+    // Color matte modal (new_layer_dialog.h): pending_layer_*
+    // captures the context-menu insert point so Apply lands on the
+    // lane/time that opened the dialog.
+    void ShowNewLayerDialog(int track, double at_seconds);
+    // "Add Media…" picker: imports the file then places it on
+    // `preferred_track` at `at_seconds` (the AddMediaToTimelineAt
+    // fallback rules apply).
+    void ShowAddMediaDialog(int preferred_track, double at_seconds);
     void AddVst3FxToSelectedClip();
     // Open clip.audio_fx[fx_index]'s native editor; fx_index < 0
     // picks the first enabled fx (menu path). The popup session is
@@ -236,11 +335,21 @@ private:
     void RecoverAutosave();
     void OpenSpeedDialog();
     void OpenTitleEditor();
+    // System font browser (Tools > Fonts…); applies the chosen face
+    // to the selected Text clip's style param.
+    void OpenFontManager();
     void ApplyClipSpeed(const std::string& clip_id, double rate,
                         bool ripple);
     void AddAdjustmentClip();
     void RefreshCatalog();
     void NotifyProjectChanged();
+    // Marker keyboard nav — PageUp/PageDown plus Premiere's Shift+M.
+    // The search wraps so the keys always land on a marker.
+    void JumpToMarker(bool next);
+    // Unsaved-changes gate for the destructive ops (New/Open/close):
+    // returns true when the current project may be discarded — clean,
+    // or the user picked Discard / completed the save in the prompt.
+    bool ConfirmDiscardChanges();
     void SetStatus(const std::string& text, bool is_error = false);
     // Action dispatcher behind xer_ext.call()/projectInfo()/setStatus()
     // — JSON in/out, scoped surface for extension scripts.
@@ -273,14 +382,12 @@ private:
     bool children_attached_ = false;
     bool shortcuts_installed_ = false;
     bool context_menu_registered_ = false;
-    // Chrome rects cached by Layout() for the structural strips Render()
-    // paints (status bar, right-panel tab strip, timeline divider).
+    // Chrome lines cached by Layout() for the structural strips
+    // Render() paints (status bar surface, timeline divider). The
+    // right-panel tab strip draws itself now — Widgets::Tabs paints
+    // its own bar, hairline and underline indicator.
     float status_bar_top_ = 0.0f;
     float timeline_top_ = 0.0f;
-    XER::UI::Layout::Rect tab_strip_rect_{};
-    // Active tab's bounds (cached by Layout) so Render() can draw the
-    // accent underline indicator under it.
-    XER::UI::Layout::Rect active_tab_rect_{};
     // User-resizable panels: Layout() fills these 6px hit-rects inside
     // the gap strips the child layout leaves between panels (left
     // panel's right edge / right panel's left edge / timeline's top
@@ -316,6 +423,31 @@ private:
     AiResult ai_result_;
     float ai_progress_shown_ = -1.0f;
 
+    // URL-download background job — same AsyncOp/marshal pattern as
+    // ai_op_: the worker only writes url_result_/url_status_ under the
+    // mutex; Tick() pops the result and runs the catalog import on this
+    // thread (ImportMediaFile is not thread-safe — it touches
+    // selected_media_path_ and status).
+    Lab::AsyncOp url_op_;
+    std::mutex url_result_mutex_;
+    UrlImport::Result url_result_;
+    std::string url_status_;          // last worker status line
+    float url_progress_shown_ = -1.0f;
+
+    // Audio-sync background job — the same AsyncOp/marshal pattern as
+    // ai_op_ but a dedicated slot so a sync never evicts an AI task.
+    // The worker reads a project snapshot (UI edits keep flowing
+    // while it runs); the report lands in sync_report_ via Tick().
+    // Declared after media_prep_ so the joining dtor runs while the
+    // prep pool is still alive.
+    Lab::AsyncOp sync_op_;
+    std::mutex sync_result_mutex_;
+    AudioSyncReport sync_report_;
+    std::atomic<bool> sync_cancel_{false};
+    std::atomic<int> sync_progress_done_{0};
+    std::atomic<int> sync_progress_total_{0};
+    int sync_progress_shown_ = -1;
+
     std::shared_ptr<XER::UI::Widgets::AppTitleBar> title_bar_;
     std::shared_ptr<XER::UI::Widgets::Button> import_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
@@ -327,6 +459,9 @@ private:
     std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> export_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> status_label_;
+    // Right-docked in the status strip — the "Syncing audio…
+    // [Cancel]" affordance; hidden whenever sync_op_ is idle.
+    std::shared_ptr<XER::UI::Widgets::Button> sync_cancel_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> zoom_label_;
     // Ordered toolbar row (button + slot width). EnsureChildren fills
     // it from SharedAssetsConfig().toolbar_ids order when the assets
@@ -354,22 +489,25 @@ private:
     std::shared_ptr<MixerPanelWidget> mixer_panel_;
     std::shared_ptr<ShortcutsOverlay> shortcuts_overlay_;
     std::shared_ptr<SpeedDialog> speed_dialog_;
+    std::shared_ptr<UrlImportDialog> url_dialog_;
     std::shared_ptr<TitleEditor> title_editor_;
+    std::shared_ptr<FontManager> font_manager_;
+    std::shared_ptr<NewLayerDialog> new_layer_dialog_;
+    std::shared_ptr<LayersPanelWidget> layers_panel_;
+    // Context-menu insert point the matte dialog applies to —
+    // track < 0 / time < 0 means the default (TargetVideoTrack /
+    // playhead) was in effect when the dialog opened.
+    int pending_layer_track_ = -1;
+    double pending_layer_time_ = -1.0;
     std::shared_ptr<ExportQueuePanelWidget> export_queue_;
     std::shared_ptr<WaveformPanelWidget> waveform_panel_;
     std::shared_ptr<StatusToastWidget> status_toast_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_inspector_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_effects_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_markers_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_lab_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_history_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_mixer_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_queue_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_plugins_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_color_btn_;
-    std::shared_ptr<XER::UI::Widgets::Button> tab_browser_btn_;
+    // Right-panel tab strip: Widgets::Tabs in Underline mode inside
+    // the clip/wheel-scroll host — see TabStripScroll above.
+    std::shared_ptr<XER::UI::Widgets::Tabs> right_tabs_;
+    std::shared_ptr<TabStripScroll> tab_strip_;
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Web
+    // 8 Color, 9 Web, 10 Lyr
     int right_tab_ = 0;
     double timeline_fraction_ = 0.32;  // workspace layout knob
     std::vector<ExportJobRow> export_jobs_;
@@ -388,6 +526,19 @@ private:
     bool autosave_offer_ = false;
     std::string autosave_offer_dir_;
     std::string autosave_offer_project_;
+    // Unsaved-changes tracking — NotifyProjectChanged() sets it, a
+    // successful save or a New/Load project swap clears it. Deliberately
+    // NOT AutosaveManager::IsDirty(): a written autosave slot still
+    // means the .xerproj on disk is stale.
+    bool project_dirty_ = false;
+    // Bound thunks the WM_CLOSE/WM_DROPFILES subclass proc invokes
+    // through its ref_data pointer — keeps the Win32 hook (and
+    // windows.h types) out of this header. Set before
+    // SetWindowSubclass in the ctor.
+    WindowSubclassHooks window_hooks_;
+    // Last drop-hover state pushed to the timeline — avoids an
+    // Invalidate() per MouseMove during a bin drag.
+    bool bin_drop_hovering_ = false;
     ExportEngine export_engine_;
 
     // PreviewEngine drives playback frames + audio meters; the monitor

@@ -1,5 +1,5 @@
-// Export queue panel: Media-Encoder-style render queue — one drawn
-// row per job.
+// Export queue panel: Media-Encoder-style render queue — one
+// drawn+widget row per job.
 //
 //   EXPORT QUEUE
 //   ┌────────────────────────────────────────────────┐
@@ -14,14 +14,14 @@
 //   └────────────────────────────────────────────────┘
 //
 // Row text (basename `label`, `detail` = range/codec/bitrate line the
-// host composes), the progress bar, and the state chip are drawn —
-// not child widgets — while the per-row action buttons are Ghost
-// Button children (same split as MarkersPanelWidget): [x] cancel for
-// Queued/Running (and dismissing Failed rows), [>>] reveal for Done,
-// [R] retry for Failed. Buttons fire hooks with the ROW INDEX into
-// the last SetJobs() vector — the host maps that back to its own job
-// ids. The list scrolls internally with the mouse wheel when it
-// exceeds the viewport.
+// host composes) and the hover wash are drawn; the state chip is a
+// per-row Widgets::Badge, the progress bar a per-row Widgets::Progress,
+// and the actions Ghost Button children (same split as
+// MarkersPanelWidget): [x] cancel for Queued/Running (and dismissing
+// Failed rows), [>>] reveal for Done, [R] retry for Failed. Buttons
+// fire hooks with the ROW INDEX into the last SetJobs() vector — the
+// host maps that back to its own job ids. The list scrolls internally
+// with the mouse wheel when it exceeds the viewport.
 #pragma once
 
 #include <functional>
@@ -32,8 +32,10 @@
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {
+class Badge;
 class Button;
 class Label;
+class Progress;
 }
 
 namespace XER::VideoEditor::Ui {
@@ -91,6 +93,11 @@ public:
 
 private:
     struct Row {
+        // State chip + progress bar (enabled — Badge keeps its variant
+        // colors, Progress its accent fill). Rows have no click action
+        // of their own, so these covering part of the row is harmless.
+        std::shared_ptr<XER::UI::Widgets::Badge> badge;
+        std::shared_ptr<XER::UI::Widgets::Progress> progress;
         // All three always exist; Layout/visibility picks which show.
         std::shared_ptr<XER::UI::Widgets::Button> cancel;
         std::shared_ptr<XER::UI::Widgets::Button> reveal;
@@ -99,6 +106,9 @@ private:
 
     void EnsureChildren();
     void RebuildRows();
+    // Reflects jobs_[index] into an existing Row's children (state ->
+    // badge variant, progress value, action visibility).
+    void SyncRow(std::size_t index);
     int RowAt(const XER::UI::Layout::Point& position) const;
     XER::UI::Layout::Rect RowRect(int row) const;
     XER::UI::Layout::Rect ProgressRect(int row) const;
@@ -117,7 +127,7 @@ private:
     std::vector<Row> rows_;
     // Mark-and-sweep graveyard (see MarkersPanelWidget::retired_rows_):
     // a row button's OnClick can trigger SetJobs -> RebuildRows, which
-    // would free the widget mid-dispatch. Retired buttons are disabled
+    // would free the widget mid-dispatch. Retired children are disabled
     // + unparented and swept on the NEXT rebuild.
     std::vector<std::shared_ptr<XER::UI::Widgets::Widget>> retired_rows_;
     std::shared_ptr<XER::UI::Widgets::Label> title_;

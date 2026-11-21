@@ -80,6 +80,10 @@ void Badge::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
             fill_color = tokens.accent;
             text_color = tokens.accent_foreground;
             break;
+        case BadgeVariant::Destructive:
+            fill_color = tokens.danger;
+            text_color = tokens.danger_foreground;
+            break;
     }
     if (!IsEnabled()) {
         fill_color = tokens.secondary;

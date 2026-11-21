@@ -20,12 +20,18 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "layout/geometry.h"
 #include "widgets/widget.h"
+
+namespace XER::UI::Widgets {
+class Button;
+class Label;
+}
 
 namespace XER::VideoEditor::Ui {
 
@@ -99,6 +105,8 @@ public:
     }
 
 private:
+    // Transport row indexes — the buttons themselves are
+    // Widgets::Button children; the enum only feeds ButtonRect().
     enum class Button {
         Play,
         PrevFrame,
@@ -109,6 +117,12 @@ private:
         Overwrite,
     };
 
+    // Lazy child setup: transport buttons + the header/footer labels.
+    void EnsureChildren();
+    // Mirrors playing/marks/enabled state onto the child buttons and
+    // refreshes the header/footer label text — called every Render.
+    void SyncTransportChildren();
+
     // Geometry — pure functions of GetBounds().
     XER::UI::Layout::Rect VideoAreaRect() const;
     XER::UI::Layout::Rect RulerRect() const;
@@ -118,19 +132,17 @@ private:
     XER::UI::Layout::Rect FrameDestRect() const;
     double RulerTimeAtX(float x) const;
     void EmitSeek(double t);
+    // Footer readout text ("TC — TC · Ns marked" / hint line).
+    std::string FooterText() const;
 
     void DrawRuler(XER::UI::Rendering::Renderer& renderer,
                    const XER::UI::Theme::Tokens& tokens,
                    const XER::UI::Layout::Rect& ruler);
+    // The transport row's drawn remainder — the "current / duration"
+    // readout; the buttons themselves are child widgets now.
     void DrawTransport(XER::UI::Rendering::Renderer& renderer,
                        const XER::UI::Theme::Tokens& tokens,
                        const XER::UI::Layout::Rect& row);
-    void DrawButton(XER::UI::Rendering::Renderer& renderer,
-                    const XER::UI::Theme::Tokens& tokens,
-                    Button button, const char* label, bool active);
-    void DrawFooter(XER::UI::Rendering::Renderer& renderer,
-                    const XER::UI::Theme::Tokens& tokens,
-                    const XER::UI::Layout::Rect& row);
 
     Hooks hooks_;
     std::string path_;
@@ -150,6 +162,19 @@ private:
     int frame_height_ = 0;
     std::string status_text_ = "No clip loaded";
     bool status_error_ = false;
+
+    // Transport row children (indexed by the Button enum) plus the
+    // header/footer labels.
+    bool transport_children_ = false;
+    std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> prev_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> next_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> mark_in_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> mark_out_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> insert_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> overwrite_btn_;
+    std::shared_ptr<XER::UI::Widgets::Label> header_label_;
+    std::shared_ptr<XER::UI::Widgets::Label> footer_label_;
 };
 
 }  // namespace XER::VideoEditor::Ui

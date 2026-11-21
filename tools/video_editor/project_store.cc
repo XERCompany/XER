@@ -498,6 +498,10 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             if (!r.GetStr("source", "", &clip.source_path)) {
                 return false;
             }
+            // Optional user label (absent on load -> "").
+            if (!r.GetStr("name", clip.name, &clip.name)) {
+                return false;
+            }
 
             std::int64_t track_index = 0;
             if (!r.GetI64("track", 0, &track_index)) {
@@ -1009,6 +1013,9 @@ Json::Value ClipToJson(const Clip& clip) {
     Json::Value out(Json::objectValue);
     out["id"] = clip.id;
     out["source"] = clip.source_path;
+    if (!clip.name.empty()) {
+        out["name"] = clip.name;
+    }
     out["track"] = clip.track;
     out["timeline_start"] = clip.timeline_start;
     out["in_point"] = clip.in_point;

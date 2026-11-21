@@ -434,6 +434,29 @@ std::vector<OcioProfile>& SharedOcioProfiles() {
     return profiles;
 }
 
+// Serializes MutateOcioProfiles writers against FindOcioProfileCopy
+// readers (the compositor runs on engine threads; the LUT manager
+// rescans on the UI thread).
+std::mutex& ProfilesMutex() {
+    static std::mutex m;
+    return m;
+}
+
+void MutateOcioProfiles(
+    const std::function<void(std::vector<OcioProfile>&)>& mutate) {
+    if (!mutate) return;
+    std::lock_guard<std::mutex> lock(ProfilesMutex());
+    mutate(SharedOcioProfiles());
+}
+
+bool FindOcioProfileCopy(const std::string& name, OcioProfile* out) {
+    std::lock_guard<std::mutex> lock(ProfilesMutex());
+    const OcioProfile* found = FindOcioProfile(name);
+    if (found == nullptr) return false;
+    if (out != nullptr) *out = *found;
+    return true;
+}
+
 const OcioProfile* FindOcioProfile(const std::string& name) {
     for (const OcioProfile& profile : SharedOcioProfiles()) {
         if (profile.name.size() == name.size() &&

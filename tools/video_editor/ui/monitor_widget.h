@@ -20,6 +20,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -28,6 +29,11 @@
 #include "layout/geometry.h"
 #include "timeline_model.h"
 #include "widgets/widget.h"
+
+namespace XER::UI::Widgets {
+class Badge;
+class Button;
+}
 
 namespace XER::VideoEditor::Ui {
 
@@ -126,7 +132,8 @@ public:
     }
 
 private:
-    // Overlay transport buttons, hit-tested in HandleEvent.
+    // Transport row buttons — real Widgets::Button children; the enum
+    // indexes their geometry via OverlayButtonRect().
     enum class OverlayButton {
         Play,
         PrevFrame,
@@ -138,6 +145,13 @@ private:
     };
 
     void RebuildCompositor();
+    // Lazy child setup: transport buttons + the preview-quality badge.
+    // Runs on the first Render/Layout so headless construction stays
+    // cheap (same EnsureChildren convention as the sibling panels).
+    void EnsureChildren();
+    // Mirrors playing/toggle state onto the transport buttons' styles
+    // and the play/pause icon — called every Render.
+    void SyncTransportChildren();
     bool RenderCurrentFrame(std::string* error_out);
     void SetStatus(const std::string& text, bool is_error = false);
     void EmitTime(double t);
@@ -176,13 +190,11 @@ private:
     void DrawRuler(XER::UI::Rendering::Renderer& renderer,
                    const XER::UI::Theme::Tokens& tokens,
                    const XER::UI::Layout::Rect& ruler);
+    // The transport row's drawn remainder — the "current / duration"
+    // readout; the buttons themselves are child widgets now.
     void DrawTransport(XER::UI::Rendering::Renderer& renderer,
                        const XER::UI::Theme::Tokens& tokens,
                        const XER::UI::Layout::Rect& row);
-    void DrawOverlayButton(XER::UI::Rendering::Renderer& renderer,
-                           const XER::UI::Theme::Tokens& tokens,
-                           OverlayButton button, const char* label,
-                           bool active);
 
     Hooks hooks_;
     Project project_;
@@ -228,6 +240,23 @@ private:
     double loop_in_ = 0.0;
     double loop_out_ = 0.0;
     std::string quality_tag_ = "Full";
+    // Numeric side of the quality pick (1.0 / 0.5 / 0.25) — the badge
+    // tag is display-only; this feeds the internal compositor's
+    // preview-quality hint when the widget renders frames itself.
+    float preview_scale_ = 1.0f;
+
+    // Transport row children (indexed by OverlayButton order) plus the
+    // appended scopes toggle and the quality chip.
+    bool transport_children_ = false;
+    std::shared_ptr<XER::UI::Widgets::Button> play_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> prev_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> next_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> safe_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> grid_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> loop_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> focus_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> scopes_btn_;
+    std::shared_ptr<XER::UI::Widgets::Badge> quality_badge_;
 };
 
 }  // namespace XER::VideoEditor::Ui

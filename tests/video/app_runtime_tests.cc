@@ -276,7 +276,8 @@ void TestBootMissingAssets() {
     }
     XER_VE_CHECK(result.ok);
     XER_VE_CHECK(result.engine != nullptr);
-    XER_VE_CHECK(result.window.title == "XER Studio");
+    XER_VE_CHECK(result.window.title ==
+                 "VideoEditor - XER Creative Suite");
     XER_VE_CHECK(result.window.width == 1560);
     XER_VE_CHECK(result.window.height == 900);
 }

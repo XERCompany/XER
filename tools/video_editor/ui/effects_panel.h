@@ -4,14 +4,15 @@
 // kCatalog below, with each type's default parameter vector taken from
 // the compositor's documented fallbacks).
 //
-// Typing in the search box filters by name/description; selecting a row
-// (click, double-click, or Enter) plus the "Add" button emits
-// Hooks::on_add_effect with a ClipEffect carrying sane defaults — the
-// app wraps the mutation in TimelineHistory and the inspector's effects
-// section then exposes the params for editing.
+// Typing in the search box filters by name/description. Rows are real
+// Widgets::Item children inside a ScrollArea: a click selects (the
+// Item's on_click), a double-click applies (on_double_click), and the
+// "Add" button or Enter emits Hooks::on_add_effect with a ClipEffect
+// carrying sane defaults — the app wraps the mutation in
+// TimelineHistory and the inspector's effects section then exposes
+// the params for editing.
 #pragma once
 
-#include <chrono>
 #include <functional>
 #include <memory>
 #include <string>
@@ -22,7 +23,9 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class Item;
 class Label;
+class ScrollArea;
 class TextInput;
 }
 
@@ -37,6 +40,7 @@ public:
     };
 
     explicit EffectsPanelWidget(Hooks hooks = {});
+    ~EffectsPanelWidget() override;
 
     // The clip new effects are applied to (nullptr = panel idles and
     // the Add button stays disabled).
@@ -69,10 +73,20 @@ private:
 
     static const std::vector<EffectInfo>& Catalog();
 
+    // ScrollArea content hosting the row Items and painting the
+    // selection/hover chrome — defined in the .cc (incomplete type is
+    // fine: the destructor is out-of-line there).
+    class RowList;
+
     void EnsureChildren();
     void RecomputeFilter();
     void UpdateAddEnabled();
-    int RowAt(const XER::UI::Layout::Point& position) const;
+    // Selection bookkeeping shared by row clicks (catalog index) and
+    // arrow keys (filtered position).
+    void SelectRow(int filtered_pos);
+    void SelectCatalogRow(int catalog_index);
+    // Scrolls the ScrollArea so the selected row stays in view.
+    void EnsureSelectionVisible();
     void AddSelected();
     void SetStatus(const std::string& text, bool is_error = false);
 
@@ -80,20 +94,17 @@ private:
     std::string clip_id_;
     std::vector<int> filtered_;   // indices into Catalog()
     int selected_ = -1;           // index into filtered_
-    int hovered_ = -1;
-    float scroll_y_ = 0.0f;
-    float content_height_ = 0.0f;
-    float rows_top_ = 0.0f;       // y where the list begins (layout)
-    float rows_bottom_ = 0.0f;    // y where the list viewport ends
     bool children_attached_ = false;
-    // Double-click detection: second click on the same row adds it.
-    int last_click_row_ = -1;
-    std::chrono::steady_clock::time_point last_click_time_{};
 
     std::shared_ptr<XER::UI::Widgets::Label> title_;
     std::shared_ptr<XER::UI::Widgets::TextInput> search_;
     std::shared_ptr<XER::UI::Widgets::Button> add_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> status_;
+    std::shared_ptr<XER::UI::Widgets::ScrollArea> scroll_area_;
+    std::shared_ptr<RowList> list_;
+    // One row Item per Catalog() entry; visibility/order comes from
+    // filtered_ — rebuilt only once, never per keystroke.
+    std::vector<std::shared_ptr<XER::UI::Widgets::Item>> items_;
 };
 
 }  // namespace XER::VideoEditor::Ui

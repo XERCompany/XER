@@ -56,6 +56,12 @@ Goal started: 2026-11-15. Design doc:
 - [static-link-state.md](architecture/static-link-state.md) —
   what's static vs delay-loaded vs dynamic in the MSYS2 preset,
   skia delay-load impossibility, CopyDLL removal (2026-11-20).
+- [windows-msys2-gotchas.md](architecture/windows-msys2-gotchas.md) —
+  running-exe build locks (Build.ps1 auto-kill), MSYS2↔Windows path
+  rules, GUI-subsystem console contract, windres ASCII (2026-11-21).
+- [crash-debugging-windows.md](architecture/crash-debugging-windows.md)
+  — no gdb/lldb; VeCrashTrace SEH symbolizer, llvm-symbolizer for
+  RVAs, dormant minidump handler, 0xC0000374 fast-fail (2026-11-21).
 - [video-editor-js-fx.md](architecture/video-editor-js-fx.md) —
   JS effects/transitions (`assets/scripts/fx`, `script:` types) and
   the `--media-worker` decode subprocess (2026-11-20).
@@ -76,6 +82,15 @@ Goal started: 2026-11-15. Design doc:
 - [2026-11-20-working-version-push.md](progress/2026-11-20-working-version-push.md)
   — smoke mode (14 checks), config.h generation, FFmpeg bridge
   fix, check_all.ps1, wave-2/3 queue.
+
+- [2026-11-21-lens-sync-icons.md](progress/2026-11-21-lens-sync-icons.md)
+  — lens/glass FX + waveform sync + curves, exe icons/metadata,
+  GUI-subsystem console rules
+
+## Audit reports
+- [2026-11-21-gap-and-env-audit.md](reports/2026-11-21-gap-and-env-audit.md)
+  — ranked remaining gaps: sync-on-UI-thread, JS fx hazards, drag&drop,
+  unsaved-changes; env: build locks, CI smoke, --diag, screenshot tests
 
 ## Conventions
 

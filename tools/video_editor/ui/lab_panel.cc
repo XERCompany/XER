@@ -10,8 +10,11 @@
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widgets/button.h"
+#include "widgets/button_group.h"
+#include "widgets/field.h"
 #include "widgets/label.h"
 #include "widgets/progress.h"
+#include "widgets/separator.h"
 #include "widgets/slider.h"
 #include "widgets/text_input.h"
 
@@ -42,6 +45,9 @@ std::string IntText(int value) {
 
 LabPanel::LabPanel(Hooks hooks) : hooks_(std::move(hooks)) {
     SetFocusable(true);
+    // Content taller than the tab rect must clip instead of spilling
+    // onto the panel below (same flag the inspector sets for scroll).
+    SetClipsChildren(true);
 }
 
 LabPanel::~LabPanel() {
@@ -64,6 +70,11 @@ void LabPanel::EnsureChildren() {
 
     title_ = std::make_shared<Widgets::Label>("OBJECT LAB");
 
+    // Mode selector as a segmented strip: ButtonGroup joins the three
+    // buttons edge-to-edge; the active mode keeps the Primary fill
+    // while the rest drop back to Secondary (SyncModeButtons).
+    mode_group_ = std::make_shared<Widgets::ButtonGroup>(
+        Widgets::ButtonGroup::Orientation::Horizontal);
     cutout_btn_ = std::make_shared<Widgets::Button>(
         "Cut out", Widgets::ButtonStyle::Primary);
     cutout_btn_->SetTooltip("Extract the region into a new layer frame");
@@ -76,26 +87,56 @@ void LabPanel::EnsureChildren() {
         "To layer", Widgets::ButtonStyle::Secondary);
     layer_btn_->SetTooltip("Copy the region onto a new transparent layer");
     layer_btn_->SetOnClick([this] { SetMode(Mode::CopyToLayer); });
+    mode_group_->AddChild(cutout_btn_);
+    mode_group_->AddChild(remove_btn_);
+    mode_group_->AddChild(layer_btn_);
 
-    auto field = [](const char* placeholder) {
-        auto input = std::make_shared<Widgets::TextInput>("0");
-        input->SetPlaceholder(placeholder);
-        return input;
-    };
-    x_input_ = field("x");
-    y_input_ = field("y");
-    w_input_ = field("w");
-    h_input_ = field("h");
-    feather_input_ = field("feather px");
+    // Region fields: each Field hosts a TextInput under its caption so
+    // x/y/w/h are labeled instead of anonymous boxes. Enter inside any
+    // field submits the run — the same convention the inspector uses
+    // for its clip rows.
+    const auto make_field =
+        [this](const char* caption, const char* tooltip,
+               std::shared_ptr<Widgets::Field>* field,
+               std::shared_ptr<Widgets::TextInput>* input) {
+            auto f = std::make_shared<Widgets::Field>();
+            f->SetLabel(caption);
+            auto in = std::make_shared<Widgets::TextInput>("0");
+            in->SetPlaceholder("0");
+            in->SetTooltip(tooltip);
+            in->SetOnSubmit([this] {
+                if (!busy_) StartRun();
+            });
+            f->AddChild(in);
+            *field = f;
+            *input = in;
+        };
+    make_field("X", "Region left edge (px)", &x_field_, &x_input_);
+    make_field("Y", "Region top edge (px)", &y_field_, &y_input_);
+    make_field("W", "Region width (px)", &w_field_, &w_input_);
+    make_field("H", "Region height (px)", &h_field_, &h_input_);
+    make_field("Feather (px)", "Edge feather in pixels",
+               &feather_field_, &feather_input_);
 
     lasso_label_ = std::make_shared<Widgets::Label>("Lasso: none", true);
+
+    // Inpaint tuning: the Field caption doubles as the live readout —
+    // UpdateRadiusLabel rewrites it as "Search radius: N px".
+    radius_field_ = std::make_shared<Widgets::Field>();
     radius_slider_ =
         std::make_shared<Widgets::Slider>(4.0f, 128.0f, 24.0f);
     radius_slider_->SetTooltip("Inpaint search radius (px)");
     radius_slider_->SetOnValueChanged([this](float) {
         if (children_attached_) UpdateRadiusLabel();
     });
-    radius_label_ = std::make_shared<Widgets::Label>("", true);
+    radius_field_->AddChild(radius_slider_);
+
+    sep_mode_ = std::make_shared<Widgets::Separator>(
+        Widgets::Orientation::Horizontal);
+    sep_region_ = std::make_shared<Widgets::Separator>(
+        Widgets::Orientation::Horizontal);
+    sep_run_ = std::make_shared<Widgets::Separator>(
+        Widgets::Orientation::Horizontal);
 
     run_btn_ = std::make_shared<Widgets::Button>(
         "Run", Widgets::ButtonStyle::Primary);
@@ -108,19 +149,19 @@ void LabPanel::EnsureChildren() {
     status_ = std::make_shared<Widgets::Label>("Ready", true);
 
     AddChild(title_);
-    AddChild(cutout_btn_);
-    AddChild(remove_btn_);
-    AddChild(layer_btn_);
-    AddChild(x_input_);
-    AddChild(y_input_);
-    AddChild(w_input_);
-    AddChild(h_input_);
-    AddChild(feather_input_);
+    AddChild(mode_group_);
+    AddChild(sep_mode_);
+    AddChild(x_field_);
+    AddChild(y_field_);
+    AddChild(w_field_);
+    AddChild(h_field_);
+    AddChild(feather_field_);
     AddChild(lasso_label_);
-    AddChild(radius_slider_);
-    AddChild(radius_label_);
-    AddChild(run_btn_);
+    AddChild(sep_region_);
+    AddChild(radius_field_);
+    AddChild(sep_run_);
     AddChild(cancel_btn_);
+    AddChild(run_btn_);
     AddChild(progress_);
     AddChild(status_);
 
@@ -177,10 +218,10 @@ void LabPanel::SyncRegionInputs() {
 }
 
 void LabPanel::UpdateRadiusLabel() {
-    radius_label_->SetText("Search radius: " +
-                           IntText(static_cast<int>(
-                               radius_slider_->GetValue())) +
-                           " px");
+    radius_field_->SetLabel("Search radius: " +
+                            IntText(static_cast<int>(
+                                radius_slider_->GetValue())) +
+                            " px");
 }
 
 bool LabPanel::CollectParams(RunParams* params) {
@@ -214,6 +255,9 @@ bool LabPanel::CollectParams(RunParams* params) {
     }
     p.search_radius =
         static_cast<int>(radius_slider_->GetValue() + 0.5f);
+    // Keep GetRegion() honest: hand-edited fields count as the region
+    // once they validate, not just rects pushed via SetRegion.
+    region_ = p.region;
     *params = std::move(p);
     return true;
 }
@@ -274,6 +318,16 @@ void LabPanel::Render(XER::UI::Rendering::Renderer& renderer,
                            bounds.width - 20.0f, 3.0f},
                           tokens.accent, 2.0f);
     }
+    // Section headers (MODE / REGION / INPAINT) — the inspector's
+    // drawn-label convention: muted, small, weight 600.
+    renderer.PushClip(bounds);
+    for (const DrawnLine& line : drawn_) {
+        renderer.DrawText(
+            line.text, line.rect,
+            XER::UI::Rendering::TextStyle{
+                tokens.muted, tokens.font_small, 600});
+    }
+    renderer.PopClip();
 }
 
 void LabPanel::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -281,57 +335,81 @@ void LabPanel::Layout(const XER::UI::Layout::Rect& bounds) {
     SetBounds(bounds);
     const auto& tokens = CachedLayoutTokens();
     const float pad = tokens.spacing_medium;
+    const float gap = tokens.spacing_small;
+    const float inner_x = bounds.x + pad;
     const float inner_w = bounds.width - pad * 2.0f;
-    const float half_w = (inner_w - pad * 0.5f) * 0.5f;
+    // Field's own caption band (label_h in field.cc) + a 28px control.
+    const float caption_h = tokens.font_small * 1.4f + gap * 0.5f;
+    const float field_h = caption_h + 28.0f;
     float y = bounds.y + pad * 0.6f;
 
-    title_->Layout({bounds.x + pad, y, inner_w, 24.0f}, tokens);
-    y += 30.0f;
+    drawn_.clear();
+    // Muted section header, then a 2px breath before the content.
+    const auto section = [&](const char* text) {
+        drawn_.push_back({{inner_x, y, inner_w, 16.0f}, text});
+        y += 18.0f;
+    };
+    const auto separator =
+        [&](const std::shared_ptr<XER::UI::Widgets::Separator>& sep) {
+            sep->Layout({inner_x, y, inner_w, 8.0f}, tokens);
+            y += 12.0f;
+        };
 
-    // Mode selector row: three radio-style buttons.
-    const float mode_w = (inner_w - pad) / 3.0f;
-    cutout_btn_->Layout({bounds.x + pad, y, mode_w, 30.0f}, tokens);
-    remove_btn_->Layout(
-        {bounds.x + pad + mode_w + pad * 0.5f, y, mode_w, 30.0f},
-        tokens);
-    layer_btn_->Layout(
-        {bounds.x + pad + (mode_w + pad * 0.5f) * 2.0f, y, mode_w,
-         30.0f},
-        tokens);
+    title_->Layout({inner_x, y, inner_w, 24.0f}, tokens);
+    y += 32.0f;
+
+    // ---- mode ----
+    section("MODE");
+    mode_group_->Layout({inner_x, y, inner_w, 30.0f}, tokens);
+    y += 30.0f + gap;
+
+    separator(sep_mode_);
+
+    // ---- region ----
+    section("REGION");
+    const float quarter_w = (inner_w - gap * 3.0f) / 4.0f;
+    x_field_->Layout({inner_x, y, quarter_w, field_h}, tokens);
+    y_field_->Layout({inner_x + (quarter_w + gap), y, quarter_w,
+                      field_h},
+                     tokens);
+    w_field_->Layout({inner_x + (quarter_w + gap) * 2.0f, y, quarter_w,
+                      field_h},
+                     tokens);
+    h_field_->Layout({inner_x + (quarter_w + gap) * 3.0f, y, quarter_w,
+                      field_h},
+                     tokens);
+    y += field_h + gap * 0.75f;
+
+    // Feather on the left half; the lasso readout sits on the right
+    // half, vertically aligned with the input row under the captions.
+    const float half_w = (inner_w - gap) * 0.5f;
+    feather_field_->Layout({inner_x, y, half_w, field_h}, tokens);
+    lasso_label_->Layout(
+        {inner_x + half_w + gap, y + caption_h, half_w, 28.0f}, tokens);
+    y += field_h + gap;
+
+    separator(sep_region_);
+
+    // ---- inpaint ----
+    section("INPAINT");
+    const float radius_h = caption_h + 24.0f;
+    radius_field_->Layout({inner_x, y, inner_w, radius_h}, tokens);
+    y += radius_h + gap;
+
+    separator(sep_run_);
+    y += 2.0f;
+
+    // ---- actions ----
+    // Destructive/secondary Cancel on the left, primary Run on the
+    // right — same action-row order as the inspector (Delete/Apply).
+    cancel_btn_->Layout({inner_x, y, half_w, 32.0f}, tokens);
+    run_btn_->Layout({inner_x + half_w + gap, y, half_w, 32.0f},
+                     tokens);
     y += 40.0f;
 
-    // Region row: x/y on one line, w/h on the next.
-    x_input_->Layout({bounds.x + pad, y, half_w, 30.0f}, tokens);
-    y_input_->Layout({bounds.x + pad + half_w + pad * 0.5f, y, half_w,
-                      30.0f},
-                     tokens);
-    y += 36.0f;
-    w_input_->Layout({bounds.x + pad, y, half_w, 30.0f}, tokens);
-    h_input_->Layout({bounds.x + pad + half_w + pad * 0.5f, y, half_w,
-                      30.0f},
-                     tokens);
-    y += 36.0f;
-
-    feather_input_->Layout({bounds.x + pad, y, half_w, 30.0f}, tokens);
-    lasso_label_->Layout(
-        {bounds.x + pad + half_w + pad * 0.5f, y + 4.0f, half_w, 22.0f},
-        tokens);
-    y += 38.0f;
-
-    radius_slider_->Layout({bounds.x + pad, y, inner_w, 24.0f}, tokens);
-    y += 26.0f;
-    radius_label_->Layout({bounds.x + pad, y, inner_w, 20.0f}, tokens);
-    y += 30.0f;
-
-    run_btn_->Layout({bounds.x + pad, y, half_w, 32.0f}, tokens);
-    cancel_btn_->Layout(
-        {bounds.x + pad + half_w + pad * 0.5f, y, half_w, 32.0f},
-        tokens);
-    y += 42.0f;
-
-    progress_->Layout({bounds.x + pad, y, inner_w, 16.0f}, tokens);
-    y += 26.0f;
-    status_->Layout({bounds.x + pad, y, inner_w, 22.0f}, tokens);
+    progress_->Layout({inner_x, y, inner_w, 14.0f}, tokens);
+    y += 20.0f;
+    status_->Layout({inner_x, y, inner_w, 20.0f}, tokens);
 }
 
 bool LabPanel::HandleEvent(const XER::UI::Widgets::Event& event) {

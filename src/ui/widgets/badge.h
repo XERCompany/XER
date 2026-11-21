@@ -11,7 +11,9 @@ enum class BadgeVariant {
     Default,
     Secondary,
     Outline,
-    Accent
+    Accent,
+    // Danger-colored chip for failure/alert states.
+    Destructive
 };
 
 class Badge final : public Widget {
