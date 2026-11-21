@@ -477,6 +477,9 @@ bool MonitorWidget::RenderCurrentFrame(std::string* error_out) {
         return false;
     }
     std::string error;
+    // Internal-render path only (external playback sets quality on
+    // the PreviewEngine, which hints its own compositor the same way).
+    compositor_.SetPreviewQuality(preview_scale_);
     if (!compositor_.RenderFrameAt(time_, &frame_, &error)) {
         status_text_ = error.empty() ? "Unable to render frame" : error;
         status_error_ = true;
@@ -973,6 +976,7 @@ bool MonitorWidget::ShowContextMenu(const Layout::Point p) {
         quality.separator_before = q.scale == 1.0f;
         quality.action = [this, tag = q.tag, scale = q.scale] {
             SetQualityTag(tag);
+            preview_scale_ = scale;   // internal-compositor path too
             if (on_quality_) on_quality_(scale);
         };
         items.push_back(std::move(quality));

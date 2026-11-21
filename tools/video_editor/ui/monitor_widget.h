@@ -240,6 +240,10 @@ private:
     double loop_in_ = 0.0;
     double loop_out_ = 0.0;
     std::string quality_tag_ = "Full";
+    // Numeric side of the quality pick (1.0 / 0.5 / 0.25) — the badge
+    // tag is display-only; this feeds the internal compositor's
+    // preview-quality hint when the widget renders frames itself.
+    float preview_scale_ = 1.0f;
 
     // Transport row children (indexed by OverlayButton order) plus the
     // appended scopes toggle and the quality chip.

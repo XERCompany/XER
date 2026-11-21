@@ -43,11 +43,13 @@ std::string FoldName(const std::string& name) {
 }
 
 // Strips one pair of surrounding quotes and trims — .cube TITLE values
-// arrive either bare or "quoted".
+// arrive either bare or "quoted". '\r'/'\n' count as trim whitespace:
+// ParseCubeText strips line-end CRs, but Unquote is kept defensive for
+// values embedded mid-line.
 std::string Unquote(std::string text) {
-    const auto first = text.find_first_not_of(" \t");
+    const auto first = text.find_first_not_of(" \t\r\n");
     if (first == std::string::npos) return {};
-    const auto last = text.find_last_not_of(" \t");
+    const auto last = text.find_last_not_of(" \t\r\n");
     text = text.substr(first, last - first + 1);
     if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
         text = text.substr(1, text.size() - 2);
@@ -102,6 +104,13 @@ bool ParseCubeText(const std::string& text, CubeData* out,
     std::istringstream stream(text);
     std::string line;
     while (std::getline(stream, line)) {
+        // getline splits on '\n' only — real .cube files on Windows are
+        // routinely CRLF (the shipped assets are), and a trailing '\r'
+        // would break TITLE unquoting and leave a stray char on names.
+        while (!line.empty() &&
+               (line.back() == '\r' || line.back() == '\n')) {
+            line.pop_back();
+        }
         // '#' starts a comment anywhere on the line.
         const auto hash = line.find('#');
         if (hash != std::string::npos) line.erase(hash);

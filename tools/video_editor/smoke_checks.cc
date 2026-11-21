@@ -976,6 +976,108 @@ std::string CheckCurvesAndLens() {
     return {};
 }
 
+// Preview-quality hint: Compositor::SetPreviewQuality(<1) runs the
+// heavy glass/bokeh kernels on a downscaled frame and upsamples back
+// — the result must stay close to (but not identical with) the full
+// render, and at 1080p bokeh the preview pass must be measurably
+// faster. Quality 1.0 must be byte-identical to the untouched
+// default (the export/screenshot path depends on it).
+std::string CheckPreviewQualityScale() {
+    std::string err;
+
+    // 1) Identity: quality 1.0 == never-set — byte for byte.
+    {
+        Project small = MakeRenderProject(160, 90, 15);
+        small.clips[0].effects = {
+            {"bokeh_dof", {1.0f, 0.5f, 0.5f, 0.1f, 0.4f, 8.0f, 2.0f}},
+        };
+        Compositor def;
+        if (!def.Init(small, {}, &err)) {
+            return "identity compositor init failed: " + err;
+        }
+        std::vector<std::uint8_t> ref;
+        if (!def.RenderFrameAt(0.5, &ref, &err)) {
+            return "identity reference render failed: " + err;
+        }
+        def.SetPreviewQuality(1.0f);
+        std::vector<std::uint8_t> same;
+        if (!def.RenderFrameAt(0.5, &same, &err)) {
+            return "quality-1.0 render failed: " + err;
+        }
+        def.Shutdown();
+        if (ref.size() != same.size() ||
+            std::memcmp(ref.data(), same.data(), ref.size()) != 0) {
+            return "SetPreviewQuality(1.0) is not pixel-identical";
+        }
+    }
+
+    // 2) 1080p bokeh: preview render is faster and close-but-not-equal.
+    {
+        Project project = MakeRenderProject(1920, 1080, 30);
+        project.clips[0].effects = {
+            {"bokeh_dof", {1.0f, 0.5f, 0.5f, 0.12f, 0.3f, 18.0f, 3.0f}},
+        };
+        Compositor comp;
+        if (!comp.Init(project, {}, &err)) {
+            return "preview compositor init failed: " + err;
+        }
+        std::vector<std::uint8_t> full, half;
+        const auto t0 = std::chrono::steady_clock::now();
+        if (!comp.RenderFrameAt(0.5, &full, &err)) {
+            return "full-quality render failed: " + err;
+        }
+        const double full_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t0)
+                .count();
+        comp.SetPreviewQuality(0.5f);
+        const auto t1 = std::chrono::steady_clock::now();
+        if (!comp.RenderFrameAt(0.5, &half, &err)) {
+            return "half-quality render failed: " + err;
+        }
+        const double half_ms =
+            std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - t1)
+                .count();
+        comp.Shutdown();
+        if (half.size() != full.size()) {
+            return "preview render changed the frame size";
+        }
+        // The reduced-res path must actually WIN — the whole point of
+        // the hint. The ~4x expected margin makes this robust to
+        // ordinary timing noise on a loaded machine.
+        if (half_ms >= full_ms) {
+            char buf[96];
+            std::snprintf(buf, sizeof(buf),
+                          "preview path no faster (full %.0f ms vs "
+                          "half %.0f ms)", full_ms, half_ms);
+            return buf;
+        }
+        // Close but not identical: resampling is lossy, so the frames
+        // must differ a little; if they matched exactly the hint
+        // didn't engage, and a wild divergence means a broken kernel.
+        std::uint64_t sum = 0;
+        for (std::size_t i = 0; i < full.size(); ++i) {
+            sum += static_cast<std::uint64_t>(std::abs(
+                static_cast<int>(full[i]) - static_cast<int>(half[i])));
+        }
+        const double mean =
+            static_cast<double>(sum) / static_cast<double>(full.size());
+        std::fprintf(stderr,
+                     "  preview_quality: full %.0f ms, half %.0f ms, "
+                     "mean|diff| %.3f/byte\n",
+                     full_ms, half_ms, mean);
+        if (mean <= 0.001) {
+            return "preview output identical to full — hint ignored?";
+        }
+        if (mean > 20.0) {
+            return "preview output diverged too far (mean " +
+                   std::to_string(mean) + ")";
+        }
+    }
+    return {};
+}
+
 // JS fx: the catalog must list our stock scripts, and — when V8 is
 // compiled in — a runtime must register + execute them. invert on a
 // black pixel yields 255; bitcrush quantizes; smoothstep(0.5) = 0.5.
@@ -2287,6 +2389,7 @@ constexpr CheckEntry kChecks[] = {
     {"screenshot_png", &CheckScreenshotPng},
     {"ui_screenshot_diff", &CheckUiScreenshotDiff},
     {"curves_lens", &CheckCurvesAndLens},
+    {"preview_quality", &CheckPreviewQualityScale},
     {"js_fx", &CheckJsFx},
     {"audio_mixer", &CheckAudioMixer},
     {"audio_sync", &CheckAudioSync},

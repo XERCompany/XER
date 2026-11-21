@@ -7,7 +7,7 @@
 //   * Direct URLs   — the network stack's synchronous
 //                     Url::URLRequestJob (src/content/network) GETs the
 //                     body; the filename comes from Content-Disposition
-//                     or the URL basename.
+//                     or the basename of the final (post-redirect) URL.
 //   * Platform URLs — youtube/vimeo/tiktok/instagram/twitch need
 //                     yt-dlp: FindYtDlp() detects it on PATH and in the
 //                     usual install spots (incl. the MSYS2 clang64

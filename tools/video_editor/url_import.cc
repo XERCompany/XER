@@ -179,7 +179,8 @@ Result RunHttpGet(const std::string& url,
     Net::URLRequestJob job(ctx);
     Net::URLResponse response;
     std::string error;
-    if (!job.Run(req, &response, &error)) {
+    std::string final_url;
+    if (!job.Run(req, &response, &error, &final_url)) {
         result.error = "GET failed: " + error;
         return result;
     }
@@ -197,11 +198,16 @@ Result RunHttpGet(const std::string& url,
         return result;
     }
 
-    // Filename: Content-Disposition wins, then the URL basename, then
-    // a fixed fallback — sanitized and deduped inside the cache dir.
+    // Filename: Content-Disposition wins, then the basename of the
+    // FINAL (post-redirect) URL — download links routinely 30x onto
+    // the real file, and naming off the original URL would drop the
+    // extension onto an extensionless alias like "dl" — then a fixed
+    // fallback. Sanitized and deduped inside the cache dir.
     std::string name = FilenameFromContentDisposition(
         HeaderValue(response, "Content-Disposition"));
-    if (name.empty()) name = UrlBasename(url);
+    if (name.empty()) {
+        name = UrlBasename(final_url.empty() ? url : final_url);
+    }
     name = SanitizeFilename(name);
     const std::filesystem::path dest =
         dir / Path::FromUtf8(UniqueFileName(dir, name));
@@ -240,9 +246,15 @@ Result RunYtDlp(const std::string& ytdlp, const std::string& url,
 
     const std::filesystem::path templ =
         dir / Path::FromUtf8(stem + ".%(ext)s");
+    // bv*+ba/b: modern platforms (YouTube especially) no longer serve
+    // pre-merged formats, so plain "best" has nothing to select —
+    // merge best video+audio via the ffmpeg yt-dlp finds next to its
+    // own exe (or on PATH), falling back to a combined file when one
+    // exists. "*" and "+" need no shell quoting: CreateProcessW hands
+    // the argv to the child unparsed.
     const std::wstring cmd =
         L"\"" + Path::FromUtf8(ytdlp).wstring() +
-        L"\" --newline --no-playlist -f best"
+        L"\" --newline --no-playlist -f \"bv*+ba/b\""
         L" --print after_move:filepath -o \"" + templ.wstring() +
         L"\" \"" + Str::Utf8ToWide(url) + L"\"";
 

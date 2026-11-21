@@ -225,14 +225,19 @@ bool URLRequestJob::RunOnce(const URLRequest& request,
 
 bool URLRequestJob::Run(const URLRequest& request,
                         URLResponse* response,
-                        std::string* error) {
+                        std::string* error,
+                        std::string* effective_url) {
     URLRequest cur = request;
     const int max_hops =
         request.follow_redirects ? request.max_redirects : 0;
     for (int hop = 0;; ++hop) {
-        if (!RunOnce(cur, response, error)) return false;
+        if (!RunOnce(cur, response, error)) {
+            if (effective_url) *effective_url = cur.url;
+            return false;
+        }
         if (hop >= max_hops ||
             !IsRedirectStatus(response->status_code)) {
+            if (effective_url) *effective_url = cur.url;
             return true;
         }
         const std::string location =

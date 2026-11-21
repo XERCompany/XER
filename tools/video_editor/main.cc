@@ -531,6 +531,89 @@ bool SaveBgraPng(const std::uint8_t* bgra, int w, int h,
     return true;
 }
 
+// --bench-effects — dev micro-benchmark for the heavy clip effects.
+// Renders a synthetic 1920x1080 generated frame through each glass /
+// bokeh kernel (via the real Compositor::RenderFrameAt path) at Full
+// / 1/2 / 1/4 preview quality and prints a ms/frame table (best of
+// N timed renders after one warmup). Hidden flag — not in --help.
+int RunBenchEffects() {
+    namespace VE = XER::VideoEditor;
+    struct Case {
+        const char* type;
+        std::vector<float> params;
+    };
+    // Representative params — same ballpark as the effects-panel
+    // presets (big enough radii to stress the kernels).
+    const Case cases[] = {
+        {"lens_sphere", {0.8f, 1.5f, 2.0f, 0.3f, 0.5f}},
+        {"magnifier", {0.4f, 2.0f, 3.0f}},
+        {"ribbed_glass", {16.0f, 3.0f, 0.0f, 0.3f}},
+        {"bokeh_dof", {1.0f, 0.5f, 0.5f, 0.12f, 0.3f, 18.0f, 3.0f}},
+        {"bokeh_blur", {10.0f, 2.5f}},
+    };
+    constexpr int kTimedFrames = 5;
+    constexpr float kQualities[] = {1.0f, 0.5f, 0.25f};
+    std::printf("%-14s %12s %12s %12s\n", "effect", "full ms/f",
+                "half ms/f", "quarter ms/f");
+    for (const Case& c : cases) {
+        double best[3] = {0.0, 0.0, 0.0};
+        for (int qi = 0; qi < 3; ++qi) {
+            VE::Project project;
+            project.width = 1920;
+            project.height = 1080;
+            project.fps_num = 30;
+            project.fps_den = 1;
+            project.tracks.push_back(VE::Track{VE::TrackKind::Video, "V1"});
+            VE::Clip clip;
+            clip.id = "bars";
+            clip.track = 0;
+            clip.timeline_start = 0.0;
+            clip.duration = 1.0;
+            clip.source.kind = VE::SourceKind::ColorBars;
+            clip.source.param = "smpte75";
+            clip.effects.push_back({c.type, c.params});
+            project.clips.push_back(clip);
+
+            VE::Compositor comp;
+            std::string err;
+            if (!comp.Init(project, {}, &err)) {
+                std::fprintf(stderr, "bench: init failed: %s\n",
+                             err.c_str());
+                return 1;
+            }
+            comp.SetPreviewQuality(kQualities[qi]);
+            std::vector<std::uint8_t> bgra;
+            // Warmup: frame buffers + generated-source caches allocate
+            // on the first render — excluded from the timing.
+            if (!comp.RenderFrameAt(0.5, &bgra, &err)) {
+                std::fprintf(stderr, "bench: warmup failed: %s\n",
+                             err.c_str());
+                return 1;
+            }
+            double ms = std::numeric_limits<double>::max();
+            for (int i = 0; i < kTimedFrames; ++i) {
+                const auto t0 = std::chrono::steady_clock::now();
+                if (!comp.RenderFrameAt(0.5, &bgra, &err)) {
+                    std::fprintf(stderr, "bench: render failed: %s\n",
+                                 err.c_str());
+                    return 1;
+                }
+                const double elapsed =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - t0)
+                        .count();
+                ms = std::min(ms, elapsed);
+            }
+            best[qi] = ms;
+            comp.Shutdown();
+        }
+        std::printf("%-14s %12.1f %12.1f %12.1f\n", c.type, best[0],
+                    best[1], best[2]);
+        std::fflush(stdout);
+    }
+    return 0;
+}
+
 // Program-frame capture: ProjectStore::Load -> Compositor ->
 // RenderFrameAt(t) -> optional --size resample -> PNG. Fully headless
 // (no window, no UI libs); identical to the --export render path.
@@ -1508,6 +1591,10 @@ int main(int argc, char** argv) {
         std::cerr << "Error: --cef-check is Windows-only\n";
         return 1;
 #endif
+    }
+    if (arg == "--bench-effects") {
+        // Hidden dev flag: heavy-effect ms/frame micro-benchmark.
+        return RunBenchEffects();
     }
     if (arg == "--smoke") {
         // Headless, bounded self-check — see smoke_checks.h.

@@ -175,6 +175,18 @@ public:
     bool RenderFrameAt(double t, std::vector<std::uint8_t>* out_bgra,
                        std::string* error_out = nullptr);
 
+    // Preview-quality hint in (0,1]: below 1.0 the expensive spatial
+    // clip effects (lens sphere / magnifier / ribbed glass / bokeh)
+    // run on a bilinear-downscaled copy of the clip frame — with
+    // pixel-space params scaled by the same factor — then upscale
+    // back to full size. Visually close at monitor sizes, several
+    // times cheaper per frame. Sticky per compositor instance;
+    // defaults to 1.0. Export and screenshot paths never set it, so
+    // the full-quality render stays pixel-identical. NaN/<=0/>1 all
+    // clamp back to 1.0.
+    void SetPreviewQuality(float scale);
+    float PreviewQuality() const;
+
     // Non-fatal issues seen so far (Init warnings + runtime notes like
     // "clip X has no video stream"). Cleared by Init/Shutdown.
     const std::vector<std::string>& Warnings() const;

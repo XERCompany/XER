@@ -157,6 +157,83 @@ bool SampleBilinearBGRA(const std::uint8_t* px, int w, int h,
     return true;
 }
 
+// Bilinear whole-frame resample: dst center (x+0.5, y+0.5) reads src
+// at ((x+0.5)*sw/dw - 0.5) in index space — the same center
+// convention as SampleBilinearBGRA — with edges clamped. `dst` must
+// already be allocated to the target size.
+//
+// Integer 8.8 fixed-point weights + precomputed per-column taps:
+// this runs on every preview frame around each reduced-quality
+// effect, so it must stay cheap relative to the kernels it wraps
+// (a naive per-pixel SampleBilinearBGRA resample can cost MORE than
+// the saved kernel time on the lighter effects).
+void ResampleBilinearBGRA(const video::Frame& src, video::Frame* dst) {
+    const int sw = src.Width();
+    const int sh = src.Height();
+    const int dw = dst->Width();
+    const int dh = dst->Height();
+    const std::uint8_t* spx = src.Data();
+    std::uint8_t* dpx = dst->Data();
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) {
+        return;
+    }
+    // Same-size fast path — a plain copy.
+    if (sw == dw && sh == dh) {
+        std::memcpy(dpx, spx,
+                    static_cast<std::size_t>(dw) * dh * 4);
+        return;
+    }
+    // Per-column source taps, shared by every row.
+    std::vector<int> x0s(static_cast<std::size_t>(dw));
+    std::vector<int> x1s(static_cast<std::size_t>(dw));
+    std::vector<int> wxs(static_cast<std::size_t>(dw));
+    const double kx = static_cast<double>(sw) / dw;
+    for (int x = 0; x < dw; ++x) {
+        const double fx = std::clamp((x + 0.5) * kx - 0.5, 0.0,
+                                     static_cast<double>(sw - 1));
+        const int x0 = static_cast<int>(fx);
+        x0s[static_cast<std::size_t>(x)] = x0;
+        x1s[static_cast<std::size_t>(x)] = std::min(x0 + 1, sw - 1);
+        wxs[static_cast<std::size_t>(x)] = static_cast<int>(
+            std::lround((fx - x0) * 256.0));
+    }
+    const double ky = static_cast<double>(sh) / dh;
+    for (int y = 0; y < dh; ++y) {
+        const double fy = std::clamp((y + 0.5) * ky - 0.5, 0.0,
+                                     static_cast<double>(sh - 1));
+        const int y0 = static_cast<int>(fy);
+        const int y1 = std::min(y0 + 1, sh - 1);
+        const int wy = static_cast<int>(
+            std::lround((fy - y0) * 256.0));
+        const int wy_inv = 256 - wy;
+        const std::uint8_t* r0 =
+            spx + static_cast<std::size_t>(y0) * sw * 4;
+        const std::uint8_t* r1 =
+            spx + static_cast<std::size_t>(y1) * sw * 4;
+        std::uint8_t* out = dpx + static_cast<std::size_t>(y) * dw * 4;
+        for (int x = 0; x < dw; ++x) {
+            const std::uint8_t* p00 =
+                r0 + static_cast<std::size_t>(x0s[static_cast<std::size_t>(x)]) * 4;
+            const std::uint8_t* p10 =
+                r0 + static_cast<std::size_t>(x1s[static_cast<std::size_t>(x)]) * 4;
+            const std::uint8_t* p01 =
+                r1 + static_cast<std::size_t>(x0s[static_cast<std::size_t>(x)]) * 4;
+            const std::uint8_t* p11 =
+                r1 + static_cast<std::size_t>(x1s[static_cast<std::size_t>(x)]) * 4;
+            const int wx = wxs[static_cast<std::size_t>(x)];
+            const int w00 = (256 - wx) * wy_inv;
+            const int w10 = wx * wy_inv;
+            const int w01 = (256 - wx) * wy;
+            const int w11 = wx * wy;
+            for (int c = 0; c < 4; ++c) {
+                out[x * 4 + c] = static_cast<std::uint8_t>(
+                    (p00[c] * w00 + p10[c] * w10 + p01[c] * w01 +
+                     p11[c] * w11 + 32768) >> 16);
+            }
+        }
+    }
+}
+
 // ------------------------------------------------------------------
 // Transition helpers
 // ------------------------------------------------------------------
@@ -544,32 +621,56 @@ void ApplyBokehDOFPixels(video::Frame* frame, bool radial, double cx,
     std::uint8_t* dst = frame->Data();
     constexpr int kTaps = 24;
     constexpr double kGolden = 2.399963229728653;
+    // Vogel-spiral geometry is frame-invariant — hoist the sqrt and
+    // cos/sin per tap out of the pixel loop (identical arithmetic,
+    // so pixel-identical output; saves ~50 transcendentals/pixel).
+    std::array<double, kTaps> tap_rad;
+    std::array<double, kTaps> tap_cos;
+    std::array<double, kTaps> tap_sin;
+    for (int k = 0; k < kTaps; ++k) {
+        tap_rad[k] = std::sqrt((k + 0.5) / kTaps);
+        const double a = k * kGolden;
+        tap_cos[k] = std::cos(a);
+        tap_sin[k] = std::sin(a);
+    }
     const double diag = std::sqrt(static_cast<double>(w) * w +
                                   static_cast<double>(h) * h);
     const double band_px = band * diag;
     const double fall_px = std::max(falloff * diag, 1.0);
     for (int y = 0; y < h; ++y) {
         std::uint8_t* row = dst + static_cast<std::size_t>(y) * w * 4;
+        // Band mode: the CoC is a pure function of y — evaluated once
+        // per row, and an in-focus row skips outright.
+        double row_coc = -1.0;
+        if (!radial) {
+            const double dist = std::abs(y + 0.5 - cy);
+            row_coc = std::clamp((dist - band_px) / fall_px, 0.0, 1.0) *
+                      max_radius;
+            if (row_coc < 0.75) {
+                continue;   // in focus — untouched
+            }
+        }
         for (int x = 0; x < w; ++x) {
-            const double dist =
-                radial
-                    ? std::sqrt((x + 0.5 - cx) * (x + 0.5 - cx) +
-                                (y + 0.5 - cy) * (y + 0.5 - cy))
-                    : std::abs(y + 0.5 - cy);
-            const double coc =
-                std::clamp((dist - band_px) / fall_px, 0.0, 1.0) *
-                max_radius;
+            double coc;
+            if (radial) {
+                const double dist =
+                    std::sqrt((x + 0.5 - cx) * (x + 0.5 - cx) +
+                              (y + 0.5 - cy) * (y + 0.5 - cy));
+                coc = std::clamp((dist - band_px) / fall_px, 0.0, 1.0) *
+                      max_radius;
+            } else {
+                coc = row_coc;
+            }
             if (coc < 0.75) {
                 continue;   // in focus — untouched
             }
             double acc[4] = {};
             double wsum = 0.0;
             for (int k = 0; k < kTaps; ++k) {
-                const double rr = coc * std::sqrt((k + 0.5) / kTaps);
-                const double a = k * kGolden;
+                const double rr = coc * tap_rad[k];
                 std::uint8_t t[4];
-                SampleBilinearBGRA(src, w, h, x + 0.5 + rr * std::cos(a),
-                                   y + 0.5 + rr * std::sin(a), true, t);
+                SampleBilinearBGRA(src, w, h, x + 0.5 + rr * tap_cos[k],
+                                   y + 0.5 + rr * tap_sin[k], true, t);
                 const double luma =
                     (0.2126 * t[2] + 0.7152 * t[1] + 0.0722 * t[0]) /
                     255.0;
@@ -706,6 +807,10 @@ struct Compositor::Impl {
     // failed to load (already Warn'ed once).
     std::unique_ptr<JsFxRuntime> js_fx;
     bool js_fx_tried = false;
+    // SetPreviewQuality() — <1.0 routes the heavy spatial kernels
+    // through a downscale->effect->upscale detour (preview only).
+    double preview_quality_ = 1.0;
+    video::Frame fx_lo_;   // reduced-res work frame (grows once)
     JsFxRuntime* JsFx() {
         if (!js_fx_tried) {
             js_fx_tried = true;
@@ -885,6 +990,8 @@ struct Compositor::Impl {
         duration = 0.0;
         canvas_w = 0;
         canvas_h = 0;
+        preview_quality_ = 1.0;
+        fx_lo_.Release();
         cancelled.store(false, std::memory_order_relaxed);
     }
 
@@ -1068,6 +1175,34 @@ struct Compositor::Impl {
 
     // ---- effects ---------------------------------------------------
 
+    // Preview-quality detour for the heavy spatial kernels
+    // (SetPreviewQuality < 1): the clip frame is bilinear-downsampled
+    // into fx_lo_, `apply` runs the kernel on the reduced frame (the
+    // lambda must scale its pixel-space params by lo/full size), then
+    // the result is bilinear-upsampled back in place. Effect-free
+    // regions of the frame still soften a little from the resample —
+    // acceptable at monitor sizes, and export never takes this path.
+    template <typename Fn>
+    void ApplyReduced(video::Frame* frame, Fn&& apply) {
+        const int lw = std::max(
+            1, static_cast<int>(std::lround(
+                   frame->Width() * preview_quality_)));
+        const int lh = std::max(
+            1, static_cast<int>(std::lround(
+                   frame->Height() * preview_quality_)));
+        if (!fx_lo_.IsValid() || fx_lo_.Width() != lw ||
+            fx_lo_.Height() != lh ||
+            fx_lo_.Format() != video::PixelFormat::BGRA8) {
+            fx_lo_.Release();
+            if (!fx_lo_.Allocate(lw, lh, video::PixelFormat::BGRA8)) {
+                return;   // alloc fail — leave the frame untouched
+            }
+        }
+        ResampleBilinearBGRA(*frame, &fx_lo_);
+        apply(&fx_lo_);
+        ResampleBilinearBGRA(fx_lo_, frame);
+    }
+
     void ApplyClipEffects(ClipSession& s,
                           const std::vector<ClipEffect>& effects,
                           double clip_time_s) {
@@ -1243,14 +1378,30 @@ struct Compositor::Impl {
                 const double radius = std::clamp(
                     EffectParamDouble(effect, 0, 0.45), 0.05, 1.0) *
                     std::min(frame.Width(), frame.Height()) * 0.5;
-                ApplySphereRefraction(
-                    &frame, frame.Width() * 0.5, frame.Height() * 0.5,
-                    radius,
-                    std::clamp(EffectParamDouble(effect, 1, 1.4), 0.0, 2.5),
-                    std::clamp(EffectParamDouble(effect, 2, 3.0), 0.0, 24.0),
-                    std::clamp(EffectParamDouble(effect, 3, 0.35), 0.0, 1.0),
-                    std::clamp(EffectParamDouble(effect, 4, 0.6), 0.0, 1.0),
-                    &fx_scratch);
+                const double bend = std::clamp(
+                    EffectParamDouble(effect, 1, 1.4), 0.0, 2.5);
+                const double chroma = std::clamp(
+                    EffectParamDouble(effect, 2, 3.0), 0.0, 24.0);
+                const double edge = std::clamp(
+                    EffectParamDouble(effect, 3, 0.35), 0.0, 1.0);
+                const double spec = std::clamp(
+                    EffectParamDouble(effect, 4, 0.6), 0.0, 1.0);
+                if (preview_quality_ < 1.0) {
+                    ApplyReduced(&frame, [&](video::Frame* lo) {
+                        const double rs =
+                            static_cast<double>(lo->Width()) /
+                            frame.Width();
+                        ApplySphereRefraction(
+                            lo, lo->Width() * 0.5, lo->Height() * 0.5,
+                            radius * rs, bend, chroma * rs, edge, spec,
+                            &fx_scratch);
+                    });
+                } else {
+                    ApplySphereRefraction(
+                        &frame, frame.Width() * 0.5,
+                        frame.Height() * 0.5, radius, bend, chroma, edge,
+                        spec, &fx_scratch);
+                }
             } else if (type == "magnifier") {
                 // {radius frac, zoom 1..4, chroma px} — thin-lens
                 // bulge: bend = 1 - 1/zoom keeps center undistorted.
@@ -1259,44 +1410,103 @@ struct Compositor::Impl {
                 const double radius = std::clamp(
                     EffectParamDouble(effect, 0, 0.3), 0.05, 1.0) *
                     std::min(frame.Width(), frame.Height()) * 0.5;
-                ApplySphereRefraction(
-                    &frame, frame.Width() * 0.5, frame.Height() * 0.5,
-                    radius, 1.0 - 1.0 / zoom,
-                    std::clamp(EffectParamDouble(effect, 2, 2.0), 0.0, 24.0),
-                    0.15, 0.4, &fx_scratch);
+                const double chroma = std::clamp(
+                    EffectParamDouble(effect, 2, 2.0), 0.0, 24.0);
+                if (preview_quality_ < 1.0) {
+                    ApplyReduced(&frame, [&](video::Frame* lo) {
+                        const double rs =
+                            static_cast<double>(lo->Width()) /
+                            frame.Width();
+                        ApplySphereRefraction(
+                            lo, lo->Width() * 0.5, lo->Height() * 0.5,
+                            radius * rs, 1.0 - 1.0 / zoom, chroma * rs,
+                            0.15, 0.4, &fx_scratch);
+                    });
+                } else {
+                    ApplySphereRefraction(
+                        &frame, frame.Width() * 0.5,
+                        frame.Height() * 0.5, radius, 1.0 - 1.0 / zoom,
+                        chroma, 0.15, 0.4, &fx_scratch);
+                }
             } else if (type == "ribbed_glass") {
                 // {period px, amplitude px, axis 0=vert|1=horiz,
                 //  softness 0..1} — fluted/reeded pane.
-                ApplyRibbedGlassPixels(
-                    &frame,
-                    std::clamp(EffectParamDouble(effect, 0, 24.0), 2.0, 400.0),
-                    std::clamp(EffectParamDouble(effect, 1, 6.0), 0.0, 80.0),
-                    EffectParamInt(effect, 2, 0) != 0,
-                    std::clamp(EffectParamDouble(effect, 3, 0.5), 0.0, 1.0),
-                    &fx_scratch);
+                const double period = std::clamp(
+                    EffectParamDouble(effect, 0, 24.0), 2.0, 400.0);
+                const double amplitude = std::clamp(
+                    EffectParamDouble(effect, 1, 6.0), 0.0, 80.0);
+                const bool horizontal = EffectParamInt(effect, 2, 0) != 0;
+                const double softness = std::clamp(
+                    EffectParamDouble(effect, 3, 0.5), 0.0, 1.0);
+                if (preview_quality_ < 1.0) {
+                    ApplyReduced(&frame, [&](video::Frame* lo) {
+                        const double rs =
+                            static_cast<double>(lo->Width()) /
+                            frame.Width();
+                        ApplyRibbedGlassPixels(
+                            lo, std::max(period * rs, 2.0),
+                            amplitude * rs, horizontal, softness,
+                            &fx_scratch);
+                    });
+                } else {
+                    ApplyRibbedGlassPixels(&frame, period, amplitude,
+                                           horizontal, softness,
+                                           &fx_scratch);
+                }
             } else if (type == "bokeh_dof") {
                 // {mode 0=band|1=radial, cx, cy, band, falloff,
                 //  max radius px, highlight boost} — depth-of-field:
                 // CoC grows with distance from the focus zone.
-                ApplyBokehDOFPixels(
-                    &frame, EffectParamInt(effect, 0, 1) != 0,
-                    EffectParamDouble(effect, 1, 0.5) * frame.Width(),
-                    EffectParamDouble(effect, 2, 0.5) * frame.Height(),
-                    std::clamp(EffectParamDouble(effect, 3, 0.12), 0.0, 1.0),
-                    std::clamp(EffectParamDouble(effect, 4, 0.3), 0.01, 1.0),
-                    std::clamp(EffectParamDouble(effect, 5, 18.0), 1.0, 64.0),
-                    std::clamp(EffectParamDouble(effect, 6, 3.0), 0.0, 16.0),
-                    &fx_scratch);
+                const bool radial = EffectParamInt(effect, 0, 1) != 0;
+                const double fx_cx = EffectParamDouble(effect, 1, 0.5);
+                const double fx_cy = EffectParamDouble(effect, 2, 0.5);
+                const double band = std::clamp(
+                    EffectParamDouble(effect, 3, 0.12), 0.0, 1.0);
+                const double falloff = std::clamp(
+                    EffectParamDouble(effect, 4, 0.3), 0.01, 1.0);
+                const double max_radius = std::clamp(
+                    EffectParamDouble(effect, 5, 18.0), 1.0, 64.0);
+                const double boost = std::clamp(
+                    EffectParamDouble(effect, 6, 3.0), 0.0, 16.0);
+                if (preview_quality_ < 1.0) {
+                    ApplyReduced(&frame, [&](video::Frame* lo) {
+                        const double rs =
+                            static_cast<double>(lo->Width()) /
+                            frame.Width();
+                        ApplyBokehDOFPixels(
+                            lo, radial, fx_cx * lo->Width(),
+                            fx_cy * lo->Height(), band, falloff,
+                            max_radius * rs, boost, &fx_scratch);
+                    });
+                } else {
+                    ApplyBokehDOFPixels(
+                        &frame, radial, fx_cx * frame.Width(),
+                        fx_cy * frame.Height(), band, falloff,
+                        max_radius, boost, &fx_scratch);
+                }
             } else if (type == "bokeh_blur") {
                 // {radius px, highlight boost} — uniform aperture
                 // discs everywhere (dreamy defocus).
                 // band=-1 forces (dist-band)/falloff >= 1 everywhere
                 // → constant CoC = radius, i.e. uniform aperture blur.
-                ApplyBokehDOFPixels(
-                    &frame, true, 0.0, 0.0, -1.0, 1.0,
-                    std::clamp(EffectParamDouble(effect, 0, 10.0), 1.0, 64.0),
-                    std::clamp(EffectParamDouble(effect, 1, 2.5), 0.0, 16.0),
-                    &fx_scratch);
+                const double radius = std::clamp(
+                    EffectParamDouble(effect, 0, 10.0), 1.0, 64.0);
+                const double boost = std::clamp(
+                    EffectParamDouble(effect, 1, 2.5), 0.0, 16.0);
+                if (preview_quality_ < 1.0) {
+                    ApplyReduced(&frame, [&](video::Frame* lo) {
+                        const double rs =
+                            static_cast<double>(lo->Width()) /
+                            frame.Width();
+                        ApplyBokehDOFPixels(
+                            lo, true, 0.0, 0.0, -1.0, 1.0, radius * rs,
+                            boost, &fx_scratch);
+                    });
+                } else {
+                    ApplyBokehDOFPixels(&frame, true, 0.0, 0.0, -1.0,
+                                        1.0, radius, boost,
+                                        &fx_scratch);
+                }
             }
         }
     }
@@ -2099,6 +2309,17 @@ bool Compositor::RenderFrameAt(double t,
                                std::vector<std::uint8_t>* out_bgra,
                                std::string* error_out) {
     return impl_->RenderFrameAt(t, out_bgra, error_out);
+}
+
+void Compositor::SetPreviewQuality(float scale) {
+    impl_->preview_quality_ =
+        (std::isfinite(scale) && scale > 0.0f && scale < 1.0f)
+            ? static_cast<double>(scale)
+            : 1.0;
+}
+
+float Compositor::PreviewQuality() const {
+    return static_cast<float>(impl_->preview_quality_);
 }
 
 const std::vector<std::string>& Compositor::Warnings() const {
