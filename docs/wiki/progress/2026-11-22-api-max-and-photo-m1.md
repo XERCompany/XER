@@ -108,6 +108,37 @@ incl. new checks `blend_modes` and `photo_m1`.
   intact for third-party; 31 xer_* sources deleted; `sdk/` +
   `plugins/common/` kept. Smoke `builtin_fx` covers all 48.
 
+## Third batch — workspace UI + AI consumers + cleanup (2026-11-22, `SMOKE RESULT OK` 54 checks)
+
+- **Photo M3 workspace UI** (`a896d49c`): "Photo" workspace via
+  title-bar pill / View menu (`photo_workspace.{h,cc}` ~2000 lines):
+  canvas viewport (checkerboard, zoom-at-cursor, pan, brush ring),
+  left-strip tools B/E/F/G/H (brush w/ size-hardness-opacity, eraser,
+  fill, gradient-drag), layers panel (tree, eye, opacity, blend,
+  add/group/dup/delete/up/down/merge/flatten), undo Ctrl+Z/Y,
+  New/Open `.xerphoto`+common formats/Save/Export PNG via Windows
+  pickers, responsive ≥1100×700. New `RegisterCheck` hook so exe-side
+  UI can register smoke checks; `photo_workspace` check verifies
+  headless widget + scripted stroke + pixel-exact undo + xerphoto
+  round-trip.
+- **AI consumers** (`c6781d49`): shared `Onnx::Session` extracted to
+  `src/content/ai/onnx_session/` (ORT preferred → cv::dnn fallback,
+  lazy per-model cache; find_object.cc shrank 1240→465). Object Lab:
+  "No BG" (BiRefNet → RGBA cutout via AsyncOp), "Smart" select
+  (EfficientSAM — up to 6 click points on monitor, best-of-3 by IoU
+  → stored AI mask preferred by Cut out/Remove/To layer). Whisper
+  verified already wired (media-bin ctx "Transcribe → Markers",
+  `bin/models/ggml-base.en.bin`). Smoke `ai_lab_ops` runs real models
+  on synthetic images.
+- **Cleanup** (`c98114e2`): `libopencv_calib` "broken dll" was a
+  probe-list splicing bug (`;`-list → only first entry survived) —
+  fixed in CMakeLists, package was never stale. `audio_mixer.cc` +
+  `media_catalog.cc` PCM copies → `AudioBitDepthConverter`
+  (downmix/LFE matrix kept — editor-specific, `channel_mixer.cc`
+  lacks the rules). `ENABLE_CUDNN` now actually gates async_io
+  surface (and was outright broken before — missing find_package).
+  `module_registry.h` TODO seam left.
+
 ## Decisions resolved 2026-11-22 / still open
 
 - ORT route → **resolved**: vendored official binaries (user choice).

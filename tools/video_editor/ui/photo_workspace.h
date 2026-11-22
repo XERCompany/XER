@@ -132,9 +132,8 @@ private:
         bool group = false;
         bool visible = true;
         bool locked = false;
-        // Cached hit boxes (widget coords) — filled by Layout().
-        XER::UI::Layout::Rect rect{};
-        XER::UI::Layout::Rect eye_rect{};
+        // Hit boxes are computed on demand via LayerRowRect() —
+        // scroll offset makes caching them inside the row stale-fast.
     };
 
     void EnsureChildren();
@@ -284,5 +283,13 @@ private:
     std::shared_ptr<XER::UI::Widgets::Select> blend_select_;
     std::shared_ptr<XER::UI::Widgets::Label> hint_label_;
 };
+
+// Headless smoke entry point — registered from main.cc as the
+// "photo_workspace" check (the suite lives in the UI-free core, so it
+// can't see this class). Constructs the widget, lays it out at the
+// app's minimum window size, scripts a brush stroke through synthetic
+// Events, and asserts on flatten/undo/redo pixels plus file round
+// trips. Empty string = OK, otherwise a one-line reason.
+std::string PhotoWorkspaceSmoke();
 
 }  // namespace XER::VideoEditor::Ui

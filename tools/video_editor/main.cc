@@ -48,6 +48,7 @@
 #include "ui/core/window.h"
 #include "ui/theme/theme.h"
 #include "ui/ve_theme.h"
+#include "ui/photo_workspace.h"       // PhotoWorkspaceSmoke hook
 #include "ui/video_editor_app.h"
 #include "ui/widgets/app_title_bar.h"
 
@@ -1602,9 +1603,22 @@ int main(int argc, char** argv) {
     }
     if (arg == "--smoke") {
         // Headless, bounded self-check — see smoke_checks.h.
+#if defined(_WIN32)
+        // Exe-side registration: the photo-workspace check exercises
+        // widget classes that live in this target, not the UI-free
+        // core where smoke_checks.cc compiles.
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "photo_workspace",
+            &XER::VideoEditor::Ui::PhotoWorkspaceSmoke);
+#endif
         return XER::VideoEditor::Smoke::RunAll();
     }
     if (arg == "--smoke-list") {
+#if defined(_WIN32)
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "photo_workspace",
+            &XER::VideoEditor::Ui::PhotoWorkspaceSmoke);
+#endif
         for (const std::string& name :
              XER::VideoEditor::Smoke::CheckNames()) {
             std::cout << name << '\n';

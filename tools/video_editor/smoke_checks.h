@@ -36,9 +36,20 @@ bool IsMediaImportPath(const std::string& utf8_path);
 
 namespace Smoke {
 
+// A check returns an empty string on success or a one-line failure
+// reason on failure.
+using CheckFn = std::string (*)();
+
 // Names of every registered check, in run order. Stable across runs —
 // automation can diff `--smoke-list` output.
 std::vector<std::string> CheckNames();
+
+// Appends a check to the run list. Exe-side callers (main.cc) use
+// this to register checks that live outside the UI-free core — e.g.
+// the PhotoWorkspace check, which exercises widget classes that only
+// exist in the video_editor target on Windows. Register BEFORE
+// RunAll()/CheckNames() to be included.
+void RegisterCheck(std::string name, CheckFn fn);
 
 // Runs every check in order, printing the SMOKE lines above to
 // stdout. Returns the process exit code: 0 when all checks pass,

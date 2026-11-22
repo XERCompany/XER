@@ -1729,6 +1729,26 @@ void VideoEditorAppWidget::EnsureChildren() {
     project_manager_ =
         std::make_shared<ProjectManagerScreen>(pm_hooks);
 
+    // Photo workspace (ui/photo_workspace.*): the "Photo" workspace
+    // preset swaps the whole content band for this widget — built
+    // once here, hidden until EnterPhotoMode().
+    {
+        PhotoWorkspaceWidget::Hooks photo_hooks;
+        photo_hooks.on_status =
+            [this](const std::string& text, bool err) {
+                SetStatus(text, err);
+            };
+        photo_hooks.on_exit = [this] {
+            // Back out to the video Editing preset — same path the
+            // workspace menu takes for any non-Photo entry.
+            ApplyWorkspace(BuiltinWorkspaces().front());
+        };
+        photo_workspace_ =
+            std::make_shared<PhotoWorkspaceWidget>(parent_hwnd_,
+                                                   std::move(photo_hooks));
+        photo_workspace_->SetVisible(false);
+    }
+
     AddChild(title_bar_);
     AddChild(import_btn_);
     AddChild(add_btn_);
@@ -1761,6 +1781,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(status_toast_);
     AddChild(tab_strip_);
     AddChild(timeline_);
+    AddChild(photo_workspace_);
     // Last child: hit-test and paint order put the start screen above
     // the whole workspace when it's visible.
     AddChild(project_manager_);
@@ -1850,6 +1871,53 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
         menu_item.separator_before = separator;
         return menu_item;
     };
+
+    // Photo mode gets its own menu set — project/timeline items make
+    // no sense while the photo workspace owns the content band. The
+    // workspace exit paths live in File + View (and the workspace
+    // pill, whose items still call ApplyWorkspace).
+    if (photo_mode_ && photo_workspace_ != nullptr) {
+        const auto exit_ws = [this] {
+            ApplyWorkspace(BuiltinWorkspaces().front());
+        };
+        Menu pfile;
+        pfile.label = "File";
+        pfile.items = {
+            item("New Document…", "Ctrl+N",
+                 [this] { photo_workspace_->NewDocumentDialog(); }),
+            item("Open…", "Ctrl+O",
+                 [this] { photo_workspace_->OpenDialog(); }),
+            item("Save", "Ctrl+S",
+                 [this] { photo_workspace_->Save(false); }),
+            item("Save As…", "Ctrl+Shift+S",
+                 [this] { photo_workspace_->Save(true); }),
+            item("Export PNG…", "",
+                 [this] { photo_workspace_->ExportPng(); }, true,
+                 false, false, true),
+            item("Back to Video Workspace", "", exit_ws, true, false,
+                 false, true),
+        };
+        Menu pedit;
+        pedit.label = "Edit";
+        pedit.items = {
+            item("Undo", "Ctrl+Z",
+                 [this] { photo_workspace_->Undo(); }),
+            item("Redo", "Ctrl+Y",
+                 [this] { photo_workspace_->Redo(); }),
+        };
+        Menu pview;
+        pview.label = "View";
+        pview.items = {
+            item("Back to Video Workspace", "", exit_ws),
+        };
+        for (const WorkspaceLayout& ws : BuiltinWorkspaces()) {
+            pview.items.push_back(
+                item("Workspace: " + ws.name, "",
+                     [this, ws] { ApplyWorkspace(ws); }));
+        }
+        title_bar_->SetMenus({pfile, pedit, pview});
+        return;
+    }
 
     Menu file;
     file.label = "File";
@@ -4251,12 +4319,68 @@ void VideoEditorAppWidget::ToggleShortcutsOverlay() {
 }
 
 void VideoEditorAppWidget::ApplyWorkspace(const WorkspaceLayout& ws) {
+    // "Photo" is a mode, not a panel arrangement — swap the content
+    // band for the photo workspace instead of reshuffling panels.
+    if (ws.name == "Photo") {
+        EnterPhotoMode();
+        SetStatus("Workspace: Photo");
+        return;
+    }
+    if (photo_mode_) ExitPhotoMode();
     left_panel_visible_ = ws.left_visible;
     right_panel_visible_ = ws.right_visible;
     timeline_fraction_ = std::clamp(ws.timeline_fraction, 0.2, 0.5);
     timeline_height_ = 0.0f;   // drop splitter override; fraction rules
     SetRightTab(ws.right_tab);   // restyles tabs + RequestLayout
     SetStatus("Workspace: " + ws.name);
+}
+
+void VideoEditorAppWidget::EnterPhotoMode() {
+    if (photo_mode_ || photo_workspace_ == nullptr) return;
+    photo_mode_ = true;
+    // Hide every video-chrome child; the normal Layout() pass
+    // re-derives visibility from the panel flags on the way back, and
+    // ExitPhotoMode() re-shows the always-on pieces (rail, monitor).
+    const std::shared_ptr<Widgets::Widget> chrome[] = {
+        import_btn_,        add_btn_,       undo_btn_,
+        redo_btn_,          split_btn_,     delete_btn_,
+        snap_btn_,          play_btn_,      export_btn_,
+        zoom_label_,        nav_rail_,      media_bin_,
+        monitor_,           source_monitor_, inspector_,
+        effects_panel_,     markers_panel_, lab_panel_,
+        history_panel_,     mixer_panel_,   export_queue_,
+        plugins_panel_,     color_panel_,   extensions_panel_,
+        layers_panel_,      waveform_panel_, tab_strip_,
+        timeline_};
+    for (const auto& w : chrome) {
+        if (w != nullptr) w->SetVisible(false);
+    }
+    photo_workspace_->SetVisible(true);
+    photo_workspace_->EnsureDocument();
+    title_bar_->SetWorkspaceLabel("Photo Editor");
+    RebuildTitleBarMenus();
+    // No need to steal focus: the tree focuses the workspace on first
+    // canvas click, and before that the app-level key forwarding in
+    // HandleEvent() routes keys to it anyway.
+    RequestLayout();
+    Invalidate();
+}
+
+void VideoEditorAppWidget::ExitPhotoMode() {
+    if (!photo_mode_) return;
+    photo_mode_ = false;
+    if (photo_workspace_ != nullptr) {
+        photo_workspace_->SetVisible(false);
+    }
+    // Always-visible children the video Layout() never toggles get
+    // re-shown here; everything else is restored by the normal pass.
+    if (nav_rail_ != nullptr) nav_rail_->SetVisible(true);
+    if (monitor_ != nullptr) monitor_->SetVisible(true);
+    RefreshWaveformPanel();
+    title_bar_->SetWorkspaceLabel("Video Editor");
+    RebuildTitleBarMenus();
+    RequestLayout();
+    Invalidate();
 }
 
 void VideoEditorAppWidget::RefreshWaveformPanel() {
@@ -6847,11 +6971,15 @@ void VideoEditorAppWidget::Render(
     renderer.FillRect(bounds, tokens.background, 0.0f);
     // Toolbar chrome band under the title bar — the same elevation as
     // the status bar/tab strip so the chrome reads as one frame.
-    renderer.FillRect({bounds.x, bounds.y + 38.0f, bounds.width, 44.0f},
-                      tokens.panel, 0.0f);
-    renderer.DrawLine({bounds.x, bounds.y + 82.0f},
-                      {bounds.x + bounds.width, bounds.y + 82.0f},
-                      tokens.border, 1.0f);
+    // Skipped in photo mode: the workspace paints its own top bar.
+    if (!photo_mode_) {
+        renderer.FillRect(
+            {bounds.x, bounds.y + 38.0f, bounds.width, 44.0f},
+            tokens.panel, 0.0f);
+        renderer.DrawLine({bounds.x, bounds.y + 82.0f},
+                          {bounds.x + bounds.width, bounds.y + 82.0f},
+                          tokens.border, 1.0f);
+    }
     // Structural chrome cached by Layout(): the status bar gets its
     // own surface and the timeline split gets a hairline divider. The
     // right-panel tab strip paints itself now (Widgets::Tabs draws
@@ -6892,9 +7020,11 @@ void VideoEditorAppWidget::Render(
                     color, 0.0f);
             }
         };
-    draw_splitter(left_splitter_rect_, 0, true);
-    draw_splitter(right_splitter_rect_, 1, true);
-    draw_splitter(timeline_splitter_rect_, 2, false);
+    if (!photo_mode_) {
+        draw_splitter(left_splitter_rect_, 0, true);
+        draw_splitter(right_splitter_rect_, 1, true);
+        draw_splitter(timeline_splitter_rect_, 2, false);
+    }
 }
 
 void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -6919,6 +7049,43 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     const float gap = tokens.spacing_small;
 
     title_bar_->Layout({bounds.x, bounds.y, bounds.width, 38.0f}, tokens);
+
+    // Photo mode: the workspace owns the band between the title bar
+    // and the status strip; all video chrome stays hidden.
+    if (photo_mode_ && photo_workspace_ != nullptr) {
+        const float photo_status_h = 26.0f;
+        const float photo_top = bounds.y + 38.0f;
+        const float photo_bottom =
+            bounds.y + bounds.height - photo_status_h;
+        photo_workspace_->Layout(
+            {bounds.x, photo_top, bounds.width,
+             std::max(0.0f, photo_bottom - photo_top)},
+            tokens);
+        status_bar_top_ = photo_bottom;
+        timeline_top_ = 0.0f;
+        left_splitter_rect_ = {};
+        right_splitter_rect_ = {};
+        timeline_splitter_rect_ = {};
+        status_label_->Layout({bounds.x + 12.0f, photo_bottom + 4.0f,
+                               bounds.width - 112.0f, 20.0f},
+                              tokens);
+        if (sync_cancel_btn_) {
+            sync_cancel_btn_->Layout(
+                {bounds.x + bounds.width - 88.0f, photo_bottom + 2.0f,
+                 80.0f, 22.0f},
+                tokens);
+        }
+        if (status_toast_) status_toast_->Layout(bounds, tokens);
+        // The Home start screen stays reachable in photo mode too
+        // (title bar File ▸ Home) — keep it laid out on top.
+        if (project_manager_ != nullptr && project_manager_->IsOpen()) {
+            project_manager_->Layout(
+                {bounds.x, bounds.y + 38.0f, bounds.width,
+                 std::max(0.0f, bounds.height - 38.0f)},
+                tokens);
+        }
+        return;
+    }
 
     const float toolbar_y = bounds.y + 38.0f;
     const float toolbar_h = 44.0f;
@@ -7167,6 +7334,21 @@ bool VideoEditorAppWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
             event.type == Event::Type::TextInput) {
             return true;
         }
+    }
+    // Photo mode: key/text events route to the photo workspace — its
+    // focused children (the hex/name inputs) already consumed theirs
+    // before this tree-level handler runs, so forwarding here covers
+    // the unfocused case. Anything left over is swallowed: the video
+    // shortcuts below (b/c/m/space, Ctrl+S→project save, …) must not
+    // fire behind the photo UI.
+    if (photo_mode_ && photo_workspace_ != nullptr) {
+        if (event.type == Event::Type::KeyDown ||
+            event.type == Event::Type::KeyUp ||
+            event.type == Event::Type::TextInput) {
+            photo_workspace_->HandleEvent(event);
+            return true;
+        }
+        return false;   // no splitter rects exist in photo mode
     }
     // Panel splitters: hit-rects are cached by Layout() inside the gap
     // strips between children, so presses land on this widget and the

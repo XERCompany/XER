@@ -14,6 +14,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -4979,12 +4980,42 @@ constexpr CheckEntry kChecks[] = {
     {"export_render", &CheckExportRender},
 };
 
+// Registered checks beyond the compiled-in list — exe-side additions
+// (e.g. PhotoWorkspace, which lives in the video_editor target, not
+// the UI-free core this file compiles into).
+std::deque<std::string>& ExtraCheckNames() {
+    static std::deque<std::string> names;
+    return names;
+}
+std::vector<CheckEntry>& ExtraChecks() {
+    static std::vector<CheckEntry> extra;
+    return extra;
+}
+
+std::vector<CheckEntry> AllChecks() {
+    std::vector<CheckEntry> all(std::begin(kChecks), std::end(kChecks));
+    const auto& extra = ExtraChecks();
+    all.insert(all.end(), extra.begin(), extra.end());
+    return all;
+}
+
 }  // namespace
+
+void RegisterCheck(std::string name, CheckFn fn) {
+    if (fn == nullptr) return;
+    // deque storage keeps the c_str() stable for the entry's lifetime.
+    ExtraCheckNames().push_back(std::move(name));
+    CheckEntry entry;
+    entry.name = ExtraCheckNames().back().c_str();
+    entry.fn = fn;
+    ExtraChecks().push_back(entry);
+}
 
 std::vector<std::string> CheckNames() {
     std::vector<std::string> names;
-    names.reserve(std::size(kChecks));
-    for (const CheckEntry& entry : kChecks) {
+    const auto all = AllChecks();
+    names.reserve(all.size());
+    for (const CheckEntry& entry : all) {
         names.emplace_back(entry.name);
     }
     return names;
@@ -5022,7 +5053,7 @@ int RunAll() {
     }).detach();
 
     int failures = 0;
-    for (const CheckEntry& entry : kChecks) {
+    for (const CheckEntry& entry : AllChecks()) {
         const auto started = std::chrono::steady_clock::now();
         const std::string reason = entry.fn();
         const auto elapsed =

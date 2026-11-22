@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <utility>
 
 #ifdef _WIN32
@@ -42,7 +43,6 @@ using XER::UI::Theme::Color;
 
 constexpr float kTopBarH = 40.0f;
 constexpr float kToolStripW = 40.0f;
-constexpr float kGap = 8.0f;
 constexpr float kPad = 10.0f;
 constexpr float kBtnH = 28.0f;
 
@@ -162,11 +162,6 @@ public:
     }
     int Width() const { return Parse(w_input_->GetValue(), 1280); }
     int Height() const { return Parse(h_input_->GetValue(), 720); }
-    // Enter in either field submits the dialog.
-    void SetOnSubmit(std::function<void()> cb) {
-        w_input_->SetOnSubmit(std::move(cb));
-        h_input_->SetOnSubmit(std::move(cb));
-    }
 
     void Render(Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override {
@@ -558,10 +553,7 @@ void PhotoWorkspaceWidget::NewDocumentDialog() {
     dlg->SetPanelWidth(360.0f);
     std::weak_ptr<NewDocFields> weak_fields = fields;
     std::weak_ptr<Widgets::Dialog> weak_dlg = dlg;
-    // Enter inside a field confirms the dialog.
-    fields->SetOnSubmit([weak_dlg] {
-        if (auto d = weak_dlg.lock()) d->Close();
-    });
+    // Dialog already confirms on Enter — no extra submit wiring needed.
     dlg->SetOnClosed([this, weak_dlg, weak_fields] {
         auto d = weak_dlg.lock();
         auto f = weak_fields.lock();
@@ -774,7 +766,7 @@ void PhotoWorkspaceWidget::AddLayer(bool group) {
     EnsureDocument();
     if (doc_ == nullptr) return;
     int n = 1;
-    for (const LayerRow& row : rows_view_) ++n;
+    for (size_t i = 0; i < rows_view_.size(); ++i) ++n;
     const std::string name =
         (group ? "Group " : "Layer ") + std::to_string(n);
     ph::LayerId id = ph::kInvalidLayerId;
@@ -1933,5 +1925,144 @@ bool PhotoWorkspaceWidget::HandleEvent(
 }
 
 void PhotoWorkspaceWidget::Tick(double dt_seconds) { (void)dt_seconds; }
+
+// ---------------------------------------------------------------------------
+// Headless smoke check ("photo_workspace") — see the header comment.
+// ---------------------------------------------------------------------------
+
+std::string PhotoWorkspaceSmoke() {
+    namespace ph = Photo;
+    namespace W = XER::UI::Widgets;
+    using XER::UI::Layout::Point;
+
+    auto any_painted = [](ph::Document& d) {
+        for (const std::uint32_t v : d.FlattenU32()) {
+            if ((v & 0xFF) > 0) return true;   // alpha byte
+        }
+        return false;
+    };
+
+    auto ws = std::make_shared<PhotoWorkspaceWidget>(nullptr);
+    ws->EnsureDocument();
+    ph::Document* doc = ws->Doc();
+    if (doc == nullptr) return "EnsureDocument produced no document";
+    if (doc->CanvasWidth() != 1280 || doc->CanvasHeight() != 720) {
+        return "unexpected default canvas size";
+    }
+    // Minimum-window layout so the viewport + children exist.
+    ws->Layout({0.0f, 0.0f, 1100.0f, 700.0f},
+               XER::UI::Theme::Tokens{});
+    if (ws->HasDocument() == false || doc->Flatten().Width() != 1280) {
+        return "layout broke the document";
+    }
+
+    const auto send = [&](W::Event::Type type, float x, float y) {
+        W::Event ev{};
+        ev.type = type;
+        ev.position = {x, y};
+        if (type == W::Event::Type::MouseDown) {
+            ev.mouse_button = W::MouseButton::Left;
+        }
+        ws->HandleEvent(ev);
+    };
+    // Viewport center (tool strip 40 + top bar 40; panel ~264 wide).
+    const Point vc{438.0f, 370.0f};
+    if (any_painted(*doc)) return "fresh document is not transparent";
+    send(W::Event::Type::MouseDown, vc.x, vc.y);
+    send(W::Event::Type::MouseMove, vc.x + 80.0f, vc.y + 60.0f);
+    send(W::Event::Type::MouseMove, vc.x - 40.0f, vc.y + 100.0f);
+    send(W::Event::Type::MouseUp, vc.x - 40.0f, vc.y + 100.0f);
+    if (!any_painted(*doc)) {
+        return "scripted stroke painted no pixels";
+    }
+    const auto painted = doc->FlattenU32();
+
+    // Ctrl+Z erases the stroke; Ctrl+Y restores it pixel-exact.
+    W::Event key{};
+    key.type = W::Event::Type::KeyDown;
+    key.is_ctrl = true;
+    key.key = W::KeyCode::Z;
+    ws->HandleEvent(key);
+    if (any_painted(*doc)) {
+        return "Ctrl+Z did not remove the stroke";
+    }
+    key.key = W::KeyCode::Y;
+    ws->HandleEvent(key);
+    if (doc->FlattenU32() != painted) {
+        return "Ctrl+Y redo not pixel-exact";
+    }
+
+    // Fill tool: 'f' selects it, a canvas click floods the layer.
+    W::Event txt{};
+    txt.type = W::Event::Type::TextInput;
+    txt.text = "f";
+    ws->HandleEvent(txt);
+    send(W::Event::Type::MouseDown, vc.x, vc.y);
+    send(W::Event::Type::MouseUp, vc.x, vc.y);
+    {
+        const auto flat = doc->FlattenU32();
+        bool all_opaque = !flat.empty();
+        for (const std::uint32_t v : flat) {
+            if ((v & 0xFF) < 255) {
+                all_opaque = false;
+                break;
+            }
+        }
+        if (!all_opaque) {
+            return "fill tool left transparent pixels";
+        }
+    }
+
+    // Layer ops: add/duplicate/move/merge/flatten/delete through the
+    // same public buttons' handlers — all must stay undoable.
+    ws->AddLayer(false);
+    ws->AddLayer(true);   // group
+    ws->DuplicateActiveLayer();
+    ws->MoveActiveLayer(-1);
+    ws->MoveActiveLayer(1);
+    ws->MergeActiveLayer();
+    ws->DeleteActiveLayer();
+    ws->FlattenImage();
+    // Undo back to the filled single-layer doc.
+    key.key = W::KeyCode::Z;
+    for (int i = 0; i < 8; ++i) ws->HandleEvent(key);
+    if (!any_painted(*doc)) {
+        return "undo chain lost the fill";
+    }
+
+    // File round trips: PNG import path (OpenPath) + .xerphoto save.
+    {
+        const auto tmp = std::filesystem::temp_directory_path();
+        const std::string png =
+            (tmp / "xer_photo_ws.png").generic_string();
+        const std::string xph =
+            (tmp / "xer_photo_ws.xerphoto").generic_string();
+        std::string err;
+        if (!doc->SavePng(png, &err)) {
+            return "SavePng failed: " + err;
+        }
+        if (!ws->OpenPath(png)) {
+            return "OpenPath(png) failed";
+        }
+        if (ws->Doc()->CanvasWidth() != 1280 ||
+            ws->Doc()->CanvasHeight() != 720) {
+            return "PNG import changed canvas size";
+        }
+        if (!ph::SaveDocument(*ws->Doc(), xph, &err)) {
+            return "SaveDocument failed: " + err;
+        }
+        if (!ws->OpenPath(xph)) {
+            return "OpenPath(.xerphoto) failed";
+        }
+        // doc_path_ is now bound — Save(false) writes headlessly.
+        if (!ws->Save(false)) {
+            return "Save(false) on bound .xerphoto failed";
+        }
+        std::error_code ec;
+        std::filesystem::remove(png, ec);
+        std::filesystem::remove(xph, ec);
+    }
+    return {};
+}
 
 }  // namespace XER::VideoEditor::Ui
