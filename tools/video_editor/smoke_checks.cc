@@ -75,6 +75,13 @@
 
 #if defined(_WIN32)
 #include <windows.h>   // GetModuleFileNameW — worker-exe sibling lookup
+// windows.h redefines DrawText -> DrawTextW; rendering/renderer.h was
+// included above (before this) so its self-undef already ran and is
+// not re-applied under the include guard — drop the macro again for
+// the Renderer overrides below.
+#ifdef DrawText
+    #undef DrawText
+#endif
 #endif
 
 namespace XER::VideoEditor {
@@ -133,7 +140,11 @@ namespace Path = XER::Helper::Path;
 namespace FFmpeg = XER::Bridge::FFmpeg;
 
 // Hard cap for the entire run — a hung check must not block callers.
-constexpr int kWatchdogSeconds = 15;
+// This is a hang bound, not a timing budget: worker-process spawns,
+// delay-loaded backend DLL closures (ggml_backend_load_all, the
+// ~50-DLL OpenCV set), and the FFmpeg export legitimately take tens
+// of seconds on a cold disk / indexer-scanned machine.
+constexpr int kWatchdogSeconds = 240;
 
 // Scratch area for the file-backed checks (store, autosave, catalog,
 // presets, export). Distinct from the unit-test dir so a smoke run
@@ -3653,6 +3664,21 @@ std::string CheckNnBackends() {
         const std::string id(b.id);
         if (id != "opencv" && id != "onnxruntime" && id != "dnnl" &&
             id != "ggml") {
+            continue;
+        }
+        // Pre-probe the delay-import DLLs: the binder raises an
+        // uncatchable exception on a missing/unloadable runtime, so a
+        // broken toolchain package (stale DLL deps) would otherwise
+        // crash the suite here. A runtime that cannot LoadLibrary is
+        // "unavailable", not a test failure — report it loudly and
+        // skip the computation.
+        const std::string probe = NnBackendRuntimeProbe(b.id);
+        if (!probe.empty()) {
+            std::fprintf(stdout,
+                         "  nn_backends: %s SKIP (runtime "
+                         "unloadable) — %s\n",
+                         id.c_str(), probe.c_str());
+            std::fflush(stdout);
             continue;
         }
         const std::string err = NnBackendSelfTest(b.id);

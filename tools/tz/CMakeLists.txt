@@ -37,7 +37,23 @@ set(_ztz_clang_tools ztzmake XSJOBuildX)
 # dirs set by the configs; fall back to find_library/find_path for
 # toolchains without CMake configs.
 find_package(LLVM CONFIG QUIET)
-find_package(Clang CONFIG QUIET)
+# MSYS2 clang ships a ClangTargets.cmake that references static libs
+# the package does not install (libclangApplyReplacements.a, ...) —
+# find_package(Clang) hard-fails configure there. Probe the specific
+# breakage before trusting the package config; the bare import-lib
+# fallback below reaches the same monolithic single-DLL link anyway.
+set(_ztz_skip_clang_pkg OFF)
+if(MINGW)
+    get_filename_component(_ztz_tc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    get_filename_component(_ztz_tc_root "${_ztz_tc_bin}/.." ABSOLUTE)
+    if(EXISTS "${_ztz_tc_root}/lib/cmake/clang/ClangTargets.cmake" AND
+       NOT EXISTS "${_ztz_tc_root}/lib/libclangApplyReplacements.a")
+        set(_ztz_skip_clang_pkg ON)
+    endif()
+endif()
+if(NOT _ztz_skip_clang_pkg)
+    find_package(Clang CONFIG QUIET)
+endif()
 
 set(_ztz_llvm_ok OFF)
 if(TARGET clang-cpp AND TARGET LLVM)

@@ -334,6 +334,8 @@ void TimelineWidget::SetProject(const Project* project) {
 }
 
 void TimelineWidget::SetPlayhead(double seconds) {
+    const double prev_playhead = playhead_;
+    const double prev_scroll = scroll_seconds_;
     playhead_ = std::max(0.0, seconds);
     if (project_ != nullptr) {
         const double duration = std::max(project_->duration(), 1.0);
@@ -347,7 +349,23 @@ void TimelineWidget::SetPlayhead(double seconds) {
                 std::max(0.0, playhead_ - duration * 0.1);
         }
     }
-    Invalidate();
+    if (scroll_seconds_ != prev_scroll) {
+        // Auto-scroll moved the content — the whole viewport repaints.
+        Invalidate();
+        return;
+    }
+    if (playhead_ == prev_playhead) {
+        return;
+    }
+    // Only the old and new playhead columns changed: the cap handle is
+    // 14px wide and the line is 2px, so a 16px column covers both (the
+    // damage tracker inflates beyond that anyway).
+    const Rect b = GetBounds();
+    const auto strip = [&](double t) {
+        return Rect{XAtTime(t) - 8.0f, b.y, 16.0f, b.height};
+    };
+    Invalidate(strip(prev_playhead));
+    Invalidate(strip(playhead_));
 }
 
 void TimelineWidget::SetSelectedClip(const std::string& clip_id) {

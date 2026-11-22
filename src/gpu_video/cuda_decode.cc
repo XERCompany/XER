@@ -8,6 +8,9 @@
 #include "gpu_video/cuda_decode.h"
 
 #include "gpu_video/cuda_runtime.h"
+// Complete AudioFrameInfo — the tap copies fields out of it
+// (CollectTapAudioFrame); the header forward-declares it only.
+#include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
 
 #ifdef _WIN32
 #ifndef __STDC_CONSTANT_MACROS

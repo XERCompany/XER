@@ -21,6 +21,15 @@
 #include "widgets/button.h"
 #include "widgets/context_menu.h"
 
+// helper/path_utils.h -> windows.h defines the DrawText -> DrawTextW
+// macro. monitor_widget.h already pulled rendering/renderer.h (via the
+// FrameRender seam) BEFORE it — so renderer.h's own #undef ran before
+// the macro existed and is not re-run under the include guard. Undef
+// here for this TU's DrawText call sites (same convention).
+#if defined(DrawText)
+    #undef DrawText
+#endif
+
 namespace XER::VideoEditor::Ui {
 namespace {
 
@@ -388,9 +397,18 @@ void MonitorWidget::SetPlaying(bool playing) {
 }
 
 void MonitorWidget::SetPeakLevels(float left, float right) {
-    peak_in_l_ = std::isfinite(left) ? std::max(0.0f, left) : 0.0f;
-    peak_in_r_ = std::isfinite(right) ? std::max(0.0f, right) : 0.0f;
-    Invalidate();
+    const float l = std::isfinite(left) ? std::max(0.0f, left) : 0.0f;
+    const float r = std::isfinite(right) ? std::max(0.0f, right) : 0.0f;
+    // Values arrive every engine tick; sub-perceptual deltas skip the
+    // repaint — Tick()'s ballistics still decay the bars and invalidate
+    // themselves when a meter actually moves (>0.05 dB).
+    const bool moved = std::abs(l - peak_in_l_) >= 0.005f ||
+                       std::abs(r - peak_in_r_) >= 0.005f;
+    peak_in_l_ = l;
+    peak_in_r_ = r;
+    if (moved) {
+        Invalidate();
+    }
 }
 
 void MonitorWidget::SetSafeMargins(bool on) {

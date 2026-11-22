@@ -239,6 +239,10 @@ public:
     Layout::Rect GetBounds() const;
     void SetBounds(const Layout::Rect& bounds);
     void Invalidate();
+    // Repaint only `region` (same client coordinate space as GetBounds(),
+    // clamped to the widget bounds) instead of the whole widget — for
+    // widgets redrawing a small moving part (playhead line, caret).
+    void Invalidate(const Layout::Rect& region);
 
 protected:
     Widget() = default;

@@ -374,6 +374,19 @@ void Widget::Invalidate() {
     }
 }
 
+void Widget::Invalidate(const Layout::Rect& region) {
+    paint_dirty_ = true;
+    for (auto ancestor = GetParent(); ancestor; ancestor = ancestor->GetParent()) {
+        ancestor->paint_dirty_ = true;
+    }
+    // Same damage reporting as Invalidate() but clipped to `region` —
+    // keeps a moving element (playhead column) from repainting the whole
+    // widget bounds.
+    if (tree_ != nullptr && !tree_->LayoutInProgress()) {
+        tree_->AddDamageRect(bounds_.Intersect(region));
+    }
+}
+
 void Widget::RequestLayout() {
     layout_dirty_ = true;
     for (auto ancestor = GetParent(); ancestor; ancestor = ancestor->GetParent()) {

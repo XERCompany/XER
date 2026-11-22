@@ -935,6 +935,11 @@ if(XER_BUILD_NODE_ADDON)
     add_subdirectory(addon)
 endif()
 
+# xer_pe_deps — build-time PE import/delay-import scanner used by
+# xer_stage_runtime_dlls(TARGET ...). Must be defined before the tool
+# subdirectories that attach its POST_BUILD staging.
+add_subdirectory(tools/pe_deps)
+
 # VideoEditor (XER Studio Phase 1) — headless core lib; the exe lands in
 # 1C/1D inside this same directory.
 add_subdirectory(tools/tz)

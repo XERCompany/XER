@@ -1,4 +1,13 @@
 {
   "cmake.generator": "Unix Makefiles",
-  "cmake.buildDirectory": "${workspaceFolder}/build"
+  "cmake.buildDirectory": "${workspaceFolder}/build",
+  "clangd.path": "C:/tools/msys64/clang64/bin/clangd.exe",
+  "clangd.arguments": [
+    "--compile-commands-dir=${workspaceFolder}/out/build/windows-clang-msys2",
+    "--background-index",
+    "--query-driver=C:/tools/msys64/clang64/bin/clang++.exe",
+    "--header-insertion=never",
+    "-log=error"
+  ],
+  "C_Cpp.intelliSenseEngine": "disabled"
 }

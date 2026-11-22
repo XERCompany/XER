@@ -319,7 +319,11 @@ struct Session {
 };
 
 #if defined(XER_AI_FO_ONNXRUNTIME)
-struct OrtSession final : Session {
+// NOTE: the wrapper is named OrtSessionImpl — calling it OrtSession
+// would shadow the real ::OrtSession C type inside its own scope
+// (injected-class-name), turning `OrtSession* session` into a pointer
+// to the wrapper and breaking every api->*Session* call.
+struct OrtSessionImpl final : Session {
     const OrtApi* api = nullptr;
     OrtEnv* env = nullptr;
     OrtSession* session = nullptr;
@@ -330,7 +334,7 @@ struct OrtSession final : Session {
     std::vector<std::string> output_names;
     std::vector<const char*> output_name_ptrs;
     std::vector<OrtValue*> outputs;
-    ~OrtSession() override {
+    ~OrtSessionImpl() override {
         if (api == nullptr) return;
         for (OrtValue* v : outputs) api->ReleaseValue(v);
         for (char* p : owned_names) alloc->Free(alloc, p);
@@ -378,7 +382,10 @@ struct OrtSession final : Session {
             return false;
         }
         OrtTensorTypeAndShapeInfo* info = nullptr;
-        st = api->GetTensorTypeAndShapeInfo(outputs[0], &info);
+        // GetTensorTypeAndShape is the stable name across ORT C-API
+        // revisions (ORT_API_VERSION 29 dropped the *Info-suffixed
+        // alias the code was first written against).
+        st = api->GetTensorTypeAndShape(outputs[0], &info);
         if (!Check(st, "GetTensorTypeAndShapeInfo", error_out).empty() ||
             info == nullptr) {
             return false;
@@ -410,7 +417,7 @@ struct OrtSession final : Session {
 std::unique_ptr<Session> MakeOrtSession(const std::string& model_path,
                                         int* input_size,
                                         std::string* error_out) {
-    auto s = std::make_unique<OrtSession>();
+    auto s = std::make_unique<OrtSessionImpl>();
     const OrtApiBase* base = OrtGetApiBase();
     if (base == nullptr) {
         if (error_out) *error_out = "OrtGetApiBase returned null";
@@ -485,9 +492,11 @@ std::unique_ptr<Session> MakeOrtSession(const std::string& model_path,
     st = api->SessionGetInputTypeInfo(s->session, 0, &ti);
     if (s->Check(st, "SessionGetInputTypeInfo", error_out).empty() &&
         ti != nullptr) {
-        const OrtTensorTypeAndShapeInfo* info =
-            api->CastTypeInfoToTensorInfo(ti);
-        if (info != nullptr) {
+        // ORT C-API >= ~v21: out-parameter form returning OrtStatus*
+        // (the borrowed info lives as long as `ti` — freed below).
+        const OrtTensorTypeAndShapeInfo* info = nullptr;
+        if (api->CastTypeInfoToTensorInfo(ti, &info) == nullptr &&
+            info != nullptr) {
             std::size_t nd = 0;
             if (api->GetDimensionsCount(info, &nd) == nullptr &&
                 nd == 4) {
@@ -665,7 +674,7 @@ std::string ActiveBackendId() {
 
 std::vector<std::string> LoadLabels(const std::string& utf8_path) {
     std::vector<std::string> labels;
-    std::ifstream in(std::filesystem::path(utf8_path));
+    std::ifstream in{std::filesystem::path(utf8_path)};
     if (!in) return labels;
     std::string line;
     while (std::getline(in, line)) {

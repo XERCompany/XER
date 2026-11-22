@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+#if defined(_WIN32)
+#    include <windows.h>   // LoadLibraryExA — delay-load pre-probe
+#endif
+
 #include "lab/mkl_accel.h"  // runtime-probed BLAS (MKL / OpenBLAS / scalar)
 
 // Build-time feature gates — injected by tools/video_editor/CMakeLists.txt.
@@ -246,34 +250,68 @@ std::string TestGgml() {
     // & friends) from beside the exe — the build stages them into the
     // bin dir. With none reachable, there is nothing to compute on.
     ggml_backend_load_all();
-    if (ggml_backend_dev_count() == 0) {
+    const int dev_count = ggml_backend_dev_count();
+    if (dev_count == 0) {
         return "no ggml backend modules found "
                "(ggml-cpu-*.dll not beside the exe)";
     }
-    ggml_backend_dev_t dev = ggml_backend_dev_get(0);
-    if (dev == nullptr) {
-        return "ggml_backend_dev_get(0) returned null";
-    }
-    ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
-    if (backend == nullptr) {
-        return "ggml_backend_dev_init failed";
-    }
 
-    // [1,1,1,1] + [2,2,2,2] = [3,...] — a 4-float add graph on the
-    // first backend device.
-    const ggml_init_params ip = {/*.mem_size   =*/ 16 * 1024,
-                                 /*.mem_buffer =*/ nullptr,
-                                 /*.no_alloc   =*/ true};
+    // [1,1,1,1] + [2,2,2,2] = [3,...] — a 4-float add graph. The
+    // cgraph lives in the context pool too: ggml_new_graph allocates
+    // GGML_DEFAULT_GRAPH_SIZE nodes' worth of storage up front, so
+    // the pool must cover tensor overhead AND ggml_graph_overhead() —
+    // an undersized pool returns a null cgraph which
+    // ggml_build_forward_expand then dereferences.
+    const ggml_init_params ip = {
+        /*.mem_size   =*/ 16 * 1024 + ggml_graph_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true};
     ggml_context* ctx = ggml_init(ip);
     if (ctx == nullptr) {
-        ggml_backend_free(backend);
         return "ggml_init failed";
     }
     ggml_tensor* ta = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
     ggml_tensor* tb = ggml_new_tensor_1d(ctx, GGML_TYPE_F32, 4);
-    ggml_tensor* tc = ggml_add(ctx, ta, tb);
-    ggml_cgraph* gf = ggml_new_graph(ctx);
+    ggml_tensor* tc =
+        (ta != nullptr && tb != nullptr) ? ggml_add(ctx, ta, tb)
+                                         : nullptr;
+    ggml_cgraph* gf =
+        tc != nullptr ? ggml_new_graph(ctx) : nullptr;
+    if (gf == nullptr) {
+        ggml_free(ctx);
+        return "ggml context could not hold a tiny add graph";
+    }
     ggml_build_forward_expand(gf, tc);
+
+    // Device 0 is NOT a safe default — backend load order is
+    // arbitrary and accelerator backends do not implement every op
+    // (ggml-blas aborts inside graph_compute on elementwise ADD —
+    // GGML_ABORT, uncatchable). Prefer a CPU device for universal
+    // coverage; otherwise take the first device that reports op
+    // support via ggml_backend_dev_supports_op.
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(
+        GGML_BACKEND_DEVICE_TYPE_CPU);
+    for (int i = 0; dev == nullptr && i < dev_count; ++i) {
+        ggml_backend_dev_t candidate = ggml_backend_dev_get(i);
+        if (candidate != nullptr &&
+            ggml_backend_dev_supports_op(candidate, tc)) {
+            dev = candidate;
+        }
+    }
+    if (dev == nullptr) {
+        ggml_free(ctx);
+        return "no ggml device supports the add op";
+    }
+    ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+    if (backend == nullptr) {
+        ggml_free(ctx);
+        return "ggml_backend_dev_init failed";
+    }
+    if (!ggml_backend_supports_op(backend, tc)) {
+        ggml_free(ctx);
+        ggml_backend_free(backend);
+        return "picked ggml backend cannot run elementwise add";
+    }
 
     std::string fail;
     ggml_backend_buffer_t buf =
@@ -301,6 +339,34 @@ std::string TestGgml() {
     ggml_free(ctx);
     ggml_backend_free(backend);
     return fail;
+}
+#endif
+
+#if defined(_WIN32)
+// LoadLibrary-probe each "|"-separated delay-import DLL before the
+// first call into it. The delay-load binder raises 0xc06d007e
+// (FACILITY_VISUALCPP / ERROR_MOD_NOT_FOUND) on a missing or
+// unloadable module — structured, not a C++ exception, so the smoke
+// cannot catch it. Probing converts "link-time present, runtime
+// broken" into a reportable verdict. LOAD_LIBRARY_SEARCH_DEFAULT_DIRS
+// resolves the exe dir first, exactly like the binder.
+std::string ProbeDelayloadDlls(const char* pipe_list) {
+    if (pipe_list == nullptr || *pipe_list == '\0') return {};
+    std::string rest(pipe_list);
+    while (true) {
+        const std::size_t sep = rest.find('|');
+        const std::string name = rest.substr(0, sep);
+        const HMODULE h = LoadLibraryExA(
+            name.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+        if (h == nullptr) {
+            return name + " will not load (Win32 error " +
+                   std::to_string(GetLastError()) + ")";
+        }
+        FreeLibrary(h);   // probe only — the binder resolves for real
+        if (sep == std::string::npos) break;
+        rest = rest.substr(sep + 1);
+    }
+    return {};
 }
 #endif
 
@@ -345,6 +411,34 @@ std::string NnBackendSelfTest(const char* id) {
     if (s == "ggml") return TestGgml();
 #endif
     return s + " not compiled into this build";
+}
+
+std::string NnBackendRuntimeProbe(const char* id) {
+#if defined(_WIN32)
+    if (id == nullptr) return "null id";
+    const std::string s(id);
+    // The XER_VE_NN_*_DLLS lists are the exact delay-import names
+    // CMake collected from the linked targets — same names the binder
+    // will try, probed the safe way first.
+#if defined(XER_VE_NN_OPENCV) && defined(XER_VE_NN_OPENCV_DLLS)
+    if (s == "opencv") return ProbeDelayloadDlls(XER_VE_NN_OPENCV_DLLS);
+#endif
+#if defined(XER_VE_NN_ONNXRUNTIME) && \
+    defined(XER_VE_NN_ONNXRUNTIME_DLLS)
+    if (s == "onnxruntime") {
+        return ProbeDelayloadDlls(XER_VE_NN_ONNXRUNTIME_DLLS);
+    }
+#endif
+#if defined(XER_VE_NN_DNNL) && defined(XER_VE_NN_DNNL_DLLS)
+    if (s == "dnnl") return ProbeDelayloadDlls(XER_VE_NN_DNNL_DLLS);
+#endif
+#if defined(XER_VE_NN_GGML) && defined(XER_VE_NN_GGML_DLLS)
+    if (s == "ggml") return ProbeDelayloadDlls(XER_VE_NN_GGML_DLLS);
+#endif
+#else
+    static_cast<void>(id);
+#endif
+    return {};   // nothing to probe: loadable or not delay-imported
 }
 
 }  // namespace XER::VideoEditor

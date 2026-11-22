@@ -25,6 +25,12 @@ namespace XER::UI::Rendering {
 //               duplicate the same GPU work for no gain; the enum value
 //               exists so callers can select the D3D11-device provider
 //               explicitly.
+//   kD2D2     — Direct2DEngine: same D2D/DWrite feature set, but the
+//               swapchain lives on a dedicated present thread (second
+//               D3D11 device + keyed-mutex shared canvas), so a Present
+//               stall can never freeze the UI thread. Default in the
+//               auto chain; "d2d" selects the legacy single-threaded
+//               renderer for A/B.
 //   kVulkan   — real Vulkan WSI renderer (dynamic vulkan-1.dll loader;
 //               returns nullptr when no loader/ICD is present, which the
 //               factory treats as "unavailable" and falls back).
@@ -34,6 +40,7 @@ enum class RendererBackend {
     kD2D,
     kD3D11,
     kVulkan,
+    kD2D2,
 };
 
 // Canonical lowercase names accepted by ParseRendererBackend and produced
@@ -66,7 +73,7 @@ public:
 
 // Instantiates a renderer for `backend` bound to `native_window` (HWND).
 // Explicit backends are tried first; on failure the factory walks the
-// automatic preference chain (kD2D/kD3D11 -> kVulkan -> kSoftware) so the
+// automatic preference chain (kD2D2 -> kD2D/kD3D11 -> kVulkan -> kSoftware) so the
 // call only returns nullptr when even the software provider failed —
 // effectively "always a renderer" on Windows. Never throws.
 std::unique_ptr<Renderer> CreateRenderer(RendererBackend backend,
@@ -74,7 +81,7 @@ std::unique_ptr<Renderer> CreateRenderer(RendererBackend backend,
 
 // CreateRenderer(ResolveRendererBackendFromEnv(), native_window).
 // Precedence: XER_UI_RENDERER explicit value > kAuto chain. Documented
-// env values: vulkan | d2d | d3d11 | software | auto (case-insensitive).
+// env values: vulkan | d2d | d2d2 | d3d11 | software | auto (case-insensitive).
 std::unique_ptr<Renderer> CreateRendererFromEnv(void* native_window);
 
 } // namespace XER::UI::Rendering

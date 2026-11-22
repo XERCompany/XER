@@ -323,17 +323,70 @@ function(xer_collect_delayload_dlls out_var)
 endfunction()
 
 # xer_stage_runtime_dlls(<out_dir> <toolchain_bin> <seed-dll>...)
-# Recursively walks the PE import + delay-import tables of each seed
-# DLL (via CMAKE_OBJDUMP -p) and copies every dependency that resolves
-# inside <toolchain_bin> into <out_dir>. Names found in neither dir are
-# OS-provided (KERNEL32/…, api-ms-*, …) and skipped; names already in
-# <out_dir> are followed but not re-copied. Runs at configure time so
-# every consumer target inherits the staged runtime for free — the
-# delay-load helper only defers a missing DLL to first call, where it
-# still hard-kills the process (exit 127 under MSYS2).
-function(xer_stage_runtime_dlls out_dir toolchain_bin)
+# xer_stage_runtime_dlls(TARGET <t> SEARCH <toolchain_bin> [DEST <dir>])
+#
+# Seed mode (configure time): recursively walks the PE import +
+# delay-import tables of each seed DLL (via CMAKE_OBJDUMP -p) and
+# copies every dependency that resolves inside <toolchain_bin> into
+# <out_dir>. Names found in neither dir are OS-provided (KERNEL32/…,
+# api-ms-*, …) and skipped; names already in <out_dir> are followed
+# but not re-copied. Runs at configure time so every consumer target
+# inherits the staged runtime for free — the delay-load helper only
+# defers a missing DLL to first call, where it still hard-kills the
+# process (exit 127 under MSYS2). Seed mode remains the only option
+# for DLLs the BUILD itself needs (ztzmake packs .xexrj during the
+# build — chicken-and-egg) and for LoadLibrary-only runtimes that no
+# import table mentions (ggml-cpu-*.dll, onnxruntime_providers_*).
+#
+# TARGET mode (build time): attaches a POST_BUILD step to <t> that runs
+# xer_pe_deps on the freshly linked binary — the exact DLL set the exe
+# actually imports (transitively, including delay imports and the
+# YA.*.dll modules sitting beside it in DEST) is computed and copied
+# from SEARCH into DEST (default ${CMAKE_BINARY_DIR}/bin). No hand
+# lists, no over-staging. Needs the xer_pe_deps target (tools/pe_deps);
+# when it is unavailable the call degrades to a status message.
+function(xer_stage_runtime_dlls)
+    if("${ARGV0}" STREQUAL "TARGET")
+        cmake_parse_arguments(XSD "" "TARGET;SEARCH;DEST" "" ${ARGN})
+        if(NOT XSD_TARGET OR NOT XSD_SEARCH)
+            message(FATAL_ERROR
+                "xer_stage_runtime_dlls(TARGET <t> SEARCH <dir> "
+                "[DEST <dir>]) — TARGET and SEARCH are required")
+        endif()
+        if(NOT TARGET ${XSD_TARGET})
+            message(FATAL_ERROR
+                "xer_stage_runtime_dlls: target '${XSD_TARGET}' does "
+                "not exist (call it after add_executable/add_library)")
+        endif()
+        if(NOT XSD_DEST)
+            set(XSD_DEST "${CMAKE_BINARY_DIR}/bin")
+        endif()
+        if(TARGET xer_pe_deps)
+            # The $<TARGET_FILE:> genex already implies a dependency on
+            # xer_pe_deps; the explicit add_dependencies makes the order
+            # guarantee obvious (the tool must exist before POST_BUILD).
+            add_dependencies(${XSD_TARGET} xer_pe_deps)
+            add_custom_command(TARGET ${XSD_TARGET} POST_BUILD
+                COMMAND $<TARGET_FILE:xer_pe_deps>
+                        "$<TARGET_FILE:${XSD_TARGET}>"
+                        "${XSD_SEARCH}"
+                        --transitive --copy "${XSD_DEST}"
+                COMMENT "Staging computed PE runtime DLLs for ${XSD_TARGET}"
+                VERBATIM)
+        else()
+            message(STATUS
+                "xer_stage_runtime_dlls(TARGET ${XSD_TARGET}): "
+                "xer_pe_deps unavailable — computed staging skipped")
+        endif()
+        return()
+    endif()
+
+    set(out_dir "${ARGV0}")
+    set(toolchain_bin "${ARGV1}")
+    set(_seeds ${ARGV})
+    list(REMOVE_AT _seeds 0 1)
     file(MAKE_DIRECTORY "${out_dir}")
-    set(_queue ${ARGN})
+    set(_queue ${_seeds})
     set(_seen)
     set(_staged)
     while(_queue)
@@ -370,7 +423,7 @@ function(xer_stage_runtime_dlls out_dir toolchain_bin)
     endwhile()
     list(LENGTH _staged _n)
     message(STATUS "xer_stage_runtime_dlls: ${_n} toolchain DLL(s) "
-                   "staged into ${out_dir} (seeds: ${ARGN})")
+                   "staged into ${out_dir} (seeds: ${_seeds})")
 endfunction()
 
 # xer_delayload(<target> <dll>...)

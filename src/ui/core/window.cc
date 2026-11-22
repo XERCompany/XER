@@ -454,12 +454,35 @@ public:
 
             case WM_TIMER:
                 if (wParam == kFrameTimerId) {
+                    // XER_UI_PERF: measure the whole per-tick cost — the
+                    // app callback, widget Tick and the invalidation
+                    // flush all run on the UI thread, so a heavy tick
+                    // delays every queued paint exactly as a slow paint
+                    // would (visible as constant micro-jitter).
+                    const auto tick_start =
+                        std::chrono::steady_clock::now();
                     if (frame_callback_) {
                         frame_callback_();
                     }
+                    const auto app_cb_done =
+                        std::chrono::steady_clock::now();
                     widget_tree_.Tick(
                         static_cast<double>(frame_interval_ms_) * 0.001);
                     FlushDirtyState(message_hwnd);
+                    if (perf_hud_) {
+                        const double cb_ms =
+                            std::chrono::duration<double, std::milli>(
+                                app_cb_done - tick_start).count();
+                        const double tick_ms =
+                            std::chrono::duration<double, std::milli>(
+                                std::chrono::steady_clock::now() -
+                                tick_start).count();
+                        tick_cost_avg_ = tick_cost_avg_ * 0.9 + tick_ms * 0.1;
+                        tick_cb_avg_ = tick_cb_avg_ * 0.9 + cb_ms * 0.1;
+                        if (tick_ms > tick_cost_max_) {
+                            tick_cost_max_ = tick_ms;
+                        }
+                    }
                     return 0;
                 }
                 return DefWindowProcW(message_hwnd, msg, wParam, lParam);
@@ -758,8 +781,9 @@ public:
 
 private:
     // Repaints only when widgets reported changes since the last flush.
-    // Paint-only changes invalidate just the union of the invalidated
-    // widget bounds (converted DIP->px) instead of the whole client area.
+    // Paint-only changes invalidate each reported damage rect (converted
+    // DIP->px) instead of the whole client area; Windows coalesces them
+    // into the update region while the render pass culls per-rect.
     void FlushDirtyState(HWND hwnd) {
         if (hwnd == nullptr) {
             return;
@@ -771,37 +795,47 @@ private:
         if (layout_requested) {
             LayoutContent(hwnd);
             InvalidateRect(hwnd, nullptr, FALSE);
+            damage_rects_.clear();
             return;
         }
         if (!paint_requested && !damage.valid && !full_damage) {
             return;
         }
-        if (full_damage || !damage.valid) {
+        if (full_damage || damage.rects.empty()) {
             InvalidateRect(hwnd, nullptr, FALSE);
+            damage_rects_.clear();
             return;
         }
-        const float dip_to_px = static_cast<float>(dpi_) / 96.0f;
-        RECT rc = {
-            static_cast<LONG>(std::floor(damage.rect.x * dip_to_px)),
-            static_cast<LONG>(std::floor(damage.rect.y * dip_to_px)),
-            static_cast<LONG>(std::ceil(
-                (damage.rect.x + damage.rect.width) * dip_to_px)),
-            static_cast<LONG>(std::ceil(
-                (damage.rect.y + damage.rect.height) * dip_to_px)),
-        };
         RECT client{};
         if (!GetClientRect(hwnd, &client)) {
             InvalidateRect(hwnd, nullptr, FALSE);
+            damage_rects_.clear();
             return;
         }
-        rc.left = std::max<LONG>(rc.left, client.left);
-        rc.top = std::max<LONG>(rc.top, client.top);
-        rc.right = std::min<LONG>(rc.right, client.right);
-        rc.bottom = std::min<LONG>(rc.bottom, client.bottom);
-        if (rc.right <= rc.left || rc.bottom <= rc.top) {
-            return;  // damage fell entirely outside the client area
+        const float dip_to_px = static_cast<float>(dpi_) / 96.0f;
+        for (const Layout::Rect& dr : damage.rects) {
+            RECT rc = {
+                static_cast<LONG>(std::floor(dr.x * dip_to_px)),
+                static_cast<LONG>(std::floor(dr.y * dip_to_px)),
+                static_cast<LONG>(
+                    std::ceil((dr.x + dr.width) * dip_to_px)),
+                static_cast<LONG>(
+                    std::ceil((dr.y + dr.height) * dip_to_px)),
+            };
+            rc.left = std::max<LONG>(rc.left, client.left);
+            rc.top = std::max<LONG>(rc.top, client.top);
+            rc.right = std::min<LONG>(rc.right, client.right);
+            rc.bottom = std::min<LONG>(rc.bottom, client.bottom);
+            if (rc.right <= rc.left || rc.bottom <= rc.top) {
+                continue;  // this rect fell entirely outside the client
+            }
+            InvalidateRect(hwnd, &rc, FALSE);
+            // Keep the DIP rect so the next WM_PAINT can cull against the
+            // same scattered list instead of the rcPaint bounding union.
+            Widgets::WidgetTree::MergeDamageRect(&damage_rects_, dr);
         }
-        InvalidateRect(hwnd, &rc, FALSE);
+        // If every rect clamped outside the client area, no InvalidateRect
+        // was issued — nothing to repaint, matching the old early-return.
     }
 
     void UpdateFrameTimer() {
@@ -813,6 +847,24 @@ private:
             frame_timer_active_ = false;
         }
         if (frame_callback_) {
+            // WM_TIMER defaults to the 15.6 ms system tick: a 33 ms
+            // request lands at 31/47 ms steps and every per-tick
+            // invalidation (playhead, meters, monitor frame) arrives
+            // with visible cadence jitter. NtSetTimerResolution is
+            // resolved dynamically — always present on supported
+            // Windows, no winmm import needed.
+            using NtSetTimerResolutionFn =
+                LONG(WINAPI*)(ULONG, BOOLEAN, PULONG);
+            static const auto set_res =
+                reinterpret_cast<NtSetTimerResolutionFn>(GetProcAddress(
+                    GetModuleHandleW(L"ntdll.dll"),
+                    "NtSetTimerResolution"));
+            if (set_res != nullptr && !timer_res_raised_) {
+                ULONG current = 0;
+                if (set_res(5000, TRUE, &current) >= 0) {
+                    timer_res_raised_ = true;  // 0.5 ms units
+                }
+            }
             SetTimer(hwnd_, kFrameTimerId, frame_interval_ms_, nullptr);
             frame_timer_active_ = true;
         }
@@ -925,6 +977,25 @@ private:
                         px_to_dip,
                     static_cast<float>(paint_rect.bottom - paint_rect.top) *
                         px_to_dip};
+                // Consume the damage list accumulated by FlushDirtyState.
+                // It drives the render cull only when rcPaint is partial:
+                // a full-client update region means some path (layout,
+                // resize, explicit Invalidate) invalidated everything, so
+                // the scattered list would wrongly cull live widgets.
+                std::vector<Layout::Rect> cull_rects =
+                    std::exchange(damage_rects_, {});
+                RECT client_px{};
+                const bool client_ok = GetClientRect(hwnd, &client_px) != 0;
+                const bool covers_full_client =
+                    !client_ok ||
+                    (paint_rect.left <= client_px.left &&
+                     paint_rect.top <= client_px.top &&
+                     paint_rect.right >= client_px.right &&
+                     paint_rect.bottom >= client_px.bottom);
+                const std::vector<Layout::Rect>* render_cull =
+                    (!covers_full_client && !cull_rects.empty())
+                        ? &cull_rects
+                        : nullptr;
                 if (event_bus_ != nullptr &&
                     event_bus_->HasRenderHooks(
                         UiEventBus::RenderPhase::kBeforeFrame)) {
@@ -936,7 +1007,14 @@ private:
                     event_bus_->NotifyRender(
                         UiEventBus::RenderPhase::kBeforeFrame, frame);
                 }
-                widget_tree_.Render(*renderer_, theme_.GetTokens(), &damage);
+                const auto render_start =
+                    std::chrono::steady_clock::now();
+                widget_tree_.Render(*renderer_, theme_.GetTokens(),
+                                    render_cull);
+                last_render_ms_ =
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - render_start)
+                        .count();
                 last_counters_ = renderer_->TakeFrameCounters();
                 last_widget_stats_ = widget_tree_.LastFrameWidgetStats();
                 if (event_bus_ != nullptr) {
@@ -948,19 +1026,32 @@ private:
                     event_bus_->NotifyRender(
                         UiEventBus::RenderPhase::kAfterFrame, frame);
                 }
-                // Damage coverage: union of this paint's DIP rect vs the
-                // client area. ~100% means a full repaint (resize, layout,
-                // explicit Invalidate); small values mean a regional update.
-                RECT client_px{};
-                if (GetClientRect(hwnd, &client_px)) {
+                // Damage coverage: what this paint actually repainted vs
+                // the client area. When a scattered rect list drove the
+                // cull, sum those rects — rcPaint is only the bounding
+                // union of the update region and overstates scattered
+                // partial repaints (meter + playhead ≈ fullscreen union).
+                // ~100% means a full repaint (resize, layout, explicit
+                // Invalidate); small values mean a regional update.
+                if (client_ok) {
                     const float client_w =
                         (client_px.right - client_px.left) * px_to_dip;
                     const float client_h =
                         (client_px.bottom - client_px.top) * px_to_dip;
                     const float client_area = client_w * client_h;
                     if (client_area > 0.0f) {
+                        float damaged_area =
+                            damage.width * damage.height;
+                        if (render_cull != nullptr) {
+                            float rects_area = 0.0f;
+                            for (const Layout::Rect& r : cull_rects) {
+                                rects_area += r.width * r.height;
+                            }
+                            damaged_area =
+                                std::min(damaged_area, rects_area);
+                        }
                         damage_pct = std::clamp(
-                            damage.width * damage.height / client_area * 100.0f,
+                            damaged_area / client_area * 100.0f,
                             0.0f, 100.0f);
                     }
                 }
@@ -992,16 +1083,22 @@ private:
                 std::fprintf(
                     stderr,
                     "[XER UI perf] frames=%llu last=%.1fms avg=%.1fms "
-                    "dmg=%.0f%% draws=%u txt=%u img=%u widgets=%u(cull %u)\n",
+                    "render=%.1fms present=%.1fms "
+                    "dmg=%.0f%% draws=%u txt=%u img=%u widgets=%u(cull %u) "
+                    "tick=%.1f/%.1f cb=%.1f\n",
                     static_cast<unsigned long long>(render_stats_.frames),
                     render_stats_.last_frame_ms,
                     render_stats_.avg_frame_ms,
+                    last_render_ms_ - widget_tree_.LastEndFrameMs(),
+                    widget_tree_.LastEndFrameMs(),
                     static_cast<double>(damage_pct),
                     last_counters_.draw_calls,
                     last_counters_.text_calls,
                     last_counters_.image_calls,
                     last_widget_stats_.painted,
-                    last_widget_stats_.culled);
+                    last_widget_stats_.culled,
+                    tick_cost_avg_, tick_cost_max_, tick_cb_avg_);
+                tick_cost_max_ = 0.0;
             }
             last_render_error_.clear();
         } catch (const std::exception& error) {
@@ -1051,6 +1148,10 @@ private:
     Rendering::Renderer::PerfHudInfo hud_info_{};
     Rendering::Renderer::FrameCounters last_counters_{};
     Widgets::WidgetTree::FrameWidgetStats last_widget_stats_{};
+    // DIP-space damage rects accumulated by FlushDirtyState since the last
+    // paint — consumed by Paint() as the render-cull list so scattered
+    // invalidations don't cull against the rcPaint bounding union.
+    std::vector<Layout::Rect> damage_rects_;
 
     bool custom_title_bar_ = false;
     float title_bar_height_dip_ = 38.0f;
@@ -1063,6 +1164,13 @@ private:
     std::uint64_t next_hook_id_ = 1;
     std::uint32_t frame_interval_ms_ = 33;
     bool frame_timer_active_ = false;
+    bool timer_res_raised_ = false;  // NtSetTimerResolution succeeded
+    double last_render_ms_ = 0.0;    // widget Render() wall time
+    // Per-tick UI-thread cost diagnostics (XER_UI_PERF): avg/max of the
+    // whole WM_TIMER handler, and the app frame_callback_ share of it.
+    double tick_cost_avg_ = 0.0;
+    double tick_cost_max_ = 0.0;
+    double tick_cb_avg_ = 0.0;
     static constexpr UINT_PTR kFrameTimerId = 0x4552; // 'ER'
 };
 

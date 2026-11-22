@@ -5,7 +5,6 @@
 
 namespace XER {
 
-
 // Central runtime-configuration object built from CLI flags before execution.
 // Passed through the execution stack so every component reads a single
 // source-of-truth instead of consulting environment variables directly.

@@ -103,6 +103,10 @@ Goal started: 2026-11-15. Design doc:
 - [2026-11-21-nle-redesign.md](progress/2026-11-21-nle-redesign.md) —
   Premiere-style visual redesign (4 waves): new theme tokens,
   monitor/transport, timeline chrome, right-dock panels (2026-11-21).
+- [2026-11-21-gpu-ai-modules.md](progress/2026-11-21-gpu-ai-modules.md) —
+  YA.CUDADecode/CUDAEncode/FrameRender + YA.AIFindObject + clip AI
+  tags; RTX 3070 nvenc/cuda-hwaccel verified, ORT dll broken →
+  OpenCV DNN active (2026-11-21).
   — lens/glass FX + waveform sync + curves, exe icons/metadata,
   GUI-subsystem console rules
 

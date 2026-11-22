@@ -9,6 +9,8 @@ CompileFlags:
     # clangd resolves them anyway, but listing key ones speeds up
     # background indexing of headers included transitively.
     - "-isystem"
+    - "C:/tools/msys64/clang64/include/c++/v1"
+    - "-isystem"
     - "C:/tools/msys64/clang64/include"
     - "-isystem"
     - "C:/tools/msys64/clang64/include/skia/include"
@@ -31,4 +33,8 @@ CompileFlags:
   BuiltinHeaders: QueryDriver
   Add:
     - "-ID:/Developers/XER3/src"
-  Compiler: clang++
+    - "-isystem"
+    - "C:/tools/msys64/clang64/include/c++/v1"
+    - "-isystem"
+    - "C:/tools/msys64/clang64/include"
+  Compiler: C:/tools/msys64/clang64/bin/clang++.exe

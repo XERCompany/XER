@@ -4620,7 +4620,8 @@ void VideoEditorAppWidget::ClearClipTags(const std::string& clip_id) {
     Clip next = *clip;
     next.tags.clear();
     std::string error;
-    if (!history_.ReplaceClip(clip_id, next, &error)) {
+    if (!history_.ReplaceClip(
+            clip_id, next, BoundsForPath(clip->source_path), &error)) {
         SetStatus("Clear tags failed: " + error, true);
         return;
     }
@@ -7459,8 +7460,10 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                     const std::size_t count = result.tags.size();
                     next.tags = std::move(result.tags);
                     std::string rep_error;
-                    if (history_.ReplaceClip(result.tags_clip_id, next,
-                                             &rep_error)) {
+                    if (history_.ReplaceClip(
+                            result.tags_clip_id, next,
+                            BoundsForPath(clip->source_path),
+                            &rep_error)) {
                         inspector_->SetClip(
                             FindClip(project_, result.tags_clip_id));
                         NotifyProjectChanged();

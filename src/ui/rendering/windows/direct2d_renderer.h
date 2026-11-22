@@ -9,7 +9,7 @@
 
 #include <d2d1_1.h>
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_3.h>
 #include <dwrite.h>
 #include <wrl/client.h>
 
@@ -105,6 +105,21 @@ private:
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device_;
     Microsoft::WRL::ComPtr<IDXGIFactory2> dxgi_factory_;
     Microsoft::WRL::ComPtr<IDXGISwapChain1> swap_chain_;
+    // Auto-reset event from the FRAME_LATENCY_WAITABLE_OBJECT swapchain:
+    // signaled when the frame queue has a free slot. Bounded waits on it
+    // replace Present() blocking. Owned with the swapchain lifetime.
+    HANDLE frame_latency_waitable_ = nullptr;
+    // Region (px) whose Present was dropped on a full frame queue; the
+    // retained canvas already holds those pixels, so the next presented
+    // frame carries the rect in its dirty list instead of repainting.
+    RECT dropped_damage_px_{};
+    bool has_dropped_damage_ = false;
+    // XER_UI_PHASE diagnostics: EndFrame split into latency-wait and
+    // flush+present halves so stalls are attributable without a profiler.
+    bool phase_log_ = false;
+    std::uint64_t phase_log_frames_ = 0;
+    DWORD last_wait_result_ = 0;
+    double last_phase_ms_[2] = {0.0, 0.0};
     // D2D device + immediate context issuing all draw commands.
     Microsoft::WRL::ComPtr<ID2D1Factory1> d2d_factory_;
     Microsoft::WRL::ComPtr<ID2D1Device> d2d_device_;

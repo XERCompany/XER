@@ -436,13 +436,67 @@ if(MINGW AND _ve_nn_libs)
     if(TARGET YA_VideoEditor_Core)
         xer_delayload(YA_VideoEditor_Core ${_ve_nn_dlls})
     endif()
+    # Per-backend delay-import name lists for nn_probe.cc — the smoke
+    # LoadLibrary-probes these BEFORE the first delay-import call, so
+    # a runtime whose closure is broken (e.g. a stale MSYS2 package
+    # still wanting libabsl_*-<old>.dll) reports "unloadable" instead
+    # of raising the uncatchable delay-load binder exception.
+    set(_ve_nn_probe_defs "")
+    set(_ve_nn_probe_groups "")
+    if(XER_WITH_OPENCV AND OpenCV_FOUND)
+        list(APPEND _ve_nn_probe_groups
+            "XER_VE_NN_OPENCV_DLLS|${OpenCV_LIBS}")
+    endif()
+    if(XER_WITH_ONNX AND _ve_ort_target)
+        list(APPEND _ve_nn_probe_groups
+            "XER_VE_NN_ONNXRUNTIME_DLLS|${_ve_ort_target}")
+    endif()
+    if(XER_WITH_DNNL AND TARGET DNNL::dnnl)
+        list(APPEND _ve_nn_probe_groups
+            "XER_VE_NN_DNNL_DLLS|DNNL::dnnl")
+    endif()
+    if(XER_WITH_GGML AND TARGET ggml::ggml)
+        list(APPEND _ve_nn_probe_groups
+            "XER_VE_NN_GGML_DLLS|ggml::ggml")
+    endif()
+    foreach(_probe_group IN LISTS _ve_nn_probe_groups)
+        string(REGEX MATCH "^([^|]+)\\|(.*)$" _pm "${_probe_group}")
+        set(_probe_def "${CMAKE_MATCH_1}")
+        set(_probe_targets "${CMAKE_MATCH_2}")
+        set(_probe_ok "")
+        foreach(_pt IN LISTS _probe_targets)
+            if(TARGET ${_pt})
+                list(APPEND _probe_ok ${_pt})
+            endif()
+        endforeach()
+        if(_probe_ok)
+            xer_collect_delayload_dlls(_probe_dlls ${_probe_ok})
+            if(_probe_dlls)
+                list(JOIN _probe_dlls "|" _probe_s)
+                list(APPEND _ve_nn_probe_defs
+                    "${_probe_def}=\"${_probe_s}\"")
+            endif()
+        endif()
+    endforeach()
+    if(_ve_nn_probe_defs)
+        target_compile_definitions(XER_VideoEditor_Core
+            ${_xer_ve_scope} ${_ve_nn_probe_defs})
+        if(TARGET YA_VideoEditor_Core_objs)
+            target_compile_definitions(YA_VideoEditor_Core_objs PRIVATE
+                ${_ve_nn_probe_defs})
+        endif()
+    endif()
     get_filename_component(_ve_toolchain_bin "${CMAKE_CXX_COMPILER}"
         DIRECTORY)
     # ggml backend modules (ggml-cpu-*.dll, ggml-blas.dll, ...) are
     # dlopen'd by ggml_backend_load_all(), and ORT resolves its
     # onnxruntime_providers_shared.dll provider host at run time —
     # neither appears in an import table, so seed the staging walk
-    # with them explicitly.
+    # with them explicitly. The import-linked/delay-loaded NN DLLs
+    # themselves (${_ve_nn_dlls}: opencv/onnxruntime/dnnl/ggml) are no
+    # longer seeded — the xer_pe_deps POST_BUILD scan on video_editor
+    # (below) computes the exact closure from the PE import tables of
+    # the exe and its YA.*.dll siblings.
     file(GLOB _ve_nn_runtime "${_ve_toolchain_bin}/ggml-*.dll"
                              "${_ve_toolchain_bin}/onnxruntime*.dll")
     set(_ve_nn_extra "")
@@ -451,7 +505,7 @@ if(MINGW AND _ve_nn_libs)
         list(APPEND _ve_nn_extra "${_n}")
     endforeach()
     xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin" "${_ve_toolchain_bin}"
-        ${_ve_nn_dlls} ${_ve_nn_extra})
+        ${_ve_nn_extra})
     # MKL (manual oneAPI install, detected by the configs/MKL shim): the
     # mkl_rt*.dll import is delay-loaded via MKL::MKL's own link options;
     # stage the dispatcher + its mkl_core/mkl_def/mkl_avx* siblings from
@@ -609,6 +663,16 @@ endif()
 target_compile_features(video_editor PRIVATE cxx_std_23)
 set_target_properties(video_editor PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
+# Precise runtime-DLL staging: xer_pe_deps walks the exe's PE import +
+# delay-import tables at POST_BUILD, follows the YA.*.dll modules it
+# sits next to (their delay-loads carry the opencv/ggml/onnxruntime/
+# OCIO/OIIO runtimes), and copies only the toolchain DLLs actually
+# referenced — replacing the hand-maintained seed lists above.
+if(MINGW)
+    get_filename_component(_ve_tc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    xer_stage_runtime_dlls(TARGET video_editor SEARCH "${_ve_tc_bin}")
+endif()
 if(MSVC)
     target_compile_options(video_editor PRIVATE /W4 /WX- /O2)
 else()
@@ -703,6 +767,14 @@ else()
                    "without JIT (XER_VE_HAS_LLVM=0)")
     target_compile_definitions(VE.ExtensionsRuntime PRIVATE
         XER_VE_HAS_LLVM=0)
+endif()
+# Same computed staging for the worker: it import-links libLLVM-*.dll
+# (the copy_if_different above ships the DLL itself; the pe_deps walk
+# additionally resolves libLLVM's own toolchain deps — libzstd/zlib/…).
+if(MINGW)
+    get_filename_component(_ve_tc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    xer_stage_runtime_dlls(TARGET VE.ExtensionsRuntime
+        SEARCH "${_ve_tc_bin}")
 endif()
 
 foreach(_worker IN ITEMS XERVideoLoader XERSyncMedia XERFxScript

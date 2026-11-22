@@ -1,8 +1,10 @@
 #include "widget_tree.h"
 
 #include <algorithm>
+#include <chrono>
 #include <format>
 #include <iterator>
+#include <limits>
 #include <ranges>
 #include <stdexcept>
 #include <utility>
@@ -225,7 +227,7 @@ void WidgetTree::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens)
 }
 
 void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
-                        const Layout::Rect* damage) const {
+                        const std::vector<Layout::Rect>* damage) const {
     frame_widget_stats_ = {};
     if (style_host_) style_host_->Update(root_);
     if (root_ == nullptr || !root_->IsVisible()) {
@@ -233,12 +235,18 @@ void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& toke
     }
 
     const Layout::Rect bounds = root_->GetBounds();
-    // Clip = damage (or full bounds). A 1px margin keeps anti-aliased edges
-    // at the damage boundary from being shaved by the aliased clip.
-    Layout::Rect clip =
-        (damage != nullptr && damage->width > 0.0f && damage->height > 0.0f)
-            ? *damage
-            : bounds;
+    // Clip = bounding union of the damage rects (or full bounds). The
+    // present path and the canvas clip still take a single rect; only the
+    // traversal cull below uses the individual rects. A 1px margin keeps
+    // anti-aliased edges at the damage boundary from being shaved by the
+    // aliased clip.
+    Layout::Rect clip = bounds;
+    if (damage != nullptr && !damage->empty()) {
+        clip = damage->front();
+        for (const Layout::Rect& r : *damage) {
+            clip = clip.Union(r);
+        }
+    }
     clip.x -= 1.0f;
     clip.y -= 1.0f;
     clip.width += 2.0f;
@@ -249,35 +257,63 @@ void WidgetTree::Render(Rendering::Renderer& renderer, const Theme::Tokens& toke
     // A freshly recreated canvas has no retained pixels: ignoring the
     // damage clip for this one frame prevents clear-color voids.
     const bool fresh_targets = renderer.TakeTargetsRecreated();
-    if (fresh_targets) {
-        clip = bounds;
-    }
-    renderer.PushClip(clip);
-    // Transform stack for the whole frame: each element's CSS
-    // transform composes onto its parent's matrix; RenderSubtree's
-    // scope guards pop exactly what they push.
-    std::vector<RenderTransform> transform_stack;
-    try {
-        RenderSubtree(root_, renderer, tokens,
-                      fresh_targets ? nullptr : &clip, &transform_stack);
-        if (overlay_ != nullptr) {
-            RenderSubtree(overlay_, renderer, tokens,
-                          fresh_targets ? nullptr : &clip,
-                          &transform_stack);
+    const bool clipped_passes =
+        !fresh_targets && damage != nullptr && !damage->empty();
+    // Render once per damage rect, clipped to exactly that rect. A
+    // single union clip would let an ancestor's background fill wipe
+    // culled children sitting inside the union but outside every real
+    // damage rect — permanent holes in the retained canvas (verified
+    // 2026-11-22: ProjectManagerScreen's FillRect erased the Create
+    // Project button whenever a diagonal union spanned it).
+    static const bool no_cull = [] {
+        const char* v = std::getenv("XER_UI_NOCULL");
+        return v != nullptr && v[0] == '1';
+    }();
+    const std::size_t pass_count =
+        (clipped_passes && !no_cull) ? damage->size() : 1;
+    for (std::size_t pass = 0; pass < pass_count; ++pass) {
+        Layout::Rect pass_clip = bounds;
+        std::vector<Layout::Rect> pass_cull;
+        if (clipped_passes && !no_cull) {
+            pass_clip = (*damage)[pass];
+            // 1px margin keeps anti-aliased edges at the damage
+            // boundary from being shaved by the aliased clip.
+            pass_clip.x -= 1.0f;
+            pass_clip.y -= 1.0f;
+            pass_clip.width += 2.0f;
+            pass_clip.height += 2.0f;
+            pass_cull.push_back(pass_clip);
         }
-        if (passive_overlay_ != nullptr) {
-            RenderSubtree(passive_overlay_, renderer, tokens,
-                          fresh_targets ? nullptr : &clip,
+        renderer.PushClip(pass_clip);
+        // Transform stack per pass: each element's CSS transform
+        // composes onto its parent's matrix; scope guards pop exactly
+        // what they push.
+        std::vector<RenderTransform> transform_stack;
+        const std::vector<Layout::Rect>* cull =
+            pass_cull.empty() ? nullptr : &pass_cull;
+        try {
+            RenderSubtree(root_, renderer, tokens, cull,
                           &transform_stack);
+            if (overlay_ != nullptr) {
+                RenderSubtree(overlay_, renderer, tokens, cull,
+                              &transform_stack);
+            }
+            if (passive_overlay_ != nullptr) {
+                RenderSubtree(passive_overlay_, renderer, tokens, cull,
+                              &transform_stack);
+            }
+        } catch (...) {
+            // Balance the pass clip before the throw escapes — an
+            // unbalanced PushClip would clip every later frame.
+            renderer.PopClip();
+            throw;
         }
-    } catch (...) {
-        // Balance the frame clip before the throw escapes — an
-        // unbalanced PushClip would clip every later frame.
         renderer.PopClip();
-        throw;
     }
-    renderer.PopClip();
+    const auto end_frame_start = std::chrono::steady_clock::now();
     renderer.EndFrame();
+    last_end_frame_ms_ = std::chrono::duration<double, std::milli>(
+        std::chrono::steady_clock::now() - end_frame_start).count();
 }
 
 bool WidgetTree::HandleEvent(const Event& event) {
@@ -523,22 +559,30 @@ void WidgetTree::RenderSubtree(
     const std::shared_ptr<Widget>& widget,
     Rendering::Renderer& renderer,
     const Theme::Tokens& tokens,
-    const Layout::Rect* cull,
+    const std::vector<Layout::Rect>* cull,
     std::vector<RenderTransform>* transform_stack
 ) const {
     if (widget == nullptr || !widget->IsVisible()) {
         return;
     }
 
-    // Skip subtrees that cannot intersect the damage clip. The pad covers
-    // draw overflow beyond widget bounds (focus rings, popover shadows).
+    // Skip subtrees that intersect NONE of the damage rects. The pad
+    // covers draw overflow beyond widget bounds (focus rings, popover
+    // shadows).
     if (cull != nullptr) {
         constexpr float kCullPad = 48.0f;
         const Layout::Rect& b = widget->GetBounds();
-        if (b.x + b.width < cull->x - kCullPad ||
-            b.x > cull->x + cull->width + kCullPad ||
-            b.y + b.height < cull->y - kCullPad ||
-            b.y > cull->y + cull->height + kCullPad) {
+        bool intersects_any = false;
+        for (const Layout::Rect& r : *cull) {
+            if (b.x + b.width >= r.x - kCullPad &&
+                b.x <= r.x + r.width + kCullPad &&
+                b.y + b.height >= r.y - kCullPad &&
+                b.y <= r.y + r.height + kCullPad) {
+                intersects_any = true;
+                break;
+            }
+        }
+        if (!intersects_any) {
             ++frame_widget_stats_.culled;
             return;
         }
@@ -714,15 +758,52 @@ void WidgetTree::AddDamageRect(Layout::Rect rect) {
     rect.y -= kPad;
     rect.width += 2.0f * kPad;
     rect.height += 2.0f * kPad;
-    pending_damage_ =
-        pending_damage_valid_ ? pending_damage_.Union(rect) : rect;
-    pending_damage_valid_ = true;
+    MergeDamageRect(&pending_damage_, rect);
 }
 
-WidgetTree::DamageRect WidgetTree::ConsumeDamageRect() {
-    DamageRect out{pending_damage_, pending_damage_valid_};
-    pending_damage_ = Layout::Rect{};
-    pending_damage_valid_ = false;
+void WidgetTree::MergeDamageRect(std::vector<Layout::Rect>* rects,
+                                 const Layout::Rect& rect) {
+    if (rects == nullptr || rect.width <= 0.0f || rect.height <= 0.0f) {
+        return;
+    }
+    // Nearly-touching rects coalesce so a widget invalidating two adjacent
+    // strips doesn't fragment the list (the gap is small relative to the
+    // 24px inflation applied by AddDamageRect).
+    constexpr float kMergeGap = 4.0f;
+    for (Layout::Rect& r : *rects) {
+        if (rect.x <= r.x + r.width + kMergeGap &&
+            rect.x + rect.width >= r.x - kMergeGap &&
+            rect.y <= r.y + r.height + kMergeGap &&
+            rect.y + rect.height >= r.y - kMergeGap) {
+            r = r.Union(rect);
+            return;
+        }
+    }
+    if (rects->size() < kMaxDamageRects) {
+        rects->push_back(rect);
+        return;
+    }
+    // Over the cap: fold into the closest existing rect (smallest union
+    // area) — merging the closest pair keeps scattered small
+    // invalidations from degenerating into one near-fullscreen rect.
+    std::size_t best = 0;
+    float best_area = std::numeric_limits<float>::max();
+    for (std::size_t i = 0; i < rects->size(); ++i) {
+        const Layout::Rect u = (*rects)[i].Union(rect);
+        const float area = u.width * u.height;
+        if (area < best_area) {
+            best_area = area;
+            best = i;
+        }
+    }
+    (*rects)[best] = (*rects)[best].Union(rect);
+}
+
+WidgetTree::DamageRegion WidgetTree::ConsumeDamageRect() {
+    DamageRegion out;
+    out.valid = !pending_damage_.empty();
+    out.rects = std::move(pending_damage_);
+    pending_damage_ = {};
     return out;
 }
 

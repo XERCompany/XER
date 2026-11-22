@@ -50,11 +50,12 @@ public:
     std::shared_ptr<Widget> GetOverlay() const { return overlay_; }
     void Layout(const Layout::Rect& bounds);
     void Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens);
-    // `damage` (optional, client coords): pixels that must be repainted.
-    // Renderers get it via SetFrameDamage and the traversal culls widgets
-    // fully outside it; nullptr means full repaint.
+    // `damage` (optional, client coords): the set of rects that must be
+    // repainted. The renderer gets their bounding union via SetFrameDamage
+    // and the traversal culls widgets intersecting NONE of the rects;
+    // nullptr (or an empty list) means full repaint.
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens,
-                const Layout::Rect* damage = nullptr) const;
+                const std::vector<Layout::Rect>* damage = nullptr) const;
 
     // Diagnostics for the last Render() pass (perf HUD / profiling):
     // `painted` = widgets whose Render() ran, `culled` = widgets skipped
@@ -66,6 +67,10 @@ public:
     FrameWidgetStats LastFrameWidgetStats() const {
         return frame_widget_stats_;
     }
+    // Wall time of the last renderer EndFrame() — the canvas->backbuffer
+    // blit plus swapchain Present. Everything else inside Render() is
+    // widget work; the split tells paint stalls from present stalls.
+    double LastEndFrameMs() const { return last_end_frame_ms_; }
     bool HandleEvent(const Event& event);
 
     // Event bus shared with the owning Window. When set, every incoming
@@ -86,17 +91,29 @@ public:
     bool ConsumeLayoutRequest();
 
     // --- Damage-region tracking (partial repaints) -------------------------
-    // Widgets report the bounds they invalidated; the union becomes the
-    // next InvalidateRect region instead of the whole client area.
-    // Coordinates are in widget (DIP) space.
+    // Widgets report the bounds they invalidated; the pending list is kept
+    // as a small set of rects (NOT one union) so scattered per-tick
+    // invalidations (meter + playhead + …) stay scattered instead of
+    // merging into near-fullscreen damage. Coordinates are in widget
+    // (DIP) space.
     void AddDamageRect(Layout::Rect rect);
-    // Returns the accumulated damage and clears it. `valid` is false when
-    // nothing was reported — callers should treat that as "repaint all".
-    struct DamageRect {
-        Layout::Rect rect{};
+    // Cap on pending damage rects. Over the cap, MergeDamageRect folds the
+    // new rect into the closest existing one instead of unioning
+    // everything into a single rect.
+    static constexpr std::size_t kMaxDamageRects = 12;
+    // Inserts `rect` into `rects`: merges into an existing rect when they
+    // intersect-or-nearly, pushes back while under kMaxDamageRects, else
+    // merges into the closest existing rect (smallest union area).
+    static void MergeDamageRect(std::vector<Layout::Rect>* rects,
+                                const Layout::Rect& rect);
+    // Returns the accumulated damage rects and clears them. `valid` is
+    // false when nothing was reported — callers should treat that as
+    // "repaint all".
+    struct DamageRegion {
+        std::vector<Layout::Rect> rects;
         bool valid = false;
     };
-    DamageRect ConsumeDamageRect();
+    DamageRegion ConsumeDamageRect();
     // Structural changes (root/overlay swap) that can affect pixels outside
     // any widget's recorded bounds — forces a full repaint once.
     void RequestFullDamage() { full_damage_pending_ = true; }
@@ -151,7 +168,7 @@ private:
         const std::shared_ptr<Widget>& widget,
         Rendering::Renderer& renderer,
         const Theme::Tokens& tokens,
-        const Layout::Rect* cull,
+        const std::vector<Layout::Rect>* cull,
         std::vector<RenderTransform>* transform_stack
     ) const;
     void CollectFocusable(
@@ -193,9 +210,9 @@ private:
     std::weak_ptr<Widget> hovered_widget_;
     Layout::Point synthesized_click_position_;
     bool suppress_duplicate_click_ = false;
-    // Union of invalidated widget bounds since the last ConsumeDamageRect.
-    Layout::Rect pending_damage_{};
-    bool pending_damage_valid_ = false;
+    // Invalidated widget bounds since the last ConsumeDamageRect — kept
+    // as a capped list of disjoint-ish rects (see MergeDamageRect).
+    std::vector<Layout::Rect> pending_damage_;
     bool full_damage_pending_ = false;
     bool layout_in_progress_ = false;
     std::function<bool(const Event&)> context_menu_handler_;
@@ -207,6 +224,7 @@ private:
     // mutable for the same reason: Render() is const but per-frame
     // counters are bookkeeping, reset at the top of every Render().
     mutable FrameWidgetStats frame_widget_stats_;
+    mutable double last_end_frame_ms_ = 0.0;
 };
 
 } // namespace XER::UI::Widgets

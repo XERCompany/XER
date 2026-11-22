@@ -132,7 +132,11 @@ void MarkersPanelWidget::SetProject(const Project* project) {
 }
 
 void MarkersPanelWidget::SetPlayhead(double timeline_seconds) {
+    if (timeline_seconds == playhead_) return;
     playhead_ = timeline_seconds;
+    // The current-marker highlight depends on playhead_ (Render matches
+    // marker.time within 1e-3), so a moved playhead repaints the panel.
+    Invalidate();
 }
 
 void MarkersPanelWidget::RebuildRows() {

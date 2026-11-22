@@ -73,4 +73,14 @@ std::string NnBackendsReport();
 // check NnBackend::compiled_in first.
 std::string NnBackendSelfTest(const char* id);
 
+// Run BEFORE NnBackendSelfTest on MinGW builds: the backend DLLs are
+// delay-loaded, and the delay-load binder raises an uncatchable
+// exception (0xc06d007e) when the module or its own dependency
+// closure is missing — e.g. a stale MSYS2 package. This probes each
+// of the backend's delay-import DLLs with LoadLibrary first. Returns
+// "" when the runtime resolves (or there is nothing to probe), else a
+// one-line reason — callers should treat that as "runtime
+// unavailable" and skip the self-test rather than crash.
+std::string NnBackendRuntimeProbe(const char* id);
+
 }  // namespace XER::VideoEditor

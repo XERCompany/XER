@@ -766,6 +766,7 @@ void InspectorWidget::SetClip(const Clip* clip) {
 }
 
 void InspectorWidget::SetPlayhead(double timeline_seconds) {
+    if (timeline_seconds == playhead_) return;
     playhead_ = timeline_seconds;
     if (children_attached_) {
         SyncKeyframeRows();
@@ -1312,7 +1313,9 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     // ---- keyframes ----
     section("KEYFRAMES");
     for (const KeyRow& row : key_rows_) {
-        row.select->Layout({inner_x, y, inner_w - 116.0f, 26.0f}, tokens);
+        row.select->Layout(
+            {inner_x, y, std::max(40.0f, inner_w - 116.0f), 26.0f},
+            tokens);
         row.toggle->Layout({inner_x + inner_w - 112.0f, y, 30.0f, 26.0f},
                            tokens);
         row.prev->Layout({inner_x + inner_w - 80.0f, y, 24.0f, 26.0f},
@@ -1340,14 +1343,16 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         char heading[48];
         std::snprintf(heading, sizeof(heading), "mask %zu (%s)", i + 1,
                       shape);
-        drawn_.push_back({{inner_x, y + 4.0f, inner_w - 64.0f, 20.0f},
-                          heading, false});
+        drawn_.push_back(
+            {{inner_x, y + 4.0f, std::max(20.0f, inner_w - 64.0f),
+              20.0f},
+             heading, false});
         row.inverted->Layout(
             {inner_x + inner_w - 64.0f, y + 3.0f, 34.0f, 22.0f}, tokens);
         row.remove->Layout(
             {inner_x + inner_w - 26.0f, y + 1.0f, 24.0f, 24.0f}, tokens);
         y += 28.0f;
-        const float field_w = (inner_w - 16.0f) / 5.0f;
+        const float field_w = std::max(8.0f, (inner_w - 16.0f) / 5.0f);
         row.cx->Layout({inner_x, y, field_w, 28.0f}, tokens);
         row.cy->Layout({inner_x + (field_w + 4.0f), y, field_w, 28.0f},
                        tokens);
@@ -1375,9 +1380,10 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             i < clip_.effects.size()
                 ? FormatEffectBrief(clip_.effects[i])
                 : std::string("?");
-        drawn_.push_back({{inner_x + 34.0f, y + 2.0f, inner_w - 66.0f,
-                           20.0f},
-                          text, false});
+        drawn_.push_back(
+            {{inner_x + 34.0f, y + 2.0f,
+              std::max(20.0f, inner_w - 66.0f), 20.0f},
+             text, false});
         row.remove->Layout(
             {inner_x + inner_w - 26.0f, y, 24.0f, 24.0f}, tokens);
         y += 26.0f;
@@ -1393,9 +1399,10 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             const std::string text =
                 (fx.name.empty() ? Basename(fx.plugin_path) : fx.name) +
                 (fx.enabled ? " — on" : " — bypassed");
-            drawn_.push_back({{inner_x, y + 2.0f,
-                               inner_w - kEditorBtnW - 6.0f, 18.0f},
-                              text, false});
+            drawn_.push_back(
+                {{inner_x, y + 2.0f,
+                  std::max(20.0f, inner_w - kEditorBtnW - 6.0f), 18.0f},
+                 text, false});
             if (i < afx_edit_btns_.size()) {
                 const auto& btn = afx_edit_btns_[i];
                 btn->Layout({inner_x + inner_w - kEditorBtnW, y,
@@ -1416,13 +1423,21 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         const bool scannable =
             clip_.source.kind == SourceKind::Media &&
             !clip_.source_path.empty() && !clip_.is_adjustment;
-        ai_find_btn_->Layout(
-            {inner_x, y, std::max(60.0f, inner_w - 68.0f), 26.0f},
-            tokens);
+        // Below ~110px inner width the two buttons cannot coexist —
+        // Clear yields the whole row to Find instead of overlapping.
+        const bool ai_two_cols = inner_w >= 110.0f;
+        ai_find_btn_->SetVisible(ai_two_cols);
+        if (ai_two_cols) {
+            ai_find_btn_->Layout(
+                {inner_x, y, std::max(40.0f, inner_w - 68.0f), 26.0f},
+                tokens);
+        }
         ai_find_btn_->SetEnabled(
             scannable && hooks_.on_ai_find_objects != nullptr);
         ai_clear_btn_->Layout(
-            {inner_x + inner_w - 62.0f, y, 62.0f, 26.0f}, tokens);
+            {inner_x + inner_w - (ai_two_cols ? 62.0f : inner_w), y,
+             ai_two_cols ? 62.0f : inner_w, 26.0f},
+            tokens);
         ai_clear_btn_->SetEnabled(!clip_.tags.empty() &&
                                   hooks_.on_ai_clear_tags != nullptr);
         y += 32.0f;
@@ -1467,21 +1482,44 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         tokens);
     y += 36.0f;
     drawn_.push_back({{inner_x, y, 90.0f, 30.0f}, "Dur (s)", false});
+    // The input ends 6px before the Add button — a full-width input
+    // would render the button floating on top of the field's right edge.
     transition_duration_input_->Layout(
-        {inner_x + 92.0f, y, std::max(40.0f, inner_w - 92.0f), 30.0f},
+        {inner_x + 92.0f, y,
+         std::max(24.0f, inner_w - 92.0f - 84.0f), 30.0f},
         tokens);
     transition_btn_->Layout(
         {inner_x + inner_w - 78.0f, y, 78.0f, 30.0f}, tokens);
     y += 40.0f;
 
     // ---- actions ----
+    // Wide row: [mute toggle][muted] ········ [Delete][Apply].
+    // Narrow: mute+label on line one, Delete/Apply on line two —
+    // side-by-side at <270px collapses the group into a jumble.
     muted_->Layout({inner_x, y + 3.0f, 42.0f, 24.0f}, tokens);
-    drawn_.push_back(
-        {{inner_x + 46.0f, y + 4.0f, 44.0f, 22.0f}, "muted", false});
-    apply_btn_->Layout({inner_x + inner_w - 78.0f, y, 78.0f, 30.0f},
-                       tokens);
-    delete_btn_->Layout({inner_x, y, 76.0f, 30.0f}, tokens);
-    y += 40.0f;
+    const bool wide_actions = inner_w >= 270.0f;
+    if (wide_actions) {
+        drawn_.push_back(
+            {{inner_x + 46.0f, y + 4.0f, 44.0f, 22.0f}, "muted", false});
+        delete_btn_->Layout({inner_x + inner_w - 162.0f, y, 76.0f,
+                             30.0f},
+                            tokens);
+        apply_btn_->Layout({inner_x + inner_w - 78.0f, y, 78.0f,
+                            30.0f},
+                           tokens);
+        y += 40.0f;
+    } else {
+        drawn_.push_back(
+            {{inner_x + 46.0f, y + 4.0f, inner_w - 46.0f, 22.0f},
+             "muted", false});
+        y += 34.0f;
+        delete_btn_->Layout({inner_x, y, 76.0f, 30.0f}, tokens);
+        apply_btn_->Layout(
+            {inner_x + std::min(inner_w - 78.0f, 84.0f), y, 78.0f,
+             30.0f},
+            tokens);
+        y += 40.0f;
+    }
     place(status_, 24.0f);
 
     // Scrollable content height vs. the scrolled-out offset.

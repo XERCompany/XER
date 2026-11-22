@@ -106,7 +106,22 @@ endif()
 # compiles; without it the IDE still builds and C++ formatting just
 # reports "unavailable" (the builtin JS formatter has no deps).
 find_package(LLVM CONFIG QUIET)
-find_package(Clang CONFIG QUIET)
+# MSYS2 clang's ClangTargets.cmake references uninstalled static libs
+# (libclangApplyReplacements.a, ...) and hard-fails configure — skip
+# find_package(Clang) only when that specific breakage is present;
+# the bare import-lib fallback below links the same monolithic DLL.
+set(_ide_skip_clang_pkg OFF)
+if(MINGW)
+    get_filename_component(_ide_tc_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    get_filename_component(_ide_tc_root "${_ide_tc_bin}/.." ABSOLUTE)
+    if(EXISTS "${_ide_tc_root}/lib/cmake/clang/ClangTargets.cmake" AND
+       NOT EXISTS "${_ide_tc_root}/lib/libclangApplyReplacements.a")
+        set(_ide_skip_clang_pkg ON)
+    endif()
+endif()
+if(NOT _ide_skip_clang_pkg)
+    find_package(Clang CONFIG QUIET)
+endif()
 set(_ide_clang_ok OFF)
 if(TARGET clang-cpp AND TARGET LLVM)
     set(_ide_clang_ok ON)
@@ -138,24 +153,15 @@ else()
 endif()
 if(_ide_clang_ok)
     target_compile_definitions(IDEXEJSO PRIVATE XER_IDE_HAS_CLANG=1)
-    # The libclang-cpp/libLLVM runtime DLLs must sit beside the exe —
-    # ztzmake stages them into the same bin dir; repeat the seed here
-    # so IDEXEJSO stays self-sufficient even when built alone.
-    if(MINGW AND COMMAND xer_stage_runtime_dlls)
+    # The libclang-cpp/libLLVM runtime DLLs must sit beside the exe.
+    # Both are plain import links, so the POST_BUILD pe_deps walk sees
+    # them (and their own toolchain deps) directly — no seed list.
+    # ztzmake's configure-time seed staging still covers the shared bin
+    # dir for the build-time pack step.
+    if(MINGW)
         get_filename_component(_ide_tc_bin
             "${CMAKE_CXX_COMPILER}" DIRECTORY)
-        file(GLOB _ide_llvm_dlls
-             "${_ide_tc_bin}/libLLVM*.dll"
-             "${_ide_tc_bin}/libclang-cpp.dll")
-        set(_ide_seeds)
-        foreach(_f IN LISTS _ide_llvm_dlls)
-            get_filename_component(_n "${_f}" NAME)
-            list(APPEND _ide_seeds "${_n}")
-        endforeach()
-        if(_ide_seeds)
-            xer_stage_runtime_dlls("${CMAKE_BINARY_DIR}/bin"
-                                   "${_ide_tc_bin}" ${_ide_seeds})
-        endif()
+        xer_stage_runtime_dlls(TARGET IDEXEJSO SEARCH "${_ide_tc_bin}")
     endif()
     message(STATUS "IDEXEJSO: in-process clang-format enabled")
 else()

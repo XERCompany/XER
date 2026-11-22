@@ -73,7 +73,9 @@ void WaveformPanelWidget::SetScroll(double timeline_seconds) {
 }
 
 void WaveformPanelWidget::SetPlayhead(double timeline_seconds) {
-    playhead_ = std::isfinite(timeline_seconds) ? timeline_seconds : 0.0;
+    const double t = std::isfinite(timeline_seconds) ? timeline_seconds : 0.0;
+    if (t == playhead_) return;
+    playhead_ = t;
     Invalidate();
 }
 

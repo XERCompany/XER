@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cmath>
 #include <cstdint>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -18,7 +19,7 @@
 
 #include <windows.h>
 #include <d3d11.h>
-#include <dxgi1_2.h>
+#include <dxgi1_3.h>
 #include <wincodec.h>
 
 #ifdef DrawText
@@ -133,6 +134,9 @@ Direct2DRenderer::Direct2DRenderer(HWND hwnd)
         dpi_ = USER_DEFAULT_SCREEN_DPI;
     }
     // Escape hatch for A/B testing the dirty-rect present path.
+    if (const char* env = std::getenv("XER_UI_PHASE")) {
+        phase_log_ = env[0] != '\0' && env[0] != '0';
+    }
     if (const char* env = std::getenv("XER_UI_PRESENT_FULL")) {
         force_full_present_ =
             env[0] != '\0' &&
@@ -159,7 +163,12 @@ Direct2DRenderer::Direct2DRenderer(HWND hwnd)
     );
 }
 
-Direct2DRenderer::~Direct2DRenderer() = default;
+Direct2DRenderer::~Direct2DRenderer() {
+    if (frame_latency_waitable_ != nullptr) {
+        CloseHandle(frame_latency_waitable_);
+        frame_latency_waitable_ = nullptr;
+    }
+}
 
 void Direct2DRenderer::SetClearColor(Theme::Color color) {
     clear_color_ = color;
@@ -229,7 +238,11 @@ void Direct2DRenderer::EnsureDevice() {
     if (auto* dev1 = dxgi_device_.Get()) {
         Microsoft::WRL::ComPtr<IDXGIDevice1> dxgi1;
         if (SUCCEEDED(dev1->QueryInterface(IID_PPV_ARGS(&dxgi1)))) {
-            dxgi1->SetMaximumFrameLatency(1);
+            // Latency 1 made every Present block until the previous
+            // frame left the screen (~16.6 ms per WM_PAINT -> visible
+            // input jitter). 3 = DXGI default: event-driven repaints
+            // queue freely; a runaway paint loop still back-pressures.
+            dxgi1->SetMaximumFrameLatency(3);
         }
     }
 
@@ -268,6 +281,9 @@ void Direct2DRenderer::EnsureTargets(UINT32 width, UINT32 height) {
         desc.Scaling = DXGI_SCALING_STRETCH;
         desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
         desc.AlphaMode = DXGI_ALPHA_MODE_IGNORE;
+        // Enables DXGI_PRESENT_DO_NOT_WAIT at present time: a full frame
+        // queue drops the present instead of blocking the UI thread.
+        desc.Flags = DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT;
         ThrowIfFailed(
             dxgi_factory_->CreateSwapChainForHwnd(
                 d3d_device_.Get(), hwnd_, &desc,
@@ -276,6 +292,13 @@ void Direct2DRenderer::EnsureTargets(UINT32 width, UINT32 height) {
         // Keep DXGI from hijacking Alt+Enter / window management.
         dxgi_factory_->MakeWindowAssociation(
             hwnd_, DXGI_MWA_NO_ALT_ENTER | DXGI_MWA_NO_WINDOW_CHANGES);
+        // FRAME_LATENCY_WAITABLE_OBJECT: the event signals when a frame
+        // slot frees; a short wait before the GPU flush replaces the
+        // 16 ms block that Present used to impose mid-paint.
+        Microsoft::WRL::ComPtr<IDXGISwapChain2> sc2;
+        if (SUCCEEDED(swap_chain_.CopyTo(sc2.GetAddressOf()))) {
+            frame_latency_waitable_ = sc2->GetFrameLatencyWaitableObject();
+        }
         target_size_ = {0, 0};
     }
 
@@ -295,6 +318,10 @@ void Direct2DRenderer::EnsureTargets(UINT32 width, UINT32 height) {
             0, width, height, DXGI_FORMAT_UNKNOWN, 0);
         if (FAILED(resize_hr)) {
             ReleaseTargets();
+            if (frame_latency_waitable_ != nullptr) {
+                CloseHandle(frame_latency_waitable_);
+                frame_latency_waitable_ = nullptr;
+            }
             swap_chain_.Reset();
             ThrowIfFailed(resize_hr, "IDXGISwapChain::ResizeBuffers");
         }
@@ -437,6 +464,19 @@ void Direct2DRenderer::EndFrame() {
     Layout::Rect hud_box{};
     const bool hud_drawn = hud_enabled_ && DrawPerfHud(&hud_box);
 
+    // Wait (bounded) for a free frame slot BEFORE the GPU flush: with a
+    // full queue, EndDraw itself blocks until a presented frame retires,
+    // so queueing more work just moves the stall inside the flush.
+    // A timeout still proceeds — DO_NOT_WAIT handles a full queue below.
+    // XER_UI_PHASE: split the EndFrame cost into wait/flush/present for
+    // stall diagnosis — written to the frame counters line via stderr.
+    const auto phase_start = std::chrono::steady_clock::now();
+    if (frame_latency_waitable_ != nullptr) {
+        last_wait_result_ =
+            WaitForSingleObjectEx(frame_latency_waitable_, 4, TRUE);
+    }
+    const auto wait_done = std::chrono::steady_clock::now();
+
     const auto result = dc_->EndDraw();
     if (FAILED(result)) {
         if (result == D2DERR_RECREATE_TARGET) {
@@ -445,17 +485,29 @@ void Direct2DRenderer::EndFrame() {
         }
         ThrowIfFailed(result, "ID2D1DeviceContext::EndDraw");
     }
+    const auto enddraw_done = std::chrono::steady_clock::now();
     // Canvas now holds a complete frame.
     canvas_valid_ = true;
 
     HRESULT present_hr = S_OK;
+    // sync=0: WM_PAINT-driven UI must not block on vsync — a 16.6 ms
+    // wait inside every paint turns input-bound repaints (hover, drag,
+    // caret) into visible jitter. DWM still flips at vsync; the DXGI
+    // frame queue back-pressures naturally if we ever outpace it.
     if (full_present) {
-        present_hr = swap_chain_->Present(1, 0);
+        present_hr =
+            swap_chain_->Present(0, DXGI_PRESENT_DO_NOT_WAIT);
     } else {
-        RECT dirty[2];
+        RECT dirty[3];
         UINT dirty_count = 0;
         if (!damage_empty) {
             dirty[dirty_count++] = damage_px;
+        }
+        if (has_dropped_damage_) {
+            // Carry a region whose present was previously dropped: the
+            // canvas already holds its new pixels, so folding it into
+            // this present displays them without a repaint pass.
+            dirty[dirty_count++] = dropped_damage_px_;
         }
         if (hud_drawn) {
             dirty[dirty_count++] = dip_to_px_rect(hud_box);
@@ -466,10 +518,62 @@ void Direct2DRenderer::EndFrame() {
             params.pDirtyRects = dirty;
             params.pScrollRect = nullptr;
             params.pScrollOffset = nullptr;
-            present_hr = swap_chain_->Present1(1, 0, &params);
+            present_hr = swap_chain_->Present1(
+                0, DXGI_PRESENT_DO_NOT_WAIT, &params);
         }
         // dirty_count == 0: nothing changed — skip the present entirely;
         // the screen keeps the previously presented frame.
+    }
+    const auto present_done = std::chrono::steady_clock::now();
+    last_phase_ms_[0] =
+        std::chrono::duration<double, std::milli>(wait_done - phase_start)
+            .count();
+    last_phase_ms_[1] =
+        std::chrono::duration<double, std::milli>(present_done - wait_done)
+            .count();
+    if (phase_log_ && ++phase_log_frames_ % 300 == 0) {
+        const double enddraw_ms =
+            std::chrono::duration<double, std::milli>(enddraw_done - wait_done)
+                .count();
+        const double present_ms =
+            std::chrono::duration<double, std::milli>(
+                present_done - enddraw_done).count();
+        std::fprintf(
+            stderr,
+            "[XER UI phase] wait=%.1fms(%lu) enddraw=%.1fms "
+            "present=%.1fms hr=0x%lx\n",
+            last_phase_ms_[0], static_cast<unsigned long>(last_wait_result_),
+            enddraw_ms, present_ms,
+            static_cast<unsigned long>(present_hr));
+    }
+    if (present_hr == DXGI_ERROR_WAS_STILL_DRAWING) {
+        // Frame queue is full (a repaint burst outpaced the display
+        // rate). The canvas already holds the new pixels — remember the
+        // region and fold it into the next presented frame's dirty
+        // rects. Deliberately NO InvalidateRect here: retrying on an
+        // immediate repaint spins a render->drop loop that keeps the
+        // queue permanently full.
+        if (full_present) {
+            dropped_damage_px_ = {0, 0,
+                static_cast<LONG>(target_size_.width),
+                static_cast<LONG>(target_size_.height)};
+        } else if (has_dropped_damage_) {
+            dropped_damage_px_.left =
+                std::min(dropped_damage_px_.left, damage_px.left);
+            dropped_damage_px_.top =
+                std::min(dropped_damage_px_.top, damage_px.top);
+            dropped_damage_px_.right =
+                std::max(dropped_damage_px_.right, damage_px.right);
+            dropped_damage_px_.bottom =
+                std::max(dropped_damage_px_.bottom, damage_px.bottom);
+        } else {
+            dropped_damage_px_ = damage_px;
+        }
+        has_dropped_damage_ = true;
+        return;
+    }
+    if (SUCCEEDED(present_hr)) {
+        has_dropped_damage_ = false;
     }
     if (present_hr == DXGI_ERROR_DEVICE_REMOVED ||
         present_hr == DXGI_ERROR_DEVICE_RESET) {
@@ -484,6 +588,10 @@ void Direct2DRenderer::EndFrame() {
         blur_bitmap_.Reset();
         blur_bitmap_size_ = {0, 0};
         ReleaseTargets();
+        if (frame_latency_waitable_ != nullptr) {
+            CloseHandle(frame_latency_waitable_);
+            frame_latency_waitable_ = nullptr;
+        }
         swap_chain_.Reset();
         backbuffer_.Reset();
         d3d_device_.Reset();
@@ -592,12 +700,6 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
     if (text.empty() || rect.width <= 0.0f || rect.height <= 0.0f) {
         return;
     }
-    // TEMP-DIAG entry marker: separates "crashed before DrawTextLayout"
-    // from "crashed inside it" in the launch log.
-    std::fprintf(stderr, "[DTIN] rect=(%g %g %g %g) size=%g w=%d text=%.40s\n",
-                 rect.x, rect.y, rect.width, rect.height, style.size,
-                 style.weight, std::string(text).c_str());
-    std::fflush(stderr);
     if (text.size() > std::numeric_limits<UINT32>::max()) {
         throw std::length_error("Text exceeds the supported DirectWrite length");
     }
@@ -615,9 +717,21 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
     cache_key.push_back('\x1f');
     cache_key.append(text);
 
+    // Layout reuse across DrawTextLayout calls provokes an access
+    // violation inside d2d1.dll on this driver/OS build (verified
+    // 2026-11-21: cached path crashes at clip depth >=3, uncached
+    // does not). Keep the LRU machinery but gate it behind an
+    // explicit opt-in until the root cause is isolated under a
+    // debugger — XER_DT_CACHE=1 re-enables.
+    const bool text_cache_on = [] {
+        const char* v = std::getenv("XER_DT_CACHE");
+        return v != nullptr && v[0] == '1';
+    }();
     Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-    if (auto* cached = LruGet(text_layouts_, text_layout_lru_, cache_key);
-        cached != nullptr) {
+    auto* cached = text_cache_on
+        ? LruGet(text_layouts_, text_layout_lru_, cache_key)
+        : nullptr;
+    if (cached != nullptr) {
         layout = *cached;
     } else {
         const auto wide_text = ToWideString(text);
@@ -633,29 +747,22 @@ void Direct2DRenderer::DrawText(std::string_view text, Layout::Rect rect, TextSt
             ),
             "IDWriteFactory::CreateTextLayout"
         );
-        LruPut(text_layouts_, text_layout_lru_, cache_key, layout, 256);
+        if (text_cache_on) {
+            LruPut(text_layouts_, text_layout_lru_, cache_key, layout, 256);
+        }
     }
 
     auto* brush = Brush();
     brush->SetColor(ToColor(style.color));
-    // TEMP-DIAG: isolate the d2d1 AV — log call params before the crash.
-    {
-        D2D1_MATRIX_3X2_F m{};
-        dc_->GetTransform(&m);
-        std::fprintf(stderr,
-                     "[DTDBG] xform=(%g %g %g %g %g %g) origin=(%g %g) "
-                     "rect=(%g %g) size=%g w=%d text=%.40s\n",
-                     m._11, m._12, m._21, m._22, m._31, m._32,
-                     rect.x, rect.y, rect.width, rect.height,
-                     style.size, style.weight,
-                     std::string(text).c_str());
-        std::fflush(stderr);
-    }
+    // DRAW_TEXT_OPTIONS_CLIP is intentionally absent: with an active
+    // axis-aligned clip stack it sends D2D down a glyph-clip path that
+    // access-violates inside D2D1InvertMatrix on some driver builds.
+    // Widget clip rects already bound glyph overhang where it matters.
     dc_->DrawTextLayout(
         D2D1::Point2F(rect.x, rect.y),
         layout.Get(),
         brush,
-        D2D1_DRAW_TEXT_OPTIONS_CLIP
+        D2D1_DRAW_TEXT_OPTIONS_NONE
     );
     ++counters_.text_calls;
 }

@@ -10,6 +10,7 @@
 #if defined(_WIN32)
 #include <windows.h>
 #include "rendering/vulkan/vulkan_renderer.h"
+#include "rendering/windows/direct2d_engine.h"
 #include "rendering/windows/direct2d_renderer.h"
 #include "rendering/windows/software_renderer.h"
 #endif
@@ -37,6 +38,17 @@ public:
     RendererBackend Backend() const override { return RendererBackend::kD2D; }
     std::unique_ptr<Renderer> Create(void* native_window) override {
         return std::make_unique<Windows::Direct2DRenderer>(
+            static_cast<HWND>(native_window));
+    }
+};
+
+class Direct2D2Provider final : public RendererProvider {
+public:
+    RendererBackend Backend() const override {
+        return RendererBackend::kD2D2;
+    }
+    std::unique_ptr<Renderer> Create(void* native_window) override {
+        return std::make_unique<Windows::Direct2DEngine>(
             static_cast<HWND>(native_window));
     }
 };
@@ -104,6 +116,8 @@ std::string_view RendererBackendName(RendererBackend backend) {
             return "d3d11";
         case RendererBackend::kVulkan:
             return "vulkan";
+        case RendererBackend::kD2D2:
+            return "d2d2";
     }
     return "auto";
 }
@@ -116,6 +130,9 @@ bool ParseRendererBackend(std::string_view name, RendererBackend* out) {
     } else if (normalized == "software" || normalized == "sw" ||
                normalized == "cpu") {
         parsed = RendererBackend::kSoftware;
+    } else if (normalized == "d2d2" || normalized == "d2dengine" ||
+               normalized == "engine") {
+        parsed = RendererBackend::kD2D2;
     } else if (normalized == "d2d" || normalized == "direct2d") {
         parsed = RendererBackend::kD2D;
     } else if (normalized == "d3d11" || normalized == "direct3d11" ||
@@ -157,10 +174,16 @@ std::unique_ptr<Renderer> CreateRenderer(RendererBackend backend,
                                          void* native_window) {
 #if defined(_WIN32)
     Direct2DProvider d2d;
+    Direct2D2Provider d2d2;
     VulkanProvider vulkan;
     SoftwareProvider software;
 
     switch (backend) {
+        case RendererBackend::kD2D2:
+            if (auto r = TryProvider(d2d2, native_window)) {
+                return r;
+            }
+            break;
         case RendererBackend::kD2D:
         case RendererBackend::kD3D11:
             // kD3D11 selects the provider owning the D3D11 device layer —
@@ -185,7 +208,13 @@ std::unique_ptr<Renderer> CreateRenderer(RendererBackend backend,
     }
 
     // Automatic / fallback chain: most complete first, always-available
-    // last. An explicit-but-failed request continues down this chain.
+    // last. The threaded-present engine (d2d2) leads — a Present stall
+    // on the legacy path would freeze the UI thread.
+    if (backend != RendererBackend::kD2D2) {
+        if (auto r = TryProvider(d2d2, native_window)) {
+            return r;
+        }
+    }
     if (backend != RendererBackend::kD2D &&
         backend != RendererBackend::kD3D11) {
         if (auto r = TryProvider(d2d, native_window)) {
