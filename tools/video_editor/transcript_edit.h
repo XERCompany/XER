@@ -5,10 +5,11 @@
 // range the timeline model can lift/extract.
 //
 // UI-free like the rest of the core lib: pure data transforms the
-// panel widget and the smoke checks both consume. Whisper emits
-// SEGMENT-level spans only (whisper_transcribe.h), so word timing is
-// distributed evenly across each segment's span — true per-word
-// timestamps are a deferred gap; the edit surface behaves the same.
+// panel widget and the smoke checks both consume. Word timing uses
+// real whisper token timestamps when the probed DLL exports the
+// token API (TranscriptSegment::words in whisper_transcribe.h);
+// otherwise each segment's span is distributed across its words
+// proportionally to length — the edit surface behaves the same.
 #pragma once
 
 #include <string>
@@ -29,10 +30,12 @@ struct TranscriptWord {
     bool segment_start = false;  // first word of its whisper segment
 };
 
-// Splits every segment's text on whitespace into words, distributing
-// the segment's [t0,t1] across the words proportionally to text
-// length (longer word -> longer span). Empty segments produce no
-// words; degenerate (t1 <= t0) spans still emit words with t0 == t1.
+// Expands every segment into display words. Segments carrying real
+// token timings (TranscriptSegment::words) pass them through;
+// otherwise the segment's [t0,t1] is distributed across its
+// whitespace-split tokens proportionally to text length (longer word
+// -> longer span). Empty segments produce no words; degenerate
+// (t1 <= t0) spans still emit words with t0 == t1.
 std::vector<TranscriptWord> TranscriptWordsFromSegments(
     const std::vector<Ai::TranscriptSegment>& segments);
 

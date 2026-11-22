@@ -18,6 +18,23 @@
 //   shadow=0|1   shadow_x=<px>  shadow_y=<px>  shadow_blur=<px>
 //   shadow_color=#RRGGBB[AA]
 //
+// Karaoke word highlight (animated captions):
+//   karaoke=1                      enables per-word coloring
+//   karaoke_times=t0-t1,t0-t1,...  word spans in CLIP-LOCAL seconds,
+//                                  one pair per whitespace-delimited
+//                                  word of the text (alias: kwt)
+//   karaoke_active=#RRGGBB[AA]     color of the currently-spoken word
+//                                  (alias: kact)
+//   karaoke_done=#RRGGBB[AA]       color of already-spoken words;
+//                                  omitted/alpha-0 means they keep
+//                                  the base `color` (alias: kdone)
+//
+// A karaoke clip is time-VARIANT: RenderClipText takes the clip-local
+// time and colors word i `karaoke_active` while its span contains it,
+// `karaoke_done` once it has passed, `color` before it starts.
+// Words past the end of the timing list stay inactive — a malformed
+// list degrades to the flat base color, never to a missing glyph.
+//
 // Legacy tokens size/color/outline/outline_color/align keep their old
 // meaning; unknown keys and malformed values are ignored — a style
 // typo must never kill the title.
@@ -26,6 +43,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "frame.h"
 
@@ -67,6 +85,19 @@ struct ClipTextStyle {
     float shadow_y = 0.0f;
     float shadow_blur = 0.0f;   // sigma-ish blur radius, px
     std::array<std::uint8_t, 4> shadow_color{0, 0, 0, 128};  // BGRA
+
+    // ---- karaoke word highlight ------------------------------------
+    // Per-word clip-local timing table. word_times[i] maps to the
+    // i-th whitespace-delimited word of `text` (newlines count as
+    // separators, matching the renderer's own word scan).
+    struct WordTime {
+        float t0 = 0.0f;   // clip-local seconds
+        float t1 = 0.0f;
+    };
+    bool karaoke = false;
+    std::vector<WordTime> word_times;
+    std::array<std::uint8_t, 4> karaoke_active{255, 224, 0, 255};  // BGRA
+    std::array<std::uint8_t, 4> karaoke_done{0, 0, 0, 0};   // a==0 -> `color`
 };
 
 // Parses Clip::source.param for a Text clip (see above). Never fails —
@@ -82,11 +113,12 @@ std::string SerializeClipTextStyle(const ClipTextStyle& style);
 // Rasterizes the style into a BGRA8 STRAIGHT-alpha frame. The frame is
 // (re)allocated to the text box size (measured when box w/h are 0),
 // padded by the stroke/shadow extents. Uses Skia when the build links
-// it (XER_VE_HAS_SKIA); otherwise falls back to the BitmapFont path,
-// which honors the legacy subset (text/size/color/outline/align).
-// Returns false only on allocation/geometry failure; an empty text
-// yields a 1x1 transparent frame.
+// it (XER_VE_HAS_SKIA); otherwise falls back to the BitmapFont path.
+// `clip_local_t` (seconds inside the clip) drives the karaoke word
+// highlight — every other field renders time-invariantly, so callers
+// without a clock pass 0. Returns false only on allocation/geometry
+// failure; an empty text yields a 1x1 transparent frame.
 bool RenderClipText(const ClipTextStyle& style, int canvas_h,
-                    video::Frame* out);
+                    video::Frame* out, double clip_local_t = 0.0);
 
 }  // namespace XER::VideoEditor

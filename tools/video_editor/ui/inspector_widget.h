@@ -79,6 +79,16 @@ public:
             on_smart_reframe;
         std::function<void(const std::string& clip_id, double ratio)>
             on_smart_reframe_analyze;
+        // OBJECT TRACK section: "Track" starts the async object scan
+        // ("" label filter = primary subject); "Pin Title"/"Pin
+        // Mosaic" apply the pin targets to the stored track; "Clear"
+        // empties Clip::object_track.
+        std::function<void(const std::string& clip_id,
+                           const std::string& label_filter)>
+            on_track_object;
+        std::function<void(const std::string& clip_id)> on_pin_title;
+        std::function<void(const std::string& clip_id)> on_pin_mosaic;
+        std::function<void(const std::string& clip_id)> on_clear_track;
     };
 
     explicit InspectorWidget(Hooks hooks = {});
@@ -231,6 +241,10 @@ private:
     std::shared_ptr<XER::UI::Widgets::Button> ai_clear_btn_;
     std::shared_ptr<XER::UI::Widgets::Combobox> reframe_combo_;
     std::shared_ptr<XER::UI::Widgets::Button> reframe_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> track_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> pin_title_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> pin_mosaic_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> track_clear_btn_;
     std::shared_ptr<XER::UI::Widgets::Combobox> transition_combo_;
     std::shared_ptr<XER::UI::Widgets::TextInput>
         transition_duration_input_;

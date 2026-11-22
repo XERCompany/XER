@@ -55,8 +55,9 @@ int TextClipGlyphScale(int canvas_h);
 // decorations, box geometry, shadow, ...) is documented there.
 
 // Produces the clip's intrinsic frame at clip-local time
-// `clip_local_t` (currently every generated kind is time-invariant —
-// the parameter exists for future animated sources). `canvas_w`/
+// `clip_local_t` (matte/bars are time-invariant; Text evaluates its
+// karaoke word highlight at u — see the karaoke_* fields in
+// text_style.h). `canvas_w`/
 // `canvas_h` are the PROJECT canvas dims: matte/bars adopt them as
 // their natural size, text uses them only for glyph scale and as a
 // size ceiling. `out` is (re)allocated to the source's natural size —

@@ -35,6 +35,7 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class Combobox;
 class Label;
 }
 
@@ -55,6 +56,9 @@ public:
         // Caption clips for the selection — SOURCE-time range (the
         // app re-maps through the bound clip).
         std::function<void(double, double)> on_make_captions;
+        // Caption-style picker changed: "classic" | "karaoke" |
+        // "wordpop" (CaptionPresetByName on the app side).
+        std::function<void(const std::string&)> on_caption_style;
         // whisper DLL + model check — drives the button's enabled
         // state so an uninstalled backend reads as a hint, not an
         // error.
@@ -158,6 +162,7 @@ private:
     float gutter_w_ = 44.0f;
 
     std::shared_ptr<XER::UI::Widgets::Button> transcribe_btn_;
+    std::shared_ptr<XER::UI::Widgets::Combobox> caption_style_combo_;
     std::shared_ptr<XER::UI::Widgets::Button> cut_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> marker_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> captions_btn_;

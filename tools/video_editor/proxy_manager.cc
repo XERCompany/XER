@@ -320,16 +320,129 @@ std::string ProxyManager::ResolveDecodePath(
         FileMtimeUnix(fs_path) != record.src_mtime) {
         return utf8_path;
     }
-    std::error_code ec;
-    if (!std::filesystem::exists(Path::FromUtf8(record.proxy_path),
-                                 ec)) {
+    const std::filesystem::path proxy_fs =
+        Path::FromUtf8(record.proxy_path);
+    const std::int64_t proxy_mtime = FileMtimeUnix(proxy_fs);
+    if (proxy_mtime <= 0) {
         return utf8_path;   // proxy file deleted behind our back
+    }
+    // LRU stamp: the proxy file's mtime is its last-used marker —
+    // EnforceStorageCap evicts oldest-first on it. ~60 s granularity
+    // keeps a resolve storm read-only (one timestamp write per minute
+    // per proxy at most).
+    const std::int64_t now =
+        std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::system_clock::now().time_since_epoch())
+            .count();
+    if (now - proxy_mtime > 60) {
+        std::error_code tec;
+        std::filesystem::last_write_time(
+            proxy_fs, std::filesystem::file_time_type::clock::now(),
+            tec);
     }
     return record.proxy_path;
 }
 
 bool ProxyManager::ConsumeCatalogDirty() {
     return catalog_dirty_.exchange(false, std::memory_order_acquire);
+}
+
+void ProxyManager::SetStorageCapBytes(std::int64_t bytes) {
+    cap_bytes_.store(std::max<std::int64_t>(bytes, 0),
+                     std::memory_order_release);
+}
+
+void ProxyManager::SetProtectedSources(
+    std::vector<std::string> utf8_paths) {
+    std::unordered_set<std::string> canon_set;
+    canon_set.reserve(utf8_paths.size());
+    for (const std::string& p : utf8_paths) {
+        std::string canon;
+        if (CanonicalizeMediaPath(p, &canon)) {
+            canon_set.insert(std::move(canon));
+        }
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    protected_sources_ = std::move(canon_set);
+}
+
+int ProxyManager::EnforceStorageCap() {
+    const std::int64_t cap = cap_bytes_.load(std::memory_order_acquire);
+    if (cap <= 0 || catalog_ == nullptr || !catalog_->IsOpen()) {
+        return 0;
+    }
+    std::vector<ProxyRecord> records;
+    if (!catalog_->ListProxies(&records, nullptr)) {
+        return 0;
+    }
+    // Snapshot the no-evict set under the queue mutex — the disk scan
+    // below must not hold it (a transcode keeps running meanwhile).
+    std::unordered_set<std::string> skip;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        skip = pending_;
+        if (!running_path_.empty()) {
+            skip.insert(running_path_);
+        }
+        skip.insert(protected_sources_.begin(),
+                    protected_sources_.end());
+    }
+    const std::filesystem::path dir = Path::FromUtf8(catalog_->ProxyDir())
+                                          .lexically_normal();
+
+    struct Live {
+        std::string canon;
+        std::filesystem::path file;
+        std::int64_t size;
+        std::int64_t used;   // last-used stamp = file mtime (unix s)
+    };
+    std::vector<Live> live;
+    std::int64_t total = 0;
+    for (const ProxyRecord& rec : records) {
+        if (rec.status != ProxyStatus::kReady ||
+            rec.proxy_path.empty() || skip.count(rec.path) != 0u) {
+            continue;
+        }
+        const std::filesystem::path file =
+            Path::FromUtf8(rec.proxy_path).lexically_normal();
+        // Managed-dir guard: evictions only ever delete inside
+        // ProxyDir — a hand-edited row pointing elsewhere is ignored,
+        // never unlinked. Component-wise prefix compare.
+        if (!std::equal(dir.begin(), dir.end(), file.begin(),
+                        file.end())) {
+            continue;
+        }
+        const std::int64_t size = FileSizeBytes(file);
+        if (size <= 0) continue;   // missing file — resolve falls back
+        live.push_back(
+            {rec.path, file, size, FileMtimeUnix(file)});
+        total += size;
+    }
+    if (total <= cap) return 0;
+    // Oldest-use first; an unstattable file (used==0) reads as the
+    // coldest entry and goes first.
+    std::sort(live.begin(), live.end(),
+              [](const Live& a, const Live& b) {
+                  return a.used < b.used;
+              });
+    int evicted = 0;
+    for (const Live& e : live) {
+        if (total <= cap) break;
+        std::error_code ec;
+        std::filesystem::remove(e.file, ec);
+        if (ec) {
+            // Couldn't unlink (locked/permissions) — keep the row so
+            // the proxy keeps resolving, and keep its bytes in `total`
+            // so the accounting stays honest about the failure.
+            continue;
+        }
+        if (catalog_->RemoveProxy(e.canon, nullptr)) {
+            total -= e.size;
+            ++evicted;
+            catalog_dirty_.store(true, std::memory_order_release);
+        }
+    }
+    return evicted;
 }
 
 std::size_t ProxyManager::PendingCount() const {
@@ -435,6 +548,11 @@ void ProxyManager::WorkerMain() {
             cancelled_.erase(job.canon);
         }
         idle_cv_.notify_all();
+        // Bounded storage: sweep after every finished job. The fresh
+        // proxy's mtime is "now", so it sorts last under LRU — it can
+        // only evict itself when the cap is absurdly small (a
+        // documented degenerate case).
+        EnforceStorageCap();
     }
 }
 

@@ -213,6 +213,28 @@ void FeatherSelection(TiledDevice& sel, float radius_px) {
     sel.WriteRegionCoverage(b, cov.data());
 }
 
+void RefineSelectionEdge(TiledDevice& sel, const RefineEdgeParams& p) {
+    const IntRect b = sel.Bounds();
+    if (b.IsEmpty()) return;
+    const bool noop = p.radius_px <= 0.0f && p.smooth <= 0.0f &&
+                      p.feather_px <= 0.0f && p.contrast == 0.0f &&
+                      p.shift_px == 0.0f;
+    if (noop) return;
+    std::vector<uint8_t> cov = sel.ReadRegionCoverage(b);
+    // Photoshop slider order (see the header for the mapping): band
+    // pre-soften, de-jag, shift, feather, contrast.
+    Lab::FeatherMaskInPlace(cov, b.w, b.h, p.radius_px);
+    if (p.smooth > 0.0f) {
+        const float s = std::clamp(p.smooth, 0.0f, 1.0f);
+        Lab::FeatherMaskInPlace(cov, b.w, b.h, s * 4.0f);
+        Lab::EdgeContrastInPlace(cov, b.w, b.h, 0.3f * s);
+    }
+    Lab::GrowMaskInPlace(cov, b.w, b.h, p.shift_px);
+    Lab::FeatherMaskInPlace(cov, b.w, b.h, p.feather_px);
+    Lab::EdgeContrastInPlace(cov, b.w, b.h, p.contrast);
+    sel.WriteRegionCoverage(b, cov.data());
+}
+
 bool SelectionIsEmpty(const TiledDevice& sel) {
     const IntRect ext = sel.Extent();
     if (ext.IsEmpty()) {

@@ -159,6 +159,18 @@ public:
         // (w/h: 9:16 = 0.5625, 1:1 = 1.0, 4:5 = 0.8).
         std::function<void(const std::string&, double)>
             on_smart_reframe;
+        // Clip context menu "Track object…" (and "Track '<class>'…"
+        // re-scans narrowed to a class the first scan saw): the shell
+        // runs the async scan (ai/object_track.h) and lands
+        // Clip::object_track. Second arg is the class filter — "" for
+        // the primary-subject policy. "Pin Title"/"Pin Mosaic" follow
+        // the stored track; "Clear" empties it.
+        std::function<void(const std::string&,
+                           const std::string& label_filter)>
+            on_track_object;
+        std::function<void(const std::string&)> on_pin_title;
+        std::function<void(const std::string&)> on_pin_mosaic;
+        std::function<void(const std::string&)> on_clear_track;
         // Clip context menu "Edit by Transcript": the shell selects
         // the clip, focuses the Transcript dock and (cache miss)
         // starts the whisper job — media clips only.

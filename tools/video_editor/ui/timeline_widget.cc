@@ -2692,6 +2692,84 @@ bool TimelineWidget::ShowContextMenu(
                 }
             }
 
+            // Track object → pin content (ai/object_track.h). The
+            // scan itself is media-only; pin items unlock once the
+            // clip carries a track. Labels a previous scan observed
+            // are offered as class-narrowed re-scans ("pick the
+            // detection" when several objects share the frame).
+            if (hooks_.on_track_object != nullptr ||
+                hooks_.on_pin_title != nullptr ||
+                hooks_.on_pin_mosaic != nullptr) {
+                const bool scannable =
+                    clip.source.kind == SourceKind::Media &&
+                    !clip.source_path.empty() && !clip.is_adjustment;
+                Widgets::ContextMenu::Item track;
+                track.label = "Track object\xe2\x80\xa6";
+                track.separator_before = true;
+                track.enabled = scannable &&
+                                hooks_.on_track_object != nullptr;
+                track.action = [this, id] {
+                    if (hooks_.on_track_object) {
+                        hooks_.on_track_object(id, "");
+                    }
+                };
+                items.push_back(std::move(track));
+                // Class-narrowed re-scans — the candidates the last
+                // scan observed (cap the list; COCO exports can name
+                // 80 classes).
+                if (hooks_.on_track_object != nullptr) {
+                    constexpr std::size_t kMaxClassItems = 8;
+                    for (std::size_t i = 0;
+                         i < clip.object_track.classes.size() &&
+                         i < kMaxClassItems; ++i) {
+                        const std::string label =
+                            clip.object_track.classes[i];
+                        Widgets::ContextMenu::Item narrowed;
+                        narrowed.label = "Track \xe2\x80\x98" + label +
+                                         "\xe2\x80\x99\xe2\x80\xa6";
+                        narrowed.enabled = scannable;
+                        narrowed.checked =
+                            label == clip.object_track.label;
+                        narrowed.action = [this, id, label] {
+                            if (hooks_.on_track_object) {
+                                hooks_.on_track_object(id, label);
+                            }
+                        };
+                        items.push_back(std::move(narrowed));
+                    }
+                }
+                const bool has_track =
+                    !clip.object_track.samples.empty();
+                Widgets::ContextMenu::Item pin_title;
+                pin_title.label = "Pin \xe2\x86\x92 Title";
+                pin_title.enabled = has_track &&
+                                    hooks_.on_pin_title != nullptr;
+                pin_title.action = [this, id] {
+                    if (hooks_.on_pin_title) hooks_.on_pin_title(id);
+                };
+                items.push_back(std::move(pin_title));
+                Widgets::ContextMenu::Item pin_mosaic;
+                pin_mosaic.label = "Pin \xe2\x86\x92 Mosaic";
+                pin_mosaic.enabled = has_track &&
+                                     hooks_.on_pin_mosaic != nullptr;
+                pin_mosaic.action = [this, id] {
+                    if (hooks_.on_pin_mosaic) hooks_.on_pin_mosaic(id);
+                };
+                items.push_back(std::move(pin_mosaic));
+                if (has_track || !clip.object_track.label.empty()) {
+                    Widgets::ContextMenu::Item clear;
+                    clear.label = "Clear Object Track";
+                    clear.enabled =
+                        hooks_.on_clear_track != nullptr;
+                    clear.action = [this, id] {
+                        if (hooks_.on_clear_track) {
+                            hooks_.on_clear_track(id);
+                        }
+                    };
+                    items.push_back(std::move(clear));
+                }
+            }
+
             // AI object scan — media clips only (generated sources and
             // adjustment layers have no source file to decode). The
             // shell runs it on its background AI job and reports the

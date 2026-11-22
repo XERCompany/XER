@@ -458,20 +458,15 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
         }
     }
 
-    // clips: required id (non-empty, unique) + source (non-empty);
-    // track must index the loaded tracks; times must be >= 0 and
-    // duration > 0.
-    if (root.isMember("clips")) {
-        const Json::Value& cv = root["clips"];
-        if (!cv.isArray()) {
-            return Fail(error_out, "clips: expected array");
-        }
-        for (Json::ArrayIndex i = 0; i < cv.size(); ++i) {
-            const Json::Value& cj = cv[i];
-            const std::string where = "clip[" + std::to_string(i) + "]";
-            if (!cj.isObject()) {
-                return Fail(error_out, where + ": expected object");
-            }
+    // Per-clip parse — shared by the top-level "clips" array and each
+    // stored sequence's inner clips (sequence-local tracks are passed
+    // the same way). `existing` is the clip list parsed so far, used
+    // for the unique-id check.
+    const auto parse_clip = [&](const Json::Value& cj,
+                                const std::string& where,
+                                const std::vector<Track>& tracks,
+                                const std::vector<Clip>& existing,
+                                Clip* clip_out) -> bool {
             Reader r{cj, where, error_out};
             Clip clip;
 
@@ -481,7 +476,10 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             if (clip.id.empty()) {
                 return Fail(error_out, where + ".id: required non-empty");
             }
-            if (FindClip(project, clip.id) != nullptr) {
+            const bool duplicate =
+                std::any_of(existing.begin(), existing.end(),
+                            [&](const Clip& c) { return c.id == clip.id; });
+            if (duplicate) {
                 return Fail(error_out,
                             where + ".id: duplicate clip id '" + clip.id +
                                 "'");
@@ -500,7 +498,7 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             }
             if (track_index < 0 ||
                 track_index >=
-                    static_cast<std::int64_t>(project.tracks.size())) {
+                    static_cast<std::int64_t>(tracks.size())) {
                 return Fail(error_out,
                             where + ".track: index out of range");
             }
@@ -581,9 +579,16 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                 return false;
             }
             if (clip.source.kind == SourceKind::Media &&
-                !clip.is_adjustment && clip.source_path.empty()) {
+                !clip.is_adjustment && clip.compound.empty() &&
+                clip.source_path.empty()) {
                 return Fail(error_out,
                             where + ".source: required non-empty");
+            }
+            // Compound clip: "compound" stores the referenced sequence
+            // id (v3+). Resolution + cycle checks run after all
+            // sequences are parsed.
+            if (!r.GetStr("compound", clip.compound, &clip.compound)) {
+                return false;
             }
 
             // transform: optional object; absent fields keep Transform{}.
@@ -907,7 +912,109 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                 }
             }
 
-            project.clips.push_back(clip);
+            // object_track: optional AI track-object result —
+            // {label, classes: [...], samples: [{t, cx, cy, w, h,
+            // conf, cut}]} in SOURCE seconds / frame fractions (the
+            // ClipTrack contract — same sample shape as reframe).
+            // Same policy as reframe: wrong types are hard errors,
+            // non-finite numbers drop the entry.
+            if (cj.isMember("object_track")) {
+                const Json::Value& tj = cj["object_track"];
+                const std::string twhere = where + ".object_track";
+                if (!tj.isObject()) {
+                    return Fail(error_out,
+                                twhere + ": expected object");
+                }
+                Reader tr{tj, twhere, error_out};
+                if (!tr.GetStr("label", clip.object_track.label,
+                               &clip.object_track.label)) {
+                    return false;
+                }
+                if (tj.isMember("classes")) {
+                    const Json::Value& cl = tj["classes"];
+                    if (!cl.isArray()) {
+                        return Fail(
+                            error_out,
+                            twhere + ".classes: expected array");
+                    }
+                    for (Json::ArrayIndex j = 0; j < cl.size(); ++j) {
+                        if (!cl[j].isString()) {
+                            return Fail(
+                                error_out,
+                                twhere + ".classes[" +
+                                    std::to_string(j) +
+                                    "]: expected string");
+                        }
+                        clip.object_track.classes.push_back(
+                            cl[j].asString());
+                    }
+                }
+                if (tj.isMember("samples")) {
+                    const Json::Value& sj = tj["samples"];
+                    if (!sj.isArray()) {
+                        return Fail(
+                            error_out,
+                            twhere + ".samples: expected array");
+                    }
+                    for (Json::ArrayIndex j = 0; j < sj.size(); ++j) {
+                        const Json::Value& ss = sj[j];
+                        const std::string swhere =
+                            twhere + ".samples[" +
+                            std::to_string(j) + "]";
+                        if (!ss.isObject()) {
+                            return Fail(error_out,
+                                        swhere + ": expected object");
+                        }
+                        Reader sr{ss, swhere, error_out};
+                        ReframeSample sample;
+                        if (!sr.GetF64("t", sample.t, &sample.t) ||
+                            !sr.GetF32("cx", sample.cx, &sample.cx) ||
+                            !sr.GetF32("cy", sample.cy, &sample.cy) ||
+                            !sr.GetF32("w", sample.w, &sample.w) ||
+                            !sr.GetF32("h", sample.h, &sample.h) ||
+                            !sr.GetF32("conf", sample.confidence,
+                                       &sample.confidence) ||
+                            !sr.GetBool("cut", sample.scene_boundary,
+                                        &sample.scene_boundary)) {
+                            return false;
+                        }
+                        if (!std::isfinite(sample.t) ||
+                            !std::isfinite(sample.cx) ||
+                            !std::isfinite(sample.cy) ||
+                            !std::isfinite(sample.w) ||
+                            !std::isfinite(sample.h) ||
+                            !std::isfinite(sample.confidence)) {
+                            continue;   // corrupt entry — drop it
+                        }
+                        clip.object_track.samples.push_back(sample);
+                    }
+                }
+            }
+
+            *clip_out = std::move(clip);
+            return true;
+    };
+
+    // clips: required id (non-empty, unique) + source (non-empty);
+    // track must index the loaded tracks; times must be >= 0 and
+    // duration > 0.
+    if (root.isMember("clips")) {
+        const Json::Value& cv = root["clips"];
+        if (!cv.isArray()) {
+            return Fail(error_out, "clips: expected array");
+        }
+        for (Json::ArrayIndex i = 0; i < cv.size(); ++i) {
+            const Json::Value& cj = cv[i];
+            const std::string where = "clip[" + std::to_string(i) + "]";
+            if (!cj.isObject()) {
+                return Fail(error_out, where + ": expected object");
+            }
+            Clip clip;
+            if (!parse_clip(cj, where, project.tracks, project.clips,
+                            &clip)) {
+                return false;
+            }
+            project.clips.push_back(std::move(clip));
         }
     }
 
@@ -1049,6 +1156,7 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
         Reader r{root, "project", error_out};
         std::int64_t proxy_max_dim = project.proxy_max_dim;
         std::int64_t proxy_crf = project.proxy_crf;
+        std::int64_t proxy_cache_max_mb = project.proxy_cache_max_mb;
         if (!r.GetF64("work_in", project.work_in, &project.work_in) ||
             !r.GetF64("work_out", project.work_out, &project.work_out) ||
             !r.GetF32("master_gain_db", project.master_gain_db,
@@ -1059,7 +1167,9 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                        &project.proxy_ingest) ||
             !r.GetI64("proxy_max_dim", project.proxy_max_dim,
                       &proxy_max_dim) ||
-            !r.GetI64("proxy_crf", project.proxy_crf, &proxy_crf)) {
+            !r.GetI64("proxy_crf", project.proxy_crf, &proxy_crf) ||
+            !r.GetI64("proxy_cache_max_mb", project.proxy_cache_max_mb,
+                      &proxy_cache_max_mb)) {
             return false;
         }
         project.proxy_max_dim =
@@ -1067,6 +1177,10 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                 proxy_max_dim, 0, 16384));
         project.proxy_crf = static_cast<int>(
             std::clamp<std::int64_t>(proxy_crf, -1, 63));
+        // 1 TiB of proxies is absurd — bound the field to a sane
+        // ceiling (0 keeps the documented "unbounded" meaning).
+        project.proxy_cache_max_mb = static_cast<int>(
+            std::clamp<std::int64_t>(proxy_cache_max_mb, 0, 1048576));
         if (!std::isfinite(project.master_gain_db) ||
             project.master_gain_db < -96.0f ||
             project.master_gain_db > 24.0f) {
@@ -1188,6 +1302,38 @@ Json::Value ClipToJson(const Clip& clip) {
         }
         reframe["samples"] = samples;
         out["reframe"] = reframe;
+    }
+
+    if (!clip.object_track.samples.empty() ||
+        !clip.object_track.label.empty() ||
+        !clip.object_track.classes.empty()) {
+        Json::Value track(Json::objectValue);
+        if (!clip.object_track.label.empty()) {
+            track["label"] = clip.object_track.label;
+        }
+        if (!clip.object_track.classes.empty()) {
+            Json::Value classes(Json::arrayValue);
+            for (const std::string& label :
+                 clip.object_track.classes) {
+                classes.append(label);
+            }
+            track["classes"] = classes;
+        }
+        Json::Value samples(Json::arrayValue);
+        for (const ReframeSample& sample :
+             clip.object_track.samples) {
+            Json::Value sj(Json::objectValue);
+            sj["t"] = sample.t;
+            sj["cx"] = static_cast<double>(sample.cx);
+            sj["cy"] = static_cast<double>(sample.cy);
+            sj["w"] = static_cast<double>(sample.w);
+            sj["h"] = static_cast<double>(sample.h);
+            sj["conf"] = static_cast<double>(sample.confidence);
+            sj["cut"] = sample.scene_boundary;
+            samples.append(sj);
+        }
+        track["samples"] = samples;
+        out["object_track"] = track;
     }
 
     if (!clip.masks.empty()) {
@@ -1324,6 +1470,7 @@ Json::Value ProjectToJson(const Project& project) {
     root["proxy_ingest"] = project.proxy_ingest;
     root["proxy_max_dim"] = project.proxy_max_dim;
     root["proxy_crf"] = project.proxy_crf;
+    root["proxy_cache_max_mb"] = project.proxy_cache_max_mb;
     return root;
 }
 

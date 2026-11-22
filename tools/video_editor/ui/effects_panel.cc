@@ -326,6 +326,12 @@ EffectsPanelWidget::Catalog() {
         // Analyze button build it); without a track it center-crops.
         {"builtin:xer.fx.smart_reframe", {0.5625f, 0.5f},
          "smart reframe · target w/h (9:16 = 0.5625), smoothing 0..1"},
+        // Track-driven AI effect — pixelates the clip's
+        // Clip::object_track box ("Track object… → Pin → Mosaic" is
+        // the intended path); without a track it no-ops.
+        {"builtin:xer.fx.track_mosaic", {12.0f, 0.15f, 0.5f},
+         "tracked mosaic · block px 2..128, box padding 0..1, "
+         "smoothing 0..1"},
         };
         if (!JsFxRuntime::FxDir().empty() ||
             JsFxRuntime::LoadCatalog(

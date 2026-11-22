@@ -87,12 +87,39 @@ public:
     // `utf8_path` unchanged otherwise (never empty for non-empty
     // input). Internally canonicalizes, so timeline paths and bin
     // paths hit the same row. Safe from any thread.
+    // Side effect: a successful resolve refreshes the proxy file's
+    // mtime — that timestamp is the LRU marker EnforceStorageCap
+    // evicts on (see the storage-cap block below).
     std::string ResolveDecodePath(const std::string& utf8_path) const;
 
     // Managed proxy filename for a canonical path — FNV-1a hex of the
     // path, stable across sessions so a re-imported file reuses its
     // proxy. Exposed for tests and the smoke check.
     static std::string ProxyFileName(const std::string& canon_path);
+
+    // ---- storage cap / LRU eviction ----------------------------------
+    // Byte cap on the managed proxies dir (0 = unbounded). The app
+    // feeds Project::proxy_cache_max_mb (MiB) * 2^20. The worker
+    // re-enforces after every finished job; EnforceStorageCap() below
+    // runs it on demand (project load, settings apply).
+    void SetStorageCapBytes(std::int64_t bytes);
+    // Media paths (canonicalized inside — raw source paths are fine)
+    // whose proxies are NEVER evicted: the open project's sources.
+    // Replace-all semantics; an empty vector protects nothing.
+    void SetProtectedSources(std::vector<std::string> utf8_paths);
+    // Evicts least-recently-used ready proxies — managed file +
+    // catalog row together — until the proxies dir fits the cap.
+    // LRU stamp choice (documented contract): the proxy FILE's mtime
+    // is its last-used marker; ResolveDecodePath rewrites it (~1 min
+    // granularity) on every successful resolve, so recency survives
+    // across sessions without a schema change and costs at most one
+    // timestamp write per resolve. Rows skipped: protected sources,
+    // queued/running jobs, non-ready states, missing files, and any
+    // proxy_path outside the managed dir (a hand-edited row must not
+    // become a deletion primitive). Returns the evicted count; the
+    // dirty flag flips so the bin re-reads badges. Safe from any
+    // thread; runs its disk I/O off the queue mutex.
+    int EnforceStorageCap();
 
     // ---- UI drains / introspection (Tick thread) --------------------
     // True once after any proxies-row write (pending/ready/failed/
@@ -150,6 +177,12 @@ private:
     // Progress of the running job — [0,1] fraction of source
     // duration decoded (progress only; the row owns truth).
     std::atomic<double> progress_{0.0};
+
+    // Storage cap: byte limit (0 = unbounded) read by
+    // EnforceStorageCap; protected_sources_ holds canonical paths the
+    // sweep skips (mutex_-guarded like the job sets).
+    std::atomic<std::int64_t> cap_bytes_{0};
+    std::unordered_set<std::string> protected_sources_;
 };
 
 }  // namespace XER::VideoEditor

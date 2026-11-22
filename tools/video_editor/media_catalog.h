@@ -203,6 +203,11 @@ public:
     // is not an error.
     bool GetProxy(const std::string& utf8_path, ProxyRecord* out,
                   std::string* error_out = nullptr) const;
+    // Every proxies row (any state). Feeds ProxyManager's LRU sweep —
+    // eviction scans files + rows rather than a directory walk so
+    // stray files in the dir are never catalog-adopted or deleted.
+    bool ListProxies(std::vector<ProxyRecord>* out,
+                     std::string* error_out = nullptr) const;
     // Drops the row (state back to none). The FILE under ProxyDir() is
     // the caller's problem (ProxyManager deletes it).
     bool RemoveProxy(const std::string& utf8_path,

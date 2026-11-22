@@ -52,6 +52,7 @@
 #include "ai/beat_markers.h"
 #include "ai/scene_detect.h"
 #include "ai/silence_detect.h"
+#include "ai/object_track.h"
 #include "ai/smart_reframe.h"
 #include "ai/whisper_transcribe.h"
 #include "ai_tags.h"
@@ -402,6 +403,7 @@ private:
         project.proxy_ingest = s.proxy_ingest;
         project.proxy_max_dim = s.proxy_max_dim;
         project.proxy_crf = s.proxy_crf;
+        project.proxy_cache_max_mb = s.proxy_cache_max_mb;
     }
     ProjectSettings before_;
     ProjectSettings next_;
@@ -1144,6 +1146,17 @@ void VideoEditorAppWidget::EnsureChildren() {
         [this](const std::string& id, double ratio) {
             SmartReframeForClip(id, ratio);
         };
+    // OBJECT TRACK section — async scan + pin targets.
+    inspector_hooks.on_track_object =
+        [this](const std::string& id, const std::string& label) {
+            TrackObjectForClip(id, label);
+        };
+    inspector_hooks.on_pin_title =
+        [this](const std::string& id) { PinTitleToTrack(id); };
+    inspector_hooks.on_pin_mosaic =
+        [this](const std::string& id) { PinMosaicToTrack(id); };
+    inspector_hooks.on_clear_track =
+        [this](const std::string& id) { ClearClipTrack(id); };
     inspector_ = std::make_shared<InspectorWidget>(inspector_hooks);
 
     EffectsPanelWidget::Hooks effects_hooks;
@@ -1197,6 +1210,10 @@ void VideoEditorAppWidget::EnsureChildren() {
     transcript_hooks.on_make_captions =
         [this](double s0, double s1) {
             MakeCaptionsForSourceRange(s0, s1);
+        };
+    transcript_hooks.on_caption_style =
+        [this](const std::string& preset) {
+            caption_style_.preset = CaptionPresetByName(preset);
         };
     transcript_hooks.transcribe_ready = [] {
         return Ai::WhisperAvailable() &&
@@ -1796,6 +1813,18 @@ void VideoEditorAppWidget::EnsureChildren() {
         [this](const std::string& id, double ratio) {
             SmartReframeForClip(id, ratio);
         };
+    // Clip context menu "AI: Track object" + pin targets — same
+    // async AI job + ReplaceClip landing as Smart Reframe.
+    timeline_hooks.on_track_object =
+        [this](const std::string& id, const std::string& label) {
+            TrackObjectForClip(id, label);
+        };
+    timeline_hooks.on_pin_title =
+        [this](const std::string& id) { PinTitleToTrack(id); };
+    timeline_hooks.on_pin_mosaic =
+        [this](const std::string& id) { PinMosaicToTrack(id); };
+    timeline_hooks.on_clear_track =
+        [this](const std::string& id) { ClearClipTrack(id); };
     // Timeline corner-toolbar magnet — same flip as the main-toolbar
     // Snap button / S shortcut so all three stay in sync.
     timeline_hooks.on_snap_toggle = [this](bool on) {
@@ -2058,6 +2087,19 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             item("Redo", "Ctrl+Y",
                  [this] { photo_workspace_->Redo(); }),
         };
+        Menu pselect;
+        pselect.label = "Select";
+        pselect.items = {
+            item("Select All", "Ctrl+A",
+                 [this] { photo_workspace_->SelectAll(); }),
+            item("Deselect", "Ctrl+D",
+                 [this] { photo_workspace_->Deselect(); }),
+            item("Invert Selection", "",
+                 [this] { photo_workspace_->InvertSelection(); }),
+            item("Refine Edge…", "",
+                 [this] { photo_workspace_->ToggleRefineEdgePanel(); },
+                 true, false, false, true),
+        };
         Menu pview;
         pview.label = "View";
         pview.items = {
@@ -2068,7 +2110,7 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
                 item("Workspace: " + ws.name, "",
                      [this, ws] { ApplyWorkspace(ws); }));
         }
-        title_bar_->SetMenus({pfile, pedit, pview});
+        title_bar_->SetMenus({pfile, pedit, pselect, pview});
         return;
     }
 
@@ -2272,6 +2314,7 @@ void VideoEditorAppWidget::ShowProjectSettingsDialog() {
     settings.proxy_ingest = project_.proxy_ingest;
     settings.proxy_max_dim = project_.proxy_max_dim;
     settings.proxy_crf = project_.proxy_crf;
+    settings.proxy_cache_max_mb = project_.proxy_cache_max_mb;
     settings_dialog_->SetProjectName(
         project_path_.empty() ? "Untitled.xerproj"
                               : Basename(project_path_));
@@ -2303,6 +2346,9 @@ bool VideoEditorAppWidget::NewProject() {
     Lut::Manager::Shared().Rescan();
     if (color_panel_) color_panel_->Refresh();
     NotifyProjectChanged();
+    // Fresh canvas carries Project defaults — push the proxy cap and
+    // the (now-empty) protected-source set into the worker.
+    SyncProxyCachePolicy();
     project_dirty_ = false;   // fresh canvas — nothing to lose
     HideStartScreen();
     SetStatus("New project");
@@ -2329,6 +2375,9 @@ bool VideoEditorAppWidget::LoadProject(const std::string& utf8_path) {
     Lut::Manager::Shared().Rescan();
     if (color_panel_) color_panel_->Refresh();
     NotifyProjectChanged();
+    // Loaded cap + protected set → proxy worker; the sweep also trims
+    // anything already over the project's stored limit.
+    SyncProxyCachePolicy();
     project_dirty_ = false;   // just loaded — matches the file on disk
     TrackRecentProject();
     HideStartScreen();
@@ -4837,8 +4886,13 @@ void VideoEditorAppWidget::StartTranscription(const std::string& path,
         [this, path, model, markers](const Lab::JobControl& ctl) {
             Ai::Pcm pcm;
             std::string error;
-            // 16 kHz mono is the whisper contract; cap at 10 minutes.
-            if (!Ai::ExtractMonoPcm(path, 16000, 600.0, &pcm, &error)) {
+            // 16 kHz mono is the whisper contract. The decode cap is
+            // a named bound (default 60 min, XER_TRANSCRIBE_MAX_MINUTES
+            // override) — it exists because the whole span is
+            // materialized as PCM and whisper walks it in one job.
+            if (!Ai::ExtractMonoPcm(path, 16000,
+                                    Ai::TranscribeMaxSeconds(), &pcm,
+                                    &error)) {
                 ctl.Fail(std::move(error));
                 return false;
             }
@@ -4871,10 +4925,14 @@ void VideoEditorAppWidget::StartTranscription(const std::string& path,
                     s.t0 = seg.t0;
                     s.t1 = seg.t1;
                     s.label = seg.text;
+                    s.words = seg.words;
                     ai_result_.spans.push_back(std::move(s));
                 }
                 ai_result_.detail =
-                    std::to_string(segments.size()) + " segments";
+                    std::to_string(segments.size()) + " segments" +
+                    (segments.empty() || !segments.front().words.empty()
+                         ? ""
+                         : " (segment timing)");
             }
             return true;
         });
@@ -5006,8 +5064,16 @@ void VideoEditorAppWidget::MakeCaptionsForSourceRange(
         SetStatus("No transcript for captions", true);
         return;
     }
-    // Captionist's clip recipe — the "Captions" lane + the same
-    // Text-source style string its extension emits.
+    // The clip recipe now lives in captions.cc — the panel's style
+    // picker selects classic / karaoke / word-pop and the builder
+    // maps the cached word spans through the bound clip.
+    const std::vector<Clip> clips =
+        BuildCaptionClips(it->second.words, *clip, src_t0, src_t1, 0,
+                          caption_style_);
+    if (clips.empty()) {
+        SetStatus("Selection maps to no caption words", true);
+        return;
+    }
     history_.BeginMacro("Caption clips");
     const int track = history_.AddTrack(TrackKind::Video, "Captions");
     if (track < 0) {
@@ -5018,24 +5084,8 @@ void VideoEditorAppWidget::MakeCaptionsForSourceRange(
     int made = 0;
     std::string last_error;
     const MediaBounds bounds{0.0, true};   // generated — unbounded
-    for (const auto& span : it->second.spans) {
-        if (span.t1 <= src_t0 || span.t0 >= src_t1) continue;
-        double tl0 = 0.0, tl1 = 0.0;
-        if (!SourceRangeToTimeline(*clip, span.t0, span.t1, &tl0,
-                                   &tl1)) {
-            continue;
-        }
-        Clip cap;
-        cap.id = NewClipId();
-        cap.name = "Caption";
-        cap.source.kind = SourceKind::Text;
+    for (Clip cap : clips) {
         cap.track = track;
-        cap.timeline_start = tl0;
-        cap.duration = std::max(0.4, tl1 - tl0);
-        cap.source.param =
-            span.text +
-            " | size=56 color=#FFFFFF outline=2 "
-            "outline_color=#000000 align=center valign=bottom w=1600";
         std::string error;
         if (history_.AddClip(std::move(cap), bounds, nullptr,
                              &error)) {
@@ -5048,7 +5098,8 @@ void VideoEditorAppWidget::MakeCaptionsForSourceRange(
     if (transcript_panel_) transcript_panel_->ClearSelection();
     NotifyProjectChanged();
     SetStatus("Created " + std::to_string(made) +
-              " caption clip(s)" +
+              " caption clip(s) (" +
+              CaptionPresetName(caption_style_.preset) + ")" +
               (last_error.empty() ? "" : " — " + last_error));
 }
 
@@ -5389,6 +5440,266 @@ void VideoEditorAppWidget::SetSmartReframeTarget(
     SetStatus("Smart Reframe target " + FormatAspectLabel(ratio));
 }
 
+void VideoEditorAppWidget::TrackObjectForClip(
+    const std::string& clip_id, const std::string& label_filter) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("No clip selected for object tracking", true);
+        return;
+    }
+    if (clip->source.kind != SourceKind::Media ||
+        clip->source_path.empty() || clip->is_adjustment) {
+        SetStatus("Object tracking needs a media clip on the timeline",
+                  true);
+        return;
+    }
+    if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+        SetStatus("An AI task is already running", true);
+        return;
+    }
+    // Same pre-flight as Smart Reframe / Find Objects.
+    const std::string model = Ai::FindObjectModel();
+    if (model.empty()) {
+        SetStatus(Ai::FindObjectModelHint(), true);
+        return;
+    }
+    const std::string labels = Ai::FindObjectLabels(model);
+    const Clip clip_copy = *clip;
+    SetStatus("Track object: " + Basename(clip->source_path) +
+              (label_filter.empty()
+                   ? "…"
+                   : " ('" + label_filter + "')…"));
+    ai_progress_shown_ = -1.0f;
+    const bool started = ai_op_.Start(
+        [this, clip_copy, model, labels,
+         label_filter](const Lab::JobControl& ctl) {
+            ClipTrack track;
+            std::string error;
+            Ai::ReframeScanParams params;
+            if (!Ai::ScanClipTrack(
+                    clip_copy, model, labels, params, label_filter,
+                    [&ctl](float p) { ctl.ReportProgress(p); },
+                    [&ctl] { return ctl.ShouldCancel(); }, &track,
+                    &error)) {
+                ctl.Fail(std::move(error));
+                return false;
+            }
+            {
+                std::lock_guard lock(ai_result_mutex_);
+                ai_result_ = AiResult{};
+                ai_result_.kind = "track";
+                ai_result_.track_clip_id = clip_copy.id;
+                ai_result_.object_track = std::move(track);
+                // Span view for ai.last consumers — subject-center
+                // samples in SOURCE seconds, like the reframe job.
+                for (const ReframeSample& s :
+                     ai_result_.object_track.samples) {
+                    AiResult::Span sp;
+                    sp.t0 = sp.t1 = s.t;
+                    sp.label = ai_result_.object_track.label;
+                    sp.confidence = s.confidence;
+                    ai_result_.spans.push_back(std::move(sp));
+                }
+            }
+            return true;
+        });
+    if (!started) SetStatus("An AI task is already running", true);
+}
+
+void VideoEditorAppWidget::PinTitleToTrack(
+    const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr || clip->object_track.samples.empty()) {
+        SetStatus("Track an object on the clip first", true);
+        return;
+    }
+    // Decoded source dims drive the source->canvas mapping — catalog
+    // first, probe fallback, canvas dims as the degraded last resort
+    // (right only for canvas-shaped sources; the pin still lands but
+    // can drift off the subject on mismatched media).
+    int src_w = project_.width;
+    int src_h = project_.height;
+    if (const CatalogEntry* entry = FindCatalogEntry(clip->source_path);
+        entry != nullptr && entry->HasVideo()) {
+        src_w = entry->width;
+        src_h = entry->height;
+    } else {
+        XER::Content::Video::VideoInfo info;
+        std::string probe_error;
+        if (XER::Content::Video::ProbeVideo(clip->source_path, &info,
+                                            &probe_error) &&
+            info.width > 0 && info.height > 0) {
+            src_w = info.width;
+            src_h = info.height;
+        }
+    }
+    // Lane above the tracked clip for the title: first unlocked video
+    // track with a higher index whose span is free; else a fresh
+    // track appended on top.
+    int lane = -1;
+    const double span0 = clip->timeline_start;
+    const double span1 = ClipEndSeconds(*clip);
+    for (int i = clip->track + 1;
+         i < static_cast<int>(project_.tracks.size()); ++i) {
+        const Track& t = project_.tracks[static_cast<std::size_t>(i)];
+        if (t.kind != TrackKind::Video || t.locked) continue;
+        bool busy = false;
+        for (const Clip& other : project_.clips) {
+            if (other.track != i) continue;
+            Clip probe;
+            probe.track = i;
+            probe.timeline_start = span0;
+            probe.duration = std::max(0.01, span1 - span0);
+            if (ClipsOverlap(probe, other)) {
+                busy = true;
+                break;
+            }
+        }
+        if (!busy) {
+            lane = i;
+            break;
+        }
+    }
+    // The title's default text is the tracked class when known —
+    // "name tag" is the common intent; the title editor rewrites it.
+    Clip title;
+    title.id = NewClipId();
+    title.name = clip->object_track.label.empty()
+                     ? "Pinned title"
+                     : "Pin: " + clip->object_track.label;
+    title.source.kind = SourceKind::Text;
+    title.source.param = clip->object_track.label.empty()
+                             ? "Title"
+                             : clip->object_track.label;
+    title.timeline_start = span0;
+    title.duration = clip->duration;
+    // Measure the intrinsic text frame — the pin anchor math needs
+    // the title's pixel size at scale 1.
+    video::Frame title_frame;
+    double pin_w = 160.0, pin_h = 40.0;
+    if (GenerateSourceFrame(title, 0.0, project_.width,
+                            project_.height, &title_frame) &&
+        title_frame.IsValid()) {
+        pin_w = title_frame.Width();
+        pin_h = title_frame.Height();
+    }
+    Ai::PinGeometry geom;
+    geom.src_w = src_w;
+    geom.src_h = src_h;
+    geom.canvas_w = project_.width;
+    geom.canvas_h = project_.height;
+    geom.pin_w = pin_w;
+    geom.pin_h = pin_h;
+    geom.pin_scale = 1.0;
+    Ai::PinKeys keys;
+    std::string error;
+    if (!Ai::BakePinKeys(*clip, Ai::PinAnchor::TopCenter, geom, 0.5,
+                         &keys, &error)) {
+        SetStatus("Pin title failed: " + error, true);
+        return;
+    }
+    title.keyframes[KeyProp::PosX] = std::move(keys.pos_x);
+    title.keyframes[KeyProp::PosY] = std::move(keys.pos_y);
+    // Static transform mirrors the first key so the clip reads sane
+    // before/without keyframe evaluation (e.g. scrub off the track).
+    title.transform.offset_x = title.keyframes[KeyProp::PosX].front().value;
+    title.transform.offset_y = title.keyframes[KeyProp::PosY].front().value;
+
+    history_.BeginMacro("Pin title");
+    bool ok = true;
+    bool added_track = false;
+    if (lane < 0) {
+        lane = history_.AddTrack(TrackKind::Video, "Video");
+        ok = lane >= 0;
+        added_track = ok;
+    }
+    std::string title_id;
+    if (ok) {
+        title.track = lane;
+        MediaBounds bounds;   // generated — unbounded
+        bounds.has_video = true;
+        ok = history_.AddClip(std::move(title), bounds, &title_id,
+                              &error);
+    }
+    history_.EndMacro();
+    if (!ok) {
+        // Roll the macro back ONLY when it pushed a command — a bare
+        // Undo() here would eat the user's previous unrelated edit.
+        if (added_track) history_.Undo();
+        SetStatus("Pin title failed: " +
+                      (error.empty() ? "unable to add track" : error),
+                  true);
+        return;
+    }
+    SelectClip(title_id);
+    NotifyProjectChanged();
+    SetStatus("Pinned title to tracked object");
+}
+
+void VideoEditorAppWidget::PinMosaicToTrack(
+    const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr || clip->object_track.samples.empty()) {
+        SetStatus("Track an object on the clip first", true);
+        return;
+    }
+    Clip next = *clip;
+    // Upsert the live-reference mosaic (same effect-shape as the
+    // smart-reframe upsert — re-pinning keeps edited params).
+    bool found = false;
+    for (ClipEffect& e : next.effects) {
+        std::string id = e.type;
+        if (id.rfind("builtin:", 0) == 0) {
+            id = id.substr(8);
+        } else if (id.rfind("plugin:", 0) == 0) {
+            id = id.substr(7);
+        }
+        if (id != Ai::kTrackMosaicId) continue;
+        if (e.params.empty()) {
+            e.params = {12.0f, 0.15f, 0.5f};
+        }
+        found = true;
+        break;
+    }
+    if (!found) {
+        next.effects.push_back(
+            {"builtin:" + std::string(Ai::kTrackMosaicId),
+             {12.0f, 0.15f, 0.5f}});
+    }
+    std::string error;
+    if (!history_.ReplaceClip(clip_id, next,
+                              BoundsForPath(clip->source_path),
+                              &error)) {
+        SetStatus("Pin mosaic failed: " + error, true);
+        return;
+    }
+    inspector_->SetClip(FindClip(project_, clip_id));
+    NotifyProjectChanged();
+    SetStatus("Pinned mosaic to tracked object");
+}
+
+void VideoEditorAppWidget::ClearClipTrack(const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr ||
+        (clip->object_track.samples.empty() &&
+         clip->object_track.label.empty() &&
+         clip->object_track.classes.empty())) {
+        SetStatus("Clip has no object track");
+        return;
+    }
+    Clip next = *clip;
+    next.object_track = ClipTrack{};
+    std::string error;
+    if (!history_.ReplaceClip(
+            clip_id, next, BoundsForPath(clip->source_path), &error)) {
+        SetStatus("Clear track failed: " + error, true);
+        return;
+    }
+    inspector_->SetClip(FindClip(project_, clip_id));
+    NotifyProjectChanged();
+    SetStatus("Object track cleared");
+}
+
 void VideoEditorAppWidget::AddMarkerAt(double t,
                                        const std::string& name) {
     Marker marker;
@@ -5534,6 +5845,9 @@ void VideoEditorAppWidget::ApplyProjectSettings(
         return;
     }
     NotifyProjectChanged();
+    // A just-lowered proxy cap takes effect now, not after the next
+    // transcode finishes (the worker sweeps post-job too).
+    SyncProxyCachePolicy();
     SetStatus("Project settings applied");
 }
 
@@ -6013,6 +6327,10 @@ void VideoEditorAppWidget::NotifyProjectChanged() {
     if (transcript_panel_) transcript_panel_->SetPlayhead(playhead_);
     RefreshWaveformPanel();
     monitor_->SetProject(project_);
+    // Keep the proxy LRU's protected set in step with the timeline:
+    // a proxy feeding an open clip must never be evicted mid-decode.
+    // Cheap early-out when the clip set didn't actually change.
+    SyncProxyProtectedSources();
     // Monitor-card chrome title — same name the title-bar pill shows.
     monitor_->SetTitle(project_path_.empty()
                            ? "Untitled"
@@ -7625,6 +7943,20 @@ std::string VideoEditorAppWidget::DispatchExtHostCall(
                 j["t1"] = s.t1;
                 j["label"] = s.label;
                 j["confidence"] = s.confidence;
+                if (!s.words.empty()) {
+                    // Real word timings (whisper token timestamps) —
+                    // animated-caption consumers use these for
+                    // karaoke/word-pop; absent means proportional.
+                    Json::Value warr(Json::arrayValue);
+                    for (const auto& w : s.words) {
+                        Json::Value wj(Json::objectValue);
+                        wj["t0"] = w.t0;
+                        wj["t1"] = w.t1;
+                        wj["text"] = w.text;
+                        warr.append(std::move(wj));
+                    }
+                    j["words"] = std::move(warr);
+                }
                 spans.append(std::move(j));
             }
             v["spans"] = std::move(spans);
@@ -7914,6 +8246,38 @@ void VideoEditorAppWidget::RequestProxyBuild(
     // sources already under the size cap — all benign "no proxy
     // needed" answers; the bin badge simply stays off. Keeping this
     // quiet matters for ingest, which calls us per imported file.
+}
+
+void VideoEditorAppWidget::SyncProxyCachePolicy() {
+    // 0 or negative means "unbounded" — SetStorageCapBytes clamps.
+    proxy_manager_.SetStorageCapBytes(
+        static_cast<std::int64_t>(project_.proxy_cache_max_mb) * 1024 *
+        1024);
+    SyncProxyProtectedSources();
+    // Sweep now so a freshly-lowered cap takes effect immediately;
+    // the worker re-sweeps after every finished job, so this only
+    // needs running when the policy itself changed.
+    proxy_manager_.EnforceStorageCap();
+}
+
+void VideoEditorAppWidget::SyncProxyProtectedSources() {
+    // The open project's media sources are never evicted — a proxy
+    // the timeline is actively resolving must not vanish mid-decode.
+    std::vector<std::string> paths;
+    paths.reserve(project_.clips.size());
+    for (const Clip& clip : project_.clips) {
+        if (clip.source.kind == SourceKind::Media &&
+            !clip.source_path.empty()) {
+            paths.push_back(clip.source_path);
+        }
+    }
+    std::sort(paths.begin(), paths.end());
+    paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
+    if (paths == proxy_protected_set_) {
+        return;   // unchanged — skip the canonicalization stats
+    }
+    proxy_protected_set_ = paths;
+    proxy_manager_.SetProtectedSources(std::move(paths));
 }
 
 MediaPrep::Options VideoEditorAppWidget::BuildPrepOptions() {
@@ -8757,11 +9121,12 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 !result.spans.empty()) {
                 std::vector<Ai::TranscriptSegment> segs;
                 segs.reserve(result.spans.size());
-                for (const AiResult::Span& s : result.spans) {
+                for (AiResult::Span& s : result.spans) {
                     Ai::TranscriptSegment seg;
                     seg.t0 = s.t0;
                     seg.t1 = s.t1;
                     seg.text = s.label;
+                    seg.words = std::move(s.words);
                     segs.push_back(std::move(seg));
                 }
                 StoreTranscriptResult(result.media_path,
@@ -8831,6 +9196,45 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                     }
                 } else {
                     SetStatus("Smart Reframe: clip no longer exists",
+                              true);
+                }
+            } else if (ok && !result.track_clip_id.empty()) {
+                // Track-object payload: ReplaceClip lands the smoothed
+                // object track (undoable, validated); pin actions
+                // become live once samples exist.
+                if (const Clip* clip =
+                        FindClip(project_, result.track_clip_id);
+                    clip != nullptr) {
+                    Clip next = *clip;
+                    const std::size_t count =
+                        result.object_track.samples.size();
+                    const std::string label =
+                        result.object_track.label;
+                    next.object_track = std::move(result.object_track);
+                    std::string rep_error;
+                    if (history_.ReplaceClip(
+                            result.track_clip_id, next,
+                            BoundsForPath(clip->source_path),
+                            &rep_error)) {
+                        inspector_->SetClip(
+                            FindClip(project_,
+                                     result.track_clip_id));
+                        NotifyProjectChanged();
+                        SetStatus(
+                            "Track object" +
+                            (count > 0
+                                 ? ": " + std::to_string(count) +
+                                       " samples" +
+                                       (label.empty()
+                                            ? ""
+                                            : " ('" + label + "')")
+                                 : ": nothing above threshold"));
+                    } else {
+                        SetStatus("Track object failed: " + rep_error,
+                                  true);
+                    }
+                } else {
+                    SetStatus("Track object: clip no longer exists",
                               true);
                 }
             } else if (ok && !result.bounce_path.empty()) {

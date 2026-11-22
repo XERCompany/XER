@@ -18,6 +18,7 @@
 #include <mutex>
 #include <set>
 
+#include "ai/object_track.h"
 #include "ai/smart_reframe.h"
 #include "app_runtime/app_runtime.h"
 #include "color/ocio_transform.h"
@@ -864,6 +865,20 @@ std::uint64_t ClipStateHash(const Clip& clip, double preview_quality,
         h = HashF32(h, s.confidence);
         h = HashU64(h, s.scene_boundary ? 1ull : 0ull);
     }
+    // Object track — the xer.fx.track_mosaic region resolves from it
+    // per frame, so a re-track must bust caches exactly like reframe.
+    h = HashStr(h, clip.object_track.label);
+    h = HashU64(h, static_cast<std::uint64_t>(
+                      clip.object_track.samples.size()));
+    for (const ReframeSample& s : clip.object_track.samples) {
+        h = HashF64(h, s.t);
+        h = HashF32(h, s.cx);
+        h = HashF32(h, s.cy);
+        h = HashF32(h, s.w);
+        h = HashF32(h, s.h);
+        h = HashF32(h, s.confidence);
+        h = HashU64(h, s.scene_boundary ? 1ull : 0ull);
+    }
     h = HashU64(h, static_cast<std::uint64_t>(clip.masks.size()));
     for (const ClipMask& m : clip.masks) {
         h = HashU64(h, static_cast<std::uint64_t>(m.shape));
@@ -1358,6 +1373,103 @@ struct Compositor::Impl {
         ResampleBilinearBGRA(fx_lo_, frame);
     }
 
+    // xer.fx.track_mosaic: pixelate the clip's tracked object box in
+    // CLIP-FRAME space (the track stores frame fractions, so the box
+    // maps 1:1 onto the decoded frame and rides the later warp with
+    // the content — the censor follows whatever the transform does).
+    // `clip_time_s` is the clip-local u; source time resolves as
+    // in_point + u*rate, matching the decode-branch math. An empty
+    // track (or a degenerate box) leaves the frame untouched.
+    void ApplyTrackedMosaic(ClipSession& s, const ClipEffect& effect,
+                          double clip_time_s) {
+        video::Frame& frame = s.frame;
+        const Clip& clip = *s.clip;
+        if (!frame.IsValid() ||
+            frame.Format() != video::PixelFormat::BGRA8 ||
+            clip.object_track.samples.empty()) {
+            return;
+        }
+        const double rate =
+            std::isfinite(clip.playback_rate) && clip.playback_rate > 0.0
+                ? clip.playback_rate
+                : 1.0;
+        const double src_t = clip.in_point + clip_time_s * rate;
+        const double smooth = std::clamp(
+            EffectParamDouble(effect, 2, 0.5), 0.0, 1.0);
+        const Ai::TrackBox box =
+            Ai::TrackBoxAt(clip.object_track, src_t, smooth);
+        if (box.w <= 0.0 || box.h <= 0.0) {
+            return;
+        }
+        const int block = std::clamp(EffectParamInt(effect, 0, 12),
+                                     2, 128);
+        const double pad =
+            std::clamp(EffectParamDouble(effect, 1, 0.15), 0.0, 1.0);
+        const double fw = static_cast<double>(frame.Width());
+        const double fh = static_cast<double>(frame.Height());
+        const double pw = box.w * fw * (1.0 + pad);
+        const double ph = box.h * fh * (1.0 + pad);
+        const int x0 = std::clamp(
+            static_cast<int>(std::floor(box.cx * fw - pw * 0.5)), 0,
+            frame.Width());
+        const int y0 = std::clamp(
+            static_cast<int>(std::floor(box.cy * fh - ph * 0.5)), 0,
+            frame.Height());
+        const int x1 = std::clamp(
+            static_cast<int>(std::ceil(box.cx * fw + pw * 0.5)), 0,
+            frame.Width());
+        const int y1 = std::clamp(
+            static_cast<int>(std::ceil(box.cy * fh + ph * 0.5)), 0,
+            frame.Height());
+        if (x1 <= x0 || y1 <= y0) {
+            return;
+        }
+        // Block-average pixelate of the region — BGRA, straight alpha;
+        // alpha averages with the color so partially-masked boxes stay
+        // honest.
+        const int stride = frame.Stride();
+        std::uint8_t* data = frame.Data();
+        for (int by = y0; by < y1; by += block) {
+            const int bh = std::min(block, y1 - by);
+            for (int bx = x0; bx < x1; bx += block) {
+                const int bw = std::min(block, x1 - bx);
+                unsigned acc[4] = {0, 0, 0, 0};
+                for (int yy = by; yy < by + bh; ++yy) {
+                    const std::uint8_t* row =
+                        data + static_cast<std::size_t>(yy) * stride;
+                    for (int xx = bx; xx < bx + bw; ++xx) {
+                        const std::uint8_t* p = row + xx * 4;
+                        acc[0] += p[0];
+                        acc[1] += p[1];
+                        acc[2] += p[2];
+                        acc[3] += p[3];
+                    }
+                }
+                const unsigned n =
+                    static_cast<unsigned>(bw) * static_cast<unsigned>(bh);
+                const std::uint8_t mb =
+                    static_cast<std::uint8_t>(acc[0] / n);
+                const std::uint8_t mg =
+                    static_cast<std::uint8_t>(acc[1] / n);
+                const std::uint8_t mr =
+                    static_cast<std::uint8_t>(acc[2] / n);
+                const std::uint8_t ma =
+                    static_cast<std::uint8_t>(acc[3] / n);
+                for (int yy = by; yy < by + bh; ++yy) {
+                    std::uint8_t* row =
+                        data + static_cast<std::size_t>(yy) * stride;
+                    for (int xx = bx; xx < bx + bw; ++xx) {
+                        std::uint8_t* p = row + xx * 4;
+                        p[0] = mb;
+                        p[1] = mg;
+                        p[2] = mr;
+                        p[3] = ma;
+                    }
+                }
+            }
+        }
+    }
+
     void ApplyClipEffects(ClipSession& s,
                           const std::vector<ClipEffect>& effects,
                           double clip_time_s) {
@@ -1379,6 +1491,13 @@ struct Compositor::Impl {
                 // warp stage. Skip it here (its ABI fn is identity
                 // anyway).
                 if (desc != nullptr && desc->id == Ai::kSmartReframeId) {
+                    continue;
+                }
+                // Tracked Mosaic is also track-driven: its pixelated
+                // region comes from Clip::object_track at the frame's
+                // source time (the live-reference pin, auto-censor).
+                if (desc != nullptr && desc->id == Ai::kTrackMosaicId) {
+                    ApplyTrackedMosaic(s, effect, clip_time_s);
                     continue;
                 }
                 if (desc != nullptr &&

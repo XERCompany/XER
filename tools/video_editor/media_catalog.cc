@@ -1342,6 +1342,41 @@ bool MediaCatalog::GetProxy(const std::string& utf8_path,
     return true;
 }
 
+bool MediaCatalog::ListProxies(std::vector<ProxyRecord>* out,
+                               std::string* error_out) const {
+    if (out == nullptr) {
+        return Fail(error_out, "null proxies out-param");
+    }
+    out->clear();
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!IsOpenLocked()) {
+        return Fail(error_out, "catalog is not open");
+    }
+    std::vector<Row> rows;
+    if (!db_->Query(
+            "SELECT path, proxy_path, state, src_size, src_mtime,"
+            " max_dim, error, updated_at FROM proxies",
+            {}, rows, error_out)) {
+        return false;
+    }
+    out->reserve(rows.size());
+    for (const Row& row : rows) {
+        if (row.columns.size() < 8) continue;
+        const auto& cols = row.columns;
+        ProxyRecord rec;
+        rec.path = AsString(cols[0]);
+        rec.proxy_path = AsString(cols[1]);
+        rec.status = static_cast<ProxyStatus>(AsInt(cols[2]));
+        rec.src_size = AsInt(cols[3]);
+        rec.src_mtime = AsInt(cols[4]);
+        rec.max_dim = static_cast<int>(AsInt(cols[5]));
+        rec.error = AsString(cols[6]);
+        rec.updated_at_unix = AsInt(cols[7]);
+        out->push_back(std::move(rec));
+    }
+    return true;
+}
+
 bool MediaCatalog::RemoveProxy(const std::string& utf8_path,
                                std::string* error_out) {
     std::string canon;

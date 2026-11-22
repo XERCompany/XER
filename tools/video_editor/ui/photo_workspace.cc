@@ -358,6 +358,54 @@ void PhotoWorkspaceWidget::EnsureChildren() {
         make_btn("None", W::ButtonStyle::Ghost,
                  [this] { Deselect(); },
                  "Deselect (Ctrl+D)");
+    refine_btn_ =
+        make_btn("Refine", W::ButtonStyle::Ghost,
+                 [this] { ToggleRefineEdgePanel(); },
+                 "Refine Edge — radius/smooth/feather/contrast/shift "
+                 "the selection edge (Select menu)");
+
+    // Refine-Edge panel (modeless card over the viewport — see
+    // RefinePanelRect/SyncRefinePanelVisibility). Slider params map
+    // onto Photo::RefineEdgeParams; ApplyRefineEdge commits them.
+    auto rf_radius = make_opt(
+        "Radius", 0.0f, 40.0f, 0.0f,
+        [this](float v) { refine_params_.radius_px = v; },
+        "Refine band width (px) — pre-softens the edge zone");
+    rf_radius_label_ = rf_radius.first;
+    rf_radius_slider_ = rf_radius.second;
+    auto rf_smooth = make_opt(
+        "Smooth", 0.0f, 100.0f, 0.0f,
+        [this](float v) { refine_params_.smooth = v / 100.0f; },
+        "De-jag strength (%) — relaxes stepped marquee/lasso edges");
+    rf_smooth_label_ = rf_smooth.first;
+    rf_smooth_slider_ = rf_smooth.second;
+    auto rf_feather = make_opt(
+        "Feather", 0.0f, 50.0f, 0.0f,
+        [this](float v) { refine_params_.feather_px = v; },
+        "Edge softening (px)");
+    rf_feather_label_ = rf_feather.first;
+    rf_feather_slider_ = rf_feather.second;
+    auto rf_contrast = make_opt(
+        "Contrast", -100.0f, 100.0f, 0.0f,
+        [this](float v) { refine_params_.contrast = v / 100.0f; },
+        "Edge-ramp steepening about 50% (+ hard / - flat)");
+    rf_contrast_label_ = rf_contrast.first;
+    rf_contrast_slider_ = rf_contrast.second;
+    auto rf_shift = make_opt(
+        "Shift", -50.0f, 50.0f, 0.0f,
+        [this](float v) { refine_params_.shift_px = v; },
+        "Shift Edge (px) — + grows, - contracts the selection");
+    rf_shift_label_ = rf_shift.first;
+    rf_shift_slider_ = rf_shift.second;
+    rf_apply_btn_ =
+        make_btn("Apply", W::ButtonStyle::Primary,
+                 [this] { ApplyRefineEdge(); },
+                 "Apply to the active selection (undoable)");
+    rf_close_btn_ =
+        make_btn("Close", W::ButtonStyle::Secondary,
+                 [this] { ToggleRefineEdgePanel(); },
+                 "Close the Refine Edge panel");
+    SyncRefinePanelVisibility();
 
     color_input_ = std::make_shared<W::TextInput>(
         HexOf(brush_params_.color));
@@ -1060,6 +1108,7 @@ void PhotoWorkspaceWidget::SetTool(Tool tool) {
                                     tool_ != Tool::MagicWand);
         invert_sel_btn_->SetVisible(selecty);
         deselect_btn_->SetVisible(selecty);
+        refine_btn_->SetVisible(selecty);
         static const char* const kHints[] = {
             "Brush — drag to paint on the active layer",
             "Eraser — drag to erase on the active layer",
@@ -1393,6 +1442,9 @@ void PhotoWorkspaceWidget::RefreshSelectionState() {
     sel_outline_ = selection_nonempty_
                        ? ph::SelectionOutline(*selection_)
                        : std::vector<ph::IntPoint>{};
+    // The Refine-Edge Apply button tracks "has selection" — cheap
+    // because the sync only touches visibility/enabled flags.
+    if (refine_panel_visible_) SyncRefinePanelVisibility();
 }
 
 void PhotoWorkspaceWidget::RunSelectionOp(
@@ -1425,6 +1477,68 @@ void PhotoWorkspaceWidget::FeatherSelectionPx(float radius_px) {
     RunSelectionOp("Feather Selection", [radius_px](ph::TiledDevice& s) {
         ph::FeatherSelection(s, radius_px);
     });
+}
+
+// ---------------------------------------------------------------------------
+// M4+: Refine-Edge panel (modeless card over the viewport)
+// ---------------------------------------------------------------------------
+
+Layout::Rect PhotoWorkspaceWidget::RefinePanelRect() const {
+    // Anchored to the viewport's top-left; sized for the five slider
+    // rows + title + button row. Clamped into the viewport so a tiny
+    // window never pushes the card off-canvas.
+    const float w = std::min(300.0f, std::max(160.0f,
+                                              viewport_.width - 16.0f));
+    const float h = std::min(244.0f, std::max(140.0f,
+                                              viewport_.height - 16.0f));
+    return {viewport_.x + 8.0f, viewport_.y + 8.0f, w, h};
+}
+
+void PhotoWorkspaceWidget::SyncRefinePanelVisibility() {
+    if (!children_attached_) return;
+    const bool on = refine_panel_visible_;
+    const std::shared_ptr<Widgets::Widget> panel_children[] = {
+        rf_radius_label_,  rf_radius_slider_, rf_smooth_label_,
+        rf_smooth_slider_, rf_feather_label_, rf_feather_slider_,
+        rf_contrast_label_, rf_contrast_slider_, rf_shift_label_,
+        rf_shift_slider_,  rf_apply_btn_,     rf_close_btn_};
+    for (const auto& c : panel_children) {
+        if (c != nullptr) c->SetVisible(on);
+    }
+    if (rf_apply_btn_ != nullptr) {
+        rf_apply_btn_->SetEnabled(selection_nonempty_);
+    }
+}
+
+void PhotoWorkspaceWidget::ToggleRefineEdgePanel() {
+    refine_panel_visible_ = !refine_panel_visible_;
+    SyncRefinePanelVisibility();
+    Invalidate();
+    RequestLayout();
+    if (refine_panel_visible_) {
+        SetStatus(selection_nonempty_
+                      ? "Refine Edge — adjust, then Apply"
+                      : "Refine Edge — make a selection first");
+    }
+}
+
+void PhotoWorkspaceWidget::ApplyRefineEdge() {
+    if (!selection_nonempty_) {
+        SetStatus("No active selection to refine", true);
+        return;
+    }
+    const ph::RefineEdgeParams p = refine_params_;
+    const bool noop = p.radius_px <= 0.0f && p.smooth <= 0.0f &&
+                      p.feather_px <= 0.0f && p.contrast == 0.0f &&
+                      p.shift_px == 0.0f;
+    if (noop) {
+        SetStatus("Refine Edge — all sliders at zero");
+        return;
+    }
+    RunSelectionOp("Refine Edge", [p](ph::TiledDevice& s) {
+        ph::RefineSelectionEdge(s, p);
+    });
+    SetStatus("Refine Edge applied");
 }
 
 ph::SelectionCombine PhotoWorkspaceWidget::PendingCombine() const {
@@ -1975,6 +2089,7 @@ void PhotoWorkspaceWidget::Layout(const Layout::Rect& bounds) {
         };
     place_opt_btn(invert_sel_btn_, selecty, 40.0f);
     place_opt_btn(deselect_btn_, selecty, 46.0f);
+    place_opt_btn(refine_btn_, selecty, 56.0f);
 
     // Colors: fg chip + swatches + hex input, right-aligned.
     float cx = right_edge - kPad;
@@ -2085,6 +2200,32 @@ void PhotoWorkspaceWidget::Layout(const Layout::Rect& bounds) {
     by -= 32.0f;
     name_input_->Layout({lx, by, lw, kBtnH}, tokens);
     // The rows' cached rects are recomputed lazily by LayerRowRect.
+
+    // ---- Refine-Edge panel (modeless card over the viewport) ----
+    if (refine_panel_visible_) {
+        const Layout::Rect pr = RefinePanelRect();
+        const float row_h = 28.0f;
+        float ry = pr.y + 34.0f;   // below the drawn title band
+        const auto rf_row =
+            [&](const std::shared_ptr<Widgets::Label>& l,
+                const std::shared_ptr<Widgets::Slider>& s) {
+                l->Layout({pr.x + 12.0f, ry + 6.0f, 66.0f, 16.0f},
+                          tokens);
+                s->Layout({pr.x + 84.0f, ry, pr.width - 96.0f, row_h},
+                          tokens);
+                ry += row_h + 4.0f;
+            };
+        rf_row(rf_radius_label_, rf_radius_slider_);
+        rf_row(rf_smooth_label_, rf_smooth_slider_);
+        rf_row(rf_feather_label_, rf_feather_slider_);
+        rf_row(rf_contrast_label_, rf_contrast_slider_);
+        rf_row(rf_shift_label_, rf_shift_slider_);
+        const float bw = (pr.width - 30.0f) * 0.5f;
+        rf_apply_btn_->Layout({pr.x + 10.0f, ry + 2.0f, bw, kBtnH},
+                              tokens);
+        rf_close_btn_->Layout({pr.x + 20.0f + bw, ry + 2.0f, bw, kBtnH},
+                              tokens);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2422,6 +2563,27 @@ void PhotoWorkspaceWidget::Render(
                   static_cast<int>(zoom_ * 100.0f));
     zoom_label_->SetText(zoom_text);
 
+    // ---- Refine-Edge panel card (children draw themselves on top) --
+    if (refine_panel_visible_) {
+        const Layout::Rect pr = RefinePanelRect();
+        renderer.FillRect(pr, tokens.surface, tokens.radius_large);
+        renderer.StrokeRect(pr, tokens.border, 1.0f,
+                            tokens.radius_large);
+        renderer.FillRect({pr.x, pr.y, 3.0f, pr.height}, tokens.accent,
+                          tokens.radius_large);
+        VeIcons::DrawSectionHeader(
+            renderer, tokens,
+            {pr.x + 10.0f, pr.y + 2.0f, pr.width - 20.0f,
+             VeTheme::kRowHeight},
+            "Refine Edge", false);
+        if (!selection_nonempty_) {
+            renderer.DrawText(
+                "no active selection",
+                {pr.x + 12.0f, pr.y + 30.0f, pr.width - 24.0f, 16.0f},
+                {tokens.muted, tokens.font_small, 400});
+        }
+    }
+
     if (IsFocused()) {
         RenderFocusRing(renderer, tokens, tokens.radius_large);
     }
@@ -2439,6 +2601,13 @@ bool PhotoWorkspaceWidget::HandleEvent(
 
     switch (event.type) {
         case Event::Type::MouseWheel: {
+            // The modeless Refine-Edge card swallows wheel input over
+            // its rect — a scroll there must not zoom the canvas under
+            // the panel (its own children handle their fields first).
+            if (refine_panel_visible_ &&
+                RefinePanelRect().Contains(event.position)) {
+                return true;
+            }
             // Layers list scrolls; the viewport zooms at the cursor.
             const int row_zone = LayerRowAt(event.position);
             const auto b = GetBounds();
@@ -2476,6 +2645,12 @@ bool PhotoWorkspaceWidget::HandleEvent(
                 return false;
             }
             const Layout::Point p = event.position;
+            // The modeless Refine-Edge card eats pointer presses over
+            // its rect — the canvas marquee/pan logic must not see a
+            // click that landed on the panel's background.
+            if (refine_panel_visible_ && RefinePanelRect().Contains(p)) {
+                return true;
+            }
             // Swatch pick (top bar).
             for (int i = 0;
                  i < static_cast<int>(swatch_rects_.size()); ++i) {
@@ -2753,6 +2928,8 @@ bool PhotoWorkspaceWidget::HandleEvent(
             // don't re-select; clicks are swallowed to keep the event
             // from bubbling into other widgets.
             return LayerRowAt(event.position) >= 0 ||
+                   (refine_panel_visible_ &&
+                    RefinePanelRect().Contains(event.position)) ||
                    viewport_.Contains(event.position);
 
         case Event::Type::KeyDown: {
@@ -2762,6 +2939,15 @@ bool PhotoWorkspaceWidget::HandleEvent(
                 return true;
             }
             if (event.key == KeyCode::Escape) {
+                if (refine_panel_visible_ && !stroking_ &&
+                    !marquee_drag_ && !poly_active_) {
+                    // No gesture in flight: Escape closes the modeless
+                    // panel (same convention as dialogs).
+                    refine_panel_visible_ = false;
+                    SyncRefinePanelVisibility();
+                    Invalidate();
+                    return true;
+                }
                 if (stroking_ || gradient_drag_ || marquee_drag_ ||
                     poly_active_ || retouch_drag_) {
                     stroking_ = false;

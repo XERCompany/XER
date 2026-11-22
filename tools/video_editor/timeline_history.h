@@ -107,6 +107,19 @@ public:
                           std::string* error_out = nullptr);
     bool LiftRange(double t0, double t1, bool close_gap,
                    std::string* error_out = nullptr);
+    // Compound (Premiere "Nest"): selected clips move into a new
+    // stored Sequence and one compound clip replaces them. Ids are
+    // minted internally and returned via the out-params (the model
+    // op takes them by value so the snapshot command replays
+    // deterministically). FlattenCompound restores the sequence's
+    // clips inline — see timeline_model.h for the placement rules.
+    bool MakeCompound(std::vector<std::string> clip_ids,
+                      std::string name,
+                      std::string* clip_id_out = nullptr,
+                      std::string* sequence_id_out = nullptr,
+                      std::string* error_out = nullptr);
+    bool FlattenCompound(const std::string& clip_id,
+                         std::string* error_out = nullptr);
     bool RollingEdit(const std::string& from_clip,
                      const std::string& to_clip, double delta_seconds,
                      const MediaBounds& from_bounds,

@@ -148,6 +148,23 @@ struct ClipReframe {
     std::vector<ReframeSample> samples;  // sorted by t, source seconds
 };
 
+// AI "Track object" result on a clip (ai/object_track.h — ctx-menu
+// "Track object…" / inspector OBJECT TRACK). The smoothed bounding-box
+// track that pinned content follows: baked title positions and the
+// live xer.fx.track_mosaic censor both resolve from it. Samples reuse
+// ReframeSample verbatim — same source-seconds / frame-fraction
+// contract — but the track is stored SEPARATELY from Clip::reframe so
+// pinning never fights the reframe analysis for the same storage (a
+// clip can reframe a person while censoring a car). `label` names the
+// dominant tracked class; `classes` lists every distinct label the
+// scan observed — the "pick detection" candidates a re-scan can be
+// narrowed to (ScanClipTrack's label_filter).
+struct ClipTrack {
+    std::vector<ReframeSample> samples;   // sorted by t, source seconds
+    std::string label;                    // picked class ("person", …)
+    std::vector<std::string> classes;     // labels observed in the span
+};
+
 struct Clip {
     std::string id;             // uuid (NewClipId)
     std::string source_path;    // UTF-8
@@ -179,6 +196,15 @@ struct Clip {
     std::string link_group;     // non-empty: clips in a group move together
     std::vector<ClipTag> tags;  // AI find-objects result (source seconds)
     ClipReframe reframe;        // AI smart-reframe subject track
+    ClipTrack object_track;     // AI track-object result for pinning
+    // Compound clip (Premiere "Nest" / Resolve "Compound Clip" /
+    // FCP "Compound"): non-empty `compound` is the id of a Sequence in
+    // Project::sequences whose timeline the clip renders/mixes. The
+    // normal timing fields keep their meaning: in_point is a
+    // SEQUENCE-local seconds offset, playback_rate maps sequence time
+    // like media time, duration is the timeline footprint. source/
+    // source_path stay empty — the sub-sequence is the source.
+    std::string compound;
 };
 struct Transition {
     std::string from_clip, to_clip;     // adjacent on same VIDEO track
@@ -204,6 +230,27 @@ struct Track {
     float pan = 0.0f;      // stereo position [-1, 1] — summed with
                            // clip.pan (clamped) by the audio mixer
 };
+// A named sub-sequence — the timeline content a compound clip (see
+// Clip::compound) renders/mixes, and the editing unit the UI opens
+// into a nested timeline level. Tracks/clips/transitions/markers have
+// EXACTLY the Project-field meanings, in sequence-local seconds; a
+// Sequence never stores canvas/fps — it inherits the owning
+// Project's. `source_tracks` runs parallel to `tracks` and records
+// the outer track index each inner track was copied from at
+// MakeCompound time (-1 when created inside another sequence or by
+// hand) — FlattenCompound prefers it to restore the original layout
+// before falling back to greedy kind-matched assignment.
+struct Sequence {
+    std::string id;          // uuid — same namespace style as clip ids
+    std::string name;        // shown on compound clips + breadcrumbs
+    std::vector<Track> tracks;
+    std::vector<Clip> clips;
+    std::vector<Transition> transitions;
+    std::vector<Marker> markers;
+    std::vector<int> source_tracks;   // parallel to tracks; -1 = none
+    double work_in = 0.0, work_out = 0.0;
+    double duration() const;   // max clip end, 0 if empty
+};
 struct Project {
     int width = 1920, height = 1080;
     int fps_num = 30, fps_den = 1;
@@ -212,6 +259,15 @@ struct Project {
     std::vector<Clip> clips;
     std::vector<Transition> transitions;
     std::vector<Marker> markers;        // timeline markers, sorted by time
+    // Named sub-sequences compound clips can reference via
+    // Clip::compound. Sequences are stored — never embedded in a
+    // clip — so a compound is one Clip + one Sequence row. Orphaned
+    // sequences (no clip references them) are legal but
+    // FlattenCompound deletes the sequence it restores when nothing
+    // else uses it. Nesting is supported (a sequence may itself
+    // contain compound clips) subject to kMaxCompoundDepth; cycles are
+    // rejected at load and by MakeCompound construction.
+    std::vector<Sequence> sequences;
     double work_in = 0.0, work_out = 0.0;   // export/preview range;
                                            // work_out <= work_in = whole
     float master_gain_db = 0.0f;       // post-mix master fader (dB),
@@ -231,6 +287,12 @@ struct Project {
     // are unaffected — their own params ride the catalog row).
     int proxy_max_dim = 960;        // long-edge cap, px
     int proxy_crf = 28;             // h264 constant-quality target
+    // Managed-proxy storage cap in MiB (0 = unbounded). ProxyManager
+    // evicts least-recently-used proxy files + catalog rows once the
+    // proxies dir exceeds it; sources in the open project are
+    // protected (see proxy_manager.h EnforceStorageCap). The LRU
+    // stamp is the proxy file's mtime — touched on every resolve.
+    int proxy_cache_max_mb = 20480; // 20 GiB default
     double duration() const;   // max(timeline_start + duration), 0 if empty
 };
 
@@ -412,6 +474,89 @@ const char* TransitionTypeLabel(Transition::Type type);
 // endpoint, on different tracks, or non-adjacent (to.start ≈
 // from.end). Called by every mutating op and by project_store load.
 void DropInvalidTransitions(Project&);
+// Same prune for a stored sequence's transition list (sequence-local
+// tracks/clips obey identical rules).
+void DropInvalidTransitions(Sequence&);
+
+// ---- compound clips / nested sequences ------------------------------
+
+// Deepest supported compound nesting (compound inside compound inside
+// ...). Render/mix paths stop recursing here and contribute nothing
+// rather than running an unbounded subgraph — project_store rejects
+// deeper graphs at load.
+inline constexpr int kMaxCompoundDepth = 16;
+
+const Sequence* FindSequence(const Project&,
+                             const std::string& sequence_id);
+Sequence*       FindSequence(Project&, const std::string& sequence_id);
+// A compound clip carries a non-empty sequence reference.
+bool IsCompoundClip(const Clip&);
+// True when ANY clip references `sequence_id` — the top-level
+// project.clips plus every stored sequence's clips are all scanned,
+// so a sequence used only inside another compound still counts.
+bool SequenceInUse(const Project&, const std::string& sequence_id);
+// Materializes `sequence` as a renderable Project: canvas/fps/proxy
+// fields come from `owner`, tracks/clips/transitions/markers/work
+// area come from the sequence, sequences are shared (nested compound
+// clips inside the sequence resolve against the owner's store), and
+// bg_color/master_gain_db are neutralized — inner holes render
+// transparent and the inner mix carries no master fader (the outer
+// project's own bg/fader apply once at its level).
+Project SequenceProject(const Project& owner, const Sequence& sequence);
+// Detects a compound-reference cycle (seq A contains a clip -> seq B
+// -> ... -> seq A) anywhere in the stored sequences. Cycles can only
+// enter through hand-edited files — MakeCompound always mints a fresh
+// sequence, so a new reference can never close a loop.
+bool CompoundGraphHasCycle(const Project&);
+
+// Premiere "Nest…" / Resolve "New Compound Clip": the clips named by
+// `clip_ids` (any mix of video/audio tracks) move into a new stored
+// Sequence and are replaced by ONE compound clip.
+//   * The new sequence's timeline starts at 0: inner clip starts are
+//     shifted by -span_start; inner tracks are copied in the order of
+//     the distinct source tracks used, and Sequence::source_tracks
+//     remembers each copy's outer index for FlattenCompound.
+//   * Transitions fully inside the selection move into the sequence;
+//     transitions crossing the selection boundary are dropped (a
+//     cross-boundary transition has no valid endpoint afterwards).
+//   * Markers are NOT moved (they stay at the parent level, matching
+//     Premiere); keyframes/link_groups/tags ride the copied clips.
+//   * The compound clip lands on the lowest-indexed source track
+//     matching the content kind (first video track when any selected
+//     clip sits on one, else first audio track), spans the union
+//     [min_start, max_end), and gets name/in_point=0/duration=span.
+//     Its other fields stay at Clip defaults — the caller edits them
+//     like any clip afterwards.
+// `name` labels both the clip and the stored sequence (empty -> a
+// default is generated). `new_clip_id`/`new_sequence_id` are
+// caller-supplied so undo commands can replay the exact result
+// (SplitClip precedent) — non-empty, unique in their namespaces.
+// Errors: empty selection, unknown/duplicate ids, locked source or
+// target track, a non-selected clip overlapping the span on the
+// target track, or an id collision. Transactional.
+bool MakeCompound(Project&, const std::vector<std::string>& clip_ids,
+                  const std::string& name,
+                  const std::string& new_clip_id,
+                  const std::string& new_sequence_id,
+                  std::string* error_out);
+
+// Inverse of MakeCompound ("Decompose" / flatten): the compound clip
+// is removed and its sequence's clips are restored inline exactly
+// where the compound DISPLAYED them — inner clip c lands at
+// clip.timeline_start + (c.start - clip.in_point) / clip.playback_rate
+// with duration c.duration / clip.playback_rate and its own rate
+// folded by the compound's, so a retimed or in-trimmed compound
+// restores WYSIWYG. Content landing before t=0 is trimmed away.
+// Tracks are restored via
+// Sequence::source_tracks first, then greedy kind-matched assignment,
+// creating tracks when needed. Inner clip ids that collide with
+// existing project clip ids are reminted (inner transitions follow
+// via the remap). The stored sequence is deleted when no other clip
+// (top-level or nested) still references it. Errors: unknown clip,
+// not a compound, unresolved sequence, locked target track.
+// Transactional.
+bool FlattenCompound(Project&, const std::string& clip_id,
+                     std::string* error_out);
 
 // Handle seconds a clip's contribution window extends past its
 // nominal [timeline_start, end) range: {in_handle, out_handle} where

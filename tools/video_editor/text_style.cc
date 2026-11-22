@@ -280,19 +280,36 @@ struct LaidOutLine {
     std::vector<SkPoint> pos;        // pen origin per glyph (y = 0,
                                      // baseline added at draw time)
     std::vector<bool> use_fallback;  // per glyph: drawn with `fallback`
+    // Whitespace-delimited word index per glyph (-1 = separator).
+    // Words number up ACROSS lines — the karaoke word_times table
+    // indexes this — and a hard '\n' always breaks a word.
+    std::vector<int> word_index;
     float width = 0.0f;
 };
 
 // Shapes one line into glyph ids + pen positions. Missing glyphs hop
 // to `fallback` so mixed-script titles don't tofu out; `tracking` is
-// appended after every glyph.
+// appended after every glyph. `word_counter` is in/out and keeps
+// counting across lines (the caller seeds it at -1 before line 0).
 LaidOutLine LayOutLine(const std::string& line, const SkFont& font,
-                       const SkFont& fallback, float tracking) {
+                       const SkFont& fallback, float tracking,
+                       int* word_counter) {
     LaidOutLine out;
     const std::vector<SkUnichar> chars = DecodeUtf8(line);
     out.glyphs.reserve(chars.size());
     out.use_fallback.reserve(chars.size());
+    out.word_index.reserve(chars.size());
+    bool in_word = false;   // '\n' split already reset this per line
     for (const SkUnichar u : chars) {
+        const bool sep = (u == 0x20 || u == 0x09);
+        if (sep) {
+            out.word_index.push_back(-1);
+            in_word = false;
+        } else {
+            if (!in_word) ++(*word_counter);
+            in_word = true;
+            out.word_index.push_back(*word_counter);
+        }
         SkGlyphID glyph = font.unicharToGlyph(u);
         bool fb = false;
         if (glyph == 0) {
@@ -332,7 +349,7 @@ LaidOutLine LayOutLine(const std::string& line, const SkFont& font,
 }
 
 bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
-                        video::Frame* out) {
+                        double clip_local_t, video::Frame* out) {
     if (in_style.text.empty()) {
         return EmptyFrame(out);
     }
@@ -382,11 +399,31 @@ bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
     std::vector<LaidOutLine> laid;
     laid.reserve(lines.size());
     float block_w = 0.0f;
+    int word_counter = -1;
     for (const std::string& line : lines) {
         laid.push_back(LayOutLine(line, font, fallback,
-                                  style.letter_spacing));
+                                  style.letter_spacing,
+                                  &word_counter));
         block_w = std::max(block_w, laid.back().width);
     }
+
+    // Karaoke fill buckets: 0 = base color (inactive — and "done"
+    // when no done color is set), 1 = active word, 2 = done words.
+    const bool karaoke_on =
+        style.karaoke && !style.word_times.empty();
+    const auto bucket_of = [&](int wi) -> int {
+        if (!karaoke_on || wi < 0 ||
+            wi >= static_cast<int>(style.word_times.size())) {
+            return 0;
+        }
+        const auto& ws =
+            style.word_times[static_cast<std::size_t>(wi)];
+        if (clip_local_t >= ws.t0 && clip_local_t < ws.t1) return 1;
+        if (clip_local_t >= ws.t1) {
+            return style.karaoke_done[3] > 0 ? 2 : 0;
+        }
+        return 0;
+    };
     const float block_h =
         (-metrics.fAscent + metrics.fDescent) +
         (laid.size() > 0 ? (laid.size() - 1) * line_adv : 0.0f);
@@ -498,7 +535,13 @@ bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
                    ? (region_h - block_h)
                    : 0.0f);
 
-    auto draw_glyphs = [&](SkPaint& paint, bool decorations) {
+    // Glyph pass driver: `paints` holds 1..3 colors — bucket 0 is
+    // always the pass color; karaoke fills pass all three so a glyph
+    // run is additionally split on its word's timing bucket. The
+    // shadow/stroke passes stay single-paint (one run split per font
+    // change, exactly as before).
+    auto draw_glyphs = [&](SkPaint* paints, int paint_count,
+                           bool decorations) {
         for (std::size_t li = 0; li < laid.size(); ++li) {
             const LaidOutLine& line = laid[li];
             if (line.glyphs.empty()) continue;
@@ -520,16 +563,22 @@ bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
             std::size_t i = 0;
             while (i < line.glyphs.size()) {
                 const bool fb = line.use_fallback[i];
+                const int bucket =
+                    paint_count > 1 ? bucket_of(line.word_index[i])
+                                    : 0;
                 std::size_t j = i;
                 while (j < line.glyphs.size() &&
-                       line.use_fallback[j] == fb) {
+                       line.use_fallback[j] == fb &&
+                       (paint_count <= 1 ||
+                        bucket_of(line.word_index[j]) == bucket)) {
                     ++j;
                 }
                 canvas->drawGlyphs(
                     SkSpan<const SkGlyphID>(line.glyphs.data() + i,
                                             j - i),
                     SkSpan<const SkPoint>(pos.data() + i, j - i),
-                    {0, 0}, fb ? fallback : font, paint);
+                    {0, 0}, fb ? fallback : font,
+                    paints[std::clamp(bucket, 0, paint_count - 1)]);
                 i = j;
             }
             // Decorations ride on the fill pass' paint — they inherit
@@ -548,7 +597,7 @@ bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
                          : size_px * 0.08f);
                 canvas->drawRect(
                     SkRect::MakeLTRB(left, uy, line_right, uy + thick),
-                    paint);
+                    paints[0]);
             }
             if (decorations && style.strike) {
                 const float thick =
@@ -563,7 +612,7 @@ bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
                     thick * 0.5f;
                 canvas->drawRect(
                     SkRect::MakeLTRB(left, sy, line_right, sy + thick),
-                    paint);
+                    paints[0]);
             }
         }
     };
@@ -578,7 +627,7 @@ bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
         }
         canvas->save();
         canvas->translate(sh_dx, sh_dy);
-        draw_glyphs(paint, false);
+        draw_glyphs(&paint, 1, false);
         canvas->restore();
     }
     if (style.outline_px > 0.0f) {
@@ -587,13 +636,28 @@ bool RenderClipTextSkia(const ClipTextStyle& in_style, int canvas_h,
         paint.setStyle(SkPaint::kStroke_Style);
         paint.setStrokeWidth(style.outline_px);
         paint.setColor(BgraToSkColor(style.outline_color));
-        draw_glyphs(paint, false);
+        draw_glyphs(&paint, 1, false);
     }
     {
-        SkPaint paint;
-        paint.setAntiAlias(true);
-        paint.setColor(BgraToSkColor(style.color, style.fill_opacity));
-        draw_glyphs(paint, true);
+        // Fill — up to three paints so the karaoke pass can split
+        // glyph runs into inactive / active / done colors.
+        SkPaint fills[3];
+        fills[0].setAntiAlias(true);
+        fills[0].setColor(
+            BgraToSkColor(style.color, style.fill_opacity));
+        int fill_count = 1;
+        if (karaoke_on) {
+            fills[1] = fills[0];
+            fills[1].setColor(BgraToSkColor(style.karaoke_active,
+                                            style.fill_opacity));
+            fills[2] = fills[0];
+            if (style.karaoke_done[3] > 0) {
+                fills[2].setColor(BgraToSkColor(style.karaoke_done,
+                                                style.fill_opacity));
+            }
+            fill_count = 3;
+        }
+        draw_glyphs(fills, fill_count, true);
     }
     canvas->restore();
 
@@ -649,7 +713,7 @@ constexpr std::array<std::uint8_t, 4> kShadowNear{0, 0, 0, 120};
 constexpr std::array<std::uint8_t, 4> kShadowFar{0, 0, 0, 45};
 
 bool RenderClipTextBitmap(const ClipTextStyle& style, int canvas_h,
-                          video::Frame* out) {
+                          double clip_local_t, video::Frame* out) {
     if (style.text.empty()) {
         return EmptyFrame(out);
     }
@@ -687,20 +751,109 @@ bool RenderClipTextBitmap(const ClipTextStyle& style, int canvas_h,
     std::memset(out->Data(), 0, out->DataSize());
 
     const int edge_px = static_cast<int>(edge);
+    const auto xoff_of = [&](std::size_t i) -> int {
+        if (style.align == ClipTextStyle::Align::Center) {
+            return static_cast<int>((block_w - line_w[i]) / 2);
+        }
+        if (style.align == ClipTextStyle::Align::Right) {
+            return static_cast<int>(block_w - line_w[i]);
+        }
+        return 0;
+    };
     auto draw_pass = [&](int dx, int dy,
                          const std::array<std::uint8_t, 4>& bgra) {
         for (std::size_t i = 0; i < lines.size(); ++i) {
-            int xoff = 0;
-            if (style.align == ClipTextStyle::Align::Center) {
-                xoff = static_cast<int>((block_w - line_w[i]) / 2);
-            } else if (style.align == ClipTextStyle::Align::Right) {
-                xoff = static_cast<int>(block_w - line_w[i]);
-            }
             BitmapFont::DrawText(
-                out, lines[i], edge_px + xoff + dx,
+                out, lines[i], edge_px + xoff_of(i) + dx,
                 edge_px + dy + static_cast<int>(i) *
                                    BitmapFont::kLineAdvance * scale,
                 scale, bgra);
+        }
+    };
+    // Karaoke fill: same bucket math as the Skia path — word i is
+    // active inside its clip-local span, "done" after it (falling
+    // back to base color when no done color is set). Drawn as maximal
+    // same-color runs; the bitmap face is monospace so a run's x
+    // offset is column * advance * scale and spaces merge into
+    // either neighbor (they draw no pixels anyway).
+    const bool karaoke_on =
+        style.karaoke && !style.word_times.empty();
+    const auto bucket_of = [&](int wi) -> int {
+        if (!karaoke_on || wi < 0 ||
+            wi >= static_cast<int>(style.word_times.size())) {
+            return 0;
+        }
+        const auto& ws =
+            style.word_times[static_cast<std::size_t>(wi)];
+        if (clip_local_t >= ws.t0 && clip_local_t < ws.t1) return 1;
+        if (clip_local_t >= ws.t1) {
+            return style.karaoke_done[3] > 0 ? 2 : 0;
+        }
+        return 0;
+    };
+    auto draw_karaoke_fill = [&](int dx, int dy) {
+        const std::array<std::uint8_t, 4> colors[3] = {
+            style.color, style.karaoke_active,
+            style.karaoke_done[3] > 0 ? style.karaoke_done
+                                      : style.color,
+        };
+        int word_counter = -1;   // counts across lines ('\n' breaks)
+        for (std::size_t i = 0; i < lines.size(); ++i) {
+            const std::string& line = lines[i];
+            const int base_x = edge_px + xoff_of(i) + dx;
+            const int y =
+                edge_px + dy +
+                static_cast<int>(i) * BitmapFont::kLineAdvance *
+                    scale;
+            std::size_t byte_i = 0;
+            int cp_col = 0;          // codepoint column of byte_i
+            std::size_t run_byte0 = 0;
+            int run_cp0 = 0;
+            int run_bucket = 0;
+            int cur_bucket = 0;      // last word's bucket (seps merge)
+            bool in_word = false;    // '\n' ends a word too
+            const auto flush = [&](std::size_t byte_end,
+                                   int cp_end) {
+                if (byte_end <= run_byte0) return;
+                BitmapFont::DrawText(
+                    out,
+                    line.substr(run_byte0, byte_end - run_byte0),
+                    base_x + run_cp0 * BitmapFont::kGlyphAdvance *
+                                 scale,
+                    y, scale, colors[run_bucket]);
+                run_byte0 = byte_end;
+                run_cp0 = cp_end;
+            };
+            while (byte_i < line.size()) {
+                const unsigned char c =
+                    static_cast<unsigned char>(line[byte_i]);
+                std::size_t cp_len = 1;
+                if (c >= 0xC0) {
+                    if ((c & 0xE0) == 0xC0) {
+                        cp_len = 2;
+                    } else if ((c & 0xF0) == 0xE0) {
+                        cp_len = 3;
+                    } else if ((c & 0xF8) == 0xF0) {
+                        cp_len = 4;
+                    }
+                    cp_len = std::min(cp_len, line.size() - byte_i);
+                }
+                const bool sep = (c == ' ' || c == '\t');
+                if (sep) {
+                    in_word = false;
+                } else {
+                    if (!in_word) ++word_counter;
+                    in_word = true;
+                    cur_bucket = bucket_of(word_counter);
+                    if (cur_bucket != run_bucket) {
+                        flush(byte_i, cp_col);
+                        run_bucket = cur_bucket;
+                    }
+                }
+                byte_i += cp_len;
+                ++cp_col;
+            }
+            flush(byte_i, cp_col);
         }
     };
     if (edge_px > 0) {
@@ -723,7 +876,11 @@ bool RenderClipTextBitmap(const ClipTextStyle& style, int canvas_h,
             draw_pass(scale, scale, kShadowNear);
         }
     }
-    draw_pass(0, 0, style.color);
+    if (karaoke_on) {
+        draw_karaoke_fill(0, 0);
+    } else {
+        draw_pass(0, 0, style.color);
+    }
     return true;
 }
 
@@ -862,6 +1019,38 @@ ClipTextStyle ParseClipTextStyle(const std::string& param) {
         } else if (key == "shadow_color") {
             style.shadow_explicit = true;
             style.shadow_color = ParseMatteColor(value);
+        } else if (key == "karaoke") {
+            style.karaoke = ParseBool(value);
+        } else if (key == "karaoke_times" || key == "kwt") {
+            // "t0-t1,t0-t1,..." — clip-local word spans. Any parsed
+            // pair flips karaoke on so kwt= alone lights the feature.
+            std::size_t p = 0;
+            while (p <= value.size()) {
+                const std::size_t comma = value.find(',', p);
+                const std::string pair = value.substr(
+                    p, comma == std::string::npos
+                           ? comma
+                           : comma - p);
+                const std::size_t dash = pair.find('-');
+                if (dash != std::string::npos) {
+                    const float a = ParseFloat(pair.substr(0, dash),
+                                               -1.0f);
+                    const float b = ParseFloat(pair.substr(dash + 1),
+                                               -1.0f);
+                    if (a >= 0.0f && b >= a) {
+                        style.word_times.push_back({a, b});
+                        style.karaoke = true;
+                    }
+                }
+                if (comma == std::string::npos) break;
+                p = comma + 1;
+            }
+        } else if (key == "karaoke_active" || key == "kact") {
+            style.karaoke_active = ParseMatteColor(value);
+            style.karaoke = true;
+        } else if (key == "karaoke_done" || key == "kdone") {
+            style.karaoke_done = ParseMatteColor(value);
+            style.karaoke = true;
         }
     }
     return style;
@@ -908,16 +1097,33 @@ std::string SerializeClipTextStyle(const ClipTextStyle& style) {
         out += " shadow_blur=" + FmtFloat(style.shadow_blur);
         out += " shadow_color=" + FmtHex(style.shadow_color);
     }
+    if (style.karaoke) {
+        out += " karaoke=1 kact=" + FmtHex(style.karaoke_active);
+        if (style.karaoke_done[3] > 0) {
+            out += " kdone=" + FmtHex(style.karaoke_done);
+        }
+        if (!style.word_times.empty()) {
+            out += " kwt=";
+            bool first = true;
+            for (const auto& wt : style.word_times) {
+                if (!first) out += ',';
+                first = false;
+                out += FmtFloat(wt.t0);
+                out += '-';
+                out += FmtFloat(wt.t1);
+            }
+        }
+    }
     return out;
 }
 
 bool RenderClipText(const ClipTextStyle& style, int canvas_h,
-                    video::Frame* out) {
+                    video::Frame* out, double clip_local_t) {
     if (out == nullptr) return false;
 #if defined(XER_VE_HAS_SKIA)
-    return RenderClipTextSkia(style, canvas_h, out);
+    return RenderClipTextSkia(style, canvas_h, clip_local_t, out);
 #else
-    return RenderClipTextBitmap(style, canvas_h, out);
+    return RenderClipTextBitmap(style, canvas_h, clip_local_t, out);
 #endif
 }
 

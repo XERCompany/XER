@@ -1311,6 +1311,25 @@ const std::vector<PluginDesc>& Effects() {
             d.params.assign(std::begin(kParams), std::end(kParams));
             return d;
         }(),
+        // ── video (Tracked Mosaic — track-driven, compositor) ──
+        // Pin-an-effect target for Clip::object_track ("Track object
+        // → Pin → Mosaic", the auto-censor path). Same dispatch shape
+        // as Smart Reframe: the box it pixelates comes from the clip's
+        // analyzed track at the frame's source time — no static param
+        // can express it, so compositor.cc resolves the region and
+        // skips the ABI fn (identity here keeps generic paths inert).
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.track_mosaic", "Tracked Mosaic",
+                     XER_PLUGIN_VIDEO_FX, &smart_reframe_noop, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"block", 2.0f, 128.0f, 12.0f},   // pixel-block px
+                {"padding", 0.0f, 1.0f, 0.15f},   // grow box, frac of it
+                {"smoothing", 0.0f, 1.0f, 0.5f},  // track temporal smoothing
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
         // ── audio (former xer_audio_fx) ──
         Desc("xer.af.echo", "Echo", XER_PLUGIN_AUDIO_FX, nullptr,
              &echo),

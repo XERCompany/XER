@@ -55,7 +55,27 @@ std::vector<TranscriptWord> TranscriptWordsFromSegments(
     const std::vector<Ai::TranscriptSegment>& segments) {
     std::vector<TranscriptWord> words;
     for (const auto& seg : segments) {
-        // Split on ASCII whitespace; whisper text is already trimmed.
+        // Real token timings ride on the segment when the probed
+        // libwhisper exposes them — they land verbatim (sanitized).
+        if (!seg.words.empty()) {
+            bool first = true;
+            for (const auto& ws : seg.words) {
+                if (ws.text.empty() || !std::isfinite(ws.t0) ||
+                    !std::isfinite(ws.t1) || ws.t1 < ws.t0) {
+                    continue;
+                }
+                TranscriptWord w;
+                w.text = ws.text;
+                w.src_t0 = ws.t0;
+                w.src_t1 = ws.t1;
+                w.segment_start = first;
+                words.push_back(std::move(w));
+                first = false;
+            }
+            continue;
+        }
+        // Fallback: split on ASCII whitespace (whisper text is
+        // already trimmed) and distribute the segment's span.
         std::vector<std::string> tokens;
         std::istringstream in(seg.text);
         std::string tok;
@@ -133,7 +153,9 @@ bool SaveTranscriptCache(
     const std::string& utf8_json_path, const std::string& media_path,
     const std::vector<Ai::TranscriptSegment>& spans) {
     Json::Value root(Json::objectValue);
-    root["version"] = 1;
+    // version 2 adds the optional per-span "words" array (real token
+    // timings); v1 files still load — their spans just carry no words.
+    root["version"] = 2;
     root["media"] = media_path;
     root["size"] = static_cast<Json::UInt64>(MediaFileSize(media_path));
     Json::Value arr(Json::arrayValue);
@@ -142,6 +164,17 @@ bool SaveTranscriptCache(
         j["t0"] = s.t0;
         j["t1"] = s.t1;
         j["text"] = s.text;
+        if (!s.words.empty()) {
+            Json::Value warr(Json::arrayValue);
+            for (const auto& w : s.words) {
+                Json::Value wj(Json::objectValue);
+                wj["t0"] = w.t0;
+                wj["t1"] = w.t1;
+                wj["text"] = w.text;
+                warr.append(std::move(wj));
+            }
+            j["words"] = std::move(warr);
+        }
         arr.append(std::move(j));
     }
     root["spans"] = std::move(arr);
@@ -188,6 +221,19 @@ bool LoadTranscriptCache(
         if (!std::isfinite(s.t0) || !std::isfinite(s.t1) ||
             s.t1 < s.t0) {
             continue;
+        }
+        if (j["words"].isArray()) {
+            for (const Json::Value& wj : j["words"]) {
+                Ai::TranscriptWordSpan w;
+                w.t0 = wj["t0"].asDouble();
+                w.t1 = wj["t1"].asDouble();
+                w.text = wj["text"].asString();
+                if (!std::isfinite(w.t0) || !std::isfinite(w.t1) ||
+                    w.t1 < w.t0 || w.text.empty()) {
+                    continue;
+                }
+                s.words.push_back(std::move(w));
+            }
         }
         spans.push_back(std::move(s));
     }

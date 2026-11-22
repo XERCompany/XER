@@ -5,6 +5,7 @@
 #include "ai/whisper_transcribe.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -42,6 +43,13 @@ struct WhisperApi {
     int64_t (*seg_t0)(whisper_context*, int) = nullptr;
     int64_t (*seg_t1)(whisper_context*, int) = nullptr;
     const char* (*seg_text)(whisper_context*, int) = nullptr;
+    // OPTIONAL token-level API — word timings. Absent symbols only
+    // disable the per-word path; segment results are unaffected.
+    int (*n_tokens)(whisper_context*, int) = nullptr;
+    const char* (*token_text)(whisper_context*, int, int) = nullptr;
+    whisper_token_data (*token_tstamps)(whisper_context*, int, int) =
+        nullptr;
+    whisper_token (*token_eot)(whisper_context*) = nullptr;
     std::string detail;  // resolved path or failure reason
 };
 
@@ -82,6 +90,23 @@ const WhisperApi& Api() {
             sym("whisper_full_get_segment_t1"));
         a.seg_text = reinterpret_cast<decltype(a.seg_text)>(
             sym("whisper_full_get_segment_text"));
+        a.n_tokens = reinterpret_cast<decltype(a.n_tokens)>(
+            sym("whisper_full_n_tokens"));
+        a.token_text = reinterpret_cast<decltype(a.token_text)>(
+            sym("whisper_full_get_token_text"));
+        // whisper.cpp >= 1.5 splits timestamp reads into
+        // whisper_full_get_token_tstamp_data; older versions fold
+        // t0/t1 into whisper_full_get_token_data — same struct,
+        // same signature, try the new name first.
+        a.token_tstamps = reinterpret_cast<decltype(a.token_tstamps)>(
+            sym("whisper_full_get_token_tstamp_data"));
+        if (a.token_tstamps == nullptr) {
+            a.token_tstamps =
+                reinterpret_cast<decltype(a.token_tstamps)>(
+                    sym("whisper_full_get_token_data"));
+        }
+        a.token_eot = reinterpret_cast<decltype(a.token_eot)>(
+            sym("whisper_token_eot"));
         const bool ok = a.init_from_file && a.free_ctx &&
                         a.default_params && a.full && a.n_segments &&
                         a.seg_t0 && a.seg_t1 && a.seg_text;
@@ -211,6 +236,10 @@ bool Transcribe(const std::vector<float>& samples,
     params.print_timestamps = false;
     params.single_segment = false;
     params.no_timestamps = false;
+    // Ask for token timestamps so per-word spans can be harvested
+    // below when the DLL exports the token API — a no-cost flag when
+    // it doesn't.
+    params.token_timestamps = true;
     params.n_threads = std::max<int>(
         1, static_cast<int>(std::min<unsigned>(
                8, std::thread::hardware_concurrency())));
@@ -226,6 +255,15 @@ bool Transcribe(const std::vector<float>& samples,
         return false;
     }
 
+    // Optional word-level path: token timestamps -> grouped
+    // whitespace-delimited words. All three symbols are optional —
+    // an older libwhisper just leaves seg.words empty.
+    const bool have_token_api =
+        api.n_tokens != nullptr && api.token_text != nullptr &&
+        api.token_tstamps != nullptr;
+    const whisper_token eot =
+        api.token_eot != nullptr ? api.token_eot(ctx) : -1;
+
     const int n = api.n_segments(ctx);
     for (int i = 0; i < n; ++i) {
         TranscriptSegment seg;
@@ -235,11 +273,77 @@ bool Transcribe(const std::vector<float>& samples,
         if (const char* text = api.seg_text(ctx, i); text != nullptr) {
             seg.text = Trim(text);
         }
+        if (have_token_api) {
+            const int nt = api.n_tokens(ctx, i);
+            for (int j = 0; j < nt; ++j) {
+                const whisper_token_data td =
+                    api.token_tstamps(ctx, i, j);
+                // Timestamp/control tokens (id >= eot) carry no text —
+                // skip them when the eot boundary resolved.
+                if (eot >= 0 && td.id >= eot) continue;
+                const char* raw_ptr = api.token_text(ctx, i, j);
+                if (raw_ptr == nullptr) continue;
+                const std::string raw(raw_ptr);
+                const std::string word = Trim(raw);
+                if (word.empty()) continue;
+                // whisper marks word starts with a leading space on
+                // Latin text; tokens without it continue the current
+                // word (sub-word pieces — "trans", "cription").
+                const bool boundary =
+                    seg.words.empty() || raw.front() == ' ' ||
+                    raw.front() == '\t';
+                const double wt0 = td.t0 / 100.0;
+                const double wt1 =
+                    std::max(wt0, td.t1 / 100.0);
+                if (boundary) {
+                    TranscriptWordSpan w;
+                    w.t0 = wt0;
+                    w.t1 = wt1;
+                    w.text = word;
+                    seg.words.push_back(std::move(w));
+                } else {
+                    TranscriptWordSpan& w = seg.words.back();
+                    w.text += word;
+                    w.t0 = std::min(w.t0, wt0);
+                    w.t1 = std::max(w.t1, wt1);
+                }
+            }
+            // Sanity: timestamps must be finite and ordered inside
+            // the segment — a pathological token stream is worse than
+            // the proportional fallback, so drop it.
+            for (const auto& w : seg.words) {
+                if (!std::isfinite(w.t0) || !std::isfinite(w.t1) ||
+                    w.t1 < w.t0) {
+                    seg.words.clear();
+                    break;
+                }
+            }
+        }
         out->push_back(std::move(seg));
     }
     api.free_ctx(ctx);
     return true;
 #endif
+}
+
+double TranscribeMaxSeconds() {
+    // 60-minute default (was a hard-coded 10): roughly a feature
+    // film, ~220 MiB of 16 kHz mono float PCM — a bound on decode
+    // time and worker residency, not a quality limit.
+    constexpr double kDefaultMaxSeconds = 60.0 * 60.0;
+    const char* env = std::getenv("XER_TRANSCRIBE_MAX_MINUTES");
+    if (env == nullptr || *env == '\0') {
+        return kDefaultMaxSeconds;
+    }
+    char* end = nullptr;
+    const double minutes = std::strtod(env, &end);
+    if (end == env || !std::isfinite(minutes)) {
+        // A typo'd override must not silently un-cap the decode —
+        // treat it as unset.
+        return kDefaultMaxSeconds;
+    }
+    // <= 0 is the documented "uncapped" escape hatch.
+    return minutes <= 0.0 ? 0.0 : minutes * 60.0;
 }
 
 }  // namespace XER::VideoEditor::Ai

@@ -183,12 +183,16 @@ void SettingsDialog::EnsureChildren() {
     ingest_check_ = std::make_shared<Widgets::Checkbox>(false);
     proxy_dim_input_ = std::make_shared<Widgets::TextInput>("960");
     proxy_crf_input_ = std::make_shared<Widgets::TextInput>("28");
+    proxy_cap_input_ = std::make_shared<Widgets::TextInput>("20480");
     proxy_dim_input_->SetOnSubmit(submit);
     proxy_crf_input_->SetOnSubmit(submit);
+    proxy_cap_input_->SetOnSubmit(submit);
     AddChild(proxies_check_);
     AddChild(ingest_check_);
     wrap_field("Proxy max edge (px)", proxy_dim_input_);
     wrap_field("Proxy CRF (h264)", proxy_crf_input_);
+    wrap_field("Proxy cache cap (MiB; 0 = unlimited)",
+               proxy_cap_input_);
 
     // Frame-rate presets as a segmented strip (the lab_panel mode
     // convention): ButtonGroup joins the buttons edge-to-edge; the
@@ -257,6 +261,7 @@ void SettingsDialog::SetSettings(const ProjectSettings& settings) {
     ingest_check_->SetChecked(settings.proxy_ingest);
     proxy_dim_input_->SetValue(IntToString(settings.proxy_max_dim));
     proxy_crf_input_->SetValue(IntToString(settings.proxy_crf));
+    proxy_cap_input_->SetValue(IntToString(settings.proxy_cache_max_mb));
     SyncFpsButtons(this, fps_preset_);
     Invalidate();
 }
@@ -293,6 +298,10 @@ ProjectSettings SettingsDialog::GetSettings() const {
                         ? ParseInt(proxy_crf_input_->GetValue(), 28,
                                    -1, 63)
                         : 28;
+    out.proxy_cache_max_mb =
+        proxy_cap_input_
+            ? ParseInt(proxy_cap_input_->GetValue(), 20480, 0, 1048576)
+            : 20480;
     return out;
 }
 
@@ -466,6 +475,9 @@ void SettingsDialog::Layout(const XER::UI::Layout::Rect& bounds) {
     }
     if (auto* field = FieldHosting(this, proxy_crf_input_.get())) {
         field->Layout({px + 150.0f, proxy_y, 110.0f, field_h}, tokens);
+    }
+    if (auto* field = FieldHosting(this, proxy_cap_input_.get())) {
+        field->Layout({px + 280.0f, proxy_y, 150.0f, field_h}, tokens);
     }
 
     const float button_y = panel.y + panel.height - 48.0f;

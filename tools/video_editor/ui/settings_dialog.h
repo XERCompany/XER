@@ -37,6 +37,10 @@ struct ProjectSettings {
     bool proxy_ingest = false;          // auto-build proxies on import
     int proxy_max_dim = 960;            // long-edge cap for new proxies
     int proxy_crf = 28;                 // h264 constant-quality target
+    // Managed-proxy storage cap in MiB; 0 = unbounded. ProxyManager
+    // evicts least-recently-used proxy files + rows over the cap
+    // (Project::proxy_cache_max_mb).
+    int proxy_cache_max_mb = 20480;
 };
 
 class SettingsDialog final : public XER::UI::Widgets::Widget {
@@ -106,6 +110,7 @@ private:
     std::shared_ptr<XER::UI::Widgets::Checkbox> ingest_check_;
     std::shared_ptr<XER::UI::Widgets::TextInput> proxy_dim_input_;
     std::shared_ptr<XER::UI::Widgets::TextInput> proxy_crf_input_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> proxy_cap_input_;
     std::shared_ptr<XER::UI::Widgets::Button> ok_button_;
     std::shared_ptr<XER::UI::Widgets::Button> cancel_button_;
 };

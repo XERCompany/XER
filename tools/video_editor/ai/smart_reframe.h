@@ -6,11 +6,20 @@
 // source-seconds subject track consumed by the compositor's
 // xer.fx.smart_reframe path.
 //
+// The decode/detect loop is generalized as ScanClipDetections: every
+// probe hands the raw candidate set to a caller `pick` and whichever
+// box it chooses becomes that probe's sample. ScanClipSubject is the
+// primary-subject reduction; ai/object_track.h's ScanClipTrack (the
+// "Track object → pin" feature) reduces the same scan with a
+// class-filtered pick.
+//
 // Geometry lives here too so renderer, analyzer and tests share one
 // implementation: ReframeWindowAt() turns the track + a target aspect
 // into a clamped crop window at any source time, applying EMA +
 // bounded-velocity smoothing that snaps across flagged scene
-// boundaries instead of gliding through them.
+// boundaries instead of gliding through them. TrackCenterAt exposes
+// just the smoothed-center half of that curve for pin/mask consumers
+// that track a POINT rather than a crop window.
 //
 // Pure worker/model code like the rest of ai/ — no UI state, no
 // shared globals; drive scans from an AsyncOp job.
@@ -18,6 +27,7 @@
 
 #include <functional>
 #include <string>
+#include <vector>
 
 #include "timeline_model.h"
 
@@ -60,6 +70,40 @@ bool ScanClipSubject(const Clip& clip, const std::string& model_path,
                      const std::function<bool()>& should_cancel,
                      ClipReframe* out, std::string* error_out);
 
+// ---- generalized detection scan ------------------------------------
+// Neutral detection record the shared scan hands to `pick` — pixel
+// coords in the (possibly downscaled) probed frame, mirroring
+// FindObject::Detection without dragging that header into this one.
+struct TrackDetection {
+    float x = 0.0f, y = 0.0f, w = 0.0f, h = 0.0f;
+    float confidence = 0.0f;
+    int class_id = -1;
+    std::string label;
+};
+
+// The shared subject policy as a free function so every scan consumer
+// applies the same rule: a "person" detection wins outright (generic
+// class_N labels resolve through the COCO id — 0 on YOLO exports, 1
+// on DETR), otherwise the largest confident box. nullptr on an empty
+// candidate set.
+const TrackDetection* PickPrimarySubject(
+    const std::vector<TrackDetection>& dets);
+
+// The decode + Detect + scene-cut-signature loop behind
+// ScanClipSubject, parameterized on the per-probe reduction: `pick`
+// receives every candidate for one probed frame (pixel coords of the
+// detect-resolution frame) and returns the box to record (nullptr =
+// no sample at that probe — gaps interpolate like undecodable
+// probes). Same contract/errors as ScanClipSubject.
+bool ScanClipDetections(
+    const Clip& clip, const std::string& model_path,
+    const std::string& labels_path, const ReframeScanParams& params,
+    const std::function<const TrackDetection*(
+        const std::vector<TrackDetection>&)>& pick,
+    const std::function<void(float)>& progress,
+    const std::function<bool()>& should_cancel, ClipReframe* out,
+    std::string* error_out);
+
 // ---- render-side geometry -------------------------------------------------
 // Axis-aligned crop window in FRAME PIXELS.
 struct ReframeWindow {
@@ -79,5 +123,17 @@ ReframeWindow ReframeMaxWindow(int frame_w, int frame_h, double ratio);
 ReframeWindow ReframeWindowAt(const ClipReframe& track, double t,
                               int frame_w, int frame_h, double ratio,
                               double smoothing);
+
+// The smoothed-center half of ReframeWindowAt, exposed for consumers
+// that follow the subject rather than crop around it (ai/object_track
+// pin/mask geometry): the same causal EMA + bounded-velocity curve,
+// scene_boundary snap, between-sample lerp and endpoint holds. Empty
+// `samples` returns the frame center {0.5, 0.5}.
+struct TrackPoint {
+    double x = 0.5;
+    double y = 0.5;
+};
+TrackPoint TrackCenterAt(const std::vector<ReframeSample>& samples,
+                         double t, double smoothing);
 
 }  // namespace XER::VideoEditor::Ai

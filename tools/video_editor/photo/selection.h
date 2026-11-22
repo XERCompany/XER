@@ -66,6 +66,33 @@ bool SelectColorRange(TiledDevice& sel,
 // (Lab::FeatherMaskInPlace). radius_px <= ~0 is a no-op.
 void FeatherSelection(TiledDevice& sel, float radius_px);
 
+// Photoshop "Refine Edge" — a one-shot composite of the Lab
+// mask-refine ops over the selection's whole coverage. The five
+// sliders follow Photoshop's dialog; our mask has no color-guided
+// edge detection, so the params map onto the pure mask ops like this
+// (order matters — applied in Photoshop's slider order):
+//   radius_px : detection-band width -> pre-softening blur widening
+//               the transition zone BEFORE the other ops run
+//               (Lab::FeatherMaskInPlace).
+//   smooth    : [0,1] de-jag strength -> a small blur (smooth*4 px)
+//               followed by a mild re-harden (contrast +0.3*smooth) so
+//               stepped lasso/marquee edges relax without shrinking.
+//   feather_px: edge softening (Lab::FeatherMaskInPlace).
+//   contrast  : [-1,1] ramp steepening about the 50% point
+//               (Lab::EdgeContrastInPlace).
+//   shift_px  : +dilate / -erode in px (Lab::GrowMaskInPlace).
+// An all-zero params struct is a bit-exact no-op. Wrap calls in
+// PhotoHistory::ExecuteDeviceOp for undo — same as every other
+// selection mutator.
+struct RefineEdgeParams {
+    float radius_px = 0.0f;
+    float smooth = 0.0f;      // 0..1
+    float feather_px = 0.0f;
+    float contrast = 0.0f;    // -1..1
+    float shift_px = 0.0f;    // px, signed
+};
+void RefineSelectionEdge(TiledDevice& sel, const RefineEdgeParams& p);
+
 // True when every pixel has coverage 0. SelectionExtent is the
 // bounding rect of nonzero coverage (empty when nothing selected).
 bool SelectionIsEmpty(const TiledDevice& sel);

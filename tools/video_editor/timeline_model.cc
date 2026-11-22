@@ -10,7 +10,9 @@
 #include <cstdio>
 #include <cstdint>
 #include <limits>
+#include <map>
 #include <random>
+#include <set>
 
 namespace XER::VideoEditor {
 namespace {
@@ -34,10 +36,23 @@ bool Fail(std::string* error_out, const char* message) {
 // the same track, that track is a VIDEO track, and the clips are
 // adjacent (to.start ≈ from.end). Under the no-overlap invariant exact
 // boundary contact is sufficient — nothing can sit in between.
-bool TransitionEndpointsAdjacent(const Project& project,
+// Tracks+clips are passed explicitly so stored Sequences reuse the
+// same predicate (their timelines obey the same invariants).
+const Clip* FindClipIn(const std::vector<Clip>& clips,
+                       const std::string& clip_id) {
+    for (const auto& clip : clips) {
+        if (clip.id == clip_id) {
+            return &clip;
+        }
+    }
+    return nullptr;
+}
+
+bool TransitionEndpointsAdjacent(const std::vector<Track>& tracks,
+                                 const std::vector<Clip>& clips,
                                  const Transition& transition) {
-    const Clip* from = FindClip(project, transition.from_clip);
-    const Clip* to = FindClip(project, transition.to_clip);
+    const Clip* from = FindClipIn(clips, transition.from_clip);
+    const Clip* to = FindClipIn(clips, transition.to_clip);
     if (from == nullptr || to == nullptr) {
         return false;
     }
@@ -45,10 +60,11 @@ bool TransitionEndpointsAdjacent(const Project& project,
         return false;
     }
     if (from->track < 0 ||
-        from->track >= static_cast<int>(project.tracks.size())) {
+        from->track >= static_cast<int>(tracks.size())) {
         return false;
     }
-    if (project.tracks[from->track].kind != TrackKind::Video) {
+    if (tracks[static_cast<std::size_t>(from->track)].kind !=
+        TrackKind::Video) {
         return false;
     }
     return std::fabs(to->timeline_start - ClipEndSeconds(*from)) <=
@@ -294,10 +310,38 @@ bool ValidateClipPlacement(const Project& project, const Clip& clip,
     }
     // playback_rate stretches the SOURCE span consumed: the media
     // bound applies to in_point + duration * rate, not duration alone.
+    // For compound clips the "media" is the referenced sequence —
+    // callers pass its duration through the same MediaBounds field.
     if (bounds.duration_seconds > 0.0 &&
         clip.in_point + clip.duration * clip.playback_rate >
             bounds.duration_seconds + kEpsilon) {
         return Fail(error_out, "clip exceeds the media duration");
+    }
+    // Compound clips must reference a stored sequence, and an
+    // audio-lane compound may only carry audio content — same
+    // content-kind rule as audio-only media.
+    if (!clip.compound.empty()) {
+        const Sequence* compound_seq =
+            FindSequence(project, clip.compound);
+        if (compound_seq == nullptr) {
+            return Fail(error_out,
+                        "compound clip references a missing sequence");
+        }
+        if (project.tracks[static_cast<std::size_t>(clip.track)].kind ==
+            TrackKind::Audio) {
+            for (const Clip& inner : compound_seq->clips) {
+                if (inner.track >= 0 &&
+                    inner.track < static_cast<int>(
+                                      compound_seq->tracks.size()) &&
+                    compound_seq->tracks[static_cast<std::size_t>(
+                                             inner.track)]
+                            .kind == TrackKind::Video) {
+                    return Fail(error_out,
+                                "audio-track compound references a "
+                                "sequence with video content");
+                }
+            }
+        }
     }
     // Presentation fields ride along in the same Clip and persist
     // through Save — they get the same finiteness contract so a
@@ -339,6 +383,15 @@ bool ValidateClipPlacement(const Project& project, const Clip& clip,
             !std::isfinite(sample.confidence)) {
             return Fail(error_out,
                         "clip smart-reframe samples must be finite");
+        }
+    }
+    for (const ReframeSample& sample : clip.object_track.samples) {
+        if (!std::isfinite(sample.t) || !std::isfinite(sample.cx) ||
+            !std::isfinite(sample.cy) || !std::isfinite(sample.w) ||
+            !std::isfinite(sample.h) ||
+            !std::isfinite(sample.confidence)) {
+            return Fail(error_out,
+                        "clip object-track samples must be finite");
         }
     }
     for (const auto& entry : clip.keyframes) {
@@ -1118,8 +1171,500 @@ double TransitionDurationLimit(const Project& project,
 
 void DropInvalidTransitions(Project& project) {
     std::erase_if(project.transitions, [&](const Transition& transition) {
-        return !TransitionEndpointsAdjacent(project, transition);
+        return !TransitionEndpointsAdjacent(project.tracks,
+                                            project.clips, transition);
     });
+}
+
+// Same prune for a stored sequence's transitions — identical validity
+// rules over sequence-local tracks/clips.
+void DropInvalidTransitions(Sequence& sequence) {
+    std::erase_if(sequence.transitions, [&](const Transition& transition) {
+        return !TransitionEndpointsAdjacent(sequence.tracks,
+                                            sequence.clips, transition);
+    });
+}
+
+double Sequence::duration() const {
+    double end = 0.0;
+    for (const auto& clip : clips) {
+        end = std::max(end, ClipEndSeconds(clip));
+    }
+    return end;
+}
+
+const Sequence* FindSequence(const Project& project,
+                             const std::string& sequence_id) {
+    for (const auto& sequence : project.sequences) {
+        if (sequence.id == sequence_id) {
+            return &sequence;
+        }
+    }
+    return nullptr;
+}
+
+Sequence* FindSequence(Project& project, const std::string& sequence_id) {
+    for (auto& sequence : project.sequences) {
+        if (sequence.id == sequence_id) {
+            return &sequence;
+        }
+    }
+    return nullptr;
+}
+
+bool IsCompoundClip(const Clip& clip) { return !clip.compound.empty(); }
+
+bool SequenceInUse(const Project& project,
+                   const std::string& sequence_id) {
+    const auto refs = [&](const std::vector<Clip>& clips) {
+        for (const Clip& clip : clips) {
+            if (clip.compound == sequence_id) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (refs(project.clips)) {
+        return true;
+    }
+    for (const Sequence& sequence : project.sequences) {
+        if (refs(sequence.clips)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Project SequenceProject(const Project& owner, const Sequence& sequence) {
+    Project out = owner;   // canvas, fps, proxy fields, sequence store
+    out.tracks = sequence.tracks;
+    out.clips = sequence.clips;
+    out.transitions = sequence.transitions;
+    out.markers = sequence.markers;
+    out.work_in = sequence.work_in;
+    out.work_out = sequence.work_out;
+    // Inner holes composite through to whatever sits below the
+    // compound clip — a transparent backdrop, not the project bg.
+    out.bg_color = {0, 0, 0, 0};
+    // The inner timeline has no master fader of its own — the owning
+    // project's fader applies once at its own level.
+    out.master_gain_db = 0.0f;
+    return out;
+}
+
+bool CompoundGraphHasCycle(const Project& project) {
+    // DFS over the sequence-reference graph. States: white (unseen),
+    // gray (on the current path), black (done). A gray revisit is a
+    // cycle. The graph is small (one entry per stored sequence), so
+    // plain recursion with set lookups is fine — and the depth cap
+    // keeps a hostile file from overflowing the stack.
+    enum class Mark { kWhite, kGray, kBlack };
+    std::map<std::string, Mark> marks;
+    const auto visit = [&](auto&& self, const Sequence& sequence,
+                           int depth) -> bool {
+        if (depth > kMaxCompoundDepth) {
+            return false;   // treat runaway depth as malformed
+        }
+        Mark& mark = marks[sequence.id];
+        if (mark == Mark::kGray) {
+            return false;   // back edge — cycle
+        }
+        if (mark == Mark::kBlack) {
+            return true;
+        }
+        mark = Mark::kGray;
+        for (const Clip& clip : sequence.clips) {
+            if (clip.compound.empty()) {
+                continue;
+            }
+            const Sequence* inner = FindSequence(project, clip.compound);
+            if (inner == nullptr) {
+                continue;   // dangling ref — reported elsewhere
+            }
+            if (!self(self, *inner, depth + 1)) {
+                return false;
+            }
+        }
+        mark = Mark::kBlack;
+        return true;
+    };
+    // Reach from every entry point — a self-contained cycle among
+    // unreferenced sequences is still malformed.
+    auto check_clips = [&](const std::vector<Clip>& clips) -> bool {
+        for (const Clip& clip : clips) {
+            if (clip.compound.empty()) {
+                continue;
+            }
+            const Sequence* target = FindSequence(project, clip.compound);
+            if (target != nullptr && !visit(visit, *target, 1)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!check_clips(project.clips)) {
+        return false;
+    }
+    for (const Sequence& sequence : project.sequences) {
+        if (!check_clips(sequence.clips)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MakeCompound(Project& project,
+                  const std::vector<std::string>& clip_ids,
+                  const std::string& name,
+                  const std::string& new_clip_id,
+                  const std::string& new_sequence_id,
+                  std::string* error_out) {
+    // ---- validate --------------------------------------------------
+    if (clip_ids.empty()) {
+        return Fail(error_out, "compound needs at least one clip");
+    }
+    if (new_clip_id.empty() || new_sequence_id.empty()) {
+        return Fail(error_out, "compound ids must be non-empty");
+    }
+    if (FindClip(project, new_clip_id) != nullptr) {
+        return Fail(error_out, "compound clip id already exists");
+    }
+    if (FindSequence(project, new_sequence_id) != nullptr) {
+        return Fail(error_out, "compound sequence id already exists");
+    }
+    std::vector<const Clip*> selected;
+    selected.reserve(clip_ids.size());
+    for (const std::string& id : clip_ids) {
+        const Clip* clip = FindClip(project, id);
+        if (clip == nullptr) {
+            return Fail(error_out, "compound selection has unknown clip");
+        }
+        if (clip->id == new_clip_id) {
+            return Fail(error_out, "compound clip id collides");
+        }
+        if (std::find_if(selected.begin(), selected.end(),
+                         [&](const Clip* c) { return c->id == id; }) !=
+            selected.end()) {
+            return Fail(error_out, "compound selection has duplicate id");
+        }
+        const Track* track = FindTrack(project, clip->track);
+        if (track == nullptr) {
+            return Fail(error_out, "compound clip on missing track");
+        }
+        if (track->locked) {
+            return Fail(error_out, "compound source track is locked");
+        }
+        selected.push_back(clip);
+    }
+    // Distinct source tracks in index order -> inner track order.
+    std::vector<int> source_tracks;
+    for (const Clip* clip : selected) {
+        if (std::find(source_tracks.begin(), source_tracks.end(),
+                      clip->track) == source_tracks.end()) {
+            source_tracks.push_back(clip->track);
+        }
+    }
+    std::sort(source_tracks.begin(), source_tracks.end());
+    bool has_video = false;
+    for (const int index : source_tracks) {
+        if (project.tracks[static_cast<std::size_t>(index)].kind ==
+            TrackKind::Video) {
+            has_video = true;
+            break;
+        }
+    }
+    // Target lane: lowest-indexed source track of the content kind —
+    // a compound carrying video must sit on a video track (the model's
+    // audio-only-on-audio-track invariant, generalized).
+    const TrackKind content_kind =
+        has_video ? TrackKind::Video : TrackKind::Audio;
+    int target_track = -1;
+    for (const int index : source_tracks) {
+        if (project.tracks[static_cast<std::size_t>(index)].kind ==
+            content_kind) {
+            target_track = index;
+            break;
+        }
+    }
+    if (target_track < 0 ||
+        project.tracks[static_cast<std::size_t>(target_track)].locked) {
+        return Fail(error_out, "compound target track is locked");
+    }
+
+    // Span = union of selected clip bounds.
+    double span_start = std::numeric_limits<double>::infinity();
+    double span_end = 0.0;
+    for (const Clip* clip : selected) {
+        span_start = std::min(span_start, clip->timeline_start);
+        span_end = std::max(span_end, ClipEndSeconds(*clip));
+    }
+    if (!(span_end - span_start > kMinClipDuration)) {
+        return Fail(error_out, "compound span is empty");
+    }
+    // The compound clip must not cover a non-selected clip on its
+    // target lane — the hole it would punch is unrecoverable.
+    for (const Clip& clip : project.clips) {
+        if (clip.track != target_track) {
+            continue;
+        }
+        const bool chosen =
+            std::find_if(selected.begin(), selected.end(),
+                         [&](const Clip* c) { return c->id == clip.id; }) !=
+            selected.end();
+        if (!chosen && clip.timeline_start < span_end &&
+            ClipEndSeconds(clip) > span_start) {
+            return Fail(error_out,
+                        "compound span overlaps another clip");
+        }
+    }
+
+    // ---- build (pure from here on — validate-then-mutate) ----------
+    std::map<int, int> track_map;   // outer index -> inner index
+    Sequence sequence;
+    sequence.id = new_sequence_id;
+    sequence.name = name.empty() ? "Compound" : name;
+    for (std::size_t i = 0; i < source_tracks.size(); ++i) {
+        track_map[source_tracks[i]] = static_cast<int>(i);
+        sequence.tracks.push_back(
+            project.tracks[static_cast<std::size_t>(source_tracks[i])]);
+        sequence.source_tracks.push_back(source_tracks[i]);
+    }
+    std::vector<std::string> chosen_ids;
+    chosen_ids.reserve(selected.size());
+    for (const Clip* clip : selected) {
+        chosen_ids.push_back(clip->id);
+        Clip inner = *clip;
+        inner.track = track_map[clip->track];
+        inner.timeline_start = clip->timeline_start - span_start;
+        sequence.clips.push_back(std::move(inner));
+    }
+    // Transitions fully inside the selection move with their clips;
+    // boundary-crossing ones die with their outer endpoint below.
+    const auto chosen = [&](const std::string& id) {
+        return std::find(chosen_ids.begin(), chosen_ids.end(), id) !=
+               chosen_ids.end();
+    };
+    for (const Transition& transition : project.transitions) {
+        if (chosen(transition.from_clip) && chosen(transition.to_clip)) {
+            sequence.transitions.push_back(transition);
+        }
+    }
+    DropInvalidTransitions(sequence);
+
+    std::erase_if(project.clips, [&](const Clip& clip) {
+        return chosen(clip.id);
+    });
+
+    Clip compound;
+    compound.id = new_clip_id;
+    compound.name = sequence.name;
+    compound.track = target_track;
+    compound.timeline_start = span_start;
+    compound.duration = span_end - span_start;
+    compound.in_point = 0.0;
+    compound.compound = new_sequence_id;
+    project.clips.push_back(std::move(compound));
+    project.sequences.push_back(std::move(sequence));
+    // Removing the selected clips invalidates their transitions and
+    // any transition that touched the selection boundary.
+    DropInvalidTransitions(project);
+    return true;
+}
+
+bool FlattenCompound(Project& project, const std::string& clip_id,
+                     std::string* error_out) {
+    const Clip* clip = FindClip(project, clip_id);
+    if (clip == nullptr) {
+        return Fail(error_out, "unknown clip");
+    }
+    if (!IsCompoundClip(*clip)) {
+        return Fail(error_out, "clip is not a compound clip");
+    }
+    const Sequence* sequence = FindSequence(project, clip->compound);
+    if (sequence == nullptr) {
+        return Fail(error_out, "compound clip references a missing "
+                               "sequence");
+    }
+    const Track* host = FindTrack(project, clip->track);
+    if (host == nullptr || host->locked) {
+        return Fail(error_out, "compound clip track is locked");
+    }
+    const double rate =
+        std::isfinite(clip->playback_rate) && clip->playback_rate > 0.0
+            ? clip->playback_rate
+            : 1.0;
+
+    // ---- inner track -> outer track assignment ---------------------
+    // Preference order per inner track (kind must match):
+    //   1. its recorded source_tracks index (the lane it came from)
+    //   2. the compound clip's own lane
+    //   3. the next free existing lane of that kind
+    //   4. a new lane appended to the project
+    // "Free" means no already-assigned inner track claims it AND no
+    // non-compound clip would overlap a restored clip on it — checked
+    // per inner clip against the placement window.
+    const auto land_window = [&](const Clip& inner) {
+        // WYSIWYG restore: the inner clip lands where the compound
+        // DISPLAYED it — timeline offset and duration are mapped
+        // through the compound's in_point/playback_rate so a trimmed
+        // or retimed compound restores what was visible.
+        const double start = clip->timeline_start +
+                             (inner.timeline_start - clip->in_point) /
+                                 rate;
+        const double duration = inner.duration / rate;
+        return std::pair{start, start + duration};
+    };
+    const auto overlaps_outer = [&](int track, double s, double e) {
+        for (const Clip& other : project.clips) {
+            if (other.id == clip->id || other.track != track) {
+                continue;
+            }
+            if (other.timeline_start < e && ClipEndSeconds(other) > s) {
+                return true;
+            }
+        }
+        return false;
+    };
+    const int inner_count = static_cast<int>(sequence->tracks.size());
+    std::vector<int> assign(static_cast<std::size_t>(inner_count), -1);
+    std::vector<bool> used(project.tracks.size(), false);
+    for (int i = 0; i < inner_count; ++i) {
+        const TrackKind kind = sequence->tracks[static_cast<std::size_t>(i)].kind;
+        // Candidate outer indices in preference order.
+        std::vector<int> candidates;
+        if (i < static_cast<int>(sequence->source_tracks.size())) {
+            const int src =
+                sequence->source_tracks[static_cast<std::size_t>(i)];
+            if (src >= 0 &&
+                src < static_cast<int>(project.tracks.size()) &&
+                project.tracks[static_cast<std::size_t>(src)].kind ==
+                    kind) {
+                candidates.push_back(src);
+            }
+        }
+        if (clip->track >= 0 &&
+            clip->track < static_cast<int>(project.tracks.size()) &&
+            project.tracks[static_cast<std::size_t>(clip->track)]
+                    .kind == kind) {
+            candidates.push_back(clip->track);
+        }
+        for (int t = 0; t < static_cast<int>(project.tracks.size());
+             ++t) {
+            if (project.tracks[static_cast<std::size_t>(t)].kind ==
+                kind) {
+                candidates.push_back(t);
+            }
+        }
+        // First candidate that is unused, unlocked and overlap-free
+        // for every clip this inner track restores.
+        int picked = -1;
+        for (const int cand : candidates) {
+            if (used[static_cast<std::size_t>(cand)]) {
+                continue;
+            }
+            if (project.tracks[static_cast<std::size_t>(cand)].locked) {
+                continue;
+            }
+            bool blocked = false;
+            for (const Clip& inner : sequence->clips) {
+                if (inner.track != i) {
+                    continue;
+                }
+                const auto [s, e] = land_window(inner);
+                if (overlaps_outer(cand, s, e)) {
+                    blocked = true;
+                    break;
+                }
+            }
+            if (!blocked) {
+                picked = cand;
+                break;
+            }
+        }
+        if (picked < 0) {
+            // No existing lane fits — append one of the same kind
+            // (name/gain follow the inner track).
+            Track added = sequence->tracks[static_cast<std::size_t>(i)];
+            added.locked = false;   // a locked source copy would trap
+                                  // the restored clips
+            project.tracks.push_back(added);
+            used.push_back(false);
+            picked = static_cast<int>(project.tracks.size()) - 1;
+        }
+        assign[static_cast<std::size_t>(i)] = picked;
+        used[static_cast<std::size_t>(picked)] = true;
+    }
+
+    // ---- place the inner clips --------------------------------------
+    // Inner clip ids may collide with project clip ids (e.g. clips
+    // flattened, re-compounded, flattened again). Remint collisions and
+    // translate inner transitions through the remap.
+    std::map<std::string, std::string> id_map;
+    std::set<std::string> taken_ids;
+    for (const Clip& c : project.clips) {
+        taken_ids.insert(c.id);
+    }
+    std::vector<Clip> restored;
+    restored.reserve(sequence->clips.size());
+    for (const Clip& inner : sequence->clips) {
+        auto [start, end] = land_window(inner);
+        Clip out = inner;
+        out.track = assign[static_cast<std::size_t>(inner.track)];
+        out.timeline_start = start;
+        out.duration = (end - start);
+        out.playback_rate = inner.playback_rate * rate;
+        if (out.timeline_start < 0.0) {
+            // Left of t=0 is unrepresentable — trim the head like a
+            // TrimEdge::In clamp: shift in_point by the dropped
+            // timeline seconds (scaled by the clip's own rate).
+            const double dropped = -out.timeline_start;
+            out.timeline_start = 0.0;
+            out.duration -= dropped;
+            out.in_point += dropped * out.playback_rate;
+            if (out.duration <= 0.0) {
+                continue;   // fully outside the pasteable range
+            }
+        }
+        const bool remap = taken_ids.count(out.id) != 0;
+        const std::string landed_id =
+            remap ? NewClipId() : out.id;
+        id_map[inner.id] = landed_id;
+        taken_ids.insert(landed_id);
+        out.id = landed_id;
+        restored.push_back(std::move(out));
+    }
+    // Inner transitions between restored clips come along.
+    std::vector<Transition> moved;
+    for (const Transition& transition : sequence->transitions) {
+        auto fi = id_map.find(transition.from_clip);
+        auto ti = id_map.find(transition.to_clip);
+        if (fi == id_map.end() || ti == id_map.end()) {
+            continue;
+        }
+        Transition out = transition;
+        out.from_clip = fi->second;
+        out.to_clip = ti->second;
+        moved.push_back(std::move(out));
+    }
+
+    // Commit: swap the compound for its restored content.
+    std::erase_if(project.clips,
+                  [&](const Clip& c) { return c.id == clip->id; });
+    for (Clip& c : restored) {
+        project.clips.push_back(std::move(c));
+    }
+    for (Transition& t : moved) {
+        project.transitions.push_back(std::move(t));
+    }
+    // The sequence dies with its last reference; other compound clips
+    // (top-level or nested) keep it alive.
+    if (!SequenceInUse(project, sequence->id)) {
+        std::erase_if(project.sequences, [&](const Sequence& s) {
+            return s.id == sequence->id;
+        });
+    }
+    DropInvalidTransitions(project);
+    return true;
 }
 
 std::pair<double, double> ClipTransitionHandles(

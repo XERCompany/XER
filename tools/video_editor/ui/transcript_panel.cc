@@ -13,6 +13,7 @@
 #include "theme/tokens.h"
 #include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/combobox.h"
 #include "widgets/label.h"
 
 namespace XER::VideoEditor::Ui {
@@ -95,10 +96,29 @@ void TranscriptPanelWidget::EnsureChildren() {
         }
     });
 
+    // Animated-caption style picker — sits in the header controls
+    // row; the app-side CaptionStyle tracks the picked preset.
+    caption_style_combo_ = Widgets::Combobox::Create();
+    caption_style_combo_->SetOptions(
+        {{"Classic", "classic"},
+         {"Karaoke", "karaoke"},
+         {"Word pop", "wordpop"}});
+    caption_style_combo_->SetValue("classic");
+    caption_style_combo_->SetPlaceholder("Caption style");
+    caption_style_combo_->SetOnSelect(
+        [this](const Widgets::Combobox::Option& option) {
+            if (hooks_.on_caption_style) {
+                hooks_.on_caption_style(
+                    option.value.empty() ? option.label
+                                         : option.value);
+            }
+        });
+
     status_ = std::make_shared<Widgets::Label>(
         "Select a media clip to edit by transcript", true);
 
     AddChild(transcribe_btn_);
+    AddChild(caption_style_combo_);
     AddChild(cut_btn_);
     AddChild(marker_btn_);
     AddChild(captions_btn_);
@@ -481,6 +501,12 @@ void TranscriptPanelWidget::Layout(
               : "Whisper unavailable — install libwhisper + a ggml "
                 "model (models/ or XER_WHISPER_MODEL)");
     transcribe_btn_->SetVisible(!media_path_.empty());
+
+    // Caption-style picker on the left of the same controls row.
+    caption_style_combo_->Layout(
+        {bounds.x + pad, ctrl_y, 136.0f, VeTheme::kControlHeight},
+        tokens);
+    caption_style_combo_->SetVisible(!media_path_.empty());
 
     // Bottom action bar — only while a word range is selected.
     const bool sel = HasSelection();

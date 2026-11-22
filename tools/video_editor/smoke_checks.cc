@@ -30,13 +30,16 @@
 
 #include <json/json.h>
 
+#include "ai/object_track.h"
 #include "ai/smart_reframe.h"
+#include "ai/whisper_transcribe.h"
 #include "ai_tags.h"
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
 #include "audio_sync.h"
 #include "builtin_fx.h"
+#include "captions.h"
 #include "cef/cef_ext_scheme.h"
 #include "compositor.h"
 #include "content/ai/find_object/find_object.h"  // YA.AIFindObject
@@ -798,6 +801,227 @@ std::string CheckTranscriptEditing() {
         return "stale (size-mismatched) cache entry was served";
     }
     return {};
+}
+
+// Animated captions (captions.h): real whisper word timings ->
+// word-level clip generation per preset + the karaoke style tokens
+// the renderer animates against clip-local time.
+std::string CheckCaptions() {
+    // Real token timings ride TranscriptSegment::words straight
+    // through — no proportional redistribution.
+    std::vector<Ai::TranscriptSegment> timed = {
+        {0.0, 2.0, "one two",
+         {{0.1, 0.4, "one"}, {0.9, 1.8, "two"}}},
+    };
+    const auto timed_words = TranscriptWordsFromSegments(timed);
+    if (timed_words.size() != 2 ||
+        std::fabs(timed_words[0].src_t0 - 0.1) > 1e-9 ||
+        std::fabs(timed_words[1].src_t1 - 1.8) > 1e-9 ||
+        !timed_words[0].segment_start) {
+        return "real word timings were not used verbatim";
+    }
+
+    // Bound media clip: tl 10, in_point 0, rate 1.
+    Clip bound;
+    bound.id = "cap-src";
+    bound.source_path = "m.mp4";
+    bound.source.kind = SourceKind::Media;
+    bound.timeline_start = 10.0;
+    bound.in_point = 0.0;
+    bound.duration = 60.0;
+
+    std::vector<Ai::TranscriptSegment> segments = {
+        {0.0, 4.0, "hello brave new world"},   // 4 words
+        {5.0, 6.0, "a bb"},                    // 2 words
+    };
+    const auto words = TranscriptWordsFromSegments(segments);
+
+    CaptionStyle style;
+    // Classic — one clip per segment, flat style.
+    style.preset = CaptionStyle::Preset::Classic;
+    style.animate = false;
+    const auto clips =
+        BuildCaptionClips(words, bound, 0.0, 10.0, 3, style);
+    if (clips.size() != 2) {
+        return "classic preset made " + std::to_string(clips.size()) +
+               " clips, want 2";
+    }
+    if (std::fabs(clips[0].timeline_start - 10.0) > 1e-9 ||
+        std::fabs(clips[0].duration - 4.0) > 1e-9 ||
+        std::fabs(clips[1].timeline_start - 15.0) > 1e-9 ||
+        clips[0].track != 3) {
+        return "classic clip mapping is wrong";
+    }
+    const ClipTextStyle classic_style =
+        ParseClipTextStyle(clips[0].source.param);
+    if (classic_style.karaoke ||
+        classic_style.text != "hello brave new world" ||
+        classic_style.size_px != 56) {
+        return "classic caption style param is wrong";
+    }
+    // Selection filtering: only the second segment intersects
+    // [5,7) -> exactly one clip.
+    if (BuildCaptionClips(words, bound, 5.0, 7.0, 3, style).size() !=
+        1) {
+        return "source-range filter kept wrong segments";
+    }
+
+    // Karaoke — one clip per segment carrying a clip-local word span
+    // table; word indices are positional over the joined text.
+    style.preset = CaptionStyle::Preset::Karaoke;
+    const auto kclips =
+        BuildCaptionClips(words, bound, 0.0, 10.0, 3, style);
+    if (kclips.size() != 2) {
+        return "karaoke preset made " +
+               std::to_string(kclips.size()) + " clips, want 2";
+    }
+    const ClipTextStyle ks =
+        ParseClipTextStyle(kclips[0].source.param);
+    if (!ks.karaoke || ks.word_times.size() != 4) {
+        return "karaoke style lost its word span table";
+    }
+    // Chained spans: word i+1 starts where word i ended (proportional
+    // distribution is gapless).
+    if (ks.word_times[0].t0 != 0.0f ||
+        ks.word_times[3].t1 < 3.9f ||
+        std::fabs(ks.word_times[1].t0 - ks.word_times[0].t1) >
+            0.01f) {
+        return "karaoke word spans do not chain";
+    }
+    if (kclips[0].source.param.find("kact=") == std::string::npos ||
+        kclips[0].source.param.find("kwt=") == std::string::npos) {
+        return "karaoke tokens missing from clip param";
+    }
+
+    // WordPop — one clip per word, pop keyframes on each.
+    style.preset = CaptionStyle::Preset::WordPop;
+    style.words_per_clip = 1;
+    style.animate = true;
+    const auto pclips =
+        BuildCaptionClips(words, bound, 0.0, 10.0, 3, style);
+    if (pclips.size() != 6) {
+        return "wordpop preset made " +
+               std::to_string(pclips.size()) + " clips, want 6";
+    }
+    const ClipTextStyle ps =
+        ParseClipTextStyle(pclips[0].source.param);
+    if (ps.text != "hello" ||
+        pclips[0].keyframes.count(KeyProp::Scale) == 0 ||
+        pclips[0].keyframes.count(KeyProp::Opacity) == 0 ||
+        std::fabs(pclips[0].timeline_start - 10.0) > 1e-9) {
+        return "wordpop clip shape is wrong";
+    }
+    // Chunking: 2 words per clip -> 2 clips for the 4-word segment.
+    style.words_per_clip = 2;
+    if (BuildCaptionClips(words, bound, 0.0, 4.5, 3, style).size() !=
+        2) {
+        return "word chunking is wrong";
+    }
+
+    // The karaoke render is time-variant: identical style, different
+    // clip-local times -> different pixels (both rasterizers honor
+    // the buckets).
+    const ClipTextStyle anim = ParseClipTextStyle(
+        "one two | size=24 karaoke=1 kact=#FF0000 "
+        "kwt=0.1-0.5,0.5-1.0");
+    if (!anim.karaoke || anim.word_times.size() != 2) {
+        return "kwt token did not parse";
+    }
+    video::Frame fa, fb, fc;
+    if (!RenderClipText(anim, 200, &fa, 0.0) ||
+        !RenderClipText(anim, 200, &fb, 0.2) ||
+        !RenderClipText(anim, 200, &fc, 0.7)) {
+        return "karaoke frame render failed";
+    }
+    const auto same_pixels = [](const video::Frame& a,
+                                const video::Frame& b) {
+        return a.DataSize() == b.DataSize() &&
+               std::memcmp(a.Data(), b.Data(), a.DataSize()) == 0;
+    };
+    if (same_pixels(fa, fb) || same_pixels(fb, fc)) {
+        return "karaoke render did not vary with clip-local time";
+    }
+
+    // Transcript cache v2 round-trips the word timings.
+    const auto dir = SmokeTempDir() / "transcript_cache_words";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto media_path = dir / "talk.wav";
+    {
+        std::ofstream m(media_path,
+                        std::ios::binary | std::ios::trunc);
+        m.write("0123456789", 10);
+    }
+    const std::string media_utf8 = Utf8Path(media_path);
+    const auto wjson_path =
+        dir / (TranscriptCacheKey(media_utf8) + ".json");
+    if (!SaveTranscriptCache(Utf8Path(wjson_path), media_utf8,
+                             timed)) {
+        return "SaveTranscriptCache(v2) failed";
+    }
+    std::vector<Ai::TranscriptSegment> wloaded;
+    if (!LoadTranscriptCache(Utf8Path(wjson_path), media_utf8,
+                             &wloaded) ||
+        wloaded.size() != 1 || wloaded[0].words.size() != 2 ||
+        std::fabs(wloaded[0].words[1].t1 - 1.8) > 1e-9) {
+        return "cached word timings did not round-trip";
+    }
+    return {};
+}
+
+// Ai::TranscribeMaxSeconds (ai/whisper_transcribe.h) — the named
+// bound that replaced the hard-coded 10-minute PCM cap. The bound
+// itself is kept on purpose: ExtractMonoPcm materializes the whole
+// span (~3.7 MiB/min at 16 kHz mono) and whisper walks it in one
+// job, so the cap bounds memory + worker residency. Default 60 min;
+// XER_TRANSCRIBE_MAX_MINUTES overrides it, <= 0 un-caps, and an
+// unparseable value must fall back — not silently un-cap.
+std::string CheckTranscribeCap() {
+    // Portable env helpers — POSIX setenv/unsetenv don't exist in the
+    // UCRT; _putenv_s is the copying equivalent ("" value unsets).
+    const auto set_env = [](const char* name, const char* value) {
+#ifdef _WIN32
+        _putenv_s(name, value);
+#else
+        setenv(name, value, 1);
+#endif
+    };
+    const auto unset_env = [](const char* name) {
+#ifdef _WIN32
+        _putenv_s(name, "");
+#else
+        unsetenv(name);
+#endif
+    };
+    const char* prev = std::getenv("XER_TRANSCRIBE_MAX_MINUTES");
+    const std::string saved = prev != nullptr ? prev : "";
+    const auto check = [&]() -> std::string {
+        unset_env("XER_TRANSCRIBE_MAX_MINUTES");
+        if (Ai::TranscribeMaxSeconds() != 3600.0) {
+            return "default transcribe cap is not 60 minutes";
+        }
+        set_env("XER_TRANSCRIBE_MAX_MINUTES", "5");
+        if (Ai::TranscribeMaxSeconds() != 300.0) {
+            return "env override (minutes) not honored";
+        }
+        set_env("XER_TRANSCRIBE_MAX_MINUTES", "0");
+        if (Ai::TranscribeMaxSeconds() != 0.0) {
+            return "zero override did not un-cap the decode";
+        }
+        set_env("XER_TRANSCRIBE_MAX_MINUTES", "not-a-number");
+        if (Ai::TranscribeMaxSeconds() != 3600.0) {
+            return "unparseable override did not fall back to default";
+        }
+        return {};
+    };
+    const std::string result = check();
+    // Restore whatever the runner had — the suite runs in-process.
+    if (saved.empty()) {
+        unset_env("XER_TRANSCRIBE_MAX_MINUTES");
+    } else {
+        set_env("XER_TRANSCRIBE_MAX_MINUTES", saved.c_str());
+    }
+    return result;
 }
 
 std::string CheckKeyboardMap() {
@@ -2705,6 +2929,101 @@ std::string CheckProxyWorkflow() {
     if (proxies.ResolveDecodePath(src_utf8) != src_utf8) {
         catalog.Close();
         return "stale-fingerprint proxy still resolved after rewrite";
+    }
+
+    // ---- storage cap: protected sources + LRU eviction ---------------
+    // Protected sources are never evicted (the open project's clips);
+    // unprotected ready proxies go oldest-mtime-first — the file mtime
+    // IS the last-used stamp (ResolveDecodePath rewrites it).
+    proxies.SetProtectedSources({src_utf8});
+    proxies.SetStorageCapBytes(1);   // 1 byte — everything overflows
+    if (proxies.EnforceStorageCap() != 0) {
+        catalog.Close();
+        return "protected proxy was evicted";
+    }
+    {
+        ProxyRecord still;
+        if (!catalog.GetProxy(src_utf8, &still) ||
+            still.status != ProxyStatus::kReady) {
+            catalog.Close();
+            return "protected proxy row vanished";
+        }
+    }
+    // LRU order: two fake ready rows + files under the managed dir;
+    // a cap that fits only one must drop the older file, keep the
+    // newer, and remove the evicted catalog row.
+    const std::string proxy_dir = catalog.ProxyDir();
+    const std::string canon_a = "z:/xer_smoke_evict_a.mp4";
+    const std::string canon_b = "z:/xer_smoke_evict_b.mp4";
+    const auto plant_proxy = [&](const std::string& canon,
+                                 int age_seconds) {
+        const auto file = Path::FromUtf8(
+            proxy_dir + "/" + ProxyManager::ProxyFileName(canon));
+        {
+            std::ofstream o(file, std::ios::binary | std::ios::trunc);
+            o << std::string(4096, 'x');
+        }
+        std::error_code ec;
+        std::filesystem::last_write_time(
+            file,
+            std::filesystem::file_time_type::clock::now() -
+                std::chrono::seconds(age_seconds),
+            ec);
+        ProxyRecord planted;
+        planted.path = canon;
+        planted.proxy_path = Utf8Path(file);
+        planted.status = ProxyStatus::kReady;
+        if (!catalog.SetProxyRecord(planted, &err)) {
+            return std::filesystem::path{};
+        }
+        return file;
+    };
+    const std::filesystem::path file_a = plant_proxy(canon_a, 7200);
+    const std::filesystem::path file_b = plant_proxy(canon_b, 0);
+    if (file_a.empty() || file_b.empty()) {
+        catalog.Close();
+        return "failed to plant LRU fixture rows";
+    }
+    proxies.SetStorageCapBytes(6000);   // fits one of the two 4 KiB files
+    if (proxies.EnforceStorageCap() != 1) {
+        catalog.Close();
+        return "LRU sweep did not evict exactly one proxy";
+    }
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(file_a, ec)) {
+            catalog.Close();
+            return "LRU evicted the freshest proxy";
+        }
+        if (!std::filesystem::exists(file_b, ec)) {
+            catalog.Close();
+            return "LRU dropped the newest proxy file";
+        }
+        ProxyRecord gone;
+        if (catalog.GetProxy(canon_a, &gone)) {
+            catalog.Close();
+            return "evicted proxy row still present";
+        }
+    }
+    // Drop protection — the real proxy (oldest usage stamp) goes next.
+    proxies.SetProtectedSources({});
+    proxies.SetStorageCapBytes(1);
+    if (proxies.EnforceStorageCap() < 1) {
+        catalog.Close();
+        return "unprotected ready proxies were not evicted";
+    }
+    {
+        std::error_code ec;
+        if (std::filesystem::exists(Path::FromUtf8(rec.proxy_path),
+                                    ec)) {
+            catalog.Close();
+            return "evicted proxy file still on disk";
+        }
+        ProxyRecord gone;
+        if (catalog.GetProxy(src_utf8, &gone)) {
+            catalog.Close();
+            return "evicted source row still in catalog";
+        }
     }
     catalog.Close();
     return {};
@@ -5552,6 +5871,383 @@ std::string CheckSmartReframe() {
     return {};
 }
 
+// "Track object → pin content" (ai/object_track.h): the reusable
+// ClipTrack on Clip::object_track plus its two pin consumers — baked
+// PosX/PosY keyframes for a generated title (BakePinKeys) and the
+// live-reference xer.fx.track_mosaic censor resolved from the track
+// in the compositor. Everything here is deterministic model/render
+// math — the RF-DETR scan itself shares the graceful-degradation
+// contract with smart_reframe (no model => reason, never crash).
+std::string CheckObjectTrack() {
+    std::string err;
+
+    // ---- TrackBoxAt: smoothed box interpolation ----
+    ClipTrack track;
+    ReframeSample ta, tb;
+    ta.t = 0.0;
+    ta.cx = 0.2f;
+    ta.cy = 0.4f;
+    ta.w = 0.10f;
+    ta.h = 0.20f;
+    tb.t = 1.0;
+    tb.cx = 0.8f;
+    tb.cy = 0.4f;
+    tb.w = 0.20f;
+    tb.h = 0.40f;
+    track.samples = {ta, tb};
+    {
+        // Empty track -> degenerate box (w <= 0 => "nothing tracked").
+        const Ai::TrackBox empty = Ai::TrackBoxAt(ClipTrack{}, 0.5, 0.0);
+        if (empty.w > 0.0 || empty.h > 0.0) {
+            return "empty object track produced a non-empty box";
+        }
+        // Smoothing 0 follows raw centers at sample times exactly.
+        const Ai::TrackBox at0 = Ai::TrackBoxAt(track, 0.0, 0.0);
+        const Ai::TrackBox at1 = Ai::TrackBoxAt(track, 1.0, 0.0);
+        if (std::abs(at0.cx - 0.2) > 1e-4 || at1.cx < 0.6) {
+            return "TrackBoxAt did not follow the raw centers";
+        }
+        // Mid-time: center lerps to ~0.5, size lerps to the mean.
+        const Ai::TrackBox mid = Ai::TrackBoxAt(track, 0.5, 0.0);
+        if (std::abs(mid.cx - 0.5) > 0.05 ||
+            std::abs(mid.w - 0.15) > 0.02 ||
+            std::abs(mid.h - 0.30) > 0.04) {
+            return "TrackBoxAt midpoint did not lerp center and size";
+        }
+        // End holds beyond the last sample.
+        const Ai::TrackBox late = Ai::TrackBoxAt(track, 5.0, 0.0);
+        if (std::abs(late.cx - 0.8) > 1e-4 ||
+            std::abs(late.w - 0.20) > 1e-4) {
+            return "TrackBoxAt did not hold the end of the track";
+        }
+        // Max smoothing restrains the 0.6-fraction jump at t=1
+        // (EMA horizon + velocity cap — same curve as Smart Reframe).
+        const Ai::TrackBox damped = Ai::TrackBoxAt(track, 1.0, 1.0);
+        if (damped.cx >= at1.cx - 0.05) {
+            return "TrackBoxAt smoothing did not restrain the jump";
+        }
+    }
+
+    // ---- BakePinKeys: track -> PosX/PosY keyframes ----
+    // Identity-transform source on a same-size canvas maps source
+    // fractions to canvas fractions 1:1, so expected key values are
+    // exact. TopCenter pin: the title's bottom-center rests margin
+    // above the tracked box top.
+    {
+        Clip tracked;
+        tracked.id = "tracked";
+        tracked.source_path = "media.mp4";
+        tracked.track = 0;
+        tracked.timeline_start = 0.0;
+        tracked.duration = 1.0;
+        tracked.in_point = 0.0;
+        tracked.playback_rate = 1.0;
+        ReframeSample s0, s1;
+        s0.t = 0.0;
+        s0.cx = 0.2f;
+        s0.cy = 0.6f;
+        s0.w = 0.2f;
+        s0.h = 0.2f;   // box top at cy - h/2 = 0.5
+        s1.t = 1.0;
+        s1.cx = 0.8f;
+        s1.cy = 0.6f;
+        s1.w = 0.2f;
+        s1.h = 0.2f;
+        tracked.object_track.samples = {s0, s1};
+        Ai::PinGeometry geom;
+        geom.src_w = 200;
+        geom.src_h = 100;
+        geom.canvas_w = 200;
+        geom.canvas_h = 100;
+        geom.pin_w = 40.0;   // title frame, canvas px at scale 1
+        geom.pin_h = 20.0;
+        geom.pin_scale = 1.0;
+        geom.margin = 0.02;
+        Ai::PinKeys keys;
+        if (!Ai::BakePinKeys(tracked, Ai::PinAnchor::TopCenter, geom,
+                             0.0, &keys, &err)) {
+            return "BakePinKeys failed: " + err;
+        }
+        if (keys.pos_x.size() != 2 || keys.pos_y.size() != 2) {
+            return "BakePinKeys produced the wrong key count";
+        }
+        // Anchor point: (cx, cy - h/2) = (0.2, 0.5); margin lifts ay
+        // to 0.48. Pinned top-left ox = ax - 0.5*pin_w/canvas_w =
+        // 0.2 - 0.1 = 0.1; oy = 0.48 - 1.0*pin_h/canvas_h = 0.28.
+        const double x0 = keys.pos_x[0].value;
+        const double y0 = keys.pos_y[0].value;
+        const double x1 = keys.pos_x[1].value;
+        const double y1 = keys.pos_y[1].value;
+        if (std::abs(keys.pos_x[0].time - 0.0) > 1e-6 ||
+            std::abs(keys.pos_x[1].time - 1.0) > 1e-6 ||
+            std::abs(x0 - 0.1) > 1e-4 || std::abs(y0 - 0.28) > 1e-4 ||
+            std::abs(x1 - 0.7) > 1e-4 || std::abs(y1 - 0.28) > 1e-4) {
+            return "BakePinKeys landed the wrong pin coordinates";
+        }
+        // The baked lists are ordinary clip keyframes: evaluate the
+        // synthetic title clip mid-span and expect the lerp midpoint.
+        Clip title;
+        title.id = "pin-title";
+        title.track = 0;
+        title.duration = 1.0;
+        title.keyframes[KeyProp::PosX] = keys.pos_x;
+        title.keyframes[KeyProp::PosY] = keys.pos_y;
+        if (std::abs(EvaluateClipProperty(title, KeyProp::PosX, 0.5,
+                                          0.0f) -
+                     0.4f) > 1e-4f ||
+            std::abs(EvaluateClipProperty(title, KeyProp::PosY, 0.5,
+                                          0.0f) -
+                     0.28f) > 1e-4f) {
+            return "baked pin keys did not evaluate to the midpoint";
+        }
+        // in_point shifts keys into the clip-local domain: a track
+        // sample at source t=5 on a clip consuming [5,6] bakes u=0.
+        Clip trimmed = tracked;
+        trimmed.in_point = 5.0;
+        ReframeSample s5, s6;
+        s5 = s0;
+        s5.t = 5.0;
+        s6 = s1;
+        s6.t = 6.0;
+        trimmed.object_track.samples = {s5, s6};
+        Ai::PinKeys keys2;
+        if (!Ai::BakePinKeys(trimmed, Ai::PinAnchor::TopCenter, geom,
+                             0.0, &keys2, &err) ||
+            keys2.pos_x.size() != 2 ||
+            std::abs(keys2.pos_x[0].time - 0.0) > 1e-6 ||
+            std::abs(keys2.pos_x[1].time - 1.0) > 1e-6) {
+            return "in_point did not map samples to clip-local keys";
+        }
+        // Samples outside the consumed span are dropped; an entirely
+        // out-of-span / empty track is a clean failure.
+        trimmed.object_track.samples[0].t = 100.0;
+        trimmed.object_track.samples[1].t = 200.0;
+        if (Ai::BakePinKeys(trimmed, Ai::PinAnchor::TopCenter, geom,
+                            0.0, &keys2, &err)) {
+            return "out-of-span track baked keys anyway";
+        }
+        Clip empty;
+        empty.id = "empty";
+        empty.duration = 1.0;
+        if (Ai::BakePinKeys(empty, Ai::PinAnchor::TopCenter, geom,
+                            0.0, &keys2, &err)) {
+            return "BakePinKeys baked from an empty track";
+        }
+        Ai::PinGeometry bad = geom;
+        bad.canvas_w = 0;
+        if (Ai::BakePinKeys(tracked, Ai::PinAnchor::TopCenter, bad,
+                            0.0, &keys2, &err)) {
+            return "BakePinKeys accepted degenerate geometry";
+        }
+    }
+
+    // ---- scan graceful-degradation contract ----
+    {
+        Clip clip;
+        clip.id = "track-scan";
+        clip.source_path = "definitely/missing/media.mp4";
+        clip.duration = 5.0;
+        ClipTrack scanned;
+        if (Ai::ScanClipTrack(clip, "", "", Ai::ReframeScanParams{},
+                              "", nullptr, nullptr, &scanned, &err)) {
+            return "ScanClipTrack succeeded with no model";
+        }
+        if (err.empty() || !scanned.samples.empty()) {
+            return "no-model track scan did not report a reason";
+        }
+        Clip generated = MakeGeneratedClip("gen2", 0, 0.0, 1.0,
+                                           SourceKind::ColorBars,
+                                           "smpte75");
+        if (Ai::ScanClipTrack(generated, "x.onnx", "",
+                              Ai::ReframeScanParams{}, "", nullptr,
+                              nullptr, &scanned, &err)) {
+            return "ScanClipTrack scanned a generated clip";
+        }
+    }
+
+    // ---- registered descriptor ----
+    {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:xer.fx.track_mosaic");
+        if (desc == nullptr || !desc->builtin ||
+            desc->id != Ai::kTrackMosaicId) {
+            return "builtin:xer.fx.track_mosaic is not registered";
+        }
+        if (desc->params.size() != 3 ||
+            std::string(desc->params[0].name) != "block" ||
+            std::string(desc->params[1].name) != "padding" ||
+            std::string(desc->params[2].name) != "smoothing") {
+            return "track_mosaic param table is not {block, padding, "
+                   "smoothing}";
+        }
+    }
+
+    // ---- end-to-end render: the mosaic pixelates the tracked box ----
+    // 200x100 bars (each ~28.6px). A track box at cx=0.25, w=0.10
+    // covers x in [40,60] — spanning the yellow->cyan boundary at
+    // x~=57. With block 128 the whole region collapses to one averaged
+    // color: two pixels that would differ unfixed (40 vs 58) become
+    // equal, and a pixel outside the box keeps its bar color.
+    {
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip bars_clip = MakeGeneratedClip("bars-m", 0, 0.0, 1.0,
+                                           SourceKind::ColorBars,
+                                           "smpte75");
+        bars_clip.effects.push_back(
+            {"builtin:xer.fx.track_mosaic", {128.0f, 0.0f, 0.0f}});
+        ReframeSample s;
+        s.t = 0.0;
+        s.cx = 0.25f;
+        s.cy = 0.5f;
+        s.w = 0.10f;
+        s.h = 1.0f;
+        s.confidence = 0.9f;
+        bars_clip.object_track.samples.push_back(s);
+        project.clips.push_back(bars_clip);
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> bgra;
+        const bool rendered = compositor.RenderFrameAt(0.0, &bgra, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const auto px = [&bgra](int x, int y) {
+            const std::uint8_t* p =
+                bgra.data() +
+                (static_cast<std::size_t>(y) * 200 + x) * 4;
+            return std::array<int, 4>{p[0], p[1], p[2], p[3]};
+        };
+        const auto a = px(42, 50);   // inside box, would be yellow
+        const auto b = px(58, 50);   // inside box, would be cyan
+        const auto outside = px(70, 50);  // beyond the box: cyan bar
+        if (a != b) {
+            return "tracked mosaic did not flatten the box to one "
+                   "color";
+        }
+        // The merged color mixes yellow (B=0) with cyan (B~191), so
+        // its blue channel lands strictly between them.
+        if (a[0] <= 0 || a[0] >= 190) {
+            return "tracked mosaic left the box unpixelated";
+        }
+        // Outside pixels keep their source color (cyan BGRA-ish):
+        // cyan ~{191,191,0} in BGR.
+        if (!(outside[0] > 150 && outside[1] > 150 &&
+              outside[2] < 60)) {
+            return "tracked mosaic pixelated outside the tracked box";
+        }
+    }
+    // And the same clip WITHOUT the effect stays unpixed — the two
+    // boundary pixels then differ (yellow vs cyan).
+    {
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip bars_clip = MakeGeneratedClip("bars-m2", 0, 0.0, 1.0,
+                                           SourceKind::ColorBars,
+                                           "smpte75");
+        ReframeSample s;
+        s.t = 0.0;
+        s.cx = 0.25f;
+        s.cy = 0.5f;
+        s.w = 0.10f;
+        s.h = 1.0f;
+        bars_clip.object_track.samples.push_back(s);
+        project.clips.push_back(bars_clip);
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> bgra;
+        const bool rendered = compositor.RenderFrameAt(0.0, &bgra, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const auto px = [&bgra](int x, int y) {
+            const std::uint8_t* p =
+                bgra.data() +
+                (static_cast<std::size_t>(y) * 200 + x) * 4;
+            return std::array<int, 4>{p[0], p[1], p[2], p[3]};
+        };
+        if (px(42, 50) == px(58, 50)) {
+            return "unpinned bars unexpectedly render one color — the "
+                   "mosaic check is unprovable";
+        }
+    }
+
+    // ---- Clip::object_track serialization round trip ----
+    {
+        Project project;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip tracked;
+        tracked.id = "tracked-rt";
+        tracked.source_path = "tracked.mp4";   // need not exist
+        tracked.track = 0;
+        tracked.timeline_start = 0.0;
+        tracked.duration = 4.0;
+        tracked.object_track.label = "person";
+        tracked.object_track.classes = {"car", "person"};
+        ReframeSample s0, s1;
+        s0.t = 0.5;
+        s0.cx = 0.3f;
+        s0.cy = 0.6f;
+        s0.w = 0.2f;
+        s0.h = 0.4f;
+        s0.confidence = 0.77f;
+        s1.t = 1.0;
+        s1.cx = 0.7f;
+        s1.cy = 0.4f;
+        s1.w = 0.3f;
+        s1.h = 0.2f;
+        s1.confidence = 0.55f;
+        s1.scene_boundary = true;
+        tracked.object_track.samples = {s0, s1};
+        project.clips.push_back(tracked);
+
+        const std::string path =
+            Utf8Path(SmokeTempDir() / "smoke_track.xerproj");
+        if (!ProjectStore::Save(project, path, &err)) {
+            return "Save failed: " + err;
+        }
+        Project loaded;
+        if (!ProjectStore::Load(path, &loaded, &err)) {
+            return "Load failed: " + err;
+        }
+        const Clip* back = FindClip(loaded, "tracked-rt");
+        if (back == nullptr ||
+            back->object_track.samples.size() != 2 ||
+            back->object_track.label != "person" ||
+            back->object_track.classes.size() != 2 ||
+            back->object_track.classes[0] != "car") {
+            return "object_track did not survive the round trip";
+        }
+        const ReframeSample& r0 = back->object_track.samples[0];
+        const ReframeSample& r1 = back->object_track.samples[1];
+        if (r0.t != 0.5 || std::abs(r0.cx - 0.3f) > 1e-6f ||
+            std::abs(r0.cy - 0.6f) > 1e-6f ||
+            std::abs(r0.w - 0.2f) > 1e-6f ||
+            std::abs(r0.h - 0.4f) > 1e-6f ||
+            std::abs(r0.confidence - 0.77f) > 1e-6f ||
+            r0.scene_boundary || r1.t != 1.0 ||
+            std::abs(r1.cx - 0.7f) > 1e-6f || !r1.scene_boundary) {
+            return "object_track sample fields did not survive the "
+                   "round trip";
+        }
+    }
+    return {};
+}
+
 // Object Lab AI ops (lab/ai_ops.h on the shared YA.AIFindObject
 // onnx_session): BiRefNet alpha matting + EfficientSAM smart-select.
 // What MUST hold regardless of the environment: bad inputs and a
@@ -6416,6 +7112,59 @@ std::string CheckPhotoM4() {
         if (edge == 0 || edge == 255) {
             return "feather produced no soft edge";
         }
+        // Refine Edge (Select → Refine Edge) — shift maps onto
+        // GrowMaskInPlace so a positive shift must grow the coverage
+        // extent; the whole apply stays undoable like every other
+        // selection mutator.
+        {
+            const ph::IntRect ext0 = ph::SelectionExtent(sel);
+            ph::RefineEdgeParams rp;
+            rp.shift_px = 3.0f;
+            if (!hist.ExecuteDeviceOp(sel, "Refine Edge",
+                                      [&rp](ph::TiledDevice& d) {
+                                          ph::RefineSelectionEdge(d, rp);
+                                      })) {
+                return "refine-edge op failed";
+            }
+            const ph::IntRect ext1 = ph::SelectionExtent(sel);
+            if (ext1.x + ext1.w <= ext0.x + ext0.w) {
+                return "refine shift did not grow the edge";
+            }
+            if (!hist.Undo() || !(ph::SelectionExtent(sel) == ext0)) {
+                return "refine shift undo failed";
+            }
+            // Contrast is a deterministic ramp about the 50% point:
+            // at +0.5 the gain is 10^0.5 (~3.16), so a written 200
+            // polarizes to 255 and a 60 collapses to 0.
+            if (!hist.ExecuteDeviceOp(
+                    sel, "Refine Edge", [](ph::TiledDevice& d) {
+                        d.WriteCoverage(2, 2, 200);
+                        d.WriteCoverage(62, 2, 60);
+                        ph::RefineEdgeParams cp;
+                        cp.contrast = 0.5f;
+                        ph::RefineSelectionEdge(d, cp);
+                    })) {
+                return "refine-contrast op failed";
+            }
+            if (sel.ReadCoverage(2, 2) != 255 ||
+                sel.ReadCoverage(62, 2) != 0) {
+                return "refine contrast did not polarize the ramp";
+            }
+            if (!hist.Undo() || sel.ReadCoverage(2, 2) != 255 ||
+                sel.ReadCoverage(62, 2) != 0) {
+                return "refine contrast undo failed";
+            }
+            // All-zero params are a documented bit-exact no-op.
+            const auto cov_pre = sel.ReadRegionCoverage(sel.Bounds());
+            hist.ExecuteDeviceOp(sel, "Refine Edge",
+                                 [](ph::TiledDevice& d) {
+                                     ph::RefineSelectionEdge(
+                                         d, ph::RefineEdgeParams{});
+                                 });
+            if (sel.ReadRegionCoverage(sel.Bounds()) != cov_pre) {
+                return "zero-param refine changed coverage";
+            }
+        }
     }
 
     // 4) Adjustment layer: invert evaluates the composite-of-below;
@@ -6582,6 +7331,8 @@ constexpr CheckEntry kChecks[] = {
     {"timeline_history", &CheckTimelineHistory},
     {"source_edit", &CheckSourceEdit},
     {"transcript_editing", &CheckTranscriptEditing},
+    {"captions", &CheckCaptions},
+    {"transcribe_cap", &CheckTranscribeCap},
     {"keyboard_map", &CheckKeyboardMap},
     {"export_presets", &CheckExportPresets},
     {"generated_source", &CheckGeneratedSource},
@@ -6624,6 +7375,7 @@ constexpr CheckEntry kChecks[] = {
     {"ai_find_object", &CheckAiFindObject},
     {"ai_tags", &CheckAiTags},
     {"smart_reframe", &CheckSmartReframe},
+    {"object_track", &CheckObjectTrack},
     {"ai_lab_ops", &CheckAiLabOps},
     {"cuda_decode", &CheckCudaDecode},
     {"cuda_encode", &CheckCudaEncode},

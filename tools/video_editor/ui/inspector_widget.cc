@@ -383,6 +383,45 @@ void InspectorWidget::EnsureChildren() {
                 clip_.id, ReframeRatioForLabel(label));
         }
     });
+    // Object Track: the scan fills Clip::object_track; the pin
+    // buttons bake a title clip / attach the live mosaic effect.
+    track_btn_ = std::make_shared<Widgets::Button>(
+        "Track", Widgets::ButtonStyle::Secondary);
+    track_btn_->SetTooltip(
+        "Track the primary object in this clip (needs a model in "
+        "assets/models/)");
+    track_btn_->SetOnClick([this] {
+        if (has_clip_ && hooks_.on_track_object) {
+            hooks_.on_track_object(clip_.id, "");
+        }
+    });
+    pin_title_btn_ = std::make_shared<Widgets::Button>(
+        "Pin Title", Widgets::ButtonStyle::Secondary);
+    pin_title_btn_->SetTooltip(
+        "Create a title clip keyframed to follow the tracked object");
+    pin_title_btn_->SetOnClick([this] {
+        if (has_clip_ && hooks_.on_pin_title) {
+            hooks_.on_pin_title(clip_.id);
+        }
+    });
+    pin_mosaic_btn_ = std::make_shared<Widgets::Button>(
+        "Pin Mosaic", Widgets::ButtonStyle::Secondary);
+    pin_mosaic_btn_->SetTooltip(
+        "Pixelate the tracked object (tracked-mosaic effect — "
+        "auto-censor)");
+    pin_mosaic_btn_->SetOnClick([this] {
+        if (has_clip_ && hooks_.on_pin_mosaic) {
+            hooks_.on_pin_mosaic(clip_.id);
+        }
+    });
+    track_clear_btn_ = std::make_shared<Widgets::Button>(
+        "Clear", Widgets::ButtonStyle::Ghost);
+    track_clear_btn_->SetTooltip("Remove this clip's object track");
+    track_clear_btn_->SetOnClick([this] {
+        if (has_clip_ && hooks_.on_clear_track) {
+            hooks_.on_clear_track(clip_.id);
+        }
+    });
     delete_btn_ = std::make_shared<Widgets::Button>(
         "Delete", Widgets::ButtonStyle::Destructive);
     delete_btn_->SetOnClick([this] {
@@ -539,6 +578,10 @@ void InspectorWidget::EnsureChildren() {
     AddChild(ai_clear_btn_);
     AddChild(reframe_combo_);
     AddChild(reframe_btn_);
+    AddChild(track_btn_);
+    AddChild(pin_title_btn_);
+    AddChild(pin_mosaic_btn_);
+    AddChild(track_clear_btn_);
     AddChild(delete_btn_);
     AddChild(status_);
     SetClip(has_clip_ ? &clip_ : nullptr);
@@ -1642,6 +1685,74 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
         // rects (Layout is never called for them this pass).
         reframe_combo_->SetVisible(false);
         reframe_btn_->SetVisible(false);
+    }
+
+    // ---- Object Track (pinned content: title / mosaic) ----
+    if (has_clip_ &&
+        (hooks_.on_track_object != nullptr ||
+         hooks_.on_pin_title != nullptr ||
+         hooks_.on_pin_mosaic != nullptr)) {
+        section("OBJECT TRACK");
+        const bool scannable =
+            clip_.source.kind == SourceKind::Media &&
+            !clip_.source_path.empty() && !clip_.is_adjustment;
+        const bool has_track = !clip_.object_track.samples.empty();
+        // Row: [Track][Clear] — Track flexes, Clear hugs the edge.
+        track_btn_->SetVisible(true);
+        track_btn_->Layout(
+            {inner_x, y, std::max(40.0f, inner_w - 68.0f), 26.0f},
+            tokens);
+        track_btn_->SetText(has_track ? "Re-track" : "Track");
+        track_btn_->SetEnabled(
+            scannable && hooks_.on_track_object != nullptr);
+        track_clear_btn_->SetVisible(true);
+        track_clear_btn_->Layout(
+            {inner_x + inner_w - 62.0f, y, 62.0f, 26.0f}, tokens);
+        track_clear_btn_->SetEnabled(
+            (has_track || !clip_.object_track.label.empty()) &&
+            hooks_.on_clear_track != nullptr);
+        y += 32.0f;
+        // Row: [Pin Title][Pin Mosaic] — the two pin targets, active
+        // only while a track exists.
+        pin_title_btn_->SetVisible(true);
+        pin_title_btn_->Layout(
+            {inner_x, y, std::max(40.0f, (inner_w - 6.0f) * 0.5f),
+             26.0f},
+            tokens);
+        pin_title_btn_->SetEnabled(has_track &&
+                                   hooks_.on_pin_title != nullptr);
+        pin_mosaic_btn_->SetVisible(true);
+        pin_mosaic_btn_->Layout(
+            {inner_x + (inner_w - 6.0f) * 0.5f + 6.0f, y,
+             std::max(40.0f, (inner_w - 6.0f) * 0.5f), 26.0f},
+            tokens);
+        pin_mosaic_btn_->SetEnabled(has_track &&
+                                    hooks_.on_pin_mosaic != nullptr);
+        y += 32.0f;
+        if (!has_track) {
+            label(scannable
+                      ? "no track — run Track (needs a model in "
+                        "assets/models/)"
+                      : "no track — generated clips have nothing to "
+                        "scan",
+                  18.0f);
+        } else {
+            char line[96];
+            std::snprintf(
+                line, sizeof(line), "track: %d samples%s%s",
+                static_cast<int>(clip_.object_track.samples.size()),
+                clip_.object_track.label.empty() ? "" : " · ",
+                clip_.object_track.label.empty()
+                    ? ""
+                    : clip_.object_track.label.c_str());
+            label(line, 18.0f);
+        }
+        gap(10.0f);
+    } else {
+        track_btn_->SetVisible(false);
+        pin_title_btn_->SetVisible(false);
+        pin_mosaic_btn_->SetVisible(false);
+        track_clear_btn_->SetVisible(false);
     }
 
     // ---- transition picker ----

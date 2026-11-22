@@ -473,6 +473,93 @@ private:
     bool close_gap_;
 };
 
+// Same snapshot/replay shape as TimelineSnapshotCommand but covering
+// the FULL timeline state — tracks, clips, transitions AND the stored
+// sequences. Compound ops touch all of them at once: MakeCompound
+// moves clips into a new sequence and FlattenCompound can append
+// tracks. First Apply runs the op live; undo/redo replay the exact
+// captured vectors so freshly minted ids stay deterministic.
+class ProjectSnapshotCommand : public Command {
+public:
+    bool Apply(Project& project) override {
+        if (captured_) {
+            project.tracks = after_tracks_;
+            project.clips = after_clips_;
+            project.transitions = after_transitions_;
+            project.sequences = after_sequences_;
+            return true;
+        }
+        before_tracks_ = project.tracks;
+        before_clips_ = project.clips;
+        before_transitions_ = project.transitions;
+        before_sequences_ = project.sequences;
+        last_error_.clear();
+        if (!ApplyOp(project, &last_error_)) {
+            return false;
+        }
+        after_tracks_ = project.tracks;
+        after_clips_ = project.clips;
+        after_transitions_ = project.transitions;
+        after_sequences_ = project.sequences;
+        captured_ = true;
+        return true;
+    }
+    bool Revert(Project& project) override {
+        project.tracks = before_tracks_;
+        project.clips = before_clips_;
+        project.transitions = before_transitions_;
+        project.sequences = before_sequences_;
+        return true;
+    }
+    const std::string& last_error() const { return last_error_; }
+
+protected:
+    virtual bool ApplyOp(Project& project, std::string* error) = 0;
+
+private:
+    std::vector<Track> before_tracks_, after_tracks_;
+    std::vector<Clip> before_clips_, after_clips_;
+    std::vector<Transition> before_transitions_, after_transitions_;
+    std::vector<Sequence> before_sequences_, after_sequences_;
+    bool captured_ = false;
+    std::string last_error_;
+};
+
+class MakeCompoundCommand : public ProjectSnapshotCommand {
+public:
+    MakeCompoundCommand(std::vector<std::string> clip_ids,
+                        std::string name, std::string clip_id,
+                        std::string sequence_id)
+        : clip_ids_(std::move(clip_ids)), name_(std::move(name)),
+          clip_id_(std::move(clip_id)),
+          sequence_id_(std::move(sequence_id)) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        return XER::VideoEditor::MakeCompound(
+            project, clip_ids_, name_, clip_id_, sequence_id_, error);
+    }
+    std::string Label() const override { return "Compound clips"; }
+    const std::string& clip_id() const { return clip_id_; }
+    const std::string& sequence_id() const { return sequence_id_; }
+
+private:
+    std::vector<std::string> clip_ids_;
+    std::string name_, clip_id_, sequence_id_;
+};
+
+class FlattenCompoundCommand : public ProjectSnapshotCommand {
+public:
+    explicit FlattenCompoundCommand(std::string clip_id)
+        : clip_id_(std::move(clip_id)) {}
+    bool ApplyOp(Project& project, std::string* error) override {
+        return XER::VideoEditor::FlattenCompound(project, clip_id_,
+                                                 error);
+    }
+    std::string Label() const override { return "Decompose compound"; }
+
+private:
+    std::string clip_id_;
+};
+
 class RollingEditCommand : public ClipEditCommand {
 public:
     RollingEditCommand(std::string from, std::string to, double delta,
@@ -1405,6 +1492,46 @@ bool TimelineHistory::RippleDeleteClip(const std::string& clip_id,
 bool TimelineHistory::LiftRange(double t0, double t1, bool close_gap,
                                 std::string* error_out) {
     auto cmd = std::make_unique<LiftRangeCommand>(t0, t1, close_gap);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::MakeCompound(std::vector<std::string> clip_ids,
+                                   std::string name,
+                                   std::string* clip_id_out,
+                                   std::string* sequence_id_out,
+                                   std::string* error_out) {
+    // Caller-supplied ids keep the snapshot command's redo replay
+    // deterministic — the model op stores exactly these.
+    auto cmd = std::make_unique<MakeCompoundCommand>(
+        std::move(clip_ids), std::move(name), NewClipId(), NewClipId());
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    if (clip_id_out != nullptr) {
+        *clip_id_out = raw->clip_id();
+    }
+    if (sequence_id_out != nullptr) {
+        *sequence_id_out = raw->sequence_id();
+    }
+    PushBack(std::move(cmd));
+    return true;
+}
+
+bool TimelineHistory::FlattenCompound(const std::string& clip_id,
+                                      std::string* error_out) {
+    auto cmd = std::make_unique<FlattenCompoundCommand>(clip_id);
     auto* raw = cmd.get();
     if (!cmd->Apply(project_)) {
         if (error_out) {

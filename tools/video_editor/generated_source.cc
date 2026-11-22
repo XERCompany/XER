@@ -1,7 +1,8 @@
 // generated_source.cc — see generated_source.h for the contract.
-// Every generator writes packed BGRA8 straight alpha. All three kinds
-// are time-invariant today; clip_local_t is accepted for future
-// animated sources (e.g. a rolling title).
+// Every generator writes packed BGRA8 straight alpha. Matte and bars
+// are time-invariant; Text re-evaluates its karaoke word highlight
+// (text_style.h) against clip_local_t, so the compositor's per-u
+// memo/cache keys animate it like a decoded source.
 #include "generated_source.h"
 
 #include <algorithm>
@@ -143,7 +144,7 @@ int TextClipGlyphScale(int canvas_h) {
     return std::clamp(canvas_h / 135, 1, 64);
 }
 
-bool GenerateSourceFrame(const Clip& clip, double /*clip_local_t*/,
+bool GenerateSourceFrame(const Clip& clip, double clip_local_t,
                          int canvas_w, int canvas_h, video::Frame* out) {
     if (out == nullptr || canvas_w <= 0 || canvas_h <= 0) {
         return false;
@@ -159,8 +160,10 @@ bool GenerateSourceFrame(const Clip& clip, double /*clip_local_t*/,
         case SourceKind::Text:
             // Parse + rasterize lives in text_style.cc (Skia path,
             // BitmapFont fallback) — see text_style.h for the tokens.
+            // clip_local_t drives the karaoke word highlight.
             return RenderClipText(
-                ParseClipTextStyle(clip.source.param), canvas_h, out);
+                ParseClipTextStyle(clip.source.param), canvas_h, out,
+                clip_local_t);
         case SourceKind::Media:
         default:
             return false;   // Media decodes; unknown kinds are errors

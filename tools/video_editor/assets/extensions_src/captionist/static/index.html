@@ -36,6 +36,18 @@ captions onto a new "Captions" track as editable title clips.</p>
     <option value="top">Top</option>
   </select>
 </div>
+<div class="row">
+  <label for="style">Style</label>
+  <select id="style">
+    <option value="classic">Classic (line at a time)</option>
+    <option value="karaoke">Karaoke (word highlight)</option>
+    <option value="wordpop">Word pop (animated words)</option>
+  </select>
+</div>
+<div class="row">
+  <label for="acolor">Highlight color (karaoke / pop)</label>
+  <input id="acolor" type="text" value="#FFE000">
+</div>
 <div class="row"><button id="go">Transcribe &amp; Caption</button></div>
 <pre id="log"></pre>
 <script>
@@ -93,7 +105,9 @@ async function run() {
         (last.detail ? " — " + last.detail : ""));
     const size = parseInt($("size").value, 10) || 56;
     const color = $("color").value || "#FFFFFF";
+    const acolor = $("acolor").value || "#FFE000";
     const valign = $("valign").value;
+    const style = $("style").value;
     const track = await ve('timeline.add_track',
                            {kind: 'video', name: 'Captions'});
     if (!track.ok) {
@@ -102,6 +116,27 @@ async function run() {
     }
     const capTrack = track.index;
     const end = clip.start + clip.duration;
+    const baseStyle = "size=" + size + " outline=2 " +
+                      "outline_color=#000000 align=center valign=" +
+                      valign + " w=1600";
+    // Word expansion: real token timings ride span.words when the
+    // installed libwhisper provides them; otherwise distribute the
+    // span proportionally to word length (editor fallback parity).
+    function spanWords(s) {
+      if (Array.isArray(s.words) && s.words.length) {
+        return s.words.map(w => ({text: w.text, t0: w.t0, t1: w.t1}));
+      }
+      const toks = (s.label || '').trim().split(/\s+/)
+                                       .filter(t => t.length);
+      const total = toks.reduce((n, t) => n + t.length, 0) || 1;
+      let cur = s.t0;
+      return toks.map(t => {
+        const share = (s.t1 - s.t0) * Math.max(1, t.length) / total;
+        const w = {text: t, t0: cur, t1: cur + share};
+        cur += share;
+        return w;
+      });
+    }
     let made = 0;
     for (const s of last.spans) {
       const text = (s.label || '').trim();
@@ -110,20 +145,72 @@ async function run() {
       const t1 = Math.min(end, srcToTl(clip, s.t1));
       const dur = Math.max(0.4, t1 - t0);
       if (t0 >= end || t1 <= clip.start) continue;
-      const param = JSON.stringify({
-        name: 'Caption',
-        text: text + " | size=" + size + " color=" + color +
-              " outline=2 outline_color=#000000 align=center valign=" +
-              valign + " w=1600"
-      });
-      const r = await ve('timeline.add_clip',
-                         {kind: 'text', param, start: t0,
-                          duration: dur, track: capTrack});
-      if (r.ok) ++made;
-      else log("add_clip@" + t0.toFixed(2) + ": " + (r.error || '?'));
+      if (style === 'karaoke') {
+        // One clip per segment — the per-word highlight is rendered
+        // by the clip itself (kwt= word spans, clip-local seconds).
+        const words = spanWords(s);
+        const kwt = words.map(w => {
+          const a = Math.max(0, srcToTl(clip, w.t0) - t0);
+          const b = Math.max(0, srcToTl(clip, w.t1) - t0);
+          return a.toFixed(2) + "-" + Math.max(a, b).toFixed(2);
+        }).join(',');
+        const param = JSON.stringify({
+          name: 'Caption',
+          text: text + " | " + baseStyle + " color=" + color +
+                " karaoke=1 kact=" + acolor + " kwt=" + kwt
+        });
+        const r = await ve('timeline.add_clip',
+                           {kind: 'text', param, start: t0,
+                            duration: dur, track: capTrack});
+        if (r.ok) ++made;
+        else log("add_clip@" + t0.toFixed(2) + ": " + (r.error || '?'));
+      } else if (style === 'wordpop') {
+        // One clip per word, scale-pop + fade-in via keyframes.
+        for (const w of spanWords(s)) {
+          const wt0 = Math.max(clip.start, srcToTl(clip, w.t0));
+          const wt1 = Math.min(end, srcToTl(clip, w.t1));
+          const wdur = Math.max(0.25, wt1 - wt0);
+          if (wt0 >= end || wt1 <= clip.start) continue;
+          const param = JSON.stringify({
+            name: 'Caption',
+            text: w.text + " | " + baseStyle + " color=" + acolor
+          });
+          const r = await ve('timeline.add_clip',
+                             {kind: 'text', param, start: wt0,
+                              duration: wdur, track: capTrack});
+          if (!r.ok) {
+            log("add_clip@" + wt0.toFixed(2) + ": " +
+                (r.error || '?'));
+            continue;
+          }
+          ++made;
+          // The just-added clip is the current selection — keyframe
+          // calls default to it.
+          await ve('timeline.set_keyframes',
+                   {prop: 'scale',
+                    keys: [{time: 0, value: 0.6, ease: 'back'},
+                           {time: Math.min(0.16, wdur), value: 1,
+                            ease: 'hold'}]});
+          await ve('timeline.set_keyframes',
+                   {prop: 'opacity',
+                    keys: [{time: 0, value: 0},
+                           {time: Math.min(0.06, wdur), value: 1,
+                            ease: 'hold'}]});
+        }
+      } else {
+        const param = JSON.stringify({
+          name: 'Caption',
+          text: text + " | " + baseStyle + " color=" + color
+        });
+        const r = await ve('timeline.add_clip',
+                           {kind: 'text', param, start: t0,
+                            duration: dur, track: capTrack});
+        if (r.ok) ++made;
+        else log("add_clip@" + t0.toFixed(2) + ": " + (r.error || '?'));
+      }
     }
     log("Created " + made + " caption clip(s) on track " + capTrack +
-        " — fully editable, fully undoable.");
+        " (" + style + ") — fully editable, fully undoable.");
   } finally {
     $("go").disabled = false;
     $("go").textContent = "Transcribe & Caption";

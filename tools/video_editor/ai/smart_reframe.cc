@@ -127,7 +127,7 @@ float SignatureDistance(const Signature& a, const Signature& b) {
 // Primary-subject policy: a real "person" label wins outright; with
 // generic class_N labels (no .names file) COCO person is class 1 on
 // DETR exports (logit index == COCO id) and 0 on YOLO exports.
-bool IsPerson(const FindObj::Detection& d) {
+bool IsPerson(const TrackDetection& d) {
     if (!d.label.empty() && d.label.rfind("class_", 0) != 0) {
         std::string low = d.label;
         std::transform(low.begin(), low.end(), low.begin(),
@@ -139,12 +139,14 @@ bool IsPerson(const FindObj::Detection& d) {
     return d.class_id == 0 || d.class_id == 1;
 }
 
-const FindObj::Detection* PickSubject(
-    const std::vector<FindObj::Detection>& dets) {
-    const FindObj::Detection* person = nullptr;
-    const FindObj::Detection* largest = nullptr;
+}  // namespace
+
+const TrackDetection* PickPrimarySubject(
+    const std::vector<TrackDetection>& dets) {
+    const TrackDetection* person = nullptr;
+    const TrackDetection* largest = nullptr;
     double largest_area = -1.0;
-    for (const FindObj::Detection& d : dets) {
+    for (const TrackDetection& d : dets) {
         const double area =
             static_cast<double>(d.w) * static_cast<double>(d.h);
         if (area > largest_area) {
@@ -160,12 +162,7 @@ const FindObj::Detection* PickSubject(
 }
 
 // ---------------------------------------------------------------------------
-// Smoothed subject center
-
-struct Center {
-    double x = 0.5;
-    double y = 0.5;
-};
+// Smoothed subject center — the TrackCenterAt implementation.
 
 // Causal smoother over the sample stream: each sample's raw center is
 // folded into the running estimate by an EMA whose horizon `tau`
@@ -174,9 +171,9 @@ struct Center {
 // scene_boundary relax both knobs — a cut re-centers quickly instead
 // of gliding through unrelated content. Between samples the smoothed
 // endpoints lerp; ends hold.
-Center SmoothedCenterAt(const ClipReframe& track, double t,
-                        double smoothing) {
-    const std::vector<ReframeSample>& s = track.samples;
+TrackPoint TrackCenterAt(const std::vector<ReframeSample>& samples,
+                         double t, double smoothing) {
+    const std::vector<ReframeSample>& s = samples;
     if (s.empty()) {
         return {};
     }
@@ -218,8 +215,6 @@ Center SmoothedCenterAt(const ClipReframe& track, double t,
     return {sm_x, sm_y};
 }
 
-}  // namespace
-
 ReframeWindow ReframeMaxWindow(int frame_w, int frame_h, double ratio) {
     if (frame_w <= 0 || frame_h <= 0 || !(ratio > 0.0)) {
         return {};
@@ -246,8 +241,8 @@ ReframeWindow ReframeWindowAt(const ClipReframe& track, double t,
     if (win.w <= 0.0 || win.h <= 0.0) {
         return win;
     }
-    const Center c =
-        SmoothedCenterAt(track, t, std::clamp(smoothing, 0.0, 1.0));
+    const TrackPoint c =
+        TrackCenterAt(track.samples, t, std::clamp(smoothing, 0.0, 1.0));
     win.x = std::clamp(c.x * frame_w - win.w * 0.5, 0.0,
                        std::max(0.0, frame_w - win.w));
     win.y = std::clamp(c.y * frame_h - win.h * 0.5, 0.0,
@@ -261,6 +256,19 @@ bool ScanClipSubject(const Clip& clip, const std::string& model_path,
                      const std::function<void(float)>& progress,
                      const std::function<bool()>& should_cancel,
                      ClipReframe* out, std::string* error_out) {
+    return ScanClipDetections(clip, model_path, labels_path, params,
+                              &PickPrimarySubject, progress,
+                              should_cancel, out, error_out);
+}
+
+bool ScanClipDetections(
+    const Clip& clip, const std::string& model_path,
+    const std::string& labels_path, const ReframeScanParams& params,
+    const std::function<const TrackDetection*(
+        const std::vector<TrackDetection>&)>& pick,
+    const std::function<void(float)>& progress,
+    const std::function<bool()>& should_cancel, ClipReframe* out,
+    std::string* error_out) {
     if (out == nullptr) return false;
     out->samples.clear();
     if (clip.source_path.empty() || clip.is_adjustment) {
@@ -366,9 +374,25 @@ bool ScanClipSubject(const Clip& clip, const std::string& model_path,
         prev = sig;
         have_prev = true;
 
-        const auto dets = detector.Detect(pixels, pw, ph, pw * 4, opts);
-        if (const FindObj::Detection* subject = PickSubject(dets);
-            subject != nullptr) {
+        const auto found = detector.Detect(pixels, pw, ph, pw * 4, opts);
+        // Neutral candidates for the caller's reduction — FindObj::
+        // Detection stays a .cc type; `pick` only sees TrackDetection.
+        std::vector<TrackDetection> dets;
+        dets.reserve(found.size());
+        for (const FindObj::Detection& d : found) {
+            TrackDetection td;
+            td.x = d.x;
+            td.y = d.y;
+            td.w = d.w;
+            td.h = d.h;
+            td.confidence = d.confidence;
+            td.class_id = d.class_id;
+            td.label = d.label;
+            dets.push_back(std::move(td));
+        }
+        const TrackDetection* subject =
+            pick != nullptr ? pick(dets) : nullptr;
+        if (subject != nullptr) {
             ReframeSample s;
             s.t = t;
             const double fw = static_cast<double>(pw);

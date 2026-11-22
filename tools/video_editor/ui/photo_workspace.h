@@ -122,6 +122,15 @@ public:
     void Deselect();
     void InvertSelection();
     void FeatherSelectionPx(float radius_px);
+    // Modeless "Refine Edge" panel (Select → Refine Edge, or the
+    // "Refine" tool-options button while a select tool is active):
+    // radius/smooth/feather/contrast/shift sliders composited via
+    // Photo::RefineSelectionEdge onto the active selection through
+    // PhotoHistory (undoable "Refine Edge"). ToggleRefineEdgePanel
+    // opens/closes it; ApplyRefineEdge commits the current sliders.
+    void ToggleRefineEdgePanel();
+    bool RefineEdgePanelOpen() const { return refine_panel_visible_; }
+    void ApplyRefineEdge();
 
     // ---- M4: masks + adjustment layers ------------------------------
     // Attaches a fresh A8 mask to the active layer, or detaches it
@@ -227,6 +236,10 @@ private:
     // Recomputes has-selection + the marching-ants outline.
     void RefreshSelectionState();
     Photo::SelectionCombine PendingCombine() const;
+    // Refine-Edge panel: card geometry inside the viewport and child
+    // visibility sync (RefineEdgePanelOpen drives both).
+    XER::UI::Layout::Rect RefinePanelRect() const;
+    void SyncRefinePanelVisibility();
     // Commits the in-progress marquee drag (rect/ellipse/lasso).
     void CommitMarquee();
     // The doc-space polygon to draw as the ants outline for the
@@ -338,6 +351,12 @@ private:
     std::vector<Photo::IntPoint> poly_pts_;
     float wand_tol_ = 32.0f;      // magic-wand tolerance (0..255)
     float sel_feather_ = 0.0f;    // marquee feather option (px)
+    // Refine-Edge panel state: modeless card over the viewport; the
+    // params persist across open/close so re-opening keeps the last
+    // values (PS keeps its dialog stateless per-open — we keep the
+    // friendlier behavior since Apply is explicit).
+    bool refine_panel_visible_ = false;
+    Photo::RefineEdgeParams refine_params_;
 
     // ---- retouch ---------------------------------------------------------
     bool retouch_drag_ = false;
@@ -400,6 +419,20 @@ private:
     std::shared_ptr<XER::UI::Widgets::Slider> feather_slider_;
     std::shared_ptr<XER::UI::Widgets::Button> invert_sel_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> deselect_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> refine_btn_;
+    // Refine-Edge panel (modeless card over the viewport).
+    std::shared_ptr<XER::UI::Widgets::Label> rf_radius_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> rf_radius_slider_;
+    std::shared_ptr<XER::UI::Widgets::Label> rf_smooth_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> rf_smooth_slider_;
+    std::shared_ptr<XER::UI::Widgets::Label> rf_feather_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> rf_feather_slider_;
+    std::shared_ptr<XER::UI::Widgets::Label> rf_contrast_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> rf_contrast_slider_;
+    std::shared_ptr<XER::UI::Widgets::Label> rf_shift_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> rf_shift_slider_;
+    std::shared_ptr<XER::UI::Widgets::Button> rf_apply_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> rf_close_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> color_input_;
     std::shared_ptr<XER::UI::Widgets::Label> zoom_label_;
     // Layers panel controls (right column).

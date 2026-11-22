@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "audio_sync.h"
+#include "captions.h"
 #include "export_engine.h"
 #include "media_catalog.h"
 #include "media_prep.h"
@@ -322,6 +323,23 @@ private:
     // otherwise it kicks SmartReframeForClip.
     void SetSmartReframeTarget(const std::string& clip_id,
                                double target_ratio);
+    // AI "Track object" (ai/object_track.h): async object scan on the
+    // shared AI job; the ClipTrack lands on the clip via ReplaceClip
+    // in Tick(). `label_filter` narrows the pick to a class the first
+    // scan observed ("" = primary-subject policy).
+    void TrackObjectForClip(const std::string& clip_id,
+                            const std::string& label_filter);
+    // Pin targets over Clip::object_track:
+    //  * PinTitleToTrack — generates a Text clip on a lane above the
+    //    source clip spanning its range, PosX/PosY keyframes baked
+    //    from the track (undoable; plain keyframes afterward).
+    //  * PinMosaicToTrack — upserts the live-reference
+    //    builtin:xer.fx.track_mosaic effect on the clip (auto-censor).
+    //  * ClearClipTrack — empties Clip::object_track (the mosaic
+    //    effect, if pinned, stays but renders nothing).
+    void PinTitleToTrack(const std::string& clip_id);
+    void PinMosaicToTrack(const std::string& clip_id);
+    void ClearClipTrack(const std::string& clip_id);
     void MoveClip(const std::string& clip_id, double start);
     // One-click waveform sync (audio_sync.h): correlate every
     // audio-bearing clip's envelope against the selected/first clip
@@ -522,6 +540,19 @@ private:
     // settings (proxy_max_dim/proxy_crf) — the media-bin "Create
     // proxy" action and the import-time ingest share it.
     void RequestProxyBuild(const std::string& path);
+    // Pushes the project's proxy storage policy into proxy_manager_:
+    // the byte cap (proxy_cache_max_mb MiB, 0 = unbounded) plus the
+    // protected-source set below, then runs the LRU sweep so a
+    // just-lowered cap takes effect immediately (the worker also
+    // sweeps after every finished job). Project load/new and
+    // settings-apply call it.
+    void SyncProxyCachePolicy();
+    // Refreshes only the protected-source set — the sorted media
+    // source_paths of the open project's clips, which ProxyManager
+    // never evicts. Re-pushed from NotifyProjectChanged ONLY when the
+    // set actually changed (canonicalizing paths costs filesystem
+    // stats, so a same-set edit stays a pure string compare).
+    void SyncProxyProtectedSources();
     // MediaPrep options for the member initializer — path_resolver
     // delegates to DecodePathFor (worker-thread safe: it reads the
     // proxies_enabled_ atomic + the internally-locked manager).
@@ -558,6 +589,10 @@ private:
     // capturing `this` before the manager constructs is safe.
     MediaPrep media_prep_{&catalog_, BuildPrepOptions(), {}};
     std::string proxy_activity_;   // last shown DescribeActivity line
+    // Sorted media source_path set last pushed via
+    // SetProtectedSources — the change detector for
+    // SyncProxyProtectedSources (see its comment above).
+    std::vector<std::string> proxy_protected_set_;
     std::vector<CatalogEntry> catalog_entries_;
     std::string selected_media_path_;
     std::string selected_clip_id_;
@@ -614,6 +649,10 @@ private:
             double t1 = 0.0;
             std::string label;
             float confidence = 0.0f;
+            // Real word timings when whisper token timestamps ran —
+            // mirrored into TranscriptSegment::words by the cache
+            // path and served to extensions by ai.last.
+            std::vector<Ai::TranscriptWordSpan> words;
         };
         std::string kind;  // "beats" | "transcribe" | "objects" | "bounce"
         std::vector<std::pair<double, std::string>> markers;
@@ -633,6 +672,10 @@ private:
         std::string reframe_clip_id;
         ClipReframe reframe;
         double reframe_ratio = 0.5625;
+        // AI track-object payload: the target clip + analyzed object
+        // track. track_clip_id non-empty selects this path in Tick().
+        std::string track_clip_id;
+        ClipTrack object_track;
     };
     std::mutex ai_result_mutex_;
     AiResult ai_result_;
@@ -744,6 +787,10 @@ private:
     // (path+size); mirrored to TranscriptCacheDir()/*.json so it
     // survives restarts.
     std::unordered_map<std::string, TranscriptDoc> transcript_cache_;
+    // Style the "Captions" action applies — the transcript panel's
+    // caption-style picker writes through on_caption_style; the
+    // captionist extension passes its own per-run params instead.
+    CaptionStyle caption_style_{};
     // Context-menu insert point the matte dialog applies to —
     // track < 0 / time < 0 means the default (TargetVideoTrack /
     // playhead) was in effect when the dialog opened.
