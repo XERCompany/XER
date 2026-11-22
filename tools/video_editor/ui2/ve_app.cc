@@ -4,8 +4,16 @@
 #include <utility>
 #include <vector>
 
+#include "builtin_fx.h"
+#include "effects_panel.h"
+#include "inspector_panel.h"
+#include "js_fx.h"
+#include "media_panel.h"
+#include "media_prep.h"
 #include "monitor_panel.h"
 #include "overlays/toast.h"
+#include "plugin_host.h"
+#include "proxy_manager.h"
 #include "rendering/renderer.h"
 #include "shell_widgets.h"
 #include "timeline_bridge.h"
@@ -19,6 +27,18 @@
 #include "widgets/resizable.h"
 #include "widgets/sidebar.h"
 #include "widgets/widget_tree.h"
+
+#include "voice_isolate.h"
+
+#if defined(_WIN32)
+#include <windows.h>
+// WIN32_LEAN_AND_MEAN keeps these out of <windows.h>:
+#include <commdlg.h>   // GetOpenFileNameW / OPENFILENAMEW
+#include <shellapi.h>  // ShellExecuteW
+
+#include "helper/path_utils.h"
+#include "helper/string_utils.h"
+#endif
 
 namespace XER::VideoEditor::Ui2 {
 namespace {
@@ -141,6 +161,12 @@ void VeApp::BuildShell() {
     });
     WireTimelineBridge();
 
+    // M3 panels — hook wiring after the timeline surface exists (the
+    // bin's drag handoff + the inspector's selection provider read it).
+    WireMediaPanel();
+    WireEffectsPanel();
+    WireInspectorPanel();
+
     status_ = StatusStrip::Create();
     status_->SetBadges({{"autosave", "Autosave off"},
                         {"jobs", "0 jobs"},
@@ -168,12 +194,18 @@ void VeApp::BuildShell() {
 }
 
 void VeApp::BuildDockPanels() {
-    left_dock_->AddTab("Media", "Media bin — catalog browser (M3)",
-                       PH("dock.media", "Media",
-                          "Catalog + bin list"));
-    left_dock_->AddTab("Effects", "Effects browser (M3)",
-                       PH("dock.effects", "Effects",
-                          "Audio/video fx rack browser"));
+    // M3 wave-1: real panels replace the M1 placeholders for Media,
+    // Effects and Inspector. Panels are created + hook-wired here;
+    // the media stack (catalog/prep/proxies) lazy-inits so smoke
+    // construction stays thread-free until the bin needs it.
+    media_panel_ = MediaPanel::Create();
+    effects_panel_ = EffectsPanel::Create();
+    inspector_panel_ = InspectorPanel::Create();
+
+    left_dock_->AddTab("Media", "Media bin — catalog browser",
+                       media_panel_);
+    left_dock_->AddTab("Effects", "Effects browser",
+                       effects_panel_);
     left_dock_->AddTab("Audio", "Audio tools (M3)",
                        PH("dock.audio", "Audio",
                           "Clip mixer + track controls"));
@@ -183,9 +215,8 @@ void VeApp::BuildDockPanels() {
                        PH("dock.transitions", "Transitions",
                           "Transition presets"));
 
-    right_dock_->AddTab("Inspector", "Clip inspector (M3)",
-                        PH("dock.inspector", "Inspector",
-                           "Selected clip properties"));
+    right_dock_->AddTab("Inspector", "Clip inspector",
+                        inspector_panel_);
     right_dock_->AddTab("Color", "Color panel (M3)",
                         PH("dock.color", "Color",
                            "Wheels / curves / LUT"));
@@ -289,7 +320,7 @@ void VeApp::RebuildMenus() {
         {"Save Project", "Ctrl+S",
          [this] { Notify("Save Project", "M2 — project lifecycle"); }},
         {"Import Media…", "",
-         [this] { Notify("Import", "M2 — catalog import"); },
+         [this] { ImportMediaInteractive(); },
          true, false, false, true},
         {"Export…", "",
          [this] { Notify("Export", "M2 — export pipeline"); }},
@@ -461,6 +492,7 @@ void VeApp::WireTimelineBridge() {
         if (const auto& s = timeline_->Surface()) {
             s->SetSelectedClip(clip_id);
         }
+        RefreshInspector();   // M3: selection provider re-pull
     };
     host.on_seek = [this](double t) { OnBridgeSeek(t); };
     host.on_project_changed = [this] { NotifyTimelineChanged(); };
@@ -507,6 +539,9 @@ void VeApp::NotifyTimelineChanged() {
     program_engine_.SetFps(project_.fps_num, project_.fps_den);
     program_engine_.SetWorkArea(project_.work_in, project_.work_out);
     program_engine_.SetProject(project_);
+    // M3: document edits (incl. undo/redo) invalidate the inspector's
+    // Clip copies — re-pull through the provider.
+    RefreshInspector();
 }
 
 void VeApp::OnBridgeSeek(double seconds) {
@@ -1513,6 +1548,26 @@ void VeApp::Tick(double dt_seconds) {
     // engine callbacks never touch widgets).
     program_engine_.DrainPending();
     source_engine_.DrainPending();
+    // Media-prep drains: poster/peaks results repaint the bin
+    // (NotifyMediaChanged clears negative caches + invalidates), an
+    // import poster writing poster_path refreshes the row data.
+    if (media_prep_ != nullptr) {
+        if (media_prep_->ConsumeRenderDirty() &&
+            media_panel_ != nullptr) {
+            media_panel_->NotifyMediaChanged();
+        }
+        if (media_prep_->ConsumeCatalogDirty()) {
+            RefreshBinEntries();
+        }
+        const std::uint64_t dropped =
+            media_prep_->ConsumeDroppedPosterRequests();
+        if (dropped > 0) {
+            SetStatus("Media queue full — " +
+                          std::to_string(dropped) +
+                          " poster request(s) dropped",
+                      true);
+        }
+    }
     if (prefs_dirty_) {
         prefs_flush_timer_ += dt_seconds;
         if (prefs_flush_timer_ >= 1.0) {
@@ -1522,9 +1577,648 @@ void VeApp::Tick(double dt_seconds) {
 }
 
 void VeApp::TickTree(double dt_seconds) {
+    // The host's frame callback drives us; WidgetTree::Tick only
+    // covers the tooltip layer — the widget subtree (VeApp::Tick's
+    // DrainPending marshal + prefs flush, MonitorSurface's click
+    // clock, LevelMeter ballistics, TimelineStrip's surface re-sync)
+    // needs the Widget::TickTree walk (the old shell's TickTree
+    // parity — VideoEditorAppWidget inherited Widget::TickTree).
+    Widget::TickTree(dt_seconds);
     if (auto* tree = GetTree(); tree != nullptr) {
         tree->Tick(dt_seconds);
     }
+}
+
+// ── M3 panels / media stack ──────────────────────────────────────────
+// Same ownership rules as M2: VeApp owns the MediaCatalog, the
+// MediaPrep worker pool and the ProxyManager; the three M3 panels see
+// only their Hooks bundles (media bin: catalog rows + tri-state
+// lookups + file actions; effects: registry catalog + apply hook;
+// inspector: selection provider + commit hook). No panel mutates
+// Project — every document edit funnels through history_ below.
+
+void VeApp::EnsureMediaStack() {
+    if (media_stack_ready_) return;
+    media_stack_ready_ = true;
+    if (catalog_ == nullptr) {
+        catalog_ = std::make_unique<MediaCatalog>();
+    }
+    std::string error;
+    if (!catalog_->IsOpen() && !catalog_->Open(&error)) {
+        if (!media_stack_warned_) {
+            media_stack_warned_ = true;
+            SetStatus("Media catalog unavailable: " + error, true);
+        }
+        return;
+    }
+    if (catalog_->IsOpen() && media_prep_ == nullptr) {
+        // Borrowing order: proxies_ first so the poster path_resolver
+        // can route decodes through ready proxy files (the documented
+        // Options::path_resolver seam — proxies carry no audio so
+        // peaks always hit the original).
+        proxies_ = std::make_unique<ProxyManager>(catalog_.get());
+        MediaPrep::Options options;
+        options.path_resolver =
+            [this](const std::string& path) -> std::string {
+            return proxies_ != nullptr
+                       ? proxies_->ResolveDecodePath(path)
+                       : path;
+        };
+        media_prep_ = std::make_unique<MediaPrep>(
+            catalog_.get(), options, MediaPrep::JobRunner{});
+    }
+}
+
+const CatalogEntry* VeApp::FindCatalogEntry(
+    const std::string& path) const {
+    if (catalog_ == nullptr || !catalog_->IsOpen()) return nullptr;
+    static thread_local CatalogEntry entry;
+    if (catalog_->FindByPath(path, &entry)) return &entry;
+    return nullptr;
+}
+
+void VeApp::RefreshBinEntries() {
+    if (media_panel_ == nullptr) return;
+    std::vector<CatalogEntry> entries;
+    if (catalog_ != nullptr && catalog_->IsOpen()) {
+        std::string error;
+        entries = catalog_->List(&error);
+        if (!error.empty()) {
+            SetStatus("Catalog read failed: " + error, true);
+        }
+    }
+    media_panel_->SetEntries(std::move(entries));
+}
+
+void VeApp::WireMediaPanel() {
+    if (media_panel_ == nullptr) return;
+    EnsureMediaStack();
+
+    MediaPanel::Hooks hooks;
+    hooks.on_import = [this] { ImportMediaInteractive(); };
+    // URL import lands with the AI-tools wave — surface the honest
+    // state instead of a silent no-op.
+    hooks.on_import_url = [this] {
+        SetStatus("Import from URL — deferred to the tools wave");
+    };
+    hooks.on_open_source = [this](const std::string& path) {
+        const CatalogEntry* e = FindCatalogEntry(path);
+        if (e == nullptr) {
+            SetStatus("Media not in catalog", true);
+            return;
+        }
+        int fps_num = 30, fps_den = 1;
+        if (e->fps > 0.0) {
+            fps_num = static_cast<int>(e->fps * 1000.0 + 0.5);
+            fps_den = 1000;
+        }
+        std::string name = e->path;
+        const std::size_t pos = name.find_last_of("/\\");
+        if (pos != std::string::npos) name = name.substr(pos + 1);
+        OpenInSourceMonitor(e->path, name, e->duration_seconds,
+                            fps_num, fps_den, e->HasVideo(),
+                            e->has_audio, e->width, e->height);
+    };
+    hooks.on_add_to_timeline = [this](const std::string& path) {
+        AddMediaToTimeline(path);
+    };
+    hooks.on_remove_entries =
+        [this](const std::vector<std::string>& paths) {
+            int removed = 0;
+            for (const std::string& path : paths) {
+                CatalogEntry e;
+                if (catalog_ != nullptr && catalog_->IsOpen() &&
+                    catalog_->FindByPath(path, &e)) {
+                    if (catalog_->Remove(e.id)) {
+                        ++removed;
+                        // PurgePath drops cached posters/peaks AND
+                        // bumps the path's generation so in-flight
+                        // decodes can't republish stale results.
+                        if (media_prep_ != nullptr) {
+                            media_prep_->PurgePath(e.path);
+                        }
+                    }
+                }
+            }
+            RefreshBinEntries();
+            SetStatus(removed > 0
+                          ? "Removed " + std::to_string(removed) +
+                                " item(s) from the bin"
+                          : "Nothing removed",
+                      removed == 0);
+        };
+    hooks.on_reveal_entry = [this](const std::string& path) {
+        (void)this;  // capture retained for the non-Windows branch
+#if defined(_WIN32)
+        // explorer /select,<path> — the same reveal the legacy bin ran.
+        const std::wstring wide =
+            XER::Helper::Path::FromUtf8(path).wstring();
+        std::wstring cmd = L"/select,\"" + wide + L"\"";
+        ::ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                        cmd.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+        (void)path;
+        SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+    };
+    hooks.on_create_proxy = [this](const std::string& path) {
+        EnsureMediaStack();
+        if (proxies_ == nullptr) {
+            SetStatus("Proxy manager unavailable", true);
+            return;
+        }
+        ProxySettings settings;
+        if (proxies_->Request(path, settings)) {
+            SetStatus("Proxy queued");
+        } else {
+            SetStatus("Proxy already queued or not applicable");
+        }
+        RefreshBinEntries();   // proxy_state -> pending badge
+    };
+    hooks.on_cancel_proxy = [this](const std::string& path) {
+        if (proxies_ != nullptr) proxies_->Cancel(path);
+        RefreshBinEntries();
+    };
+    hooks.on_select = [](const std::vector<std::string>&) {
+        // Bin selection is bin-local for wave-1 (the inspector reads
+        // the TIMELINE selection) — nothing to fan out yet.
+    };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    hooks.get_poster =
+        [this](const std::string& path, double seconds,
+               video::Frame* frame) -> MediaLookup {
+        EnsureMediaStack();
+        if (media_prep_ == nullptr) return MediaLookup::kFailed;
+        switch (media_prep_->LookupPoster(path, seconds, frame)) {
+            case MediaPrep::Lookup::kReady: return MediaLookup::kReady;
+            case MediaPrep::Lookup::kPending:
+                return MediaLookup::kPending;
+            default: return MediaLookup::kFailed;
+        }
+    };
+    hooks.get_audio_peaks =
+        [this](const std::string& path,
+               AudioPeaks* out) -> MediaLookup {
+        EnsureMediaStack();
+        if (media_prep_ == nullptr) return MediaLookup::kFailed;
+        switch (media_prep_->LookupPeaks(path, out)) {
+            case MediaPrep::Lookup::kReady: return MediaLookup::kReady;
+            case MediaPrep::Lookup::kPending:
+                return MediaLookup::kPending;
+            default: return MediaLookup::kFailed;
+        }
+    };
+    // Drag-out — the shell owns the session (drag_session.h); the
+    // timeline surface gets hover feedback and the drop resolves to
+    // a history-backed insert per dragged path.
+    hooks.on_begin_drag =
+        [this](const std::vector<std::string>& paths,
+               XER::UI::Layout::Point) { drag_session_.Begin(paths); };
+    hooks.on_drag_update = [this](XER::UI::Layout::Point point) {
+        const auto& surface =
+            timeline_ != nullptr ? timeline_->Surface() : nullptr;
+        drag_session_.Update(point, surface.get());
+    };
+    hooks.on_end_drag = [this](XER::UI::Layout::Point point) {
+        const auto& surface =
+            timeline_ != nullptr ? timeline_->Surface() : nullptr;
+        auto drop = drag_session_.End(point, surface.get());
+        if (drop.has_value()) {
+            for (const std::string& path : drag_session_.Paths()) {
+                AddMediaToTimelineAt(path, drop->time, drop->track);
+            }
+        }
+    };
+    media_panel_->SetHooks(std::move(hooks));
+    RefreshBinEntries();
+}
+
+void VeApp::ImportMediaFiles(const std::vector<std::string>& paths) {
+    EnsureMediaStack();
+    if (catalog_ == nullptr || !catalog_->IsOpen()) {
+        SetStatus("Media catalog unavailable", true);
+        return;
+    }
+    int imported = 0;
+    std::string last_error;
+    for (const std::string& path : paths) {
+        std::int64_t id = 0;
+        std::string error;
+        // extract_poster=false — the poster PNG lands on the
+        // media-prep worker; ConsumeCatalogDirty refreshes the bin
+        // once poster_path is written (legacy ImportMediaFile parity).
+        if (catalog_->Import(path, &id, false, &error)) {
+            ++imported;
+            if (media_prep_ != nullptr) {
+                media_prep_->RequestImportPoster(path);
+            }
+        } else {
+            last_error = error;
+        }
+    }
+    RefreshBinEntries();
+    if (paths.size() == 1 && imported == 1) {
+        SetStatus("Imported " + paths.front());
+        return;
+    }
+    std::string msg = "Imported " + std::to_string(imported) + " of " +
+                      std::to_string(paths.size());
+    if (imported == 0 && !last_error.empty()) {
+        msg += " — " + last_error;
+    }
+    SetStatus(msg, imported == 0);
+}
+
+void VeApp::ImportMediaInteractive() {
+#if defined(_WIN32)
+    // Minimal GetOpenFileNameW multi-select picker — the legacy
+    // IFileOpenDialog path ported to the shell (no parent_hwnd_ seam
+    // here; nullptr owner is acceptable for the bin's import).
+    wchar_t buffer[32768] = {};
+    OPENFILENAMEW ofn{};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.lpstrFile = buffer;
+    ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+    ofn.lpstrFilter =
+        L"Media\0*.mp4;*.mov;*.mkv;*.avi;*.webm;*.m4v;*.mp3;*.wav;"
+        L"*.flac;*.aac;*.ogg;*.m4a;*.png;*.jpg;*.jpeg;*.bmp;*.gif;"
+        L"*.tif;*.tiff;*.webp;*.exr;*.dpx\0All files\0*.*\0";
+    ofn.lpstrTitle = L"Import media";
+    ofn.Flags = OFN_FILEMUSTEXIST | OFN_ALLOWMULTISELECT |
+                OFN_EXPLORER | OFN_HIDEREADONLY;
+    if (!::GetOpenFileNameW(&ofn)) return;
+    std::vector<std::string> paths;
+    std::wstring dir = buffer;
+    const wchar_t* p = buffer + dir.size() + 1;
+    if (*p == L'\0') {
+        paths.push_back(
+            XER::Helper::Path::NormalizeUtf8Path(
+                XER::Helper::String::WideToUtf8(dir)));
+    } else {
+        while (*p != L'\0') {
+            const std::wstring file = p;
+            const std::filesystem::path full =
+                std::filesystem::path(dir) / file;
+            paths.push_back(
+                XER::Helper::Path::NormalizeUtf8Path(
+                    XER::Helper::String::WideToUtf8(full.wstring())));
+            p += file.size() + 1;
+        }
+    }
+    ImportMediaFiles(paths);
+#else
+    SetStatus("Import dialog is Windows-only", true);
+#endif
+}
+
+// ---- bin -> timeline ----------------------------------------------------
+
+void VeApp::AddMediaToTimelineAt(const std::string& path,
+                                 double at_seconds,
+                                 int preferred_track) {
+    // Legacy AddMediaToTimelineAt parity (ui/video_editor_app.cc):
+    // kind-matched placement, linked A/V pairs, macro + rollback.
+    const CatalogEntry* entry = FindCatalogEntry(path);
+    if (entry == nullptr) {
+        SetStatus("Select media in the bin first", true);
+        return;
+    }
+    if (history_ == nullptr) {
+        SetStatus("Timeline not ready", true);
+        return;
+    }
+    const TrackKind wanted =
+        entry->HasVideo() ? TrackKind::Video : TrackKind::Audio;
+    const bool linked_av = entry->HasVideo() && entry->HasAudio();
+    const auto first_unlocked = [this](TrackKind kind) {
+        for (std::size_t i = 0; i < project_.tracks.size(); ++i) {
+            if (project_.tracks[i].kind == kind &&
+                !project_.tracks[i].locked) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    };
+
+    history_->BeginMacro("Add clip");
+    bool applied_any = false;
+    bool ok = true;
+    std::string error;
+    std::string clip_id;
+    std::string link_group;
+
+    int track_index = -1;
+    if (preferred_track >= 0 &&
+        preferred_track < static_cast<int>(project_.tracks.size()) &&
+        project_.tracks[preferred_track].kind == wanted &&
+        !project_.tracks[preferred_track].locked) {
+        track_index = preferred_track;
+    } else {
+        track_index = first_unlocked(wanted);
+    }
+    if (track_index < 0) {
+        track_index = history_->AddTrack(
+            wanted, wanted == TrackKind::Video ? "Video" : "Audio");
+        applied_any |= track_index >= 0;
+        if (track_index < 0) {
+            ok = false;
+            error = "unable to add track";
+        }
+    }
+    int audio_track = -1;
+    if (ok && linked_av) {
+        audio_track = first_unlocked(TrackKind::Audio);
+        if (audio_track < 0) {
+            audio_track = history_->AddTrack(TrackKind::Audio, "Audio");
+            applied_any |= audio_track >= 0;
+            if (audio_track < 0) {
+                ok = false;
+                error = "unable to add audio track";
+            }
+        }
+    }
+    double clip_start = std::max(0.0, at_seconds);
+    double clip_duration = 0.0;
+    if (ok) {
+        if (timeline_ != nullptr &&
+            timeline_->Surface() != nullptr &&
+            timeline_->Surface()->SnapEnabled()) {
+            clip_start = SnapTime(project_, track_index, clip_start,
+                                  0.1, playhead_);
+        }
+        clip_duration = entry->duration_seconds > 0.0
+                            ? entry->duration_seconds
+                            : 5.0;
+        Clip clip;
+        clip.id = NewClipId();
+        clip.source_path = entry->path;
+        clip.track = track_index;
+        clip.timeline_start = clip_start;
+        clip.in_point = 0.0;
+        clip.duration = clip_duration;
+        if (entry->HasVideo()) {
+            clip.transform = FitTransformToCanvas(
+                entry->width, entry->height, project_.width,
+                project_.height);
+        }
+        if (linked_av) {
+            link_group = NewClipId();
+            clip.link_group = link_group;
+        }
+        MediaBounds bounds;
+        bounds.duration_seconds = entry->duration_seconds;
+        bounds.has_video = entry->HasVideo();
+        ok = history_->AddClip(std::move(clip), bounds, &clip_id,
+                               &error);
+        applied_any |= ok;
+    }
+    if (ok && linked_av) {
+        Clip audio_clip;
+        audio_clip.id = NewClipId();
+        audio_clip.source_path = entry->path;
+        audio_clip.track = audio_track;
+        audio_clip.timeline_start = clip_start;
+        audio_clip.in_point = 0.0;
+        audio_clip.duration = clip_duration;
+        audio_clip.link_group = link_group;
+        MediaBounds audio_bounds;
+        audio_bounds.duration_seconds = entry->duration_seconds;
+        std::string audio_id;
+        ok = history_->AddClip(std::move(audio_clip), audio_bounds,
+                               &audio_id, &error);
+        applied_any |= ok;
+    }
+    history_->EndMacro();
+    if (!ok) {
+        if (applied_any) {
+            history_->Undo();   // rolls the whole macro back
+        }
+        SetStatus("Add clip failed: " + error, true);
+        return;
+    }
+    if (bridge_ != nullptr) {
+        bridge_->SelectClip(clip_id);
+    }
+    NotifyTimelineChanged();
+    SetStatus("Added " + path.substr(path.find_last_of("/\\") + 1));
+}
+
+// ---- selection provider / inspector commit ------------------------------
+
+std::vector<Clip> VeApp::SelectedClips() const {
+    std::vector<Clip> out;
+    if (bridge_ == nullptr) return out;
+    const std::string& id = bridge_->SelectedClipId();
+    if (id.empty()) return out;
+    if (const Clip* clip = FindClip(project_, id)) {
+        out.push_back(*clip);
+    }
+    return out;
+}
+
+void VeApp::RefreshInspector() {
+    if (inspector_panel_ != nullptr) {
+        inspector_panel_->RefreshSelection();
+    }
+}
+
+void VeApp::CommitInspectorClips(const std::vector<Clip>& clips) {
+    if (history_ == nullptr || clips.empty()) return;
+    const bool macro = clips.size() > 1;
+    if (macro) history_->BeginMacro("Inspector edit");
+    bool any = false;
+    for (const Clip& clip : clips) {
+        MediaBounds bounds;
+        if (const CatalogEntry* e = FindCatalogEntry(clip.source_path)) {
+            bounds.duration_seconds = e->duration_seconds;
+            bounds.has_video = e->HasVideo();
+        } else {
+            bounds.duration_seconds = clip.duration;
+            bounds.has_video = true;
+        }
+        std::string error;
+        any |= history_->ReplaceClip(clip.id, clip, bounds, &error);
+        if (!error.empty()) {
+            SetStatus("Inspector edit rejected: " + error, true);
+            break;
+        }
+    }
+    if (macro) history_->EndMacro();
+    if (any) NotifyTimelineChanged();
+}
+
+// ---- effects metadata + apply ------------------------------------------
+
+std::string VeApp::FxDisplayName(const std::string& fx_type) const {
+    for (const FxEntry& e : fx_entries_) {
+        if (e.type == fx_type) return e.name;
+    }
+    // Types can arrive from project files before the catalog built —
+    // resolve live against the plugin host too.
+    if (const PluginDesc* desc =
+            PluginHost::ForEffectType(fx_type)) {
+        return desc->name;
+    }
+    return fx_type;
+}
+
+std::vector<InspectorParamSpec> VeApp::FxParamSpecs(
+    const std::string& fx_type) const {
+    std::vector<InspectorParamSpec> specs;
+    if (const PluginDesc* desc =
+            PluginHost::ForEffectType(fx_type)) {
+        for (const XER_ParamDesc& p : desc->params) {
+            InspectorParamSpec spec;
+            spec.name = p.name != nullptr ? p.name : "param";
+            spec.minimum = p.min_value;
+            spec.maximum = p.max_value;
+            spec.step = (p.max_value - p.min_value) / 100.0f;
+            if (spec.step <= 0.0f) spec.step = 0.01f;
+            spec.default_value = p.default_value;
+            specs.push_back(spec);
+        }
+        return specs;
+    }
+    // Core/script types — FxEntry defaults carry the count; names
+    // fall back to "param i" in the panel.
+    for (const FxEntry& e : fx_entries_) {
+        if (e.type == fx_type) {
+            for (std::size_t i = 0; i < e.default_params.size(); ++i) {
+                InspectorParamSpec spec;
+                spec.name = "param " + std::to_string(i);
+                spec.default_value = e.default_params[i];
+                specs.push_back(spec);
+            }
+            return specs;
+        }
+    }
+    return specs;
+}
+
+void VeApp::ApplyFxToClips(const std::vector<std::string>& clip_ids,
+                           const std::string& fx_type) {
+    if (history_ == nullptr) return;
+    if (clip_ids.empty() || fx_type.empty()) {
+        SetStatus("Select a clip before applying an effect", true);
+        return;
+    }
+    std::vector<float> params;
+    for (const FxEntry& e : fx_entries_) {
+        if (e.type == fx_type) {
+            params = e.default_params;
+            break;
+        }
+    }
+    history_->BeginMacro("Apply FX");
+    int applied = 0;
+    for (const std::string& id : clip_ids) {
+        const Clip* clip = FindClip(project_, id);
+        if (clip == nullptr) continue;
+        Clip updated = *clip;
+        updated.effects.push_back({fx_type, params});
+        MediaBounds bounds;
+        if (const CatalogEntry* e =
+                FindCatalogEntry(clip->source_path)) {
+            bounds.duration_seconds = e->duration_seconds;
+            bounds.has_video = e->HasVideo();
+        } else {
+            bounds.duration_seconds = clip->duration;
+        }
+        std::string error;
+        if (history_->ReplaceClip(id, updated, bounds, &error)) {
+            ++applied;
+        } else {
+            SetStatus("Apply FX failed: " + error, true);
+            break;
+        }
+    }
+    history_->EndMacro();
+    if (applied > 0) {
+        NotifyTimelineChanged();
+        SetStatus("Applied " + FxDisplayName(fx_type) + " to " +
+                  std::to_string(applied) + " clip(s)");
+    }
+}
+
+void VeApp::WireEffectsPanel() {
+    if (effects_panel_ == nullptr) return;
+    fx_entries_ = BuildFxRegistryEntries();
+    effects_panel_->SetEntries(fx_entries_);
+    effects_panel_->SetClipSelectionProvider([this] {
+        std::vector<std::string> ids;
+        if (bridge_ != nullptr && !bridge_->SelectedClipId().empty()) {
+            ids.push_back(bridge_->SelectedClipId());
+        }
+        return ids;
+    });
+    effects_panel_->SetOnApplyFx(
+        [this](const std::vector<std::string>& clip_ids,
+               const std::string& fx_type) {
+            ApplyFxToClips(clip_ids, fx_type);
+        });
+    effects_panel_->SetOnStatus(
+        [this](const std::string& s, bool err) { SetStatus(s, err); });
+}
+
+void VeApp::WireInspectorPanel() {
+    if (inspector_panel_ == nullptr) return;
+    inspector_panel_->SetSelectionProvider(
+        [this] { return SelectedClips(); });
+
+    InspectorHooks hooks;
+    hooks.on_commit_clips =
+        [this](const std::vector<Clip>& clips) {
+            CommitInspectorClips(clips);
+        };
+    hooks.on_begin_macro = [this] {
+        if (history_ != nullptr) {
+            history_->BeginMacro("Inspector gesture");
+        }
+    };
+    hooks.on_end_macro = [this] {
+        if (history_ != nullptr) history_->EndMacro();
+    };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    hooks.fx_display_name = [this](const std::string& type) {
+        return FxDisplayName(type);
+    };
+    hooks.fx_param_specs = [this](const std::string& type) {
+        return FxParamSpecs(type);
+    };
+    hooks.fx_catalog = [this] {
+        // Video/track effects only — audio fx reach clips through a
+        // different chain (bounce/VST3), not clip.effects.
+        std::vector<std::pair<std::string, std::string>> out;
+        for (const FxEntry& e : fx_entries_) {
+            if (e.badge != FxEntry::Badge::Audio) {
+                out.emplace_back(e.type, e.name);
+            }
+        }
+        return out;
+    };
+    hooks.voice_isolate_available = [this](const Clip& clip) {
+        // Shown when the clip's media carries audio AND the GTCRN
+        // model is staged (voice_isolate.h — Available() reports the
+        // staged-model + ONNX-runtime verdict).
+        const CatalogEntry* e = FindCatalogEntry(clip.source_path);
+        return e != nullptr && e->has_audio &&
+               VoiceIsolate::Available();
+    };
+    hooks.on_apply_voice_isolate =
+        [this](const std::vector<std::string>& ids) {
+            // The live chain is VST3/script-only; builtin af kernels
+            // reach media through the offline bounce (legacy
+            // BounceAudioFx). Honest deferred state for wave-1.
+            (void)ids;
+            SetStatus("Voice isolate — offline bounce lands with the "
+                      "audio tools wave");
+        };
+    inspector_panel_->SetHooks(std::move(hooks));
+    inspector_panel_->RefreshSelection();
 }
 
 }  // namespace XER::VideoEditor::Ui2

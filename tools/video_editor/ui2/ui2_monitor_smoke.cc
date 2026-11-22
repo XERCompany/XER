@@ -250,7 +250,10 @@ std::string CheckSurfaceTogglesAndHooks() {
     if (toggled == 0) return "frame click did not toggle play";
 
     surface->SetClickPointsArmed(true);
-    tree.Tick(1.0);   // past the 0.4 s double-click window
+    // WidgetTree::Tick only covers tooltips — the widget subtree
+    // (the surface's click clock) ticks via Widget::TickTree, the
+    // same contract the shell's frame callback drives.
+    surface->TickTree(1.0);   // past the 0.4 s double-click window
     tree.HandleEvent(
         Click(fit.x + fit.width * 0.25f, fit.y + fit.height * 0.5f));
     if (click_x < 0.0f) return "armed click did not report a point";

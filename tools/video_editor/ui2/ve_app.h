@@ -36,7 +36,9 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
+#include "drag_session.h"         // BinDragSession — value member
 #include "preview_binding.h"      // value members — complete type
 #include "shell_prefs.h"
 #include "shortcut_router.h"
@@ -60,6 +62,11 @@ namespace XER::VideoEditor {
 // Model-layer history stack — declared here so Ui2 can hold a
 // unique_ptr without pulling timeline_history.h into the header.
 class TimelineHistory;
+// M3 media stack — unique_ptr members, complete at ve_app.cc.
+class MediaCatalog;
+class MediaPrep;
+class ProxyManager;
+struct CatalogEntry;     // media_catalog.h — bin row
 }
 
 namespace XER::VideoEditor::Ui2 {
@@ -70,6 +77,11 @@ class MonitorPanel;
 class StatusStrip;
 class TimelineStrip;
 class TimelineBridge;
+class MediaPanel;
+class EffectsPanel;
+class InspectorPanel;
+struct FxEntry;              // effects_panel.h — catalog row
+struct InspectorParamSpec;   // inspector_panel.h — param editor spec
 
 class VeApp final : public XER::UI::Widgets::Widget {
 public:
@@ -155,6 +167,30 @@ public:
     // contract and the program binding re-inits on the next
     // transport action (Premiere sequence semantics).
     void SetProject(const Project& project);
+
+    // ── M3 panels (structure accessors — smoke/discovery) ────
+    MediaPanel* MediaBin() const { return media_panel_.get(); }
+    EffectsPanel* FxBrowser() const { return effects_panel_.get(); }
+    InspectorPanel* Inspector() const { return inspector_panel_.get(); }
+
+    // M3 media stack — the bin's Import button and the File menu both
+    // funnel here. `ImportMediaFiles` is the headless seam (no file
+    // dialog); the interactive picker wraps it on _WIN32.
+    void ImportMediaFiles(const std::vector<std::string>& paths);
+    void ImportMediaInteractive();
+    // History-backed bin→timeline insert (legacy AddMediaToTimelineAt
+    // parity): kind-matched track placement, linked A/V pairs, snap,
+    // macro + rollback on failure. preferred_track < 0 -> first free.
+    void AddMediaToTimelineAt(const std::string& path,
+                              double at_seconds,
+                              int preferred_track = -1);
+    void AddMediaToTimeline(const std::string& path) {
+        AddMediaToTimelineAt(path, playhead_);
+    }
+    // The timeline selection as Clip copies — the inspector's
+    // provider contract (single-selection surface for now).
+    std::vector<Clip> SelectedClips() const;
+    void RefreshInspector();
 
     // Source monitor load — the caller supplies probed metadata
     // (media catalog/probe lands with M3's bin); builds the
@@ -256,6 +292,31 @@ private:
     // methods above, activation → ShortcutRouter scope, status →
     // SetStatus) and attaches each binding to its panel.
     void WireMonitorPanels();
+    // ── M3 panel/media wiring ─────────────────────────────────
+    // Opens the catalog (DefaultDbPath) and builds the MediaPrep
+    // pool + ProxyManager on first call — deferred from the ctor so
+    // headless smoke construction never spawns workers until the
+    // panels actually exist.
+    void EnsureMediaStack();
+    void WireMediaPanel();
+    void WireEffectsPanel();
+    void WireInspectorPanel();
+    // catalog_.List() -> media_panel_->SetEntries — the bin's only
+    // data channel (ConsumeCatalogDirty drain also lands here).
+    void RefreshBinEntries();
+    const CatalogEntry* FindCatalogEntry(const std::string& path) const;
+    // Inspector/effects FX metadata providers (resolved against
+    // BuiltinFx/PluginHost/JsFxRuntime + the core-type table).
+    std::vector<InspectorParamSpec> FxParamSpecs(
+        const std::string& fx_type) const;
+    std::string FxDisplayName(const std::string& fx_type) const;
+    // EffectsPanel::on_apply_fx — appends ClipEffect{type, defaults}
+    // to each clip inside one history macro.
+    void ApplyFxToClips(const std::vector<std::string>& clip_ids,
+                        const std::string& fx_type);
+    // InspectorPanel::on_commit_clips — ReplaceClip each through
+    // history (coalesced per clip); a >1 clip vector wraps in a macro.
+    void CommitInspectorClips(const std::vector<Clip>& clips);
     // Engine-reported playhead (worker → DrainPending → binding
     // fan-out): updates the doc playhead + timeline surface without
     // routing back through the bridge (which would re-seek).
@@ -310,6 +371,23 @@ private:
     int source_fps_num_ = 30, source_fps_den_ = 1;
     bool source_has_video_ = false, source_has_audio_ = false;
     std::unordered_map<std::string, SourceMarks> source_marks_;
+
+    // ── M3 panels + media stack (shell-owned; panels see hooks) ──
+    std::shared_ptr<MediaPanel> media_panel_;
+    std::shared_ptr<EffectsPanel> effects_panel_;
+    std::shared_ptr<InspectorPanel> inspector_panel_;
+    // Borrowing order matters: media_prep_/proxies_ borrow catalog_,
+    // so declaration order catalog_ first keeps destruction sound
+    // (reverse: proxies_ -> media_prep_ -> catalog_).
+    std::unique_ptr<XER::VideoEditor::MediaCatalog> catalog_;
+    std::unique_ptr<XER::VideoEditor::MediaPrep> media_prep_;
+    std::unique_ptr<XER::VideoEditor::ProxyManager> proxies_;
+    BinDragSession drag_session_;
+    bool media_stack_ready_ = false;
+    bool media_stack_warned_ = false;
+    // Cached effects catalog (BuildFxRegistryEntries is cheap but
+    // walks the registries — built once at wire time).
+    std::vector<XER::VideoEditor::Ui2::FxEntry> fx_entries_;
 
     // ── layout state (mirrors prefs_) ────────────────────────
     std::string workspace_name_ = "Editing";
