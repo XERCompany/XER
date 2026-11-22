@@ -10,6 +10,17 @@ engine/model layer (`timeline_model`, `timeline_history`, `compositor`,
 Verified against the working tree 2026-11-22; external layout claims
 carry source URLs.
 
+**Status (2026-11-22):** swap-over DONE — the legacy
+`tools/video_editor/ui/` tree was deleted and `ui2/` is the sole UI.
+There is no fallback path: the `--ui2` flag and `XER_VE_UI2` env
+switch are gone, `RunGui` boots `Ui2::VeApp` directly, and
+`--screenshot --ui` captures the ui2 shell. The four widget-kit smoke
+checks (`color_widgets`/`data_widgets`/`media_widgets`/`widget_kit`)
+moved into `ui2/` unchanged; the `photo_workspace` smoke registration
+was dropped — the Photo workspace returns with the ui2 rebuild at M4
+(the `photo/` model layer and its `photo_m1/m2/m4` core checks are
+untouched). `VeIcons` was ported to `ui2/icon_helpers.{h,cc}`.
+
 Assumed base-API wave (in flight when this spec was written):
 `Widget` gains Alignment/Margin/Indent/ScaledContents/sizeHint/Move
 and a generic `Surface` paint-callback widget. Where the wave differs,

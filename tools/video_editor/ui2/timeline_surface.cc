@@ -4,7 +4,7 @@
 // legacy widget (kept intentional):
 //   * Hooks type is Ui2::TimelineHooks (surface_hooks.h).
 //   * Tools live in ui2/timeline_tools.{h,cc} (TimelineTool).
-//   * Icon-pack rasterization (Ui::VeIcons) is not wired — ui2 draws
+//   * Icon-pack rasterization (Ui2::VeIcons) is not wired — ui2 draws
 //     the same hand-vector glyphs the old code used as its headless
 //     fallback, keeping the surface self-contained.
 //   * JS script-transition submenu entries are left to the bridge

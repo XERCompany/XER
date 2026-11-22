@@ -1,9 +1,11 @@
-# video_editor `ui2/` — the rebuilt editor shell (M1)
+# video_editor `ui2/` — the editor shell
 
-Parallel implementation of the VideoEditor UI per
-`docs/wiki/architecture/ve-ui-rebuild-spec.md`. The legacy shell in
-`tools/video_editor/ui/` stays the default; ui2 boots only via
-`--ui2` or `XER_VE_UI2=1` and will replace it at the M4 swap-over.
+The VideoEditor UI per `docs/wiki/architecture/ve-ui-rebuild-spec.md`.
+**ui2 is the sole shell** — the legacy `tools/video_editor/ui/` tree
+was deleted at the swap-over (2026-11-22); the `--ui2` flag and
+`XER_VE_UI2` env switch no longer exist and `video_editor` boots
+`Ui2::VeApp` directly. The Photo workspace is pending its ui2 rebuild
+(M4).
 
 ## Layout (spec §5)
 
@@ -66,14 +68,16 @@ which fires. Scope bindings shadow `kScopeGlobal`; a handler returning
 
 ## Placeholders vs real
 
-M1 wires structure only: dock panels are `PlaceholderPanel`s, monitors
-are `Surface` stand-ins, the timeline is a tool strip + empty tracks
-`Surface`, and shortcut bindings post status/toast feedback. Engine
-integration (`TimelineHistory`, `PreviewEngine`, catalog) is M2+.
+The file table above describes the M1 skeleton; M2/M3 since landed the
+real monitors (`monitor_panel`/`monitor_surface`/`preview_binding`),
+timeline (`timeline_strip`/`timeline_surface`/`timeline_tools`/
+`timeline_bridge`), and dock panels (`media_panel`/`effects_panel`/
+`inspector_panel` + `bin_surface`/`drag_session`). Remaining dock tabs
+are still `PlaceholderPanel`s.
 
 ## Boot
 
 ```bash
-video_editor --ui2 [project.xerproj]   # or: XER_VE_UI2=1 video_editor
-video_editor --smoke                   # includes the ui2_shell check
+video_editor [project.xerproj]         # the ui2 shell is the only UI
+video_editor --smoke                   # includes the ui2_* + kit checks
 ```

@@ -8,7 +8,7 @@
 #include "lab/object_ops.h"           // Lab::IntPoint (complete type for vector)
 #include "rendering/renderer.h"
 #include "timecode.h"               // FormatTimecode — mono readout
-#include "ui/icon_helpers.h"        // VeIcons::InstallButtonIconResolver
+#include "icon_helpers.h"           // VeIcons::InstallButtonIconResolver
 #include "ve_theme.h"
 #include "widgets/badge.h"
 #include "widgets/button.h"
@@ -161,7 +161,7 @@ MonitorPanel::MonitorPanel(Kind kind) : kind_(kind) {
 }
 
 void MonitorPanel::BuildChildren() {
-    Ui::VeIcons::InstallButtonIconResolver();   // idempotent
+    VeIcons::InstallButtonIconResolver();   // idempotent
 
     surface_ = MonitorSurface::Create(
         kind_ == Kind::Program ? MonitorSurface::Id::Program

@@ -564,8 +564,8 @@ if(NOT XER_YA_DLLS)
 endif()
 
 # video_editor.exe — Phase 1C headless CLI (--export/--info) plus the
-# Phase 1D desktop workspace. UI sources live under ui/ so the core lib
-# stays UI-free; they are exe-side only and Windows-gated like
+# Phase 1D desktop workspace. UI sources live under ui2/ so the core
+# lib stays UI-free; they are exe-side only and Windows-gated like
 # tools/preview.
 add_executable(video_editor main.cc)
 target_link_libraries(video_editor PRIVATE XER_VideoEditor_Core)
@@ -574,14 +574,9 @@ target_link_libraries(video_editor PRIVATE XER_VideoEditor_Core)
 # DLLs live under <bin>/plugins, so the old plugins/ subdirectory is
 # gone.
 if(WIN32)
-    # Recursive: Phase-2 panels/tools live in ui/ subdirs.
-    file(GLOB_RECURSE VIDEO_EDITOR_UI_SOURCES CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
-    )
-    target_sources(video_editor PRIVATE ${VIDEO_EDITOR_UI_SOURCES})
-    # ui2/ — the rebuilt shell (spec docs/wiki/architecture/
-    # ve-ui-rebuild-spec.md). Parallel codebase: same exe, launched via
-    # --ui2 / XER_VE_UI2=1 until the M4 swap-over.
+    # ui2/ — the sole shell (spec docs/wiki/architecture/
+    # ve-ui-rebuild-spec.md). The legacy ui/ directory was deleted at
+    # the swap-over; there is no fallback path.
     file(GLOB VIDEO_EDITOR_UI2_SOURCES CONFIGURE_DEPENDS
         "${CMAKE_CURRENT_SOURCE_DIR}/ui2/*.cc"
     )

@@ -119,7 +119,8 @@ Goal started: 2026-11-15. Design doc:
   rebuild blueprint: NLE 2025-26 layout survey (Resolve 20/Premiere
   25/FCP 11/CapCut/Clipchamp/Descript/Kdenlive), region→widget
   coverage matrix, surface list + paint contract, M1–M4 phases
-  (rebuild decision 2026-11-22).
+  (rebuild decision 2026-11-22; legacy `ui/` deleted and `ui2/` made
+  the sole shell 2026-11-22).
 - [ui-widget-api.md](architecture/ui-widget-api.md) — universal widget
   layout-geometry contract on `src/ui` (Alignment flags, margin,
   indent, scaledContents, fixed size, Move/Resize hints), the
