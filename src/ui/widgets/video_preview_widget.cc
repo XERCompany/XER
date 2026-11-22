@@ -248,19 +248,25 @@ void VideoPreviewWidget::Render(Rendering::Renderer& renderer,
             frame = poster_frame_.get();
         }
         if (frame != nullptr) {
-            const float fa = frame->width / static_cast<float>(frame->height);
-            const float aa = video_area_.width / video_area_.height;
-            float dw = video_area_.width;
-            float dh = video_area_.height;
-            if (fa > aa) {
-                dh = video_area_.width / fa;
+            if (hasScaledContents()) {
+                // QLabel-style stretch: ignore aspect, fill the well.
+                video_dest_ = video_area_;
             } else {
-                dw = video_area_.height * fa;
+                const float fa =
+                    frame->width / static_cast<float>(frame->height);
+                const float aa = video_area_.width / video_area_.height;
+                float dw = video_area_.width;
+                float dh = video_area_.height;
+                if (fa > aa) {
+                    dh = video_area_.width / fa;
+                } else {
+                    dw = video_area_.height * fa;
+                }
+                video_dest_ = Layout::Rect{
+                    video_area_.x + (video_area_.width - dw) * 0.5f,
+                    video_area_.y + (video_area_.height - dh) * 0.5f,
+                    dw, dh};
             }
-            video_dest_ = Layout::Rect{
-                video_area_.x + (video_area_.width - dw) * 0.5f,
-                video_area_.y + (video_area_.height - dh) * 0.5f,
-                dw, dh};
             have_dest_ = true;
             renderer.DrawFrameBgra(frame->bgra.data(), frame->width,
                                    frame->height, video_dest_, 1.0f);

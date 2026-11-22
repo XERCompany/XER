@@ -171,10 +171,25 @@ public:
     virtual void Layout(const Rect& bounds) = 0;
     virtual bool HandleEvent(const Event& event) = 0;
 
-    // Size hints
+    // Size hints (+ Qt aliases sizeHint() / minimumSizeHint())
     virtual Size GetMinSize() const = 0;
     virtual Size GetPreferredSize() const = 0;
     virtual Size GetMaxSize() const = 0;
+
+    // Assigned slot ↔ adopted bounds
+    Rect GetBounds() const;
+    void SetBounds(const Rect& bounds);   // resolves the box model
+
+    // Universal layout-geometry contract (Qt/views model). Uniform
+    // properties, honored centrally in SetBounds — every container
+    // respects them for every laid-out child. All defaults are no-ops.
+    void SetAlignment(Alignment);   // Qt::Alignment-style flags
+    void SetMargin(Layout::Insets); // box-model outer spacing
+    void SetIndent(int);            // direction-aware leading inset
+    void SetScaledContents(bool);   // QLabel-style content stretch
+    void SetFixedSize(Size)/SetFixedWidth/SetFixedHeight; // Qt sizing
+    void Move(...)/Resize(...);     // explicit geometry
+    rect()/pos()/size()/x()/y()/width()/height();         // Qt aliases
 
 protected:
     Widget() = default;
@@ -182,6 +197,16 @@ protected:
 
 } // namespace XER::UI::Widgets
 ```
+
+The alignment type is a flags enum (`Widgets::Alignment`: Leading/Left/
+HCenter/Right/Trailing/HFill combined with Top/VCenter/Bottom/VFill via
+`operator|`). Resolution order in `SetBounds`: slot → minus margin +
+leading-edge indent → fixed extents clamp preferred → aligned position.
+`Alignment::Default` fills the slot — the legacy contract.
+
+`widgets/surface.h` provides `Surface`, the generic custom-paint widget
+(`SetPaintCallback`/`SetEventCallback`) for app-hosted rendering; it
+honors `hasScaledContents()` when letterboxing a `ContentSize`.
 
 ### Button Widget
 ```cpp

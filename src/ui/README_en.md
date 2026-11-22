@@ -278,6 +278,67 @@ public:
 - Message handling
 - Widget tree management
 
+### Widget
+
+Universal layout-geometry contract on every widget (Qt `QWidget`/
+`QLayoutItem` + Chromium `ui/views` model). The properties are uniform —
+stored on `Widget` and resolved centrally inside `SetBounds`, the funnel
+every `Layout()` implementation and direct-placement host goes through,
+so every container honors them for every laid-out child without
+per-container code. All defaults are no-ops.
+
+```cpp
+class Widget {
+public:
+    virtual void Render(Renderer&, const Theme::Tokens&) = 0;
+    virtual void Layout(const Layout::Rect& bounds) = 0;
+    virtual bool HandleEvent(const Event&) = 0;
+    virtual Layout::Size GetMinSize() const = 0;
+    virtual Layout::Size GetPreferredSize() const = 0;
+    virtual Layout::Size GetMaxSize() const = 0;
+    Layout::Rect GetBounds() const;
+    void SetBounds(const Layout::Rect& slot);   // adopts resolved rect
+
+    // Alignment in an oversized slot — Qt::Alignment-style flags,
+    // one horizontal + one vertical bit (Alignment::HCenter | Top).
+    // Default fills the slot (legacy behavior).
+    void SetAlignment(Alignment alignment);
+    Alignment alignment() const;
+
+    // Box-model margin + direction-aware leading indent (tree/paragraph).
+    void SetMargin(Layout::Insets margin);
+    void SetIndent(int pixels);
+
+    // QLabel-style content stretch; honored by VideoPreviewWidget,
+    // Surface, and any widget with intrinsic content that opts in.
+    void SetScaledContents(bool scaled);
+    bool hasScaledContents() const;
+
+    // Qt aliases: sizeHint→GetPreferredSize, minimumSizeHint→GetMinSize.
+    Layout::Size sizeHint() const;
+    Layout::Size minimumSizeHint() const;
+
+    // Qt-style geometry aliases over GetBounds() (parent coordinates).
+    Layout::Rect rect() const;  Layout::Point pos() const;
+    Layout::Size size() const;  float x(), y(), width(), height();
+    void Move(const Layout::Rect&);  void Move(int x, int y);
+    void Resize(int w, int h);       void Resize(const Layout::Size&);
+
+    // Qt fixed-size policy: overrides the preferred extent per axis —
+    // even Fill alignment packs it at the cell start instead of
+    // stretching. Pass <= 0 or ClearFixedSize() to unset.
+    void SetFixedSize(const Layout::Size&);
+    void SetFixedWidth(float);  void SetFixedHeight(float);
+    void ClearFixedSize();
+};
+```
+
+`widgets/surface.h` adds `Surface` — the generic custom-paint widget:
+`SetPaintCallback(std::function<void(Renderer&, Rect, const Tokens&)>)`
++ `SetEventCallback`, intrinsic `ContentSize` letterboxing honoring
+`hasScaledContents()`, configurable size hints. Hosts arbitrary app
+rendering (video monitors, timelines, meters) inside the widget tree.
+
 ### ColorSpace
 
 Color space enumeration and utilities:

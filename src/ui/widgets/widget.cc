@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "content/css/computed_style.h"
+#include "layout/flex.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "widget_tree.h"
@@ -352,14 +353,189 @@ Layout::Rect Widget::GetBounds() const {
 }
 
 void Widget::SetBounds(const Layout::Rect& bounds) {
+    // This is the funnel every Layout() implementation and direct-
+    // placement host goes through, so the box-model contract (margin,
+    // indent, fixed size, alignment) is resolved here — every container
+    // honors it for every laid-out child with no per-container code.
+    const Layout::Rect resolved = ResolveBoundsInCell(bounds);
     if (tree_ != nullptr && !tree_->LayoutInProgress() &&
-        (bounds.x != bounds_.x || bounds.y != bounds_.y ||
-         bounds.width != bounds_.width || bounds.height != bounds_.height)) {
+        (resolved.x != bounds_.x || resolved.y != bounds_.y ||
+         resolved.width != bounds_.width ||
+         resolved.height != bounds_.height)) {
         // Moved/resized outside a layout pass: both old and new areas need
         // repainting or stale pixels remain.
-        tree_->AddDamageRect(bounds_.Union(bounds));
+        tree_->AddDamageRect(bounds_.Union(resolved));
     }
-    bounds_ = bounds;
+    bounds_ = resolved;
+}
+
+Layout::Rect Widget::ResolveBoundsInCell(const Layout::Rect& cell) const {
+    // Fast path: with no box-model overrides the widget adopts the slot
+    // verbatim — the legacy contract every existing widget relies on.
+    if (margin_.IsEmpty() && indent_ <= 0 &&
+        alignment_ == Alignment::Default &&
+        fixed_width_ < 0.0f && fixed_height_ < 0.0f) {
+        return cell;
+    }
+
+    // 1. Margin, plus indent on the direction-aware leading edge.
+    const bool rtl = EffectiveTextDirection() == TextDirection::Rtl;
+    Layout::Insets insets = margin_;
+    if (indent_ > 0) {
+        if (rtl) {
+            insets.right += static_cast<float>(indent_);
+        } else {
+            insets.left += static_cast<float>(indent_);
+        }
+    }
+    Layout::Rect box = insets.Apply(cell);
+    box.width = std::max(0.0f, box.width);
+    box.height = std::max(0.0f, box.height);
+
+    // 2. Per-axis placement: an unset axis fills the box unless a fixed
+    //    extent clamps it (a fixed-size widget packs at the cell start,
+    //    matching Qt's QLayout behavior for fixed-size widgets).
+    const Alignment h = HorizontalAlignment(alignment_);
+    const Alignment v = VerticalAlignment(alignment_);
+    const Layout::Size preferred = GetPreferredSize();
+
+    Layout::AlignMode hm;
+    if (h == Alignment::Default || h == Alignment::HFill) {
+        hm = Layout::AlignMode::Fill;
+    } else if (h == Alignment::HCenter) {
+        hm = Layout::AlignMode::Center;
+    } else if (h == Alignment::Left ||
+               (h == Alignment::Leading && !rtl) ||
+               (h == Alignment::Trailing && rtl)) {
+        hm = Layout::AlignMode::Leading;
+    } else {  // Right, or direction-mirrored Leading/Trailing
+        hm = Layout::AlignMode::Trailing;
+    }
+    if (fixed_width_ >= 0.0f && hm == Layout::AlignMode::Fill) {
+        hm = Layout::AlignMode::Leading;
+    }
+
+    Layout::AlignMode vm;
+    if (v == Alignment::Default || v == Alignment::VFill) {
+        vm = Layout::AlignMode::Fill;
+    } else if (v == Alignment::VCenter) {
+        vm = Layout::AlignMode::Center;
+    } else if (v == Alignment::Top) {
+        vm = Layout::AlignMode::Leading;
+    } else {  // Bottom
+        vm = Layout::AlignMode::Trailing;
+    }
+    if (fixed_height_ >= 0.0f && vm == Layout::AlignMode::Fill) {
+        vm = Layout::AlignMode::Leading;
+    }
+
+    const Layout::Size desired{
+        fixed_width_ >= 0.0f ? fixed_width_ : preferred.width,
+        fixed_height_ >= 0.0f ? fixed_height_ : preferred.height};
+    return Layout::AlignedRect(box, desired, hm, vm);
+}
+
+// ── Universal layout-geometry contract ──────────────────────────────
+
+void Widget::SetAlignment(Alignment alignment) {
+    if (alignment_ == alignment) {
+        return;
+    }
+    alignment_ = alignment;
+    RequestLayout();
+    Invalidate();
+}
+
+void Widget::SetMargin(Layout::Insets margin) {
+    if (margin_.left == margin.left && margin_.top == margin.top &&
+        margin_.right == margin.right && margin_.bottom == margin.bottom) {
+        return;
+    }
+    margin_ = margin;
+    RequestLayout();
+    Invalidate();
+}
+
+void Widget::SetIndent(int pixels) {
+    const int clamped = std::max(0, pixels);
+    if (indent_ == clamped) {
+        return;
+    }
+    indent_ = clamped;
+    RequestLayout();
+    Invalidate();
+}
+
+void Widget::SetScaledContents(bool scaled) {
+    if (scaled_contents_ == scaled) {
+        return;
+    }
+    scaled_contents_ = scaled;
+    Invalidate();
+}
+
+void Widget::Move(const Layout::Rect& rect) {
+    SetBounds(rect);
+}
+
+void Widget::Move(int x, int y) {
+    SetBounds(Layout::Rect{static_cast<float>(x), static_cast<float>(y),
+                           bounds_.width, bounds_.height});
+}
+
+void Widget::Resize(int w, int h) {
+    SetBounds(Layout::Rect{bounds_.x, bounds_.y,
+                           static_cast<float>(w), static_cast<float>(h)});
+}
+
+void Widget::Resize(const Layout::Size& size) {
+    SetBounds(Layout::Rect{bounds_.x, bounds_.y, size.width, size.height});
+}
+
+void Widget::SetFixedSize(const Layout::Size& size) {
+    const float w = size.width >= 0.0f ? size.width : -1.0f;
+    const float h = size.height >= 0.0f ? size.height : -1.0f;
+    if (fixed_width_ == w && fixed_height_ == h) {
+        return;
+    }
+    fixed_width_ = w;
+    fixed_height_ = h;
+    RequestLayout();
+    Invalidate();
+}
+
+void Widget::SetFixedSize(float w, float h) {
+    SetFixedSize(Layout::Size{w, h});
+}
+
+void Widget::SetFixedWidth(float w) {
+    const float next = w >= 0.0f ? w : -1.0f;
+    if (fixed_width_ == next) {
+        return;
+    }
+    fixed_width_ = next;
+    RequestLayout();
+    Invalidate();
+}
+
+void Widget::SetFixedHeight(float h) {
+    const float next = h >= 0.0f ? h : -1.0f;
+    if (fixed_height_ == next) {
+        return;
+    }
+    fixed_height_ = next;
+    RequestLayout();
+    Invalidate();
+}
+
+void Widget::ClearFixedSize() {
+    if (fixed_width_ < 0.0f && fixed_height_ < 0.0f) {
+        return;
+    }
+    fixed_width_ = -1.0f;
+    fixed_height_ = -1.0f;
+    RequestLayout();
+    Invalidate();
 }
 
 void Widget::Invalidate() {

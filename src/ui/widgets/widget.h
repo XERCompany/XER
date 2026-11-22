@@ -1,6 +1,7 @@
 #ifndef XER_UI_WIDGETS_WIDGET_H
 #define XER_UI_WIDGETS_WIDGET_H
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -71,6 +72,53 @@ enum class MouseButton {
     Middle,
     Right
 };
+
+// ── Layout-geometry contract (Qt::Alignment flags model) ────────────
+// How a widget positions itself inside a layout slot that is larger
+// than its preferred size. Combine one horizontal flag with one
+// vertical flag via operator| (e.g. Alignment::HCenter | Alignment::Top).
+// Default keeps the legacy contract: the widget fills its whole slot.
+enum class Alignment : std::uint32_t {
+    Default  = 0x0000,
+    // Horizontal axis — mutually exclusive.
+    Leading  = 0x0001,   // left edge in LTR, right edge in RTL
+    Left     = 0x0002,   // absolute — ignores text direction
+    HCenter  = 0x0004,
+    Right    = 0x0008,
+    Trailing = 0x0010,   // right edge in LTR, left edge in RTL
+    HFill    = 0x0020,   // stretch to the slot width
+    // Vertical axis — mutually exclusive.
+    Top      = 0x0100,
+    VCenter  = 0x0200,
+    Bottom   = 0x0400,
+    VFill    = 0x0800,
+    // Composites.
+    Center   = 0x0004 | 0x0200,
+    Fill     = 0x0020 | 0x0800
+};
+
+constexpr Alignment operator|(Alignment lhs, Alignment rhs) noexcept {
+    return static_cast<Alignment>(
+        static_cast<std::uint32_t>(lhs) | static_cast<std::uint32_t>(rhs));
+}
+constexpr Alignment operator&(Alignment lhs, Alignment rhs) noexcept {
+    return static_cast<Alignment>(
+        static_cast<std::uint32_t>(lhs) & static_cast<std::uint32_t>(rhs));
+}
+inline Alignment& operator|=(Alignment& lhs, Alignment rhs) noexcept {
+    lhs = lhs | rhs;
+    return lhs;
+}
+constexpr bool HasAlignmentFlag(Alignment value, Alignment flag) noexcept {
+    return (value & flag) == flag;
+}
+// The horizontal/vertical flag bits in isolation (Default when unset).
+constexpr Alignment HorizontalAlignment(Alignment a) noexcept {
+    return a & static_cast<Alignment>(0x00FF);
+}
+constexpr Alignment VerticalAlignment(Alignment a) noexcept {
+    return a & static_cast<Alignment>(0xFF00);
+}
 
 struct Event {
     enum class Type {
@@ -236,6 +284,10 @@ public:
 
     // Bounds in parent coordinates and repaint request — public so hosts
     // (Node addon, tests) can position widgets without a layout pass.
+    // SetBounds receives the *assigned layout slot*: the widget adopts
+    // the rect produced by the box-model resolution (margin, indent,
+    // fixed size, alignment — see below), which every Layout()
+    // implementation funnels through automatically.
     Layout::Rect GetBounds() const;
     void SetBounds(const Layout::Rect& bounds);
     void Invalidate();
@@ -243,6 +295,83 @@ public:
     // clamped to the widget bounds) instead of the whole widget — for
     // widgets redrawing a small moving part (playhead line, caret).
     void Invalidate(const Layout::Rect& region);
+
+    // ── Universal layout-geometry contract ──────────────────────────
+    // Qt QWidget/QLayoutItem + Chromium views model: uniform properties
+    // stored on Widget, honored centrally — SetBounds (the funnel every
+    // Layout implementation and direct-placement host goes through)
+    // resolves the assigned slot through the box model, so every
+    // container honors margin/alignment/fixed size for every laid-out
+    // child without per-container code. All defaults are no-ops —
+    // existing widgets keep today's behavior.
+    //
+    // NOTE for container widgets: derive internal child rects from
+    // GetBounds() after SetBounds, not from the raw `bounds` parameter,
+    // so a non-default margin/alignment stays consistent inside the
+    // widget too.
+
+    // Alignment inside an oversized slot (see the Alignment flags at
+    // the top of this header). Default fills the slot — legacy
+    // behavior. An unset axis fills the slot unless a fixed extent
+    // clamps it (Qt: a fixed-size widget packs at the cell start).
+    void SetAlignment(Alignment alignment);
+    Alignment alignment() const { return alignment_; }
+
+    // Box-model margin: outer spacing carved out of the assigned slot
+    // before the widget adopts its bounds. Honored by every parent
+    // container automatically via SetBounds resolution.
+    void SetMargin(Layout::Insets margin);
+    Layout::Insets margin() const { return margin_; }
+
+    // Extra leading-edge inset added on top of the margin during bounds
+    // resolution — Qt tree-indent semantics (left edge in LTR, right
+    // edge in RTL); also usable as a paragraph/hierarchy indent.
+    // Negative values are clamped to 0.
+    void SetIndent(int pixels);
+    int indent() const { return indent_; }
+
+    // Qt QLabel-style flag: when true, widgets with intrinsic content
+    // (decoded video frames, images, custom-painted surfaces) stretch
+    // the content to fill the adopted bounds ignoring aspect ratio.
+    // Stored centrally — VideoPreviewWidget and Surface honor it
+    // today; other widgets may consult it where meaningful.
+    void SetScaledContents(bool scaled);
+    bool hasScaledContents() const { return scaled_contents_; }
+
+    // Qt naming aliases (concrete, non-virtual): sizeHint delegates to
+    // GetPreferredSize(), minimumSizeHint() to GetMinSize().
+    Layout::Size sizeHint() const { return GetPreferredSize(); }
+    Layout::Size minimumSizeHint() const { return GetMinSize(); }
+
+    // Qt-style geometry aliases over GetBounds(). Bounds are in parent
+    // coordinates — the Qt geometry() equivalent, not Qt's local rect().
+    Layout::Rect rect() const { return bounds_; }
+    Layout::Point pos() const { return {bounds_.x, bounds_.y}; }
+    Layout::Size size() const { return bounds_.GetSize(); }
+    float x() const { return bounds_.x; }
+    float y() const { return bounds_.y; }
+    float width() const { return bounds_.width; }
+    float height() const { return bounds_.height; }
+
+    // Explicit geometry — thin aliases over SetBounds; the same
+    // box-model resolution applies to the assigned rect.
+    void Move(const Layout::Rect& rect);
+    void Move(int x, int y);               // reposition, keep the size
+    void Resize(int w, int h);             // resize, keep the position
+    void Resize(const Layout::Size& size);
+
+    // Qt fixed-size policy: a fixed extent overrides the preferred size
+    // on that axis during bounds resolution — Fill/alignment cannot
+    // stretch it. Pass <= 0 (or ClearFixedSize) to unset an axis.
+    void SetFixedSize(const Layout::Size& size);
+    void SetFixedSize(float w, float h);
+    void SetFixedWidth(float w);
+    void SetFixedHeight(float h);
+    void ClearFixedSize();
+    bool HasFixedWidth() const { return fixed_width_ >= 0.0f; }
+    bool HasFixedHeight() const { return fixed_height_ >= 0.0f; }
+    float FixedWidth() const { return fixed_width_; }
+    float FixedHeight() const { return fixed_height_; }
 
 protected:
     Widget() = default;
@@ -277,6 +406,12 @@ protected:
 private:
     friend class WidgetTree;
 
+    // Applies the box-model contract to `cell` (the assigned layout
+    // slot): subtracts margin + indent, clamps fixed extents, positions
+    // the preferred size per alignment(). Identity when all properties
+    // are default — keeps the legacy adopt-the-slot behavior.
+    Layout::Rect ResolveBoundsInCell(const Layout::Rect& cell) const;
+
     void ClearSubtreeInteractionState();
     void SetTreeRecursive(WidgetTree* tree);
     // Registers children that were AddChild()ed while the widget was still
@@ -286,6 +421,13 @@ private:
     void FlushPendingChildren();
 
     Layout::Rect bounds_;
+    // Box-model state for the universal layout-geometry contract.
+    Layout::Insets margin_{};
+    Alignment alignment_ = Alignment::Default;
+    int indent_ = 0;
+    bool scaled_contents_ = false;
+    float fixed_width_ = -1.0f;   // < 0 = unset
+    float fixed_height_ = -1.0f;  // < 0 = unset
     Theme::Tokens cached_tokens_{};
     bool visible_ = true;
     bool enabled_ = true;
