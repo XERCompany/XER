@@ -32,7 +32,7 @@ namespace XER::VideoEditor {
 // Still-image duration conventions, shared by the catalog import path
 // and the UI's probe fallback: FFmpeg's image2 demuxer reports an
 // imported still (PNG/JPEG/WebP/...) as a "video" holding one frame at
-// a nominal ~40 ms duration, and the OIIO still fallback has no
+// a nominal ~40 ms duration, and the still-image fallback has no
 // intrinsic duration at all. Either way a still gets the
 // Premiere-style 5 s editor default; any probed audio-free "video"
 // at or under kProbedStillMaxSeconds is treated as a still — a real
@@ -56,7 +56,7 @@ struct CatalogEntry {
     // Timeline classification rule — any imported file lands on
     // exactly one track kind:
     //   HasVideo() == true   -> TrackKind::Video. Includes stills:
-    //                          OIIO-decoded rasters and FFmpeg's
+    //                          still-image rasters and FFmpeg's
     //                          single-frame image containers both
     //                          store w/h > 0.
     //   HasVideo() == false  -> TrackKind::Audio. Import guarantees
@@ -141,7 +141,7 @@ public:
 
     // Poster (re)extraction for an ALREADY-IMPORTED row — the async
     // half of Import(): resolves the row by path, writes
-    // posters/<id>.png at duration*0.5 (OIIO for still images,
+    // posters/<id>.png at duration*0.5 (still_image.cc for stills,
     // ClipPoster::Extract otherwise) and updates poster_path.
     // Best-effort like Import's poster step: returns false and leaves
     // the row untouched when the media has no video or decode fails.

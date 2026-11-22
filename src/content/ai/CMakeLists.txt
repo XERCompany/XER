@@ -619,6 +619,11 @@ if(MINGW AND _fo_libs)
         xer_delayload(${_fo_link_target} ${_fo_dl})
         get_filename_component(_fo_toolchain_bin
             "${CMAKE_CXX_COMPILER}" DIRECTORY)
+        # Prefer Microsoft's official ORT binaries when vendored (the
+        # MSYS2 package can lag the toolchain's absl bump -> error 126)
+        # — must run BEFORE the seed walk so bin/onnxruntime.dll is
+        # already ours (see xer_stage_vendored_ort in YaDll.cmake).
+        xer_stage_vendored_ort("${CMAKE_BINARY_DIR}/bin")
         # ORT resolves onnxruntime_providers_shared.dll at run time
         # (not an import-table entry) — seed the staging walk with the
         # onnxruntime* glob so the provider host lands beside the exes.

@@ -188,11 +188,13 @@ bool SetLayerAttributesCommand::Apply(Document& doc) {
     LayerNode* n = doc.FindLayer(layer_);
     if (n == nullptr) return false;
     if (!have_prev_) {
-        prev_ = {n->Name(), n->Visible(), n->Opacity(), n->BlendMode()};
+        prev_ = {n->Name(), n->Visible(), n->Locked(), n->Opacity(),
+                 n->BlendMode()};
         have_prev_ = true;
     }
     n->SetName(next_.name);
     n->SetVisible(next_.visible);
+    n->SetLocked(next_.locked);
     n->SetOpacity(next_.opacity);
     n->SetBlendMode(next_.blend_mode);
     return true;
@@ -203,6 +205,7 @@ bool SetLayerAttributesCommand::Revert(Document& doc) {
     if (n == nullptr || !have_prev_) return false;
     n->SetName(prev_.name);
     n->SetVisible(prev_.visible);
+    n->SetLocked(prev_.locked);
     n->SetOpacity(prev_.opacity);
     n->SetBlendMode(prev_.blend_mode);
     return true;

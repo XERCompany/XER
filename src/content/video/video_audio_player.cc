@@ -503,9 +503,8 @@ bool VideoAudioPlayer::FinalizeOutput() {
 
     // WASAPI shared mode hands us the device mix format — float32
     // interleaved on every modern Windows audio endpoint.
-    WAVEFORMATEX* fmt = nullptr;
-    if (audio_client_ == nullptr ||
-        FAILED(audio_client_->GetMixFormat(&fmt)) || fmt == nullptr) {
+    WAVEFORMATEX* fmt = wasapi_.MixFormat();
+    if (fmt == nullptr) {
         return false;
     }
     out_rate_ = static_cast<int>(fmt->nSamplesPerSec);
@@ -521,7 +520,7 @@ bool VideoAudioPlayer::FinalizeOutput() {
         CleanupWasapi();
         return false;
     }
-    if (FAILED(audio_client_->GetBufferSize(&buffer_frame_count_))) {
+    if (wasapi_.buffer_frames() == 0) {
         CleanupWasapi();
         return false;
     }
@@ -534,58 +533,33 @@ bool VideoAudioPlayer::FinalizeOutput() {
 
 #ifdef _WIN32
 bool VideoAudioPlayer::InitWasapi() {
-    if (audio_client_ != nullptr) return true;
+    if (wasapi_.IsDeviceOpen()) return true;
 
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return false;
-    // S_OK/S_FALSE mean this call took (or deepened) our apartment
-    // reference and must be balanced; RPC_E_CHANGED_MODE means another
-    // component owns the apartment — balancing it would break them.
-    com_initialized_ = SUCCEEDED(hr);
+    // Shared endpoint plumbing (wasapi_render_client.cc): COM balance +
+    // enumerator + default render endpoint + IAudioClient, then the
+    // polled shared-mode stream (no event — the render thread paces on
+    // GetCurrentPadding) at the device mix format.
+    if (!wasapi_.OpenDevice(nullptr)) return false;
 
-    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
-                          CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
-                          reinterpret_cast<void**>(&enumerator_));
-    if (FAILED(hr)) goto fail;
-
-    hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
-    if (FAILED(hr)) goto fail;
-
-    hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                           reinterpret_cast<void**>(&audio_client_));
-    if (FAILED(hr)) goto fail;
-
-    {
-        WAVEFORMATEX* mix = nullptr;
-        hr = audio_client_->GetMixFormat(&mix);
-        if (FAILED(hr) || mix == nullptr) goto fail;
-        const REFERENCE_TIME buffer_duration = 2000000;  // 200 ms
-        hr = audio_client_->Initialize(AUDCLNT_SHAREMODE_SHARED, 0,
-                                       buffer_duration, 0, mix, nullptr);
-        CoTaskMemFree(mix);
-        if (FAILED(hr)) goto fail;
+    WAVEFORMATEX* mix = wasapi_.MixFormat();
+    if (mix == nullptr) {
+        CleanupWasapi();
+        return false;
     }
-
-    hr = audio_client_->GetService(__uuidof(IAudioRenderClient),
-                                   reinterpret_cast<void**>(&render_client_));
-    if (FAILED(hr)) goto fail;
+    const REFERENCE_TIME buffer_duration = 2000000;  // 200 ms
+    const bool ok = wasapi_.Initialize(*mix, /*stream_flags=*/0,
+                                       buffer_duration,
+                                       /*event_handle=*/nullptr);
+    CoTaskMemFree(mix);
+    if (!ok) {
+        CleanupWasapi();   // post-init failures already tore down; idempotent
+        return false;
+    }
     return true;
-
-fail:
-    CleanupWasapi();
-    return false;
 }
 
 void VideoAudioPlayer::CleanupWasapi() {
-    if (render_client_) { render_client_->Release(); render_client_ = nullptr; }
-    if (audio_client_) { audio_client_->Release(); audio_client_ = nullptr; }
-    if (device_) { device_->Release(); device_ = nullptr; }
-    if (enumerator_) { enumerator_->Release(); enumerator_ = nullptr; }
-    buffer_frame_count_ = 0;
-    if (com_initialized_) {
-        CoUninitialize();
-        com_initialized_ = false;
-    }
+    wasapi_.Close();
 }
 #endif
 
@@ -752,13 +726,13 @@ bool VideoAudioPlayer::AppendFrameSamples(
 void VideoAudioPlayer::Play() {
 #ifdef _WIN32
     if (!ready_.load(std::memory_order_acquire) ||
-        audio_client_ == nullptr || playing_.load(std::memory_order_acquire)) {
+        !wasapi_.IsDeviceOpen() || playing_.load(std::memory_order_acquire)) {
         return;
     }
     // Reap a finished render thread before starting a new one — assigning
     // to a joinable std::thread would terminate the process.
     if (render_thread_.joinable()) render_thread_.join();
-    if (FAILED(audio_client_->Start())) return;
+    if (!wasapi_.Start()) return;
     playing_.store(true, std::memory_order_release);
     render_stop_.store(false, std::memory_order_release);
     render_thread_ = std::thread([this] { RenderThreadMain(); });
@@ -774,7 +748,7 @@ void VideoAudioPlayer::Pause() {
     playing_.store(false, std::memory_order_release);
     render_stop_.store(true, std::memory_order_release);
     if (render_thread_.joinable()) render_thread_.join();
-    if (audio_client_ != nullptr) audio_client_->Stop();
+    wasapi_.Stop();
 #endif
 }
 
@@ -798,11 +772,9 @@ void VideoAudioPlayer::Seek(double seconds) {
     if (was_playing) {
         Pause();
     }
-    if (audio_client_ != nullptr) {
-        // Reset needs a stopped stream; on a never-started one it just
-        // returns AUDCLNT_E_NOT_STOPPED — harmless either way.
-        audio_client_->Reset();
-    }
+    // Reset needs a stopped stream; on a never-started one it just
+    // returns AUDCLNT_E_NOT_STOPPED — harmless either way.
+    wasapi_.Reset();
 #endif
     playhead_sec_.store(
         std::clamp(seconds, 0.0, limit), std::memory_order_relaxed);
@@ -840,9 +812,9 @@ double VideoAudioPlayer::GetPosition() const {
     // has actually played. Subtract the still-queued padding so callers
     // (SyncTo's drift check) see the heard position instead of a
     // systematic buffer-length lead that trips the seek threshold.
-    if (audio_client_ != nullptr && out_rate_ > 0) {
+    if (wasapi_.client() != nullptr && out_rate_ > 0) {
         UINT32 padding = 0;
-        if (SUCCEEDED(audio_client_->GetCurrentPadding(&padding))) {
+        if (SUCCEEDED(wasapi_.client()->GetCurrentPadding(&padding))) {
             heard -= static_cast<double>(padding) /
                      static_cast<double>(out_rate_);
         }
@@ -871,15 +843,15 @@ void VideoAudioPlayer::RenderThreadMain() {
         if (!playing_.load(std::memory_order_acquire)) break;
 
         UINT32 padding = 0;
-        if (FAILED(audio_client_->GetCurrentPadding(&padding))) break;
-        const UINT32 available = buffer_frame_count_ - padding;
+        if (FAILED(wasapi_.client()->GetCurrentPadding(&padding))) break;
+        const UINT32 available = wasapi_.buffer_frames() - padding;
         if (available == 0) {
             Sleep(5);
             continue;
         }
 
         BYTE* data = nullptr;
-        if (FAILED(render_client_->GetBuffer(available, &data))) break;
+        if (FAILED(wasapi_.render_client()->GetBuffer(available, &data))) break;
         float* out = reinterpret_cast<float*>(data);
         const int ch = out_channels_;
         const double rate = static_cast<double>(out_rate_);
@@ -945,7 +917,7 @@ void VideoAudioPlayer::RenderThreadMain() {
             playhead += static_cast<double>(available - filled) / rate;
         }
         playhead_sec_.store(playhead, std::memory_order_relaxed);
-        render_client_->ReleaseBuffer(available, 0);
+        wasapi_.render_client()->ReleaseBuffer(available, 0);
 
         // End of stream: the worker reported drained and nothing is
         // left queued. Park here instead of exiting — a post-EOF seek

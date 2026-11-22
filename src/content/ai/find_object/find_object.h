@@ -13,20 +13,29 @@
 //   Backend pick order is ORT first, OpenCV DNN second; Detector::Load
 //   accepts an explicit backend id to override.
 //
-// Model contract — YOLO-style single-shot detector ONNX exports
-// (YOLOv8n / YOLO11n are the reference):
-//   input  [1,3,H,W] float32 NCHW, RGB, /255, letterboxed (default
-//          640x640; ORT reads the real dims from the model, the cv-dnn
-//          fallback assumes 640x640)
-//   output [1,4+C,N] or [1,N,4+C] — cx,cy,w,h in input pixels followed
-//          by C per-class scores (v8-style, no separate objectness
-//          column). C==1 single-class models work too.
+// Model contract — two detector families are decoded:
+//   1. YOLO-style single-shot exports (YOLOv8n / YOLO11n reference):
+//      input  [1,3,H,W] float32 NCHW, RGB, /255, letterboxed
+//      output [1,4+C,N] or [1,N,4+C] — cx,cy,w,h in input pixels +
+//             C per-class scores (v8-style, no objectness column).
+//   2. DETR-style two-output exports (RF-DETR / RT-DETR; the shipped
+//      onnx-community/rfdetr_nano-ONNX is the reference):
+//      input  same NCHW contract (RF-DETR needs no mean/std
+//             normalization — /255 only, matching this module)
+//      output boxes  [1,N,4]  — cx,cy,w,h, normalized 0..1 or input
+//             pixels (auto-detected by range)
+//             logits [1,N,C]  — un-activated; per-class sigmoid, argmax
+//      Picked whenever a session reports >= 2 outputs.
+// Input size resolution order: backend-reported static dims ->
+// ProbeOnnxInputSquare (ONNX header protobuf walk) -> family default
+// (384 for multi-output DETR, 640 for YOLO).
 // Class labels come from a coco.names-style file (one label per line,
 // '#' comment lines ignored) — pass it to Detector::Load; absent
-// labels report as "class_<id>".
+// labels report as "class_<id>". For COCO-trained DETR exports the
+// logit index IS the COCO id (1..90, gaps included), so the names
+// file must be id-indexed (see assets/models/rfdetr_nano.names).
 // Model distribution is out of scope: the caller resolves the path
 // (tools/video_editor/ai_tags.h looks in <exe>/assets/models/).
-// Expected file name: e.g. "yolov8n.onnx" + "coco.names".
 //
 // NMS is classic per-class IoU suppression implemented here — no
 // extra dependencies. The whole module is thread-hostile like the

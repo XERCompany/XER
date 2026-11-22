@@ -47,7 +47,7 @@
 #include "app_runtime/svg_raster.h"
 #include "app_runtime/ui_manifest.h"
 #include "color/ocio_transform.h"
-#include "io/oiio_image.h"
+#include "io/still_image.h"
 
 namespace {
 using XER::VideoEditor::AppRuntime::AppManifest;
@@ -956,9 +956,11 @@ void TestOcioTransform() {
     XER_VE_CHECK(bgra[3] == 255);  // alpha untouched either way
 }
 
-// OIIO round-trip: a 4x4 BGRA checkerboard written as PNG reads back
-// with the same dimensions and the corner pixel within 2 LSB.
-void TestOiioRoundtrip() {
+// Still-image round-trip: a 4x4 BGRA checkerboard written as PNG reads
+// back with the same dimensions and the corner pixel within 2 LSB.
+// WriteImage -> image::ImageSaver (FFmpeg png), ReadImage ->
+// image::ImageLoader — the OIIO residual is not on this path.
+void TestStillImageRoundtrip() {
     const auto path = TempRoot() / "t.png";
     constexpr std::uint8_t kA[4] = {0x20, 0x40, 0x80, 0xFF};  // B,G,R,A
     constexpr std::uint8_t kB[4] = {0xC0, 0xA0, 0x40, 0xFF};
@@ -989,12 +991,16 @@ void TestOiioRoundtrip() {
     }
 }
 
-// OiioHandlesExtension covers formats WIC can't (exr, dpx) and leaves
-// the ones WIC already handles (png) alone.
-void TestOiioHandles() {
-    XER_VE_CHECK(veio::OiioHandlesExtension("exr"));
-    XER_VE_CHECK(!veio::OiioHandlesExtension("png"));
-    XER_VE_CHECK(veio::OiioHandlesExtension("dpx"));
+// StillImageHandlesExtension covers the ImageLoader formats plus the
+// OIIO residual (dpx/hdr) and rejects non-image extensions.
+void TestStillImageHandles() {
+    XER_VE_CHECK(veio::StillImageHandlesExtension("exr"));
+    XER_VE_CHECK(veio::StillImageHandlesExtension("png"));
+    XER_VE_CHECK(veio::StillImageHandlesExtension(".tiff"));
+    XER_VE_CHECK(veio::StillImageHandlesExtension("dpx"));
+    XER_VE_CHECK(veio::StillImageHandlesExtension("hdr"));
+    XER_VE_CHECK(!veio::StillImageHandlesExtension("mp4"));
+    XER_VE_CHECK(!veio::StillImageHandlesExtension("xyz"));
 }
 
 // Boot() on the deployed assets/ also fills the UI-manifest shared
@@ -1183,8 +1189,8 @@ int XER_VideoEditor_RunAppRuntimeTests() {
         {"shared_finders", &TestSharedFinders},
         {"ocio_config", &TestOcioConfig},
         {"ocio_transform", &TestOcioTransform},
-        {"oiio_roundtrip", &TestOiioRoundtrip},
-        {"oiio_handles", &TestOiioHandles},
+        {"still_image_roundtrip", &TestStillImageRoundtrip},
+        {"still_image_handles", &TestStillImageHandles},
         {"ui_manifest_shared", &TestUiManifestShared},
         {"ocio_profiles_parse", &TestOcioProfilesParse},
         {"ocio_profile_lut", &TestOcioProfileLut},

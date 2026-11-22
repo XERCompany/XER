@@ -15,6 +15,7 @@
 #include "find_object.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <filesystem>
@@ -189,12 +190,183 @@ Letterbox BgraToNchw(const std::uint8_t* bgra, int w, int h, int stride,
     return lb;
 }
 
+// ---- ONNX model header probe -------------------------------------------
+//
+// Minimal protobuf-wire walk of the .onnx header to recover the
+// declared input shape: ModelProto.graph (field 7) ->
+// GraphProto.input (field 11) -> ValueInfoProto.type.tensor_type.shape
+// -> dim_value entries. cv::dnn cannot report the declared shape
+// portably, and ORT reports symbolic dims as unusable values, so both
+// backends share this probe. Returns the square edge H (== W) of the
+// first rank-4 [N,C,H,W] graph input whose H/W are static ints — 0
+// when the file cannot be parsed or every input dim is symbolic.
+// Weight tensors can also appear in graph.input on IR<4 exports;
+// rank-4 inputs are filtered to prefer a 3-channel one, which picks
+// the image input in practice.
+
+bool PbReadVarint(const std::uint8_t*& p, const std::uint8_t* end,
+                  std::uint64_t* out) {
+    std::uint64_t v = 0;
+    int shift = 0;
+    while (p < end && shift < 64) {
+        const std::uint8_t b = *p++;
+        v |= static_cast<std::uint64_t>(b & 0x7f) << shift;
+        if ((b & 0x80) == 0) {
+            *out = v;
+            return true;
+        }
+        shift += 7;
+    }
+    return false;
+}
+
+// Iterates top-level fields of a protobuf message [b,e). cb(field_no,
+// wire_type, payload_ptr, payload_len) — wire_type 0 payloads are the
+// varint bytes themselves (not a sub-message); callers re-decode.
+template <typename F>
+void PbForEachField(const std::uint8_t* b, const std::uint8_t* e,
+                    F&& cb) {
+    const std::uint8_t* p = b;
+    while (p < e) {
+        std::uint64_t key = 0;
+        if (!PbReadVarint(p, e, &key)) return;
+        const int field = static_cast<int>(key >> 3);
+        const int wt = static_cast<int>(key & 7);
+        if (wt == 0) {
+            const std::uint8_t* start = p;
+            std::uint64_t v = 0;
+            if (!PbReadVarint(p, e, &v)) return;
+            cb(field, wt, start, p - start);
+        } else if (wt == 1) {
+            if (e - p < 8) return;
+            cb(field, wt, p, 8);
+            p += 8;
+        } else if (wt == 2) {
+            std::uint64_t len = 0;
+            if (!PbReadVarint(p, e, &len) ||
+                len > static_cast<std::uint64_t>(e - p)) {
+                return;
+            }
+            cb(field, wt, p, static_cast<std::size_t>(len));
+            p += len;
+        } else if (wt == 5) {
+            if (e - p < 4) return;
+            cb(field, wt, p, 4);
+            p += 4;
+        } else {
+            return;   // groups/wire types we do not meet in ONNX
+        }
+    }
+}
+
+// Parses a TensorShapeProto into dim ints; -1 marks a symbolic/
+// dynamic dim. shape = TensorShapeProto message bytes.
+std::vector<std::int64_t> PbParseShape(const std::uint8_t* b,
+                                       const std::uint8_t* e) {
+    std::vector<std::int64_t> dims;
+    PbForEachField(b, e, [&](int field, int wt, const std::uint8_t* d,
+                             std::size_t len) {
+        if (field != 1 || wt != 2) return;   // dim
+        std::int64_t dim = -1;
+        PbForEachField(d, d + len,
+                       [&](int df, int dwt, const std::uint8_t* dd,
+                           std::size_t dlen) {
+                           if (df == 1 && dwt == 0) {   // dim_value
+                               const std::uint8_t* q = dd;
+                               std::uint64_t v = 0;
+                               if (PbReadVarint(q, dd + dlen, &v)) {
+                                   dim = static_cast<std::int64_t>(v);
+                               }
+                           }
+                       });
+        dims.push_back(dim);
+    });
+    return dims;
+}
+
+// value_info -> (dims vector) via ValueInfoProto.type (2) ->
+// TypeProto.tensor_type (1) -> Tensor.shape (2).
+std::vector<std::int64_t> PbValueInfoDims(const std::uint8_t* b,
+                                          const std::uint8_t* e) {
+    std::vector<std::int64_t> dims;
+    PbForEachField(b, e, [&](int field, int wt, const std::uint8_t* d,
+                             std::size_t len) {
+        if (field != 2 || wt != 2) return;   // type
+        PbForEachField(d, d + len,
+                       [&](int tf, int twt, const std::uint8_t* td,
+                           std::size_t tlen) {
+                           if (tf != 1 || twt != 2) return;  // tensor_type
+                           PbForEachField(
+                               td, td + tlen,
+                               [&](int ef, int ewt, const std::uint8_t* ed,
+                                   std::size_t elen) {
+                                   if (ef == 2 && ewt == 2) {   // shape
+                                       dims = PbParseShape(ed, ed + elen);
+                                   }
+                               });
+                       });
+    });
+    return dims;
+}
+
+int ProbeOnnxInputSquare(const std::string& utf8_path) {
+    // Only the header matters, but the graph is a single length-
+    // delimited field so the whole file is read. Detector-sized files
+    // only (~100 MB); called once per Detector::Load.
+    std::ifstream in{std::filesystem::path(utf8_path),
+                     std::ios::binary};
+    if (!in) return 0;
+    std::vector<std::uint8_t> buf(
+        (std::istreambuf_iterator<char>(in)),
+        std::istreambuf_iterator<char>());
+    const std::uint8_t* b = buf.data();
+    const std::uint8_t* e = b + buf.size();
+    const std::uint8_t* graph = nullptr;
+    std::size_t graph_len = 0;
+    PbForEachField(b, e, [&](int field, int wt, const std::uint8_t* d,
+                             std::size_t len) {
+        if (field == 7 && wt == 2) {   // ModelProto.graph
+            graph = d;
+            graph_len = len;
+        }
+    });
+    if (graph == nullptr) return 0;
+    std::vector<std::vector<std::int64_t>> input_dims;
+    PbForEachField(graph, graph + graph_len,
+                   [&](int field, int wt, const std::uint8_t* d,
+                       std::size_t len) {
+                       if (field == 11 && wt == 2) {   // graph.input
+                           input_dims.push_back(
+                               PbValueInfoDims(d, d + len));
+                       }
+                   });
+    int fallback = 0;
+    for (const auto& dims : input_dims) {
+        if (dims.size() != 4 || dims[2] <= 0 || dims[2] != dims[3]) {
+            continue;
+        }
+        if (dims[1] == 3) {   // prefer a 3-channel image input
+            return static_cast<int>(dims[2]);
+        }
+        if (fallback == 0) fallback = static_cast<int>(dims[2]);
+    }
+    return fallback;
+}
+
 // ---- output decode + NMS ----------------------------------------------
 
 struct RawBox {
     float cx, cy, w, h;
     int class_id;
     float score;
+};
+
+// One model output tensor, borrowed from the backend session (valid
+// until the next Forward call on that session).
+struct TensorView {
+    std::string name;
+    std::vector<std::int64_t> dims;
+    const float* data = nullptr;
 };
 
 // YOLO v8-style decode: output dims [1,A,N] or [1,N,A] (a leading batch
@@ -238,6 +410,112 @@ std::vector<RawBox> DecodeYolo(const float* data,
         boxes.push_back({cx, cy, w, h, best, best_score});
     }
     return boxes;
+}
+
+// DETR-family decode (RF-DETR / RT-DETR exports, e.g.
+// onnx-community/rfdetr_*-ONNX): TWO outputs instead of YOLO's one —
+// a boxes tensor [1,N,4] in cx,cy,w,h and a class-logits tensor
+// [1,N,C]. Boxes may be normalized to 0..1 (RF-DETR) or already in
+// input pixels (some RT-DETR exports) — detected by range. Logits are
+// un-activated; scores are per-class sigmoids. DETR is NMS-free by
+// design but the shared NMS tail is harmless (near-zero duplicate
+// overlap) and stays enabled.
+//
+// Pairing rule: the output whose last dim == 4 is boxes, the one with
+// last dim > 4 is logits; when names are present they break ties /
+// confirm ("box"/"det" vs "logit"/"label"/"score"). Returns empty on
+// ambiguity — better a silent miss than garbage boxes.
+std::vector<RawBox> DecodeDetr(const std::vector<TensorView>& outs,
+                                 float conf_thresh, int input_size) {
+    const TensorView* boxes = nullptr;
+    const TensorView* logits = nullptr;
+    const auto last_dim = [](const TensorView& t) -> std::int64_t {
+        return t.dims.empty() ? -1 : t.dims.back();
+    };
+    const auto rank = [](const TensorView& t) -> std::size_t {
+        return t.dims.size();
+    };
+    const auto name_has = [](const TensorView& t, const char* sub) {
+        std::string low = t.name;
+        std::transform(low.begin(), low.end(), low.begin(),
+                       [](unsigned char c) {
+                           return static_cast<char>(std::tolower(c));
+                       });
+        return low.find(sub) != std::string::npos;
+    };
+    for (const TensorView& t : outs) {
+        const std::int64_t last = last_dim(t);
+        const std::size_t r = rank(t);
+        if (t.data == nullptr || (r != 2 && r != 3)) continue;
+        if (last == 4) {
+            if (boxes == nullptr) boxes = &t;
+        } else if (last > 4) {
+            if (logits == nullptr || name_has(t, "logit") ||
+                name_has(t, "label") || name_has(t, "score") ||
+                name_has(t, "cls")) {
+                logits = &t;
+            }
+        }
+    }
+    // Name-guided disambiguation for the pathological C == 4 case
+    // (Roboflow warns shape-matching swaps outputs when num_classes+1
+    // == 4): prefer explicit name matches when both candidates exist.
+    for (const TensorView& t : outs) {
+        if (name_has(t, "logit") || name_has(t, "label") ||
+            name_has(t, "score")) {
+            logits = &t;
+        } else if ((name_has(t, "box") || name_has(t, "det")) &&
+                   last_dim(t) == 4) {
+            boxes = &t;
+        }
+    }
+    if (boxes == nullptr || logits == nullptr || boxes == logits) {
+        return {};
+    }
+    const std::int64_t n = boxes->dims[rank(*boxes) - 2];
+    const std::int64_t classes =
+        logits->dims[rank(*logits) - 1];
+    const std::int64_t n_logits =
+        rank(*logits) >= 2 ? logits->dims[rank(*logits) - 2] : 0;
+    if (n < 1 || classes < 1 || n_logits != n ||
+        boxes->data == nullptr || logits->data == nullptr) {
+        return {};
+    }
+    // Normalized vs input-pixel boxes: normalized cxcywh stays in
+    // [0,~1.05]; anything past ~2 input px is already pixels.
+    float max_coord = 0.0f;
+    for (std::int64_t i = 0; i < n * 4; ++i) {
+        const float v = std::fabs(boxes->data[i]);
+        if (v > max_coord) max_coord = v;
+    }
+    const float box_scale =
+        max_coord <= 2.0f ? static_cast<float>(input_size) : 1.0f;
+
+    const auto sigmoid = [](float x) {
+        return 1.0f / (1.0f + std::exp(-x));
+    };
+    std::vector<RawBox> out;
+    out.reserve(static_cast<std::size_t>(std::min<std::int64_t>(n, 4096)));
+    for (std::int64_t i = 0; i < n; ++i) {
+        const float* row = logits->data + i * classes;
+        int best = -1;
+        float best_score = conf_thresh;
+        for (std::int64_t c = 0; c < classes; ++c) {
+            const float s = sigmoid(row[c]);
+            if (s > best_score) {
+                best_score = s;
+                best = static_cast<int>(c);
+            }
+        }
+        if (best < 0) continue;
+        const float cx = boxes->data[i * 4 + 0] * box_scale;
+        const float cy = boxes->data[i * 4 + 1] * box_scale;
+        const float w = boxes->data[i * 4 + 2] * box_scale;
+        const float h = boxes->data[i * 4 + 3] * box_scale;
+        if (!(w > 0.0f) || !(h > 0.0f)) continue;
+        out.push_back({cx, cy, w, h, best, best_score});
+    }
+    return out;
 }
 
 float IoU(const Detection& a, const Detection& b) {
@@ -308,14 +586,18 @@ std::vector<Detection> Postprocess(std::vector<RawBox> boxes,
 // ---- backend sessions ---------------------------------------------------
 
 // One loaded model on one backend. Detect() takes the letterboxed NCHW
-// input and must fill `dims_out`/`data_out` pointing at the output
-// tensor (borrowed — valid until the next Detect or destruction).
+// input and must fill `outs_out` with every f32 output tensor
+// (borrowed — valid until the next Forward or destruction). Single-
+// output models are YOLO-decoded; multi-output models go through the
+// DETR boxes+logits decoder.
 struct Session {
     virtual ~Session() = default;
     virtual bool Forward(const float* nchw, int in_w, int in_h,
-                         std::vector<std::int64_t>* dims_out,
-                         const float** data_out,
+                         std::vector<TensorView>* outs_out,
                          std::string* error_out) = 0;
+    // Declared output count — used at Load to pick an input-size
+    // fallback when the model dims are symbolic.
+    virtual int OutputCount() const = 0;
 };
 
 #if defined(XER_AI_FO_ONNXRUNTIME)
@@ -355,9 +637,13 @@ struct OrtSessionImpl final : Session {
         return msg;
     }
 
+    int OutputCount() const override {
+        return static_cast<int>(output_names.size());
+    }
+
     bool Forward(const float* nchw, int in_w, int in_h,
-                 std::vector<std::int64_t>* dims_out,
-                 const float** data_out, std::string* error_out) override {
+                 std::vector<TensorView>* outs_out,
+                 std::string* error_out) override {
         const std::int64_t dims[4] = {1, 3, in_h, in_w};
         OrtValue* input = nullptr;
         OrtStatus* st = api->CreateTensorWithDataAsOrtValue(
@@ -381,36 +667,57 @@ struct OrtSessionImpl final : Session {
             if (error_out) *error_out = "Run returned no outputs";
             return false;
         }
-        OrtTensorTypeAndShapeInfo* info = nullptr;
-        // GetTensorTypeAndShape is the stable name across ORT C-API
-        // revisions (ORT_API_VERSION 29 dropped the *Info-suffixed
-        // alias the code was first written against).
-        st = api->GetTensorTypeAndShape(outputs[0], &info);
-        if (!Check(st, "GetTensorTypeAndShapeInfo", error_out).empty() ||
-            info == nullptr) {
-            return false;
+        outs_out->clear();
+        outs_out->reserve(outputs.size());
+        for (std::size_t oi = 0; oi < outputs.size(); ++oi) {
+            if (outputs[oi] == nullptr) continue;
+            OrtTensorTypeAndShapeInfo* info = nullptr;
+            // GetTensorTypeAndShape is the stable name across ORT C-API
+            // revisions (ORT_API_VERSION 29 dropped the *Info-suffixed
+            // alias the code was first written against).
+            st = api->GetTensorTypeAndShape(outputs[oi], &info);
+            if (!Check(st, "GetTensorTypeAndShapeInfo", error_out)
+                     .empty() ||
+                info == nullptr) {
+                return false;
+            }
+            ONNXTensorElementDataType elem =
+                ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED;
+            std::size_t ndim = 0;
+            TensorView view;
+            view.name =
+                oi < output_names.size() ? output_names[oi]
+                                         : std::string();
+            bool bad = false;
+            bad = bad ||
+                  !Check(api->GetTensorElementType(info, &elem),
+                         "GetTensorElementType", error_out)
+                      .empty();
+            bad = bad ||
+                  !Check(api->GetDimensionsCount(info, &ndim),
+                         "GetDimensionsCount", error_out)
+                      .empty();
+            view.dims.assign(ndim, 0);
+            bad = bad ||
+                  !Check(api->GetDimensions(info, view.dims.data(),
+                                            ndim),
+                         "GetDimensions", error_out)
+                      .empty();
+            api->ReleaseTensorTypeAndShapeInfo(info);
+            if (bad) return false;
+            if (elem != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT) {
+                continue;   // decode paths only read f32 outputs
+            }
+            void* out_ptr = nullptr;
+            st = api->GetTensorMutableData(outputs[oi], &out_ptr);
+            if (!Check(st, "GetTensorMutableData", error_out).empty() ||
+                out_ptr == nullptr) {
+                return false;
+            }
+            view.data = static_cast<const float*>(out_ptr);
+            outs_out->push_back(std::move(view));
         }
-        std::size_t ndim = 0;
-        bool bad = false;
-        bad = bad ||
-              !Check(api->GetDimensionsCount(info, &ndim),
-                     "GetDimensionsCount", error_out)
-                  .empty();
-        dims_out->assign(ndim, 0);
-        bad = bad || !Check(api->GetDimensions(info, dims_out->data(),
-                                               ndim),
-                            "GetDimensions", error_out)
-                         .empty();
-        api->ReleaseTensorTypeAndShapeInfo(info);
-        if (bad) return false;
-        void* out_ptr = nullptr;
-        st = api->GetTensorMutableData(outputs[0], &out_ptr);
-        if (!Check(st, "GetTensorMutableData", error_out).empty() ||
-            out_ptr == nullptr) {
-            return false;
-        }
-        *data_out = static_cast<const float*>(out_ptr);
-        return true;
+        return !outs_out->empty();
     }
 };
 
@@ -531,7 +838,9 @@ std::unique_ptr<Session> MakeOrtSession(const std::string& model_path,
     for (const std::string& o : s->output_names) {
         s->output_name_ptrs.push_back(o.c_str());
     }
-    *input_size = detected_size > 0 ? detected_size : 640;
+    // Dynamic/symbolic dims report <= 0; Detector::Load resolves the
+    // real fallback (graph probe, then a per-family default).
+    *input_size = detected_size;
     return s;
 }
 #endif  // XER_AI_FO_ONNXRUNTIME
@@ -541,26 +850,37 @@ struct CvSession final : Session {
     cv::dnn::Net net;
     std::vector<std::string> out_names;
     std::vector<cv::Mat> outs;
+    int OutputCount() const override {
+        return static_cast<int>(out_names.size());
+    }
     bool Forward(const float* nchw, int in_w, int in_h,
-                 std::vector<std::int64_t>* dims_out,
-                 const float** data_out, std::string* error_out) override {
+                 std::vector<TensorView>* outs_out,
+                 std::string* error_out) override {
         try {
             const int sz[4] = {1, 3, in_h, in_w};
             cv::Mat blob(4, sz, CV_32F, const_cast<float*>(nchw));
             net.setInput(blob);
             outs.clear();
             net.forward(outs, out_names);
-            if (outs.empty() || outs[0].empty() ||
-                outs[0].type() != CV_32F) {
+            outs_out->clear();
+            outs_out->reserve(outs.size());
+            for (std::size_t i = 0; i < outs.size(); ++i) {
+                const cv::Mat& o = outs[i];
+                if (o.empty() || o.type() != CV_32F) continue;
+                TensorView view;
+                view.name =
+                    i < out_names.size() ? out_names[i] : std::string();
+                view.dims.assign(o.dims, 0);
+                for (int d = 0; d < o.dims; ++d) {
+                    view.dims[static_cast<std::size_t>(d)] = o.size[d];
+                }
+                view.data = reinterpret_cast<const float*>(o.data);
+                outs_out->push_back(std::move(view));
+            }
+            if (outs_out->empty()) {
                 if (error_out) *error_out = "forward produced no f32 output";
                 return false;
             }
-            const cv::Mat& o = outs[0];
-            dims_out->assign(o.dims, 0);
-            for (int i = 0; i < o.dims; ++i) {
-                (*dims_out)[static_cast<std::size_t>(i)] = o.size[i];
-            }
-            *data_out = reinterpret_cast<const float*>(o.data);
             return true;
         } catch (const cv::Exception& e) {
             if (error_out)
@@ -584,8 +904,8 @@ std::unique_ptr<Session> MakeCvSession(const std::string& model_path,
             return nullptr;
         }
         // cv::dnn does not expose the declared input shape portably —
-        // the YOLO export contract is a fixed square input, 640 default.
-        *input_size = 640;
+        // Detector::Load resolves it via ProbeOnnxInputSquare.
+        *input_size = 0;
         return s;
     } catch (const cv::Exception& e) {
         if (error_out)
@@ -768,6 +1088,20 @@ bool Detector::Load(const std::string& utf8_model_path,
                                          b.id
                                    : try_err;
     }
+    if (impl_->session != nullptr && impl_->input_size <= 0) {
+        // The backend could not recover a static input square (cv::dnn
+        // never can; ORT sees symbolic dims). Read it from the ONNX
+        // header directly; when the model itself declares dynamic
+        // dims, fall back per family: multi-output DETR exports feed
+        // their trained resolution (RF-DETR-N 384; larger RF-DETR /
+        // RT-DETR still run — dynamic input is valid), single-output
+        // YOLO exports keep the classic 640.
+        const int probed = ProbeOnnxInputSquare(utf8_model_path);
+        impl_->input_size =
+            probed > 0
+                ? probed
+                : (impl_->session->OutputCount() >= 2 ? 384 : 640);
+    }
     if (impl_->session == nullptr) {
         if (error_out != nullptr) {
             if (!named_backend_seen) {
@@ -810,15 +1144,24 @@ std::vector<Detection> Detector::Detect(const std::uint8_t* bgra,
     const Letterbox lb =
         BgraToNchw(bgra, width, height, stride, in, in,
                    impl_->nchw.data());
-    std::vector<std::int64_t> dims;
-    const float* out_data = nullptr;
+    std::vector<TensorView> outs;
     std::string err;
-    if (!impl_->session->Forward(impl_->nchw.data(), in, in, &dims,
-                                 &out_data, &err)) {
+    if (!impl_->session->Forward(impl_->nchw.data(), in, in, &outs,
+                                 &err)) {
         return {};
     }
-    std::vector<RawBox> boxes =
-        DecodeYolo(out_data, dims, options.confidence_threshold);
+    std::vector<RawBox> boxes;
+    if (outs.size() >= 2) {
+        // DETR-family export (RF-DETR / RT-DETR): separate boxes +
+        // logits tensors, no NMS in graph.
+        boxes = DecodeDetr(outs, options.confidence_threshold, in);
+    }
+    if (boxes.empty() && !outs.empty()) {
+        // YOLO-style single output (or unrecognized layout — decode
+        // output 0 anyway; a non-YOLO shape just yields nothing).
+        boxes = DecodeYolo(outs[0].data, outs[0].dims,
+                           options.confidence_threshold);
+    }
     return Postprocess(std::move(boxes), lb, width, height,
                        impl_->labels, options);
 }

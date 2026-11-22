@@ -13,11 +13,7 @@
 #include <vector>
 
 #ifdef _WIN32
-#ifndef WIN32_LEAN_AND_MEAN
-#define WIN32_LEAN_AND_MEAN
-#endif
-#include <mmdeviceapi.h>
-#include <audioclient.h>
+#include "wasapi_render_client.h"
 #endif
 
 namespace XER::Bridge::FFmpeg {
@@ -154,15 +150,10 @@ private:
     int out_channels_ = 0;
 
 #ifdef _WIN32
-    IMMDeviceEnumerator* enumerator_ = nullptr;
-    IMMDevice* device_ = nullptr;
-    IAudioClient* audio_client_ = nullptr;
-    IAudioRenderClient* render_client_ = nullptr;
-    UINT32 buffer_frame_count_ = 0;
-    // True only when this player successfully called CoInitializeEx —
-    // RPC_E_CHANGED_MODE means another component owns the apartment and
-    // must NOT be balanced with CoUninitialize.
-    bool com_initialized_ = false;
+    // Shared WASAPI device plumbing (wasapi_render_client.h) — owns the
+    // endpoint chain, COM-init balance and buffer size; this player
+    // keeps the pull-model render thread on top of it.
+    WasapiRenderClient wasapi_;
 #endif
 
     std::thread render_thread_;

@@ -849,7 +849,8 @@ struct Compositor::Impl {
         // re-warn through the same dedup set.
         for (const auto& clip : project_.clips) {
             for (const auto& effect : clip.effects) {
-                if (effect.type.rfind("plugin:", 0) == 0) {
+                if (effect.type.rfind("plugin:", 0) == 0 ||
+                    effect.type.rfind("builtin:", 0) == 0) {
                     if (PluginHost::ForEffectType(effect.type) ==
                         nullptr) {
                         Warn("plugin effect '" + effect.type +
@@ -1183,9 +1184,11 @@ struct Compositor::Impl {
                 return;
             }
             const std::string& type = effect.type;
-            if (type.rfind("plugin:", 0) == 0) {
-                // External plugin effect (sdk/xer_plugin.h) — applied
-                // in place to the BGRA8 frame.
+            if (type.rfind("plugin:", 0) == 0 ||
+                type.rfind("builtin:", 0) == 0) {
+                // External plugin effect (sdk/xer_plugin.h) or
+                // host-side builtin — applied in place to the BGRA8
+                // frame through the same ABI.
                 const PluginDesc* desc = PluginHost::ForEffectType(type);
                 if (desc != nullptr &&
                     frame.Format() == video::PixelFormat::BGRA8) {

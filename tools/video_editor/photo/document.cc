@@ -14,8 +14,30 @@ namespace XER::VideoEditor::Photo {
 
 namespace {
 
-void FlattenNode(const LayerNode& node, float acc_opacity,
-                 std::vector<uint32_t>* canvas, int w, int h) {
+// Bounding rect (document coords) of the visible painted content of a
+// subtree — the raster extents of every visible descendant, clipped
+// to `limit`. Empty means the subtree paints nothing.
+IntRect CollectContentExtent(const LayerNode& node,
+                             const IntRect& limit) {
+    IntRect ext;
+    if (!node.Visible() || node.Opacity() <= 0.0f) return ext;
+    if (node.Kind() == LayerKind::kRaster && node.Device() != nullptr) {
+        ext = IntRect::Union(ext, node.Device()->Extent());
+    }
+    for (const auto& child : node.Children()) {
+        ext = IntRect::Union(ext, CollectContentExtent(*child, limit));
+    }
+    return IntRect::Intersect(ext, limit);
+}
+
+// Composites `node` into `dst` (dst_w x dst_h, bridge-packed) whose
+// pixel (0,0) sits at document point (dst_ox,dst_oy). Raster leaves
+// blend with their own blend mode; groups isolate their children
+// into a scratch covering the group content extent, then land the
+// scratch with the group's blend mode and accumulated opacity.
+void CompositeNode(const LayerNode& node, float acc_opacity,
+                   std::vector<uint32_t>* dst, int dst_w, int dst_h,
+                   int dst_ox, int dst_oy) {
     if (!node.Visible()) return;
     const float op = acc_opacity * node.Opacity();
     if (op <= 0.0f) return;
@@ -24,13 +46,25 @@ void FlattenNode(const LayerNode& node, float acc_opacity,
         if (!ext.IsEmpty()) {
             const std::vector<uint32_t> src =
                 node.Device()->ReadRegionU32(ext);
-            XER::Bridge::Skia::ImageComposite(canvas, w, h, src, ext.w,
-                                              ext.h, ext.x, ext.y,
-                                              node.BlendMode(), op);
+            XER::Bridge::Skia::ImageComposite(
+                dst, dst_w, dst_h, src, ext.w, ext.h, ext.x - dst_ox,
+                ext.y - dst_oy, node.BlendMode(), op);
         }
+        return;
     }
-    for (const auto& child : node.Children()) {
-        FlattenNode(*child, op, canvas, w, h);
+    if (node.Kind() == LayerKind::kGroup) {
+        const IntRect ext = CollectContentExtent(
+            node, IntRect{dst_ox, dst_oy, dst_w, dst_h});
+        if (ext.IsEmpty()) return;
+        std::vector<uint32_t> scratch(
+            static_cast<size_t>(ext.w) * ext.h, 0);
+        for (const auto& child : node.Children()) {
+            CompositeNode(*child, 1.0f, &scratch, ext.w, ext.h, ext.x,
+                          ext.y);
+        }
+        XER::Bridge::Skia::ImageComposite(
+            dst, dst_w, dst_h, scratch, ext.w, ext.h, ext.x - dst_ox,
+            ext.y - dst_oy, node.BlendMode(), op);
     }
 }
 
@@ -89,10 +123,85 @@ std::unique_ptr<LayerNode> Document::DetachLayer(LayerId id) {
 
 LayerNode& Document::AdoptLayer(LayerNode* parent,
                               std::unique_ptr<LayerNode> node) {
+    return InsertChildAt(parent,
+                         parent ? parent->children_.size()
+                                : static_cast<size_t>(-1),
+                         std::move(node));
+}
+
+int Document::ChildIndex(const LayerNode& parent, LayerId child) const {
+    for (size_t i = 0; i < parent.children_.size(); ++i) {
+        if (parent.children_[i]->Id() == child) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+LayerNode& Document::InsertChildAt(LayerNode* parent, size_t index,
+                                   std::unique_ptr<LayerNode> node) {
     if (parent == nullptr) parent = root_.get();
+    if (index > parent->children_.size()) {
+        index = parent->children_.size();
+    }
     node->parent_ = parent;
-    parent->children_.push_back(std::move(node));
-    return *parent->children_.back();
+    auto it = parent->children_.insert(
+        parent->children_.begin() + static_cast<ptrdiff_t>(index),
+        std::move(node));
+    return **it;
+}
+
+std::unique_ptr<LayerNode> Document::CloneSubtree(LayerId id) {
+    const LayerNode* src = FindLayer(id);
+    if (src == nullptr) return nullptr;
+    const auto clone = [this](const LayerNode& s) {
+        std::unique_ptr<LayerNode> node(
+            new LayerNode(next_id_++, s.kind_, s.name_));
+        node->visible_ = s.visible_;
+        node->locked_ = s.locked_;
+        node->opacity_ = s.opacity_;
+        node->blend_mode_ = s.blend_mode_;
+        if (s.device_ != nullptr) {
+            node->device_ = s.device_->Clone();  // COW tile sharing
+        }
+        for (const auto& child : s.children_) {
+            node->children_.push_back(
+                this->CloneSubtree(child->Id()));
+            node->children_.back()->parent_ = node.get();
+        }
+        return node;
+    };
+    return clone(*src);
+}
+
+std::vector<std::unique_ptr<LayerNode>> Document::DetachAllChildren(
+    LayerNode* parent) {
+    if (parent == nullptr) return {};
+    std::vector<std::unique_ptr<LayerNode>> out =
+        std::move(parent->children_);
+    parent->children_.clear();
+    for (auto& child : out) child->parent_ = nullptr;
+    return out;
+}
+
+void Document::AdoptChildren(
+    LayerNode* parent,
+    std::vector<std::unique_ptr<LayerNode>> children) {
+    if (parent == nullptr) parent = root_.get();
+    for (auto& child : children) {
+        InsertChildAt(parent, parent->children_.size(),
+                      std::move(child));
+    }
+}
+
+bool Document::IsDescendantOrSelf(const LayerNode& node,
+                                  const LayerNode& ancestor) {
+    const LayerNode* p = &node;
+    while (p != nullptr) {
+        if (p == &ancestor) return true;
+        p = p->Parent();
+    }
+    return false;
 }
 
 LayerNode* Document::FindLayer(LayerId id) {
@@ -117,8 +226,38 @@ const TiledDevice* Document::LayerDevice(LayerId id) const {
 std::vector<uint32_t> Document::FlattenU32() const {
     std::vector<uint32_t> canvas(
         static_cast<size_t>(width_) * height_, 0);
-    if (root_) FlattenNode(*root_, 1.0f, &canvas, width_, height_);
+    if (!root_) return canvas;
+    for (const auto& child : root_->Children()) {
+        CompositeNode(*child, 1.0f, &canvas, width_, height_, 0, 0);
+    }
     return canvas;
+}
+
+std::vector<uint32_t> CompositeSubtreeU32(const LayerNode& node,
+                                          int w, int h) {
+    std::vector<uint32_t> buf(static_cast<size_t>(w) * h, 0);
+    if (!node.Visible() || w <= 0 || h <= 0) return buf;
+    if (node.Kind() == LayerKind::kRaster) {
+        // Raw device pixels — own blend/opacity are the caller's to
+        // apply when the buffer lands.
+        const TiledDevice* dev = node.Device();
+        if (dev == nullptr) return buf;
+        const IntRect ext = IntRect::Intersect(
+            dev->Extent(), IntRect{0, 0, w, h});
+        if (ext.IsEmpty()) return buf;
+        const std::vector<uint32_t> src = dev->ReadRegionU32(ext);
+        for (int y = 0; y < ext.h; ++y) {
+            std::copy_n(
+                src.data() + static_cast<size_t>(y) * ext.w, ext.w,
+                buf.data() + static_cast<size_t>(ext.y + y) * w +
+                    static_cast<size_t>(ext.x));
+        }
+        return buf;
+    }
+    for (const auto& child : node.Children()) {
+        CompositeNode(*child, 1.0f, &buf, w, h, 0, 0);
+    }
+    return buf;
 }
 
 image::ImageBuffer Document::Flatten() const {
@@ -189,7 +328,9 @@ bool Document::SavePng(const std::string& utf8_path,
 
 bool FillLayer(Document& doc, LayerId layer, Pixel color,
                PhotoHistory* hist) {
-    TiledDevice* dev = doc.LayerDevice(layer);
+    LayerNode* node = doc.FindLayer(layer);
+    if (node == nullptr || node->Locked()) return false;
+    TiledDevice* dev = node->Device();
     if (dev == nullptr) return false;
     const auto op = [color](TiledDevice& d) { d.Fill(d.Bounds(), color); };
     if (hist != nullptr) {
@@ -203,7 +344,9 @@ bool FillLinearGradient(Document& doc, LayerId layer, float x0, float y0,
                         float x1, float y1,
                         const XER::Bridge::Skia::GradientStops& stops,
                         PhotoHistory* hist) {
-    TiledDevice* dev = doc.LayerDevice(layer);
+    LayerNode* node = doc.FindLayer(layer);
+    if (node == nullptr || node->Locked()) return false;
+    TiledDevice* dev = node->Device();
     if (dev == nullptr) return false;
     const int w = doc.CanvasWidth();
     const int h = doc.CanvasHeight();

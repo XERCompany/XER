@@ -5,10 +5,12 @@
 // Clip::tags (serialized by project_store; drawn as timeline ticks;
 // listed in the inspector).
 //
-// Model management: no downloading — the user drops a YOLO-family
-// ONNX export (e.g. yolov8n.onnx) plus an optional coco.names-style
-// label file into <exe>/assets/models/ (or <exe>/models/). The env
-// var XER_FIND_OBJECT_MODEL overrides discovery. Without a model the
+// Model management: no downloading at run time — a detector ONNX
+// export (rfdetr_nano.onnx, yolov8n.onnx, …) plus an optional
+// coco.names-style label file lives in <exe>/assets/models/ (or
+// <exe>/models/). The dir also stages non-detector models (matting,
+// SAM); discovery ranks known detector names first. The env var
+// XER_FIND_OBJECT_MODEL overrides discovery. Without a model the
 // feature reports "model not installed" — see FindObjectModel().
 // Backend/model contract lives in find_object.h.
 #pragma once
@@ -24,7 +26,9 @@ namespace XER::VideoEditor::Ai {
 // Resolves a detection model: $XER_FIND_OBJECT_MODEL first (must
 // exist), then the first *.onnx in <exe>/assets/models/ and
 // <exe>/models/ — "yolov8*.onnx" / "yolo11*.onnx" names sort ahead of
-// everything else. Empty when nothing is installed.
+// everything else, other detector names (rfdetr/rtdetr/detr/yolox/
+// nanodet) ahead of arbitrary .onnx files. Empty when nothing is
+// installed.
 std::string FindObjectModel();
 // Label file for `model_path`: <model_stem>.names wins, else
 // "coco.names" beside the model. Empty when neither exists.

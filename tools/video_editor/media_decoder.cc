@@ -15,7 +15,7 @@
 #include <cstdlib>
 #include <filesystem>
 
-#include "io/oiio_image.h"
+#include "io/still_image.h"
 #include "helper/path_utils.h"
 
 #include <cctype>
@@ -36,8 +36,8 @@ namespace FFmpeg = XER::Bridge::FFmpeg;
 constexpr double kStillDurationSeconds = 5.0;
 constexpr double kStillFps = 25.0;
 
-// OIIO still-image fallback shared by both decoder adapters — kept as
-// a free helper so BridgeVideoDecoder and GpuVideoDecoder stay
+// Still-image fallback shared by both decoder adapters — kept as a
+// free helper so BridgeVideoDecoder and GpuVideoDecoder stay
 // behavior-identical on non-video inputs.
 bool TryOpenStill(const std::string& utf8_path,
                   std::vector<std::uint8_t>* bgra, int* w, int* h,
@@ -45,7 +45,7 @@ bool TryOpenStill(const std::string& utf8_path,
     const std::filesystem::path path = Path::FromUtf8(utf8_path);
     std::string ext = path.extension().string();
     for (auto& c : ext) c = static_cast<char>(std::tolower(c));
-    if (!Io::OiioHandlesExtension(ext)) {
+    if (!Io::StillImageHandlesExtension(ext)) {
         return false;
     }
     const Io::Image image = Io::ReadImage(path);
@@ -71,9 +71,10 @@ public:
         if (decoder_.Open(utf8_path, error_out)) {
             return true;
         }
-        // FFmpeg couldn't parse it — try still-image formats OIIO
-        // handles (EXR/DPX/TIFF/RAW/PSD/HDR). The still is a constant
-        // frame: every NextFrame returns the same picture.
+        // FFmpeg couldn't parse it — try the still-image formats
+        // (EXR/DPX/TIFF/RAW/PSD/HDR via ImageLoader + the narrow OIIO
+        // residual). The still is a constant frame: every NextFrame
+        // returns the same picture.
         if (!TryOpenStill(utf8_path, &still_bgra_, &still_w_,
                           &still_h_, error_out)) {
             return false;
@@ -170,7 +171,7 @@ public:
 
 private:
     FFmpeg::VideoDecoder decoder_;
-    // Still-image fallback (OIIO): a single decoded frame replayed
+    // Still-image fallback: a single decoded frame replayed
     // forever. Active only when FFmpeg couldn't open the file.
     bool still_ = false;
     std::vector<std::uint8_t> still_bgra_;

@@ -22,11 +22,16 @@ struct PluginDesc {
     std::string id;          // "xer.fx.sepia" (type is "plugin:xer.fx.sepia")
     std::string name;
     std::string vendor;
-    std::string file;        // DLL basename it came from
+    std::string file;        // DLL basename, or "builtin" for host-side
     XER_PluginKind kind = XER_PLUGIN_VIDEO_FX;
     std::vector<XER_ParamDesc> params;
     XER_ApplyVideoFn video_fn = nullptr;
     XER_ApplyAudioFn audio_fn = nullptr;
+    // True for the first-party kernels compiled into the editor
+    // (builtin_fx.cc — the retired xer_fx_* DLLs). They register
+    // alongside DLL effects so "plugin:<id>" project references keep
+    // resolving; "builtin:<id>" selects them exclusively.
+    bool builtin = false;
 };
 
 class PluginHost {
@@ -44,11 +49,16 @@ public:
 
     const std::deque<PluginDesc>& Effects() const { return effects_; }
     const PluginDesc* Find(const std::string& id) const;
+    // Builtin-only lookup — the subset of Effects() with
+    // PluginDesc::builtin set.
+    const PluginDesc* FindBuiltin(const std::string& id) const;
     // Effects that make sense to list in a UI picker, by kind.
     std::vector<const PluginDesc*> OfKind(XER_PluginKind kind) const;
 
-    // Convenience lookup by full clip-effect type — accepts both
-    // "plugin:xer.fx.sepia" and the bare "xer.fx.sepia" id.
+    // Convenience lookup by full clip-effect type:
+    //   "plugin:<id>"  — any registered effect (DLL or builtin)
+    //   "builtin:<id>" — host-compiled builtins only
+    // The bare "<id>" form is also accepted as a plugin lookup.
     static const PluginDesc* ForEffectType(const std::string& type);
 
     // Apply a video effect in place to a BGRA8 frame (width*stride

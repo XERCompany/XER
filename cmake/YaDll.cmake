@@ -426,6 +426,33 @@ function(xer_stage_runtime_dlls)
                    "staged into ${out_dir} (seeds: ${_seeds})")
 endfunction()
 
+# xer_stage_vendored_ort(<out_dir>)
+#
+# Copies Microsoft's official ORT runtime binaries vendored under
+# third_party/onnxruntime/win-x64 into <out_dir>, unconditionally.
+# Why: the MSYS2 onnxruntime package can lag the toolchain's absl
+# soname bump — the packaged dll then imports libabsl_*-<old>.dll and
+# fails with Win32 error 126 on load. The ORT C API is ABI-stable, so
+# the MSVC-built release dll is a drop-in replacement.
+#
+# Call BEFORE any xer_stage_runtime_dlls seed walk that also names
+# onnxruntime*.dll: the file(COPY) here is unconditional so a stale
+# toolchain dll already in <out_dir> is overwritten, and afterwards
+# both staging paths resolve our copy — seed mode follows out_dir
+# hits without re-copying, and xer_pe_deps resolves exe-dir first.
+function(xer_stage_vendored_ort out_dir)
+    set(_vendor "${PROJECT_SOURCE_DIR}/third_party/onnxruntime/win-x64")
+    if(NOT IS_DIRECTORY "${_vendor}")
+        return()
+    endif()
+    file(GLOB _dlls "${_vendor}/onnxruntime*.dll")
+    if(_dlls)
+        file(COPY ${_dlls} DESTINATION "${out_dir}")
+        message(STATUS "xer_stage_vendored_ort: official ORT binaries "
+                       "staged into ${out_dir}")
+    endif()
+endfunction()
+
 # xer_delayload(<target> <dll>...)
 # Adds --delayload link options: the binary starts without those DLLs
 # on PATH; they load lazily on first call into them.

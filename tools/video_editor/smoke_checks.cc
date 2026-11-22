@@ -33,6 +33,7 @@
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "audio_mixer.h"
 #include "audio_sync.h"
+#include "builtin_fx.h"
 #include "cef/cef_ext_scheme.h"
 #include "compositor.h"
 #include "content/ai/find_object/find_object.h"  // YA.AIFindObject
@@ -59,8 +60,11 @@
 #include "nn_probe.h"
 #include "photo/brush.h"
 #include "photo/document.h"
+#include "photo/layer_ops.h"
 #include "photo/photo_history.h"
 #include "photo/tile_store.h"
+#include "photo/xerphoto.h"
+#include "plugin_host.h"
 #include "poster_cache.h"
 #include "project_autosave.h"
 #include "project_store.h"
@@ -101,7 +105,7 @@ const std::string kMediaImportExtensions =
     // audio-only containers
     "wav;mp3;m4a;m4b;aac;flac;ogg;oga;opus;wma;aif;aiff;aifc;mka;ac3;"
     "eac3;dts;amr;au;caf;wv;ape;tta;spx;voc;gsm;oma;"
-    // still images (FFmpeg image2 + OIIO set)
+    // still images (FFmpeg image2 + the still_image.cc set)
     "png;jpg;jpeg;jpe;bmp;dib;gif;tif;tiff;webp;tga;ppm;pgm;pbm;pam;xpm;"
     "avif;heic;exr;dpx;hdr;psd;pfm;raw;cr2;nef;arw;dng;ora";
 
@@ -1352,6 +1356,82 @@ std::string CheckJsFx() {
     if (count_for("clipA") != 1.0f || count_for("clipA") != 2.0f ||
         count_for("clipB") != 1.0f) {
         return "ctx.clip_id did not isolate per-clip script state";
+    }
+    return {};
+}
+
+// The retired xer_fx_* / xer_audio_fx plugin kernels now live
+// host-side (builtin_fx.cc, registered into PluginHost). Every
+// previously-available "plugin:<id>" (and the new "builtin:<id>"
+// alias) must still resolve, and each effect must apply cleanly
+// through the shared ABI — video effects onto a small BGRA frame,
+// audio effects onto a short PCM buffer.
+std::string CheckBuiltinFx() {
+    const std::vector<std::string> ids = BuiltinFx::Ids();
+    if (ids.size() != 48) {
+        return "builtin table size drifted from the migrated set";
+    }
+    for (const std::string& id : ids) {
+        if (PluginHost::ForEffectType("plugin:" + id) == nullptr) {
+            return "plugin:" + id + " no longer resolves";
+        }
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:" + id);
+        if (desc == nullptr || !desc->builtin) {
+            return "builtin:" + id + " does not resolve to a builtin";
+        }
+    }
+    // Apply every effect once. A 16x16 gradient frame keeps the heavy
+    // kernels cheap; each fn must report success and the frame must
+    // stay BGRA-valid (the apply itself is in place).
+    std::vector<std::uint8_t> frame(static_cast<std::size_t>(16 * 16 * 4));
+    for (std::size_t i = 0; i < frame.size(); ++i) {
+        frame[i] = static_cast<std::uint8_t>((i * 37 + 11) & 0xFF);
+    }
+    for (const std::string& id : ids) {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:" + id);
+        if (desc->kind == XER_PLUGIN_VIDEO_FX) {
+            if (!PluginHost::ApplyVideo(*desc, frame.data(), 16, 16,
+                                        16 * 4,
+                                        {0.5f, 0.5f, 0.5f, 0.5f})) {
+                return id + " builtin apply failed";
+            }
+        }
+    }
+    // A mutating spot check: threshold_bw must binarize the gradient.
+    {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:xer.fx.threshold_bw");
+        if (desc == nullptr ||
+            !PluginHost::ApplyVideo(*desc, frame.data(), 16, 16, 16 * 4,
+                                    {128.f})) {
+            return "xer.fx.threshold_bw apply failed";
+        }
+        for (std::size_t i = 0; i + 3 < frame.size(); i += 4) {
+            if (frame[i] != 0 && frame[i] != 255) {
+                return "threshold_bw left a mid-tone pixel";
+            }
+            if (frame[i] != frame[i + 1] || frame[i] != frame[i + 2]) {
+                return "threshold_bw produced non-gray output";
+            }
+        }
+    }
+    // Audio: every xer.af.* applies to a stereo buffer at 48 kHz.
+    std::vector<float> pcm(static_cast<std::size_t>(512 * 2));
+    for (std::size_t i = 0; i < pcm.size(); ++i) {
+        pcm[i] = 0.25f * std::sin(static_cast<float>(i) * 0.05f);
+    }
+    for (const std::string& id : ids) {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:" + id);
+        if (desc->kind == XER_PLUGIN_AUDIO_FX) {
+            std::vector<float> copy = pcm;
+            if (!PluginHost::ApplyAudio(*desc, copy.data(), 512, 2,
+                                        48000, {})) {
+                return id + " builtin apply failed";
+            }
+        }
     }
     return {};
 }
@@ -4343,6 +4423,363 @@ std::string CheckPhotoM1() {
     return {};
 }
 
+// ---------------------------------------------------------------------------
+// photo_m2 — group isolation composite (group blend/opacity apply to
+// the composited children as one unit), merge/flatten/move/duplicate
+// as undoable commands, .xerphoto round-trip, and transform undo.
+// Headless; only throwaway files in SmokeTempDir are touched.
+// ---------------------------------------------------------------------------
+namespace {
+
+// u8 channel helpers for the bridge-packed u32 (R<<24|G<<16|B<<8|A).
+int U32R(uint32_t v) { return static_cast<int>((v >> 24) & 0xFF); }
+int U32G(uint32_t v) { return static_cast<int>((v >> 16) & 0xFF); }
+int U32B(uint32_t v) { return static_cast<int>((v >> 8) & 0xFF); }
+int U32A(uint32_t v) { return static_cast<int>(v & 0xFF); }
+
+bool NearU8(int got, int want, int tol = 3) {
+    return std::abs(got - want) <= tol;
+}
+
+// Structural + pixel equality of two subtrees (ids may differ —
+// .xerphoto reloads with fresh ids).
+bool TreesEquivalent(const Photo::LayerNode& a,
+                     const Photo::LayerNode& b, std::string* why) {
+    if (a.Kind() != b.Kind() || a.Name() != b.Name() ||
+        a.Visible() != b.Visible() || a.Locked() != b.Locked() ||
+        std::abs(a.Opacity() - b.Opacity()) > 1e-6f ||
+        a.BlendMode() != b.BlendMode()) {
+        *why = "attribute mismatch on layer '" + a.Name() + "'";
+        return false;
+    }
+    const Photo::TiledDevice* da = a.Device();
+    const Photo::TiledDevice* db = b.Device();
+    if ((da == nullptr) != (db == nullptr)) {
+        *why = "device presence mismatch on '" + a.Name() + "'";
+        return false;
+    }
+    if (da != nullptr && !da->IdenticalPixels(*db)) {
+        *why = "pixels differ on '" + a.Name() + "'";
+        return false;
+    }
+    if (a.Children().size() != b.Children().size()) {
+        *why = "child count differs on '" + a.Name() + "'";
+        return false;
+    }
+    for (size_t i = 0; i < a.Children().size(); ++i) {
+        if (!TreesEquivalent(*a.Children()[i], *b.Children()[i],
+                             why)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+std::string CheckPhotoM2() {
+    namespace ph = Photo;
+    using ph::Pixel;
+
+    // 1) Group isolation: a group blends its composited children as
+    //    one unit — dstOut erases what is below the group.
+    {
+        ph::Document doc(96, 64);
+        ph::LayerNode& bg = doc.AddRasterLayer("bg");
+        if (!ph::FillLayer(doc, bg.Id(), Pixel::RGBA(255, 255, 255),
+                           nullptr)) {
+            return "isolation: bg fill failed";
+        }
+        ph::LayerNode& g = doc.AddGroup("g");
+        g.SetBlendMode("dstOut");  // erase group
+        ph::LayerNode& c = doc.AddRasterLayer("c", &g);
+        ph::FillLayer(doc, c.Id(), Pixel::RGBA(0, 0, 0), nullptr);
+        const auto flat = doc.FlattenU32();
+        if (U32A(flat[0]) != 0 || U32A(flat.back()) != 0) {
+            return "group isolation: dstOut group did not erase";
+        }
+        // Control: same doc, group back to srcOver -> fully opaque.
+        g.SetBlendMode("srcOver");
+        const auto flat2 = doc.FlattenU32();
+        if (U32A(flat2[0]) != 255) {
+            return "group isolation: srcOver group not opaque";
+        }
+    }
+
+    // 1b) Isolation vs passthrough on overlapping children: group at
+    //     50% opacity composites (red full, blue right-half) into ONE
+    //     buffer first -> right stays a uniform blue-over-white blend
+    //     (G=127). Passthrough would blend blue-at-0.5 over
+    //     red-at-0.5 over white (G=63).
+    {
+        ph::Document doc(96, 64);
+        ph::LayerNode& bg = doc.AddRasterLayer("bg");
+        ph::FillLayer(doc, bg.Id(), Pixel::RGBA(255, 255, 255),
+                      nullptr);
+        ph::LayerNode& g = doc.AddGroup("g");
+        g.SetOpacity(0.5f);
+        ph::LayerNode& red = doc.AddRasterLayer("red", &g);
+        ph::FillLayer(doc, red.Id(), Pixel::RGBA(255, 0, 0), nullptr);
+        ph::LayerNode& blue = doc.AddRasterLayer("blue", &g);
+        // Right half only.
+        std::vector<uint8_t> bp(48 * 64 * 4, 0);
+        for (size_t i = 0; i < bp.size(); i += 4) {
+            bp[i + 2] = 255;
+            bp[i + 3] = 255;
+        }
+        blue.Device()->WriteRegion({48, 0, 48, 64}, bp.data());
+        const auto flat = doc.FlattenU32();
+        const uint32_t right = flat[30 * 96 + 60];
+        const uint32_t left = flat[30 * 96 + 10];
+        if (!NearU8(U32R(right), 127) || !NearU8(U32G(right), 127) ||
+            !NearU8(U32B(right), 255)) {
+            return "isolated group overlap produced wrong blend";
+        }
+        if (!NearU8(U32R(left), 255) || !NearU8(U32G(left), 127) ||
+            !NearU8(U32B(left), 127)) {
+            return "isolated group opacity produced wrong blend";
+        }
+    }
+
+    // 2) Locked attribute: undoable via SetLayerAttributesCommand and
+    //    enforced by the pixel ops.
+    {
+        ph::Document doc(64, 64);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& l = doc.AddRasterLayer("l");
+        ph::SetLayerAttributesCommand::Attributes attrs;
+        attrs.name = "l";
+        attrs.locked = true;
+        if (!hist.Execute(
+                std::make_unique<ph::SetLayerAttributesCommand>(
+                    l.Id(), attrs))) {
+            return "lock attribute command failed";
+        }
+        if (!l.Locked()) return "lock attribute not applied";
+        if (ph::FillLayer(doc, l.Id(), Pixel::RGBA(9, 9, 9), &hist)) {
+            return "fill touched a locked layer";
+        }
+        if (!hist.Undo() || l.Locked()) {
+            return "lock attribute undo failed";
+        }
+        if (!ph::FillLayer(doc, l.Id(), Pixel::RGBA(9, 9, 9), &hist)) {
+            return "fill on unlocked layer failed";
+        }
+    }
+
+    // 3) MergeDown: flatten image preserved, undo restores both
+    //    layers pixel-exact.
+    {
+        ph::Document doc(96, 64);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& lower = doc.AddRasterLayer("lower");
+        ph::FillLayer(doc, lower.Id(), Pixel::RGBA(0, 200, 0), &hist);
+        ph::LayerNode& upper = doc.AddRasterLayer("upper");
+        // Opaque red square in the middle of the upper layer.
+        std::vector<uint8_t> sq(20 * 20 * 4);
+        for (size_t i = 0; i < sq.size(); i += 4) {
+            sq[i] = 255;
+            sq[i + 3] = 255;
+        }
+        {
+            ph::TiledDevice* udev = upper.Device();
+            udev->BeginTransaction();
+            udev->WriteRegion({30, 20, 20, 20}, sq.data());
+            auto m = udev->EndTransaction();
+            hist.PushApplied(std::make_unique<ph::TileMementoCommand>(
+                upper.Id(), "paint square", std::move(m)));
+        }
+        const auto pre_merge_flat = doc.FlattenU32();
+        const auto lower_before =
+            lower.Device()->ReadRegion(lower.Device()->Bounds());
+        const ph::LayerId upper_id = upper.Id();
+        if (!ph::MergeDown(doc, upper_id, &hist)) {
+            return "MergeDown failed";
+        }
+        if (doc.FindLayer(upper_id) != nullptr) {
+            return "MergeDown left the upper layer in the tree";
+        }
+        if (doc.FlattenU32() != pre_merge_flat) {
+            return "MergeDown changed the flattened image";
+        }
+        if (!hist.Undo()) return "MergeDown undo failed";
+        if (doc.FindLayer(upper_id) == nullptr) {
+            return "MergeDown undo did not restore the layer";
+        }
+        if (lower.Device()->ReadRegion(lower.Device()->Bounds()) !=
+            lower_before) {
+            return "MergeDown undo not pixel-exact on lower";
+        }
+        if (doc.FlattenU32() != pre_merge_flat) {
+            return "MergeDown undo changed the flattened image";
+        }
+        if (!hist.Redo() || doc.FindLayer(upper_id) != nullptr) {
+            return "MergeDown redo failed";
+        }
+    }
+
+    // 4) MoveLayer: reorder changes the composite; undo restores.
+    //    Also covers reparenting into a group and the cycle guard.
+    {
+        ph::Document doc(64, 64);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& a = doc.AddRasterLayer("a");
+        ph::FillLayer(doc, a.Id(), Pixel::RGBA(255, 0, 0), nullptr);
+        ph::LayerNode& b = doc.AddRasterLayer("b");
+        ph::FillLayer(doc, b.Id(), Pixel::RGBA(0, 0, 255), nullptr);
+        const auto flat_ab = doc.FlattenU32();  // blue on top
+        // Move b to the bottom of the root stack.
+        if (!ph::MoveLayer(doc, b.Id(), ph::kInvalidLayerId, 0,
+                           &hist)) {
+            return "MoveLayer (reorder) failed";
+        }
+        const auto flat_ba = doc.FlattenU32();  // red on top
+        if (flat_ba == flat_ab || U32R(flat_ba[0]) != 255) {
+            return "MoveLayer did not reorder the composite";
+        }
+        // Reparent a under a new group.
+        ph::LayerNode& g = doc.AddGroup("g");
+        const ph::LayerId a_id = a.Id();
+        if (!ph::MoveLayer(doc, a_id, g.Id(), 0, &hist)) {
+            return "MoveLayer (reparent) failed";
+        }
+        if (doc.FindLayer(a_id) == nullptr ||
+            doc.FindLayer(a_id)->Parent() != &g) {
+            return "MoveLayer reparent landed wrong";
+        }
+        // Cycle guard: moving g under itself must fail.
+        if (ph::MoveLayer(doc, g.Id(), g.Id(), 0, &hist)) {
+            return "MoveLayer allowed a cycle";
+        }
+        if (!hist.Undo() || !hist.Undo()) return "MoveLayer undo failed";
+        if (doc.FlattenU32() != flat_ab) {
+            return "MoveLayer undo did not restore order";
+        }
+    }
+
+    // 5) DuplicateLayer: COW copy above the source, undo removes it.
+    {
+        ph::Document doc(64, 64);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& src = doc.AddRasterLayer("src");
+        ph::FillLayer(doc, src.Id(), Pixel::RGBA(10, 20, 30), nullptr);
+        const ph::LayerId dup_id =
+            ph::DuplicateLayer(doc, src.Id(), &hist);
+        if (dup_id == ph::kInvalidLayerId || dup_id == src.Id()) {
+            return "DuplicateLayer failed";
+        }
+        ph::LayerNode* dup = doc.FindLayer(dup_id);
+        if (dup == nullptr || dup->Device() == nullptr ||
+            !dup->Device()->IdenticalPixels(*src.Device())) {
+            return "duplicate pixels differ from source";
+        }
+        // The duplicate sits directly above the source.
+        if (dup->Parent() != src.Parent() ||
+            doc.ChildIndex(*dup->Parent(), dup_id) !=
+                doc.ChildIndex(*src.Parent(), src.Id()) + 1) {
+            return "duplicate did not land above the source";
+        }
+        if (!hist.Undo() || doc.FindLayer(dup_id) != nullptr) {
+            return "duplicate undo failed";
+        }
+    }
+
+    // 6) FlattenImage: collapses the tree to one raster layer holding
+    //    the same composite; undo restores the whole tree.
+    {
+        ph::Document doc(96, 64);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& base = doc.AddRasterLayer("base");
+        ph::FillLayer(doc, base.Id(), Pixel::RGBA(40, 40, 40), nullptr);
+        ph::LayerNode& g = doc.AddGroup("g");
+        ph::LayerNode& c = doc.AddRasterLayer("c", &g);
+        ph::FillLayer(doc, c.Id(), Pixel::RGBA(80, 160, 240), nullptr);
+        const auto flat_before = doc.FlattenU32();
+        const size_t children_before = doc.Root().Children().size();
+        if (!ph::FlattenImage(doc, &hist)) return "FlattenImage failed";
+        if (doc.Root().Children().size() != 1 ||
+            doc.Root().Children()[0]->Kind() != ph::LayerKind::kRaster) {
+            return "FlattenImage did not leave a single raster layer";
+        }
+        if (doc.FlattenU32() != flat_before) {
+            return "FlattenImage changed the composite";
+        }
+        if (!hist.Undo()) return "FlattenImage undo failed";
+        if (doc.Root().Children().size() != children_before ||
+            doc.FindLayer(g.Id()) == nullptr) {
+            return "FlattenImage undo did not restore the tree";
+        }
+        if (doc.FlattenU32() != flat_before) {
+            return "FlattenImage undo changed the composite";
+        }
+    }
+
+    // 7) Transform (pixel move) undo: translate a painted rect, then
+    //    undo restores pixels exactly through the tile memento.
+    {
+        ph::Document doc(96, 64);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& l = doc.AddRasterLayer("l");
+        std::vector<uint8_t> sq(10 * 10 * 4);
+        for (size_t i = 0; i < sq.size(); i += 4) {
+            sq[i] = 255;
+            sq[i + 3] = 255;
+        }
+        l.Device()->WriteRegion({5, 5, 10, 10}, sq.data());
+        const auto before =
+            l.Device()->ReadRegion(l.Device()->Bounds());
+        if (!ph::MoveLayerPixels(doc, l.Id(), 4.0, 2.0, &hist)) {
+            return "MoveLayerPixels failed";
+        }
+        if (l.Device()->ReadPixel(9, 7) != Pixel::RGBA(255, 0, 0) ||
+            l.Device()->ReadPixel(5, 5) != Pixel::Transparent()) {
+            return "pixel move landed wrong";
+        }
+        if (!hist.Undo()) return "transform undo failed";
+        if (l.Device()->ReadRegion(l.Device()->Bounds()) != before) {
+            return "transform undo not pixel-exact";
+        }
+    }
+
+    // 8) .xerphoto: save -> load reproduces the layer tree, all
+    //    attributes, pixels, and the flattened composite.
+    {
+        ph::Document doc(96, 64);
+        ph::LayerNode& bg = doc.AddRasterLayer("bg");
+        ph::FillLayer(doc, bg.Id(), Pixel::RGBA(200, 30, 30), nullptr);
+        ph::LayerNode& g = doc.AddGroup("grp");
+        g.SetOpacity(0.75f);
+        g.SetBlendMode("multiply");
+        ph::LayerNode& c = doc.AddRasterLayer("c", &g);
+        ph::FillLayer(doc, c.Id(), Pixel::RGBA(30, 200, 30), nullptr);
+        c.SetLocked(true);
+        ph::LayerNode& top = doc.AddRasterLayer("top");
+        top.SetVisible(false);
+        ph::FillLayer(doc, top.Id(), Pixel::RGBA(0, 0, 200), nullptr);
+        const auto flat_before = doc.FlattenU32();
+
+        const std::string path =
+            Utf8Path(SmokeTempDir() / "photo_m2.xerphoto");
+        std::string err;
+        if (!ph::SaveDocument(doc, path, &err)) {
+            return "SaveDocument failed: " + err;
+        }
+        auto back = ph::LoadDocument(path, &err);
+        if (!back) return "LoadDocument failed: " + err;
+        if (back->CanvasWidth() != 96 || back->CanvasHeight() != 64) {
+            return ".xerphoto changed canvas size";
+        }
+        std::string why;
+        if (!TreesEquivalent(doc.Root(), back->Root(), &why)) {
+            return ".xerphoto round trip: " + why;
+        }
+        if (back->FlattenU32() != flat_before) {
+            return ".xerphoto round trip changed the composite";
+        }
+    }
+    return {};
+}
+
 using CheckFn = std::string (*)();
 struct CheckEntry {
     const char* name;
@@ -4368,6 +4805,7 @@ constexpr CheckEntry kChecks[] = {
     {"curves_lens", &CheckCurvesAndLens},
     {"preview_quality", &CheckPreviewQualityScale},
     {"js_fx", &CheckJsFx},
+    {"builtin_fx", &CheckBuiltinFx},
     {"audio_mixer", &CheckAudioMixer},
     {"audio_sync", &CheckAudioSync},
     {"project_store", &CheckProjectStore},
@@ -4398,6 +4836,7 @@ constexpr CheckEntry kChecks[] = {
     {"cuda_encode", &CheckCudaEncode},
     {"frame_render", &CheckFrameRender},
     {"photo_m1", &CheckPhotoM1},
+    {"photo_m2", &CheckPhotoM2},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };

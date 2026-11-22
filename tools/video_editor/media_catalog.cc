@@ -20,7 +20,7 @@
 
 #include "clip_poster.h"
 #include "content/video/video_info.h"
-#include "io/oiio_image.h"
+#include "io/still_image.h"
 #include "frame.h"
 #include "helper/env_utils.h"
 #include "helper/path_utils.h"
@@ -603,16 +603,17 @@ Blob SerializePeaks(const AudioPeaks& peaks) {
 }
 
 // Poster-file writer shared by Import and ExtractPoster: still images
-// (OIIO-decoded) write the PNG directly; FFmpeg containers go through
-// ClipPoster::Extract. `poster_path` is the posters/<id>.png target —
-// callers create the directory first. Best-effort contract: false on
-// any decode/write failure, never throws.
+// (still_image.cc-decoded) write the PNG directly; FFmpeg containers
+// go through ClipPoster::Extract. `poster_path` is the
+// posters/<id>.png target — callers create the directory first.
+// Best-effort contract: false on any decode/write failure, never
+// throws.
 bool WritePosterFile(const std::string& canon, bool is_still,
                      double seek_seconds,
                      const std::string& poster_path,
                      std::string* error_out) {
     if (is_still) {
-        // OIIO decodes it — write the PNG poster directly.
+        // The still path decodes it — write the PNG poster directly.
         const Io::Image still = Io::ReadImage(Path::FromUtf8(canon));
         return still.ok &&
                Io::WriteImage(Path::FromUtf8(poster_path),
@@ -806,11 +807,11 @@ bool MediaCatalog::Import(const std::string& utf8_path,
     bool is_still = false;
     if (!Video::ProbeVideo(canon, &info, nullptr)) {
         // Still images (EXR/DPX/TIFF/RAW/PSD/HDR/...) aren't FFmpeg
-        // containers — fall back to OIIO and synthesize the probe.
-        // The decode itself is the accept test, not an extension
-        // list: any file OIIO can rasterize is a valid still, and
-        // anything it can't was never media (the *.* dialog filter
-        // must be able to pick everything).
+        // containers — fall back to the still-image path and
+        // synthesize the probe. The decode itself is the accept test,
+        // not an extension list: any file the still path can rasterize
+        // is a valid still, and anything it can't was never media (the
+        // *.* dialog filter must be able to pick everything).
         const Io::Image still = Io::ReadImage(Path::FromUtf8(canon));
         if (!still.ok || still.width <= 0 || still.height <= 0) {
             return Fail(error_out, "probe failed: " + canon);
@@ -842,7 +843,7 @@ bool MediaCatalog::Import(const std::string& utf8_path,
     // FFmpeg-demuxed stills (PNG/JPEG/WebP/BMP/TGA/...) arrive as a
     // one-frame "video" whose whole length is a single frame — the
     // file IS the picture. Normalize to the same still default the
-    // OIIO path uses so they place as a 5 s clip instead of a ~40 ms
+    // still-image path uses so they place as a 5 s clip instead of a ~40 ms
     // sliver. Audio-bearing files keep their real duration (and a
     // cover-art stream never reaches this branch — ProbeVideo already
     // classified the file as audio).
@@ -1200,7 +1201,7 @@ bool MediaCatalog::ExtractPoster(const std::string& utf8_path,
     const std::string poster_path =
         poster_dir + "/" + std::to_string(id) + ".png";
     const double seek = duration > 0.0 ? duration * 0.5 : 0.0;
-    // Import() tags OIIO-only stills with video_codec = "image".
+    // Import() tags still-image files with video_codec = "image".
     const bool is_still = video_codec == "image";
     if (!WritePosterFile(canon, is_still, seek, poster_path,
                          error_out)) {

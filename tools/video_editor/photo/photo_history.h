@@ -108,12 +108,13 @@ private:
     std::string label_;
 };
 
-// Structural: rename / visibility / opacity / blend-mode edit.
+// Structural: rename / visibility / lock / opacity / blend-mode edit.
 class SetLayerAttributesCommand : public PhotoCommand {
 public:
     struct Attributes {
         std::string name;
         bool visible = true;
+        bool locked = false;
         float opacity = 1.0f;
         std::string blend_mode = "srcOver";
     };

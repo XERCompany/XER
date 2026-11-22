@@ -182,8 +182,9 @@ if(TARGET OpenImageIO::OpenImageIO)
     endif()
     if(MINGW)
         # Delay-load target names for the LoadLibrary probe in
-        # io/oiio_image.cc — same "absent runtime degrades, never kills"
-        # contract as the OCIO side.
+        # io/still_image.cc (the OIIO residual: dpx/hdr/pfm/ora/r3d/raw
+        # decode + tiff/exr encode) — same "absent runtime degrades,
+        # never kills" contract as the OCIO side.
         xer_collect_delayload_dlls(_ve_oiio_rt OpenImageIO::OpenImageIO)
         if(_ve_oiio_rt)
             list(JOIN _ve_oiio_rt "|" _ve_oiio_rt_s)
@@ -201,7 +202,7 @@ if(TARGET OpenImageIO::OpenImageIO)
     # pulls them lazily on first color/image call. Delay-load only
     # defers the failure though: a DLL absent at first call still kills
     # the process (exit 127 under MSYS2 — the app_runtime ocio_transform/
-    # oiio_* tests died exactly this way), so the toolchain runtime
+    # image tests died exactly this way), so the toolchain runtime
     # closure is staged next to the binaries like src/ui does for libskia.
     if(MINGW)
         set(_ve_dl)
@@ -496,6 +497,11 @@ if(MINGW AND _ve_nn_libs)
     endif()
     get_filename_component(_ve_toolchain_bin "${CMAKE_CXX_COMPILER}"
         DIRECTORY)
+    # Prefer Microsoft's official ORT binaries when vendored under
+    # third_party/onnxruntime/win-x64 — must run BEFORE the seed walk
+    # below so bin/onnxruntime.dll already exists (out_dir hits are
+    # followed, never re-copied; xer_pe_deps resolves exe-dir first).
+    xer_stage_vendored_ort("${CMAKE_BINARY_DIR}/bin")
     # ggml backend modules (ggml-cpu-*.dll, ggml-blas.dll, ...) are
     # dlopen'd by ggml_backend_load_all(), and ORT resolves its
     # onnxruntime_providers_shared.dll provider host at run time —
@@ -547,10 +553,10 @@ endif()
 # tools/preview.
 add_executable(video_editor main.cc)
 target_link_libraries(video_editor PRIVATE XER_VideoEditor_Core)
-add_subdirectory(plugins)
-if(TARGET video_editor_plugins)
-    add_dependencies(video_editor video_editor_plugins)
-endif()
+# First-party effect kernels are compiled in as builtins
+# (builtin_fx.cc — registered by plugin_host.cc); only third-party
+# DLLs live under <bin>/plugins, so the old plugins/ subdirectory is
+# gone.
 if(WIN32)
     # Recursive: Phase-2 panels/tools live in ui/ subdirs.
     file(GLOB_RECURSE VIDEO_EDITOR_UI_SOURCES CONFIGURE_DEPENDS

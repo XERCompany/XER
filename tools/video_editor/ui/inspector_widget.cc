@@ -652,7 +652,6 @@ void InspectorWidget::RebuildAudioFxRows() {
 }
 
 void InspectorWidget::SyncMaskRows() {
-    namespace Widgets = XER::UI::Widgets;
     if (mask_rows_.size() != clip_.masks.size()) {
         RebuildMaskRows();   // fresh empty rows — fill them below
     }

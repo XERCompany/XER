@@ -82,46 +82,17 @@ bool WasapiSink::Open(int sample_rate, std::string* error_out) {
         return false;
     }
 
-    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    // RPC_E_CHANGED_MODE: the calling thread already joined a
-    // different apartment — the editor's UI thread is STA (the
-    // canvas/D2D init calls CoInitializeEx(COINIT_APARTMENTTHREADED)
-    // on it), which used to fail the whole sink open and left every
-    // preview permanently silent. An existing STA init still
-    // satisfies us: the WASAPI render objects are free-threaded
-    // (audioses.dll registers them Both), so they work from any
-    // apartment. The call FAILED though, so we hold no init count to
-    // balance in Close().
-    if (hr == RPC_E_CHANGED_MODE) {
-        hr = S_OK;
-    }
-    if (FAILED(hr)) {
-        return Fail("CoInitializeEx", hr, error_out);
-    }
-    // S_OK and S_FALSE both hold an init count we must release; only
-    // do it on the same thread (COM init is per-thread).
-    // RPC_E_CHANGED_MODE — normalized above — holds none.
-    if (hr == S_OK || hr == S_FALSE) {
-        com_init_ = true;
-        com_thread_ = GetCurrentThreadId();
-    }
-
-    hr = CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr,
-                          CLSCTX_ALL, __uuidof(IMMDeviceEnumerator),
-                          reinterpret_cast<void**>(&enumerator_));
-    if (FAILED(hr)) {
-        return Fail("CoCreateInstance(MMDeviceEnumerator)", hr, error_out);
-    }
-
-    hr = enumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
-    if (FAILED(hr)) {
-        return Fail("GetDefaultAudioEndpoint", hr, error_out);
-    }
-
-    hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                           reinterpret_cast<void**>(&audio_client_));
-    if (FAILED(hr)) {
-        return Fail("IMMDevice::Activate(IAudioClient)", hr, error_out);
+    // Shared endpoint plumbing (src/content/video/wasapi_render_client)
+    // — COM init + enumerator + default render endpoint + IAudioClient.
+    // Its apartment handling carries the RPC_E_CHANGED_MODE semantics
+    // this path needs: the editor's UI thread is STA (the canvas/D2D
+    // init calls CoInitializeEx(COINIT_APARTMENTTHREADED) on it), an
+    // existing STA init still satisfies the free-threaded WASAPI
+    // objects, and only a real init count gets balanced in Close().
+    if (!wasapi_.OpenDevice(error_out)) {
+        last_error_ = wasapi_.LastError();
+        if (error_out != nullptr) *error_out = last_error_;
+        return false;
     }
 
     buffer_event_ = CreateEventW(nullptr, /*bManualReset=*/FALSE,
@@ -130,6 +101,8 @@ bool WasapiSink::Open(int sample_rate, std::string* error_out) {
         return Fail("CreateEvent",
                     HRESULT_FROM_WIN32(GetLastError()), error_out);
     }
+
+    HRESULT hr = S_OK;
 
     // Negotiation stage 1 — direct stream support at the requested
     // rate: s16 stereo (zero-copy Write), then float32 stereo. The
@@ -157,8 +130,8 @@ bool WasapiSink::Open(int sample_rate, std::string* error_out) {
     const WAVEFORMATEX* direct = nullptr;
     for (const WAVEFORMATEX* cand : {&pcm16, &f32}) {
         WAVEFORMATEX* closest = nullptr;
-        hr = audio_client_->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED,
-                                              cand, &closest);
+        hr = wasapi_.client()->IsFormatSupported(AUDCLNT_SHAREMODE_SHARED,
+                                                 cand, &closest);
         if (hr == S_OK) {
             if (closest != nullptr) CoTaskMemFree(closest);
             direct = cand;
@@ -276,88 +249,58 @@ bool WasapiSink::Open(int sample_rate, std::string* error_out) {
                 init_hr, error_out);
 }
 
-// Runs Initialize + event hookup + buffer query + service + Start for
-// `fmt`. `stream_flags` are OR'd onto EVENTCALLBACK (the AUTOCONVERTPCM
-// stage passes its flags here). Returns false with *init_hr set when
-// Initialize rejects the format — the caller may try another
-// candidate. A failure AFTER a successful Initialize is fatal: Fail()
-// runs (closing the client — a retried Initialize would return
-// AUDCLNT_E_ALREADY_INITIALIZED) and *fatal_out is set so the caller
-// aborts Open rather than negotiating further.
+// Runs the shared-client Initialize (Initialize + event hookup +
+// buffer query + IAudioRenderClient service) + Start for `fmt`.
+// `stream_flags` are extra flags for the AUTOCONVERTPCM stage — the
+// shared client ORs in EVENTCALLBACK itself because we pass it our
+// buffer event. Returns false with *init_hr set to the rejection
+// HRESULT when IAudioClient::Initialize declines the format — the
+// caller may try another candidate. A failure AFTER a successful
+// Initialize is fatal: the shared client has already torn the chain
+// down (a retried Initialize would return AUDCLNT_E_ALREADY_INITIALIZED)
+// and *fatal_out is set so the caller aborts Open rather than
+// negotiating further.
 bool WasapiSink::Activate(const WAVEFORMATEX& fmt, DWORD stream_flags,
                           HRESULT* init_hr, bool* fatal_out,
                           std::string* error_out) {
-    HRESULT hr = audio_client_->Initialize(
-        AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_EVENTCALLBACK | stream_flags,
-        kBufferDuration100ns, 0, &fmt, nullptr);
-    if (FAILED(hr)) {
-        if (init_hr != nullptr) *init_hr = hr;
+    *init_hr = S_OK;
+    if (!wasapi_.Initialize(fmt, stream_flags, kBufferDuration100ns,
+                           static_cast<HANDLE>(buffer_event_),
+                           init_hr, error_out)) {
+        if (*init_hr != S_OK) {
+            return false;   // format rejected — try the next candidate
+        }
+        // Post-Initialize failure: the shared client already tore the
+        // chain down; surface its reason and mark fatal.
+        last_error_ = wasapi_.LastError();
+        if (error_out != nullptr) *error_out = last_error_;
+        *fatal_out = true;
         return false;
     }
-    *fatal_out = true;   // any failure below is unrecoverable
-    hr = audio_client_->SetEventHandle(
-        static_cast<HANDLE>(buffer_event_));
-    if (FAILED(hr)) return Fail("SetEventHandle", hr, error_out);
-    hr = audio_client_->GetBufferSize(&buffer_frames_);
-    if (FAILED(hr) || buffer_frames_ == 0) {
-        return Fail("GetBufferSize", hr, error_out);
+    if (wasapi_.Start(error_out)) {
+        return true;
     }
-    hr = audio_client_->GetService(
-        __uuidof(IAudioRenderClient),
-        reinterpret_cast<void**>(&render_client_));
-    if (FAILED(hr)) {
-        return Fail("GetService(IAudioRenderClient)", hr, error_out);
-    }
-    hr = audio_client_->Start();
-    if (FAILED(hr)) return Fail("IAudioClient::Start", hr, error_out);
-    return true;
+    // Start() failure is fatal too — a stopped-but-initialized client
+    // cannot be re-negotiated either.
+    last_error_ = wasapi_.LastError();
+    if (error_out != nullptr) *error_out = last_error_;
+    *fatal_out = true;
+    Close();
+    return false;
 }
 
 void WasapiSink::Close() {
-    if (audio_client_ != nullptr) audio_client_->Stop();
-    if (render_client_ != nullptr) {
-        render_client_->Release();
-        render_client_ = nullptr;
-    }
-    if (audio_client_ != nullptr) {
-        audio_client_->Release();
-        audio_client_ = nullptr;
-    }
-    if (device_ != nullptr) {
-        device_->Release();
-        device_ = nullptr;
-    }
-    if (enumerator_ != nullptr) {
-        enumerator_->Release();
-        enumerator_ = nullptr;
-    }
+    wasapi_.Close();
     if (buffer_event_ != nullptr) {
         CloseHandle(static_cast<HANDLE>(buffer_event_));
         buffer_event_ = nullptr;
     }
-    buffer_frames_ = 0;
     device_rate_ = 0;
     device_channels_ = 2;
     resample_pos_ = 0.0;
     resample_prev_l_ = 0;
     resample_prev_r_ = 0;
     open_ = false;
-    // Release our COM init count only on the thread that took it —
-    // CoUninitialize on a different thread would pop THAT thread's
-    // count (COM init is per-thread). A cross-thread Close therefore
-    // KEEPS com_init_ set instead of clearing it: a later Close() on
-    // the owning thread (e.g. Open()'s leading Close, or teardown on
-    // the audio worker) still balances the count. There is no
-    // marshaling channel back to the owning thread from here — if the
-    // last Close runs elsewhere the count is released with the owning
-    // thread's apartment teardown; leaking it would be strictly worse
-    // because clearing the flag made it unrecoverable (bug-audit
-    // finding).
-    if (com_init_ && GetCurrentThreadId() == com_thread_) {
-        CoUninitialize();
-        com_init_ = false;
-    }
 }
 
 bool WasapiSink::TryReopen() {
@@ -428,7 +371,7 @@ void WasapiSink::StoreFrame(std::uint8_t* dst, float l, float r) const {
 // attempt per call. Returns -1 on unrecoverable failure.
 long WasapiSink::WaitForSpace(int* reconnects) {
     UINT32 padding = 0;
-    HRESULT hr = audio_client_->GetCurrentPadding(&padding);
+    HRESULT hr = wasapi_.client()->GetCurrentPadding(&padding);
     if (FAILED(hr)) {
         if (++*reconnects > kMaxReconnectAttempts || !TryReopen()) {
             return -1;
@@ -436,7 +379,9 @@ long WasapiSink::WaitForSpace(int* reconnects) {
         return 0;
     }
     const UINT32 available =
-        padding < buffer_frames_ ? buffer_frames_ - padding : 0;
+        padding < wasapi_.buffer_frames()
+            ? wasapi_.buffer_frames() - padding
+            : 0;
     if (available != 0) {
         return static_cast<long>(available);
     }
@@ -489,8 +434,8 @@ bool WasapiSink::WriteConverted(const std::int16_t* src, int count,
             continue;
         }
         BYTE* dst = nullptr;
-        HRESULT hr =
-            render_client_->GetBuffer(static_cast<UINT32>(space), &dst);
+        HRESULT hr = wasapi_.render_client()->GetBuffer(
+            static_cast<UINT32>(space), &dst);
         if (FAILED(hr) || dst == nullptr) {
             if (++reconnects > kMaxReconnectAttempts || !TryReopen()) {
                 resample_pos_ = 0.0;
@@ -521,7 +466,7 @@ bool WasapiSink::WriteConverted(const std::int16_t* src, int count,
             pos += step;
             ++produced;
         }
-        render_client_->ReleaseBuffer(produced, 0);
+        wasapi_.render_client()->ReleaseBuffer(produced, 0);
         if (produced == 0) {
             break;   // input exhausted mid-request
         }
@@ -573,7 +518,7 @@ bool WasapiSink::Write(const std::int16_t* interleaved_samples,
             (std::min)(static_cast<UINT32>(space),
                        static_cast<UINT32>(left));
         BYTE* dst = nullptr;
-        HRESULT hr = render_client_->GetBuffer(n, &dst);
+        HRESULT hr = wasapi_.render_client()->GetBuffer(n, &dst);
         if (FAILED(hr) || dst == nullptr) {
             if (++reconnects > kMaxReconnectAttempts || !TryReopen()) {
                 return false;
@@ -589,7 +534,7 @@ bool WasapiSink::Write(const std::int16_t* interleaved_samples,
         } else {
             std::memcpy(dst, src, n * 2 * sizeof(std::int16_t));
         }
-        render_client_->ReleaseBuffer(n, 0);
+        wasapi_.render_client()->ReleaseBuffer(n, 0);
         src += n * 2;
         left -= static_cast<int>(n);
     }

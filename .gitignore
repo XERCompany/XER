@@ -77,6 +77,11 @@ EngineBuilder
 *.mkv
 /models/
 
+# Downloaded AI model weights (staged per
+# tools/video_editor/assets/models/README.md — not committed)
+/tools/video_editor/assets/models/*.onnx
+/tools/video_editor/assets/models/*.bin
+
 # Generated files
 *.flowcache.*
 *.flowcache.bin
@@ -123,3 +128,7 @@ yarn-error.log*
 # CEF binary distribution — installed locally by InstallCef.ps1,
 # never committed (280MB+ binaries).
 /third_party/cef/
+
+# Vendored official ORT runtime binaries — committed on purpose,
+# see third_party/VENDORED.md (onnxruntime/win-x64 section).
+!/third_party/onnxruntime/win-x64/*.dll

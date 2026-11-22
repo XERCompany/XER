@@ -163,7 +163,9 @@ bool BrushEngine::CompositeStroke(Document& doc, LayerId layer,
                                   const TiledDevice& scratch,
                                   const IntRect& dirty,
                                   PhotoHistory* hist) const {
-    TiledDevice* dev = doc.LayerDevice(layer);
+    LayerNode* node = doc.FindLayer(layer);
+    if (node == nullptr || node->Locked()) return false;
+    TiledDevice* dev = node->Device();
     if (dev == nullptr || dirty.IsEmpty()) return false;
     const std::vector<uint32_t> src = scratch.ReadRegionU32(dirty);
     const std::string blend =

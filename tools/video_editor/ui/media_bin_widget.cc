@@ -16,7 +16,7 @@
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
 #include "icon_helpers.h"
-#include "io/oiio_image.h"
+#include "io/still_image.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
 #include "ve_theme.h"
@@ -52,7 +52,7 @@ std::string FormatDuration(double seconds) {
 }
 
 // Lowercased extension of a UTF-8 media path, no leading dot —
-// OiioHandlesExtension's documented input ("exr", "tiff", ...).
+// StillImageHandlesExtension's documented input ("exr", "tiff", ...).
 std::string MediaExtensionLower(const std::string& utf8_path) {
     std::string ext = XER::Helper::String::ToLowerAscii(
         XER::Helper::Path::FromUtf8(utf8_path).extension().string());
@@ -62,7 +62,7 @@ std::string MediaExtensionLower(const std::string& utf8_path) {
     return ext;
 }
 
-// Still-image extensions (the image2/OIIO tail of the shared import
+// Still-image extensions (the image2/still-image tail of the shared import
 // filter): a HasVideo() entry whose file extension is a raster is an
 // Image tile, not a Video one — same classification the bin glyphs,
 // the Kind column and the Kind sort all share.
@@ -128,22 +128,22 @@ std::string FormatInfo(const CatalogEntry& entry) {
     return buffer;
 }
 
-// OIIO decode results memoized by UTF-8 path — DrawGrid repaints on
-// every hover/scroll, and decoding EXR/RAW per paint would thrash
-// disk + CPU. Failures are cached too (a corrupt still must not retry
-// every frame). Bounded: the whole map clears on overflow — entries
-// are shared_ptrs so a clear can never dangle a reference a caller
-// still holds.
-constexpr std::size_t kOiioThumbCacheMax = 64;
+// Still-image decode results memoized by UTF-8 path — DrawGrid
+// repaints on every hover/scroll, and decoding EXR/RAW per paint would
+// thrash disk + CPU. Failures are cached too (a corrupt still must not
+// retry every frame). Bounded: the whole map clears on overflow —
+// entries are shared_ptrs so a clear can never dangle a reference a
+// caller still holds.
+constexpr std::size_t kStillThumbCacheMax = 64;
 
-std::shared_ptr<const Io::Image> OiioThumb(const std::string& utf8_path) {
+std::shared_ptr<const Io::Image> StillThumb(const std::string& utf8_path) {
     static std::unordered_map<std::string, std::shared_ptr<Io::Image>>
         cache;
     const auto it = cache.find(utf8_path);
     if (it != cache.end()) {
         return it->second;
     }
-    if (cache.size() >= kOiioThumbCacheMax) {
+    if (cache.size() >= kStillThumbCacheMax) {
         cache.clear();
     }
     auto image = std::make_shared<Io::Image>(
@@ -665,12 +665,14 @@ void MediaBinWidget::DrawGrid(
                 entry.poster_path, thumb, 1.0f,
                 tokens.radius_medium);
         }
-        // Stills WIC can't decode (EXR/DPX/TIFF/RAW/PSD/HDR): OIIO
-        // reads the source file straight to BGRA — DrawFrameBgra-ready.
+        // Stills the poster pipeline couldn't cover (EXR/DPX/TIFF/RAW/
+        // PSD/HDR): the still path reads the source file straight to
+        // BGRA — DrawFrameBgra-ready.
         if (!drew_poster &&
-            Io::OiioHandlesExtension(MediaExtensionLower(entry.path))) {
+            Io::StillImageHandlesExtension(
+                MediaExtensionLower(entry.path))) {
             const std::shared_ptr<const Io::Image> img =
-                OiioThumb(entry.path);
+                StillThumb(entry.path);
             if (img != nullptr && img->ok && !img->bgra.empty() &&
                 img->width > 0 && img->height > 0) {
                 drew_poster = renderer.DrawFrameBgra(

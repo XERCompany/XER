@@ -15,6 +15,7 @@ so the vendored code is bit-identical to what the vcpkg presets already build.
 | `fxdiv/` | unofficial-fxdiv | https://github.com/Maratyszcza/fxdiv | `63058eff77e11aa15bf531df5dd34395ec3017c8` (= vcpkg port ref) | MIT (`LICENSE`) |
 | `fp16/` | unofficial-fp16 | https://github.com/Maratyszcza/fp16 | `4dfe081cf6bcd15db339cf2680b9281b8451eeb3` (= vcpkg port ref) | MIT (`LICENSE`) |
 | `dlfcn-win32/` | dlfcn-win32 | https://github.com/dlfcn-win32/dlfcn-win32 | tag `v1.4.2` (= vcpkg port version) | MIT (`COPYING`) |
+| `onnxruntime/win-x64/` | Microsoft.ML.OnnxRuntime (runtime binaries) | https://github.com/microsoft/onnxruntime | release `v1.32.0` | MIT |
 
 Download URLs used (GitHub archive tarballs):
 
@@ -120,6 +121,29 @@ Download URLs used (GitHub archive tarballs):
   exists so that `target_link_libraries(... dlfcn-win32::dl)` works
   unchanged. `src/crash/crash_stack_trace.cc` is a third unguarded
   consumer but is V8-gated (`ENABLE_V8=OFF`).
+
+### onnxruntime/win-x64 — runtime binaries only (no build)
+
+- **Why vendored:** the MSYS2 clang64 `onnxruntime` package can lag the
+  toolchain's absl soname bump — the packaged `onnxruntime.dll` imports
+  `libabsl_*-<old>.dll` and fails `LoadLibrary` with Win32 error 126.
+  The consumer (`src/content/ai/find_object/find_object.cc`) only uses
+  the ABI-stable ORT C API, so Microsoft's MSVC-built release binaries
+  are a drop-in replacement.
+- **Provenance:** official `Microsoft.ML.OnnxRuntime` **1.32.0** NuGet
+  package, `runtimes/win-x64/native/` — the same binaries as the GitHub
+  `onnxruntime-win-x64-1.32.0.zip` release asset (CPU package).
+  `onnxruntime.dll` + `onnxruntime_providers_shared.dll` only; the
+  MSYS2 import lib stays the link-time stub.
+- **Consumed by:** `xer_stage_vendored_ort()` in `cmake/YaDll.cmake`,
+  called ahead of the `onnxruntime*.dll` seed walks in
+  `tools/video_editor/CMakeLists.txt` and `src/content/ai/CMakeLists.txt`
+  — the vendored copy always wins over the toolchain one in
+  `${CMAKE_BINARY_DIR}/bin`, on configure, rebuild and clean builds.
+- **Update:** download the matching `onnxruntime-win-x64-<ver>.zip`
+  from the GitHub release (or the `Microsoft.ML.OnnxRuntime` nupkg) and
+  replace both dlls together — `onnxruntime_providers_shared.dll` must
+  match the main dll's version exactly.
 
 ## License notes
 

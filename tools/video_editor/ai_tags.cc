@@ -27,7 +27,11 @@ namespace {
 namespace FindObj = XER::AI::FindObject;
 
 // *.onnx candidates in `dir` (non-recursive), best-known detector names
-// first: yolov8*.onnx, then yolo11*.onnx / yolo*.*, then any *.onnx.
+// first: yolov8*.onnx, then yolo11*.onnx / yolo*.*, then other detector
+// families (RF-DETR / RT-DETR / YOLOX / NanoDet — the models this
+// module's decoder understands), then any *.onnx. The models dir also
+// stages non-detector ONNX (BiRefNet matting, EfficientSAM) — those
+// must never be picked as the object detector.
 std::string FirstModelIn(const std::filesystem::path& dir) {
     std::error_code ec;
     if (!std::filesystem::is_directory(dir, ec)) return {};
@@ -49,7 +53,12 @@ std::string FirstModelIn(const std::filesystem::path& dir) {
         if (low.rfind("yolov8", 0) == 0) return 0;
         if (low.rfind("yolo11", 0) == 0) return 1;
         if (low.rfind("yolo", 0) == 0) return 2;
-        return 3;
+        for (const char* detector :
+             {"rfdetr", "rf_detr", "rtdetr", "rt_detr", "detr",
+              "yolox", "nanodet", "detect"}) {
+            if (low.find(detector) != std::string::npos) return 3;
+        }
+        return 4;
     };
     std::sort(all.begin(), all.end(),
               [&](const std::string& a, const std::string& b) {
@@ -62,9 +71,9 @@ std::string FirstModelIn(const std::filesystem::path& dir) {
 }  // namespace
 
 const char* FindObjectModelHint() {
-    return "model not installed — put yolov8n.onnx (+ optional "
-           "coco.names) in assets/models/ next to the exe, or set "
-           "XER_FIND_OBJECT_MODEL";
+    return "model not installed — put a detector ONNX (rfdetr_nano.onnx "
+           "or yolov8n.onnx + matching .names) in assets/models/ next "
+           "to the exe, or set XER_FIND_OBJECT_MODEL";
 }
 
 std::string FindObjectModel() {

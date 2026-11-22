@@ -42,7 +42,7 @@
 #include "helper/path_utils.h"
 #include "helper/string_utils.h"
 #include "generated_source.h"
-#include "io/oiio_image.h"
+#include "io/still_image.h"
 #include "lab/async_op.h"
 #include "lab/object_ops.h"
 #include "lut_manager.h"
@@ -2318,8 +2318,8 @@ void VideoEditorAppWidget::CreateDemoProject() {
 
 void VideoEditorAppWidget::ImportMedia() {
 #ifdef _WIN32
-    // The curated list covers the common FFmpeg demuxers + OIIO
-    // stills, but classification comes from the probe (video_info.cc /
+    // The curated list covers the common FFmpeg demuxers + still-image
+    // formats, but classification comes from the probe (video_info.cc /
     // MediaCatalog::Import), never the extension — FilterSpec appends
     // an "All files (*.*)" second choice so any file can be picked and
     // still lands on the right track kind.
@@ -3416,8 +3416,9 @@ void VideoEditorAppWidget::OpenInSourceMonitor(
             has_audio = info.has_audio;
         } else {
             // Not an FFmpeg container — try the still-image path
-            // (EXR/DPX/TIFF/RAW/PSD/HDR via OIIO); the decoder replays
-            // a still as a constant frame on the video track.
+            // (EXR/DPX/TIFF/RAW/PSD/HDR via ImageLoader + the OIIO
+            // residual); the decoder replays a still as a constant
+            // frame on the video track.
             const Io::Image still =
                 Io::ReadImage(Path::FromUtf8(path));
             if (!still.ok || still.width <= 0 || still.height <= 0) {

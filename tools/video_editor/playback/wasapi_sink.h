@@ -5,10 +5,13 @@
 // _WIN32; elsewhere MakeWasapiSink()/MakePlatformAudioSink() return
 // nullptr + an error string.
 //
-// Pattern mirrors src/content/video/video_audio_player.cc (IMMDevice
-// -> IAudioClient shared mode -> IAudioRenderClient) but stays small
-// and self-contained: no VideoSession, no internal thread, no queue —
-// Write() pushes straight into the device buffer and paces the pump by
+// Device plumbing comes from the shared
+// XER::Content::Video::WasapiRenderClient
+// (src/content/video/wasapi_render_client.h — the IMMDevice ->
+// IAudioClient -> IAudioRenderClient chain this file and
+// video_audio_player.cc used to open by hand); on top of it this class
+// stays small: no VideoSession, no internal thread, no queue — Write()
+// pushes straight into the device buffer and paces the pump by
 // blocking on the WASAPI buffer event only while the buffer is full.
 //
 // Rate contract: the sink negotiates the device format at Init() or, if
@@ -31,6 +34,10 @@
 #endif
 #include <mmdeviceapi.h>
 #include <audioclient.h>
+#endif
+
+#ifdef _WIN32
+#include "content/video/wasapi_render_client.h"
 #endif
 
 namespace XER::VideoEditor {
@@ -87,11 +94,11 @@ private:
     enum class OutKind { kS16, kS24, kS32, kF32 };
 
     bool Open(int sample_rate, std::string* error_out);
-    // Initialize/SetEventHandle/GetBufferSize/GetService/Start for one
-    // candidate format. Returns false with *init_hr set when
-    // Initialize rejects the format (negotiation may try another
-    // candidate); a failure after a successful Initialize is fatal —
-    // Fail() runs and *fatal_out is set so the caller aborts Open.
+    // WasapiRenderClient::Initialize + Start for one candidate format.
+    // Returns false with *init_hr set to the rejection HRESULT when
+    // IAudioClient::Initialize declines the format (negotiation may
+    // try another candidate); a failure after a successful Initialize
+    // is fatal — *fatal_out is set so the caller aborts Open.
     bool Activate(const WAVEFORMATEX& fmt, DWORD stream_flags,
                   HRESULT* init_hr, bool* fatal_out,
                   std::string* error_out);
@@ -112,12 +119,12 @@ private:
     // the negotiated kind. `sample` is the dst frame base.
     void StoreFrame(std::uint8_t* dst, float l, float r) const;
 
-    IMMDeviceEnumerator* enumerator_ = nullptr;
-    IMMDevice* device_ = nullptr;
-    IAudioClient* audio_client_ = nullptr;
-    IAudioRenderClient* render_client_ = nullptr;
+    // Shared WASAPI device plumbing (src/content/video) — owns the
+    // endpoint/client/render-client chain, COM-init balance and the
+    // device buffer size; this sink keeps only the negotiation result
+    // and the event it paces on.
+    XER::Content::Video::WasapiRenderClient wasapi_;
     void* buffer_event_ = nullptr;     // HANDLE, owned
-    unsigned int buffer_frames_ = 0;   // device buffer size in frames
     int rate_ = 0;                     // client (Write) rate in Hz
     int device_rate_ = 0;              // negotiated stream rate (Hz)
     int device_channels_ = 2;          // negotiated stream channels
@@ -131,8 +138,6 @@ private:
     std::int16_t resample_prev_l_ = 0;
     std::int16_t resample_prev_r_ = 0;
     bool open_ = false;
-    bool com_init_ = false;            // we hold a CoInitialize count
-    unsigned long com_thread_ = 0;     // thread that owns that count
     std::string last_error_;
 };
 #endif  // _WIN32

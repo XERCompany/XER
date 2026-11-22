@@ -1,6 +1,7 @@
 #include "plugin_host.h"
 
 #include "app_runtime/app_runtime.h"
+#include "builtin_fx.h"
 
 #include <algorithm>
 #include <iterator>
@@ -93,6 +94,14 @@ std::vector<std::string> ListPluginDlls(const std::string& dir) {
 
 int PluginHost::LoadAll(std::vector<std::string>* warnings) {
     Unload();
+    // First-party builtins (builtin_fx.cc — the retired xer_fx_*
+    // kernels) register before the DLL scan so the "xer.fx.*"/
+    // "xer.af.*" ids resolve even with no plugins/ directory, and a
+    // stale first-party DLL left behind by an older install can't
+    // shadow them (id collisions below keep the builtin).
+    for (const PluginDesc& desc : BuiltinFx::Effects()) {
+        effects_.push_back(desc);
+    }
     const std::string dir = ExeDir() + "\\plugins";
     for (const std::string& path : ListPluginDlls(dir)) {
         void* lib = LoadLib(path);
@@ -184,6 +193,13 @@ int PluginHost::LoadAll(std::vector<std::string>* warnings) {
                  desc.audio_fn == nullptr)) {
                 continue;  // effect with no entry point — skip silently
             }
+            // First match wins: a DLL effect whose id is already
+            // claimed (by a builtin or an earlier plugin) is skipped —
+            // keeps the picker clean when a retired xer_fx_*.dll is
+            // still sitting next to the exe.
+            if (Find(desc.id) != nullptr) {
+                continue;
+            }
             // runtime.js-registered handler (if the assets layer booted)
             // sees each effect as {path, factory:{name,version,features}}.
             AppRuntime::FirePluginLoad(AppRuntime::SharedBootEngine(),
@@ -233,10 +249,24 @@ std::vector<const PluginDesc*> PluginHost::OfKind(
     return out;
 }
 
+const PluginDesc* PluginHost::FindBuiltin(const std::string& id) const {
+    for (const PluginDesc& desc : effects_) {
+        if (desc.builtin && desc.id == id) return &desc;
+    }
+    return nullptr;
+}
+
 const PluginDesc* PluginHost::ForEffectType(const std::string& type) {
-    static constexpr const char* kPrefix = "plugin:";
-    if (type.rfind(kPrefix, 0) != 0) return nullptr;
-    return SharedPluginHost().Find(type.substr(7));
+    static constexpr const char* kPluginPrefix = "plugin:";
+    static constexpr const char* kBuiltinPrefix = "builtin:";
+    if (type.rfind(kPluginPrefix, 0) == 0) {
+        return SharedPluginHost().Find(type.substr(7));
+    }
+    if (type.rfind(kBuiltinPrefix, 0) == 0) {
+        return SharedPluginHost().FindBuiltin(type.substr(8));
+    }
+    // Bare id — documented lookup form, resolves like "plugin:<id>".
+    return SharedPluginHost().Find(type);
 }
 
 bool PluginHost::ApplyVideo(const PluginDesc& desc, void* bgra,
