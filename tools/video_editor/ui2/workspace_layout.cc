@@ -32,6 +32,12 @@ const std::vector<WorkspaceLayout>& BuiltinWorkspaces() {
         // pattern): tabbed monitors, bin hidden, big timeline.
         {"Cut", false, true, kLeftTabMedia, kRightTabInspector, true,
          0.42},
+        // Photo editing: the PhotoWorkspace band replaces the monitor
+        // region (tools column + canvas + layers/adjust docks), both
+        // shell docks and the timeline collapse — the band brings its
+        // own panels.
+        {"Photo", false, false, kLeftTabMedia, kRightTabInspector,
+         false, 0.0},
     };
     return kWorkspaces;
 }
