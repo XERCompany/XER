@@ -24,7 +24,12 @@ public:
 
     Tabs();
 
-    void AddTab(std::string label);
+    // `tooltip` is optional per-tab hover text — surfaced through the
+    // widget tooltip channel as the pointer crosses cells (useful when
+    // labels are abbreviated for a compact strip).
+    void AddTab(std::string label, std::string tooltip = {});
+    // Sets/replaces the hover tooltip of the tab at `index`.
+    void SetTabTooltip(int index, std::string tooltip);
     void ClearTabs();
     int GetActiveIndex() const { return active_index_; }
     void SetActiveIndex(int index);
@@ -46,10 +51,16 @@ private:
     int HitTab(const Layout::Point& position) const;
     void RetargetIndicator();
     void ActivateTab(int index);
+    // Re-arms the widget tooltip for the currently hovered tab. The
+    // text is cleared first and restored on the next Tick so the tree
+    // drops any tooltip already showing the PREVIOUS tab's text (the
+    // tree only re-reads GetTooltip() at show time).
+    void SyncTabTooltip();
     // Pill geometry for the active indicator (inset inside the tab cell).
     Layout::Rect PillRect(float x, float w, const Layout::Rect& bounds) const;
 
     std::vector<std::string> labels_;
+    std::vector<std::string> tooltips_;
     std::vector<Layout::Rect> tab_rects_;
     int active_index_ = -1;
     int hovered_tab_ = -1;
@@ -62,6 +73,10 @@ private:
     Motion::Spring ind_w_;
     Motion::Tween press_t_;   // 0..1 press feedback on the held tab
     bool indicator_init_ = false;
+
+    // Per-tab tooltip re-arm state — see SyncTabTooltip.
+    std::string pending_tooltip_;
+    bool tooltip_dirty_ = false;
 };
 
 } // namespace XER::UI::Widgets

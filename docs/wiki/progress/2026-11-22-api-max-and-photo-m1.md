@@ -139,6 +139,37 @@ incl. new checks `blend_modes` and `photo_m1`.
   surface (and was outright broken before — missing find_package).
   `module_registry.h` TODO seam left.
 
+## Fourth batch — timeline redesign + render cache + extensions (2026-11-22, `SMOKE RESULT OK` 54)
+
+- **Timeline/panel redesign** (`4c0cd898`): CapCut-style rounded
+  clip cards (accent header strip + per-type colors via
+  `ClipTypeColor`/`VeTheme::ClipBaseColor`), transition junction
+  overlay (hatched band + edge bars + duration chip), icon-pack
+  glyphs in track headers/toolbar, right-dock tabs → `Style::Pill`
+  with full-name tooltips (`Tabs` gained per-tab tooltip API in
+  YA.UICore). `ui_screenshot_diff` unaffected (scopes compositor
+  only). Deferred: draggable transition handles, rounded blits.
+- **Effect-frame cache** (`a4e55700`): `effect_frame_cache.{h,cc}`
+  — Olive-pattern LRU (512MB, `XER_VE_FX_CACHE_MB`) keyed
+  `{clip_id, source_time_us, state_hash}` with full-key equality +
+  honest-serve store gate; injected into PreviewEngine + Monitor
+  (export/Lab bypass); per-session memo → paused repaints ~free;
+  thread_local scratch in VideoEffects → zero steady-state allocs.
+  `builtin:` chains cached; `script:`/`ocio:`/`plugin:`-DLL excluded.
+  Next: AutoCacher pre-render ±playhead for playback hits.
+- **Six extensions** (`a0ece86e`): beatcutter, captionist,
+  silencecutter, autoduck, scenecutter, audiomix — pure JS .xexrj
+  under `assets/extensions_src/`; required new v3 services
+  (`timeline.set_clip`, `timeline.set_keyframes`, `ai.status/last/
+  cancel`, `ai.detect_{silences,scenes,beats}`, `ai.loudness`,
+  `ai.transcribe`, `ai.find_objects`) + CEF bridge `editor.ve_call`
+  for `xer-ext://` pages; new `ai/silence_detect` + `ai/scene_detect`
+  helpers; all documented in `ve.core.h`, advertised via
+  `VeServiceNames()`, smoke-asserted.
+- **Feature research** (`c96ee5e0`): `research/2026-11-22-modern-nle-
+  features.md` — top-10 ranked; captions/text-edit/silence/ducking/
+  reframe all hang off already-vendored whisper+ONNX.
+
 ## Decisions resolved 2026-11-22 / still open
 
 - ORT route → **resolved**: vendored official binaries (user choice).

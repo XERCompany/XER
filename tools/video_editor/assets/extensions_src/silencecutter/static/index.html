@@ -1,0 +1,144 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Silence Cutter</title>
+<style>
+  body { background:#1b1d21; color:#d8dae0; font:13px/1.45 "Segoe UI",sans-serif;
+         margin:0; padding:14px; }
+  h1 { font-size:15px; margin:0 0 4px; color:#fff; }
+  .sub { color:#8b8f98; margin:0 0 12px; }
+  .row { margin:10px 0; }
+  label { display:block; color:#aab; margin-bottom:4px; }
+  select,input { background:#25282e; color:#d8dae0; border:1px solid #3a3e46;
+                 border-radius:4px; padding:5px 7px; width:150px; }
+  button { background:#2f6fed; color:#fff; border:0; border-radius:4px;
+           padding:7px 14px; cursor:pointer; font-weight:600; }
+  button:disabled { background:#3a3e46; cursor:default; }
+  #log { background:#14161a; border:1px solid #2c2f36; border-radius:4px;
+         padding:8px; min-height:120px; max-height:280px; overflow:auto;
+         white-space:pre-wrap; font:11px/1.5 Consolas,monospace; }
+</style></head>
+<body>
+<h1>Silence Cutter</h1>
+<p class="sub">Scan the selected clip's audio for dead air and
+ripple-delete every silent span — or preview them as markers.</p>
+<div class="row">
+  <label for="thr">Silence threshold (dBFS)</label>
+  <input id="thr" type="number" min="-80" max="-10" value="-40">
+</div>
+<div class="row">
+  <label for="mins">Minimum silence (s)</label>
+  <input id="mins" type="number" min="0.1" max="10" step="0.1" value="0.5">
+</div>
+<div class="row">
+  <label for="mode">Action</label>
+  <select id="mode">
+    <option value="cut">Ripple-delete silences</option>
+    <option value="mark">Mark silences only</option>
+  </select>
+</div>
+<div class="row"><button id="go">Analyze &amp; Apply</button></div>
+<pre id="log"></pre>
+<script>
+const $ = id => document.getElementById(id);
+function log(msg) {
+  $("log").textContent += msg + "\n";
+  $("log").scrollTop = $("log").scrollHeight;
+}
+async function ve(name, args) {
+  try {
+    const r = await xer.callJson('editor.ve_call', {name, args: args || {}});
+    return (r && typeof r === 'object') ? r : {ok:false, error:'bad reply'};
+  } catch (e) { return {ok:false, error:String(e)}; }
+}
+function srcToTl(clip, srcT) {
+  return clip.start + (srcT - clip.in_point) / (clip.rate || 1);
+}
+async function run() {
+  $("go").disabled = true;
+  try {
+    const sel = await ve('selection.get');
+    const clip = sel.ok && sel.clip;
+    if (!clip || !clip.source) {
+      log("Select a media clip first.");
+      return;
+    }
+    const thr = parseFloat($("thr").value) || -40;
+    const mins = parseFloat($("mins").value) || 0.5;
+    log("Scanning " + clip.source + " @ " + thr + " dB, min " +
+        mins + "s …");
+    const res = await ve('ai.detect_silences',
+                         {path: clip.source, threshold_db: thr,
+                          min_silence: mins});
+    if (!res.ok) {
+      log("detect_silences failed: " + (res.error || '?'));
+      return;
+    }
+    const end0 = clip.start + clip.duration;
+    // Map source-domain spans onto the timeline, clamped to the
+    // clip's consumed span.
+    let spans = res.silences.map(s => ({
+        a: Math.max(clip.start, srcToTl(clip, s.t0)),
+        b: Math.min(end0, srcToTl(clip, s.t1)),
+        rms: s.rms_db
+      })).filter(s => s.b - s.a > 0.06);
+    log(res.silences.length + " silent span(s) in source, " +
+        spans.length + " intersect the clip.");
+    if (!spans.length) return;
+    if ($("mode").value === 'mark') {
+      let n = 0;
+      for (const s of spans) {
+        const r = await ve('project.add_marker',
+                           {t: s.a, name: 'Silence'});
+        if (r.ok) ++n;
+      }
+      log("Placed " + n + " silence marker(s).");
+      return;
+    }
+    // Ripple-delete right-to-left: each removal shifts what FOLLOWS
+    // it, so earlier span times stay valid.
+    spans.sort((x, y) => y.a - x.a);
+    let removed = 0;
+    for (const s of spans) {
+      const eps = 0.03;
+      // Re-read the clip list: piece ids change as we split/delete.
+      // Locate the piece covering the span start by matching times.
+      let pieces = (await ve('timeline.clips')).clips
+        .filter(c => c.source === clip.source &&
+                     c.start <= s.a + eps && c.end >= s.b - eps);
+      if (!pieces.length) {
+        // Fallback: the original clip may still cover the span.
+        pieces = (await ve('timeline.clips')).clips
+          .filter(c => c.start <= s.a + eps && c.end >= s.a);
+      }
+      if (!pieces.length) continue;
+      const piece = pieces[0];
+      // Split at span end first (tail), then at span start — the
+      // second split's new id is exactly the silent middle piece.
+      let mid = piece.id;
+      if (s.b < piece.end - eps) {
+        const r1 = await ve('timeline.split_clip',
+                            {id: piece.id, at: s.b});
+        if (!r1.ok) { log("split(end) failed: " + r1.error); continue; }
+      }
+      if (s.a > piece.start + eps) {
+        const r2 = await ve('timeline.split_clip',
+                            {id: piece.id, at: s.a});
+        if (!r2.ok) { log("split(start) failed: " + r2.error); continue; }
+        mid = r2.new_clip_id;
+      }
+      const rd = await ve('timeline.ripple_delete', {id: mid});
+      if (rd.ok) ++removed;
+      else log("ripple_delete failed: " + (rd.error || '?'));
+    }
+    log("Removed " + removed + " silent span(s) — each step is undoable.");
+  } finally {
+    $("go").disabled = false;
+  }
+}
+$("go").addEventListener('click', run);
+(async () => {
+  const sel = await ve('selection.get');
+  log(sel.ok && sel.clip
+        ? "Selected: " + (sel.clip.name || sel.clip.source || sel.clip.id)
+        : "No clip selected — pick a media clip with audio.");
+})();
+</script></body></html>

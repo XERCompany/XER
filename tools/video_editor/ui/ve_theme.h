@@ -77,6 +77,15 @@ inline constexpr Color kClipVideoAlt{0.37f, 0.43f, 0.87f, 1.0f};
 inline constexpr Color kClipAudio{0.13f, 0.66f, 0.52f, 1.0f};
 inline constexpr Color kClipAudioAlt{0.12f, 0.58f, 0.60f, 1.0f};
 
+// Non-media clip-type accents (CapCut-style type coding on video
+// lanes): title/text clips read violet, generated sources (color
+// matte, bars) slate, adjustment layers a lighter steel. The clip
+// card's header strip uses these at full strength; the card body is
+// a dark shade derived via Mix(color, tokens.input, ~0.6).
+inline constexpr Color kClipTitle{0.60f, 0.40f, 0.86f, 1.0f};      // violet
+inline constexpr Color kClipGenerated{0.42f, 0.50f, 0.66f, 1.0f};  // slate
+inline constexpr Color kClipAdjustment{0.55f, 0.63f, 0.75f, 1.0f}; // steel
+
 // ---- NLE accent palette (cyan/teal scheme) ----
 // These mirror the matching Theme::Tokens fields DarkTokens() writes —
 // panels may use either the token (tokens.timecode etc.) or these

@@ -20,6 +20,7 @@
 #include <functional>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -41,6 +42,7 @@
 #include "content/ai/onnx_session/onnx_session.h"
 #include "lab/ai_ops.h"
 #include "content/video/video_info.h"
+#include "effect_frame_cache.h"
 #include "export_engine.h"
 #include "export_preset.h"
 #include "extensions/ext_host.h"
@@ -1205,6 +1207,127 @@ std::string CheckPreviewQualityScale() {
                    std::to_string(mean) + ")";
         }
     }
+    return {};
+}
+
+// Effect-chain result cache (effect_frame_cache.h — the Olive-style
+// hash cache wired into Compositor via CompositorOptions::frame_cache).
+// Verifies, on the headless generated-bars path:
+//   * a repeat render of the same clip/time/params is a cache hit and
+//     byte-identical;
+//   * an effect-param change produces a miss AND different pixels
+//     (invalidation — stale frames are the worst bug class);
+//   * a different clip-local time is a miss (time is key material);
+//   * an effect-free clip stores nothing (cheap chains stay off the
+//     fast path).
+std::string CheckFxFrameCache() {
+    auto make_project = [](float brightness) {
+        Project p = MakeRenderProject(160, 90, 15);
+        p.clips[0].effects = {
+            {"brightness_contrast", {brightness, 1.2f}},
+            {"grayscale", {}},
+        };
+        return p;
+    };
+    auto cache =
+        std::make_shared<EffectFrameCache>(64ull * 1024ull * 1024ull);
+    CompositorOptions opts;
+    opts.frame_cache = cache;
+    std::string err;
+
+    // Pass 1: first render stores; the immediate repeat is served.
+    Compositor a;
+    if (!a.Init(make_project(40.0f), opts, &err)) {
+        return "cache compositor A init failed: " + err;
+    }
+    std::vector<std::uint8_t> a1, a2;
+    if (!a.RenderFrameAt(0.5, &a1, &err)) {
+        return "render A1 failed: " + err;
+    }
+    if (!a.RenderFrameAt(0.5, &a2, &err)) {
+        return "render A2 failed: " + err;
+    }
+    a.Shutdown();
+    if (a1 != a2) {
+        return "repeat render produced different pixels";
+    }
+    auto stats = cache->GetStats();
+    if (stats.stores < 1) {
+        return "post-effect frame was not stored";
+    }
+    // A fresh compositor on the SAME cache must hit the stored entry —
+    // this is the seek/reopen case the cache exists for.
+    Compositor b;
+    if (!b.Init(make_project(40.0f), opts, &err)) {
+        return "cache compositor B init failed: " + err;
+    }
+    std::vector<std::uint8_t> b1;
+    if (!b.RenderFrameAt(0.5, &b1, &err)) {
+        return "render B1 failed: " + err;
+    }
+    b.Shutdown();
+    if (a1 != b1) {
+        return "cache hit returned different pixels";
+    }
+    stats = cache->GetStats();
+    if (stats.hits < 1) {
+        return "shared-cache render was not a hit";
+    }
+    // Invalidation: same clip id, tweaked effect param -> miss + new
+    // pixels under a different key.
+    Compositor c;
+    if (!c.Init(make_project(90.0f), opts, &err)) {
+        return "cache compositor C init failed: " + err;
+    }
+    std::vector<std::uint8_t> c1;
+    if (!c.RenderFrameAt(0.5, &c1, &err)) {
+        return "render C1 failed: " + err;
+    }
+    c.Shutdown();
+    if (a1 == c1) {
+        return "param change produced identical pixels";
+    }
+    // Invalidation by time: identical params at a different clip-local
+    // time must miss (u is key material for generated sources).
+    Compositor d;
+    if (!d.Init(make_project(40.0f), opts, &err)) {
+        return "cache compositor D init failed: " + err;
+    }
+    std::vector<std::uint8_t> d1;
+    if (!d.RenderFrameAt(0.7, &d1, &err)) {
+        return "render D1 failed: " + err;
+    }
+    d.Shutdown();
+    stats = cache->GetStats();
+    if (stats.misses < 2) {
+        return "param/time changes did not miss (misses=" +
+               std::to_string(stats.misses) + ")";
+    }
+    // Eligibility: an effect-free clip renders without storing.
+    const std::uint64_t stores_before = stats.stores;
+    Project plain = MakeRenderProject(160, 90, 15);   // no effects
+    Compositor e;
+    if (!e.Init(plain, opts, &err)) {
+        return "cache compositor E init failed: " + err;
+    }
+    std::vector<std::uint8_t> e1;
+    if (!e.RenderFrameAt(0.5, &e1, &err)) {
+        return "render E1 failed: " + err;
+    }
+    e.Shutdown();
+    stats = cache->GetStats();
+    if (stats.stores != stores_before) {
+        return "effect-free clip polluted the cache";
+    }
+    std::fprintf(stderr,
+                 "  fx_frame_cache: %llu hits %llu misses %llu stores "
+                 "%llu evictions, %llu B in %llu entries\n",
+                 (unsigned long long)stats.hits,
+                 (unsigned long long)stats.misses,
+                 (unsigned long long)stats.stores,
+                 (unsigned long long)stats.evictions,
+                 (unsigned long long)stats.bytes,
+                 (unsigned long long)stats.entries);
     return {};
 }
 
@@ -2790,6 +2913,35 @@ std::string CheckExtensionsPanelData() {
     if (verified == 0) {
         return "extensions present but none verified";
     }
+    // The six advanced extensions are build-time packed from
+    // assets/extensions_src/<id>/ — when the deployment carries
+    // extension packages at all, each of them must be present,
+    // verified, and expose its declared UI member.
+    const std::vector<std::string> required_ids = {
+        "beatcutter", "captionist", "silencecutter",
+        "autoduck", "scenecutter", "audiomix",
+    };
+    for (const std::string& id : required_ids) {
+        const Extension* hit = nullptr;
+        for (const Extension& e : entries) {
+            if (e.manifest.id == id) { hit = &e; break; }
+        }
+        if (hit == nullptr) {
+            return "required extension not scanned: " + id;
+        }
+        if (!hit->verified) {
+            return "required extension not verified: " + id;
+        }
+        if (hit->manifest.ui.empty()) {
+            return "required extension has no UI member: " + id;
+        }
+        if (ExtHost::Shared()
+                .ReadMember(id, hit->manifest.ui)
+                .empty()) {
+            return "UI member unreadable for " + id + ": " +
+                   hit->manifest.ui;
+        }
+    }
     if (with_ui != nullptr) {
         // The panel builds this URL for its Open action.
         const std::string url =
@@ -3515,6 +3667,10 @@ std::string CheckVeCoreV3() {
              "export.start", "export.cancel", "export.status",
              "ui.status", "ui.open_panel",
              "edit.undo", "edit.redo",
+             "timeline.set_clip", "timeline.set_keyframes",
+             "ai.status", "ai.last", "ai.cancel",
+             "ai.detect_beats", "ai.transcribe", "ai.find_objects",
+             "ai.detect_silences", "ai.detect_scenes", "ai.loudness",
          }) {
         if (!VeServiceKnown(required)) {
             return std::string("service missing from VeServiceNames: ") +
@@ -4942,6 +5098,7 @@ constexpr CheckEntry kChecks[] = {
     {"ui_screenshot_diff", &CheckUiScreenshotDiff},
     {"curves_lens", &CheckCurvesAndLens},
     {"preview_quality", &CheckPreviewQualityScale},
+    {"fx_frame_cache", &CheckFxFrameCache},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},
     {"audio_mixer", &CheckAudioMixer},

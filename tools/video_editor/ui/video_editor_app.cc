@@ -50,6 +50,8 @@
 #include "lut_manager.h"
 #include "ai/audio_pcm.h"
 #include "ai/beat_markers.h"
+#include "ai/scene_detect.h"
+#include "ai/silence_detect.h"
 #include "ai/whisper_transcribe.h"
 #include "ai_tags.h"
 #include "playback/audio_sink_factory.h"
@@ -62,6 +64,7 @@
 #include "sequence_preset.h"
 #include "extensions/ext_host.h"
 #include "cef/cef_ext_scheme.h"
+#include "cef/shell_commands.h"
 #include "rendering/renderer.h"
 #include "video/frame_exporter.h"
 #include "theme/tokens.h"
@@ -97,6 +100,47 @@ bool ParseJsonLine(const std::string& line, Json::Value* out) {
     std::istringstream in(line);
     return Json::parseFromStream(r, in, out, &errs) &&
            out->isObject();
+}
+
+// ---- CEF "editor.*" shell bridge ----------------------------------
+// xer-ext:// extension pages call xer.call("editor.<action>", args);
+// shell_commands.cc forwards the command to the registered host hook
+// on a detached worker thread. The hook unwraps {"action","args"}
+// and hands off to the live app widget, which marshals the call onto
+// its UI-thread Tick() — the same funnel ve_call uses, so extension
+// pages reach the whole v3 service table ("editor.ve_call").
+//
+// Latest-wins registration: only one VideoEditorAppWidget runs the
+// message loop at a time (the --screenshot --ui path may build a
+// second, non-pumped instance — a hook call against it just times
+// out instead of touching a torn-down widget).
+std::atomic<VideoEditorAppWidget*> g_editor_shell_target{nullptr};
+
+std::string EditorShellHook(const std::string& wrapped_json) {
+    Json::Value req;
+    if (!ParseJsonLine(wrapped_json, &req)) {
+        return "{\"ok\":false,\"error\":\"editor hook: bad json\"}";
+    }
+    std::string action = req.get("action", "").asString();
+    // shell_commands.cc forwards the full command name
+    // ("editor.ve_call") — DispatchExtensionAction keys on the bare
+    // action, so strip the prefix here.
+    if (action.rfind("editor.", 0) == 0) {
+        action.erase(0, 7);
+    }
+    if (action.empty()) {
+        return "{\"ok\":false,\"error\":\"editor hook: no action\"}";
+    }
+    const Json::Value& args = req["args"];
+    const std::string args_text =
+        args.isString() ? args.asString()
+        : args.isNull() ? "{}"
+                        : JsonLine(args);
+    VideoEditorAppWidget* target = g_editor_shell_target.load();
+    if (target == nullptr) {
+        return "{\"ok\":false,\"error\":\"no live editor\"}";
+    }
+    return target->EnqueueEditorShellRequest(action, args_text);
 }
 
 // One ext-runtime round trip — runs on whatever thread calls it (the
@@ -516,6 +560,10 @@ VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
                                            std::string project_path)
     : parent_hwnd_(parent_hwnd), project_path_(std::move(project_path)),
       history_(project_) {
+    // xer-ext:// pages reach DispatchExtensionAction through the
+    // "editor.*" shell prefix — see EditorShellHook above.
+    XER::Cef::SetShellHostHook(&EditorShellHook);
+    g_editor_shell_target.store(this);
     EnsureChildren();
     std::string error;
     if (!catalog_.Open(&error)) {
@@ -567,6 +615,14 @@ VideoEditorAppWidget::VideoEditorAppWidget(void* parent_hwnd,
 }
 
 VideoEditorAppWidget::~VideoEditorAppWidget() {
+    // Unhook the editor.* shell target first — a CEF worker blocked
+    // in EnqueueEditorShellRequest must resolve to "no live editor",
+    // never a half-destroyed widget.
+    {
+        VideoEditorAppWidget* expected = this;
+        g_editor_shell_target.compare_exchange_strong(expected,
+                                                    nullptr);
+    }
 #ifdef _WIN32
     // Normal teardown destroys the HWND first (RemoveWindowSubclass
     // then fails silently — the IsWindow guard just keeps it tidy).
@@ -1324,23 +1380,34 @@ void VideoEditorAppWidget::EnsureChildren() {
     // clicks fall through to the widgets beneath.
     status_toast_->SetEnabled(false);
 
-    // Right-panel tab strip: shadcn-style Widgets::Tabs in Underline
-    // mode — the sliding 2px indicator replaces the hand-rolled
-    // button row + drawn accent underline this strip used before.
-    // Natural-width cells can exceed a narrow docked panel, so the
-    // strip sits inside a clip/wheel-scroll host that keeps every
-    // tab reachable. SetOnChanged -> SetRightTab preserves the
-    // panel-visibility switch; programmatic SetRightTab drives
-    // SetActiveIndex (which never fires the callback — no recursion).
+    // Right-panel tab strip: shadcn-style Widgets::Tabs in Pill
+    // mode — the active tab gets a filled accent chip that slides
+    // under the label, inactive tabs stay ghost until hovered.
+    // Labels stay abbreviated for the compact strip; per-tab
+    // tooltips carry the full panel names. Natural-width cells can
+    // exceed a narrow docked panel, so the strip sits inside a
+    // clip/wheel-scroll host that keeps every tab reachable.
+    // SetOnChanged -> SetRightTab preserves the panel-visibility
+    // switch; programmatic SetRightTab drives SetActiveIndex (which
+    // never fires the callback — no recursion).
     right_tabs_ = std::make_shared<Widgets::Tabs>();
-    right_tabs_->SetStyle(Widgets::Tabs::Style::Underline);
+    right_tabs_->SetStyle(Widgets::Tabs::Style::Pill);
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
     // 8 Color, 9 Ext, 10 Lyr — the right_tab_ indexing documented in
     // the header.
-    for (const char* label :
-         {"Insp", "FX", "Mkr", "Lab", "Hist", "Mix", "Q", "Plg",
-          "Color", "Ext", "Lyr"}) {
-        right_tabs_->AddTab(label);
+    static constexpr struct {
+        const char* label;
+        const char* tooltip;
+    } kRightTabs[] = {
+        {"Insp", "Inspector"},     {"FX", "Effects"},
+        {"Mkr", "Markers"},        {"Lab", "Object Lab"},
+        {"Hist", "History"},       {"Mix", "Audio Mixer"},
+        {"Q", "Export Queue"},     {"Plg", "Plugins"},
+        {"Color", "Color"},        {"Ext", "Extensions"},
+        {"Lyr", "Layers"},
+    };
+    for (const auto& tab : kRightTabs) {
+        right_tabs_->AddTab(tab.label, tab.tooltip);
     }
     right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 10));
     right_tabs_->SetOnChanged(
@@ -4583,9 +4650,14 @@ void VideoEditorAppWidget::DetectBeatsForMedia(
             }
             {
                 std::lock_guard lock(ai_result_mutex_);
-                ai_result_.markers.clear();
+                ai_result_ = AiResult{};
+                ai_result_.kind = "beats";
                 for (const double t : beats.times) {
                     ai_result_.markers.emplace_back(t, "Beat");
+                    AiResult::Span s;
+                    s.t0 = s.t1 = t;
+                    s.label = "Beat";
+                    ai_result_.spans.push_back(std::move(s));
                 }
                 if (beats.bpm > 0.0) {
                     ai_result_.detail =
@@ -4640,15 +4712,20 @@ void VideoEditorAppWidget::TranscribeMedia(const std::string& path) {
             }
             {
                 std::lock_guard lock(ai_result_mutex_);
-                ai_result_.markers.clear();
+                ai_result_ = AiResult{};
+                ai_result_.kind = "transcribe";
                 for (const auto& seg : segments) {
                     std::string label = seg.text;
                     if (label.size() > 48) {
                         label = label.substr(0, 45) + "…";
                     }
                     if (label.empty()) label = "Speech";
-                    ai_result_.markers.emplace_back(seg.t0,
-                                                    std::move(label));
+                    ai_result_.markers.emplace_back(seg.t0, label);
+                    AiResult::Span s;
+                    s.t0 = seg.t0;
+                    s.t1 = seg.t1;
+                    s.label = seg.text;
+                    ai_result_.spans.push_back(std::move(s));
                 }
                 ai_result_.detail =
                     std::to_string(segments.size()) + " segments";
@@ -4707,7 +4784,8 @@ void VideoEditorAppWidget::BounceAudioFx(
             }
             {
                 std::lock_guard lock(ai_result_mutex_);
-                ai_result_.markers.clear();
+                ai_result_ = AiResult{};
+                ai_result_.kind = "bounce";
                 ai_result_.bounce_path = out;
                 ai_result_.detail = copy.name;
             }
@@ -4760,10 +4838,18 @@ void VideoEditorAppWidget::FindObjectsForClip(
             }
             {
                 std::lock_guard lock(ai_result_mutex_);
-                ai_result_.markers.clear();
+                ai_result_ = AiResult{};
+                ai_result_.kind = "objects";
                 ai_result_.tags_clip_id = clip_copy.id;
+                for (const ClipTag& tag : tags) {
+                    AiResult::Span s;
+                    s.t0 = tag.start;
+                    s.t1 = tag.end;
+                    s.label = tag.label;
+                    s.confidence = tag.confidence;
+                    ai_result_.spans.push_back(std::move(s));
+                }
                 ai_result_.tags = std::move(tags);
-                ai_result_.detail.clear();
             }
             return true;
         });
@@ -5527,6 +5613,26 @@ std::string VideoEditorAppWidget::DispatchExtensionAction(
         return DispatchExtHostCall(args["name"].asString(), inner);
     }
     return "{\"error\":\"unknown extension action: " + action + "\"}";
+}
+
+std::string VideoEditorAppWidget::EnqueueEditorShellRequest(
+    const std::string& action, const std::string& args) {
+    // Called from a detached CEF worker (shell_commands.cc). Park the
+    // request; Tick() fulfils it through DispatchExtensionAction on
+    // the UI thread. The wait is bounded so a wedged message loop can
+    // never pin a CEF worker forever.
+    auto reply = std::make_shared<std::promise<std::string>>();
+    std::future<std::string> future = reply->get_future();
+    {
+        std::lock_guard lock(shell_req_mutex_);
+        shell_reqs_.push_back(ShellRequest{action, args,
+                                           std::move(reply)});
+    }
+    if (future.wait_for(std::chrono::seconds(30)) !=
+        std::future_status::ready) {
+        return "{\"ok\":false,\"error\":\"editor request timed out\"}";
+    }
+    return future.get();
 }
 
 std::string VideoEditorAppWidget::ExtensionsDir() const {
@@ -6845,6 +6951,303 @@ std::string VideoEditorAppWidget::DispatchExtHostCall(
         return wrap(std::move(v));
     }
 
+    // ---- timeline.set_clip / timeline.set_keyframes ----------------
+    if (name == "timeline.set_clip") {
+        // Generic property patch — the writable subset of the clip
+        // describe payload. Rides ReplaceClip so validation + undo
+        // behave exactly like an inspector commit; `param`/`text`
+        // rewrites the generated-source payload (caption text).
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        if (!have_args) return fail("fields required");
+        Clip updated = *clip;
+        if (args["name"].isString()) {
+            updated.name = args["name"].asString();
+        }
+        if (args["muted"].isBool()) {
+            updated.muted = args["muted"].asBool();
+        }
+        if (args["gain_db"].isNumeric()) {
+            updated.gain_db = args["gain_db"].asFloat();
+        }
+        if (args["pan"].isNumeric()) {
+            updated.pan = std::clamp(args["pan"].asFloat(), -1.0f, 1.0f);
+        }
+        if (args["fade_in"].isNumeric()) {
+            updated.fade_in = args["fade_in"].asDouble();
+        }
+        if (args["fade_out"].isNumeric()) {
+            updated.fade_out = args["fade_out"].asDouble();
+        }
+        if (args["in_point"].isNumeric()) {
+            updated.in_point = args["in_point"].asDouble();
+        }
+        if (args["param"].isString() || args["text"].isString()) {
+            updated.source.param =
+                args["text"].isString() ? args["text"].asString()
+                                        : args["param"].asString();
+        }
+        std::string error;
+        if (!history_.ReplaceClip(
+                clip->id, updated,
+                BoundsForPath(clip->source_path), &error)) {
+            return fail(error);
+        }
+        NotifyProjectChanged();
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+    if (name == "timeline.set_keyframes") {
+        // {id?, prop, keys:[{time, value, ease?}]} — prop is one of
+        // posx/posy/scale/rotation/opacity/gain_db; ease accepts the
+        // KeyEase names snake-cased (linear default).
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        const std::string prop_text = arg_str("prop");
+        static const std::pair<const char*, KeyProp> kProps[] = {
+            {"posx", KeyProp::PosX},       {"posy", KeyProp::PosY},
+            {"scale", KeyProp::Scale},     {"rotation", KeyProp::Rotation},
+            {"opacity", KeyProp::Opacity}, {"gain_db", KeyProp::GainDb},
+        };
+        KeyProp prop = KeyProp::Opacity;
+        bool prop_ok = false;
+        for (const auto& [n, p] : kProps) {
+            if (prop_text == n) { prop = p; prop_ok = true; break; }
+        }
+        if (!prop_ok) return fail("bad_prop");
+        if (!have_args || !args["keys"].isArray()) {
+            return fail("keys required");
+        }
+        static const std::pair<const char*, KeyEase> kEases[] = {
+            {"linear", KeyEase::Linear},
+            {"ease_in", KeyEase::EaseIn},
+            {"ease_out", KeyEase::EaseOut},
+            {"ease_in_out", KeyEase::EaseInOut},
+            {"hold", KeyEase::Hold},
+            {"ease_in_cubic", KeyEase::EaseInCubic},
+            {"ease_out_cubic", KeyEase::EaseOutCubic},
+            {"expo_out", KeyEase::ExpoOut},
+            {"back", KeyEase::Back},
+            {"elastic", KeyEase::Elastic},
+            {"bounce", KeyEase::Bounce},
+        };
+        std::vector<Keyframe> keys;
+        keys.reserve(args["keys"].size());
+        for (const Json::Value& k : args["keys"]) {
+            if (!k["time"].isNumeric() || !k["value"].isNumeric()) {
+                return fail("key needs time+value");
+            }
+            Keyframe kf;
+            kf.time = k["time"].asDouble();
+            kf.value = k["value"].asFloat();
+            if (k["ease"].isString()) {
+                const std::string e = k["ease"].asString();
+                for (const auto& [n, ease] : kEases) {
+                    if (e == n) { kf.easing = ease; break; }
+                }
+            }
+            keys.push_back(kf);
+        }
+        SetClipKeyframesBy(clip->id, prop, std::move(keys));
+        return wrap(VeDescribeClip(project_, clip->id));
+    }
+
+    // ---- ai.* ------------------------------------------------------
+    // Async job control + the last result snapshot (ai_last_), plus
+    // three SYNCHRONOUS compute services (silences / scenes /
+    // loudness) — those decode on the UI thread inside this call; the
+    // max_seconds arg keeps them bounded.
+    const auto resolve_media_path = [&]() -> std::string {
+        std::string p = arg_str("path");
+        if (p.empty()) {
+            if (const Clip* c = clip_for(); c != nullptr) {
+                p = c->source_path;
+            }
+        }
+        return p;
+    };
+    const auto clip_context = [&](Json::Value* v) {
+        // When the analysis target is a timeline clip the spans come
+        // back in SOURCE seconds; ship the mapping the extension
+        // needs: tl = start + (src_t - in_point) / rate.
+        if (const Clip* c = clip_for();
+            c != nullptr && !c->source_path.empty()) {
+            Json::Value ctx(Json::objectValue);
+            ctx["clip_id"] = c->id;
+            ctx["start"] = c->timeline_start;
+            ctx["in_point"] = c->in_point;
+            ctx["rate"] = c->playback_rate;
+            (*v)["clip"] = std::move(ctx);
+        }
+    };
+    if (name == "ai.status") {
+        Json::Value v(Json::objectValue);
+        v["running"] = ai_op_.IsRunning();
+        v["progress"] = ai_op_.IsRunning() ? ai_op_.Progress() : 0.0f;
+        {
+            std::lock_guard lock(ai_result_mutex_);
+            v["last_kind"] = ai_last_.kind;
+            v["last_detail"] = ai_last_.detail;
+            v["last_span_count"] =
+                static_cast<Json::Int64>(ai_last_.spans.size());
+        }
+        return wrap(std::move(v));
+    }
+    if (name == "ai.last") {
+        Json::Value v(Json::objectValue);
+        {
+            std::lock_guard lock(ai_result_mutex_);
+            v["kind"] = ai_last_.kind;
+            v["detail"] = ai_last_.detail;
+            v["clip_id"] = ai_last_.tags_clip_id;
+            v["bounce_path"] = ai_last_.bounce_path;
+            Json::Value spans(Json::arrayValue);
+            for (const AiResult::Span& s : ai_last_.spans) {
+                Json::Value j(Json::objectValue);
+                j["t0"] = s.t0;
+                j["t1"] = s.t1;
+                j["label"] = s.label;
+                j["confidence"] = s.confidence;
+                spans.append(std::move(j));
+            }
+            v["spans"] = std::move(spans);
+            Json::Value markers(Json::arrayValue);
+            for (const auto& [t, n] : ai_last_.markers) {
+                Json::Value j(Json::objectValue);
+                j["t"] = t;
+                j["name"] = n;
+                markers.append(std::move(j));
+            }
+            v["markers"] = std::move(markers);
+        }
+        return wrap(std::move(v));
+    }
+    if (name == "ai.cancel") {
+        if (!ai_op_.IsRunning()) return fail("no_job");
+        ai_op_.RequestCancel();
+        return wrap(Json::Value(Json::objectValue));
+    }
+    if (name == "ai.detect_beats") {
+        const std::string path = resolve_media_path();
+        if (path.empty()) return fail("path required");
+        if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+            return fail("busy");
+        }
+        DetectBeatsForMedia(path);
+        Json::Value v(Json::objectValue);
+        v["queued"] = true;
+        v["path"] = path;
+        return wrap(std::move(v));
+    }
+    if (name == "ai.transcribe") {
+        const std::string path = resolve_media_path();
+        if (path.empty()) return fail("path required");
+        if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+            return fail("busy");
+        }
+        TranscribeMedia(path);
+        Json::Value v(Json::objectValue);
+        v["queued"] = true;
+        v["path"] = path;
+        return wrap(std::move(v));
+    }
+    if (name == "ai.find_objects") {
+        const Clip* clip = clip_for();
+        if (clip == nullptr) return fail("no_clip");
+        if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+            return fail("busy");
+        }
+        FindObjectsForClip(clip->id);
+        Json::Value v(Json::objectValue);
+        v["queued"] = true;
+        v["clip_id"] = clip->id;
+        return wrap(std::move(v));
+    }
+    if (name == "ai.detect_silences") {
+        const std::string path = resolve_media_path();
+        if (path.empty()) return fail("path required");
+        Ai::SilenceDetectParams p;
+        p.threshold_db = arg_num("threshold_db", p.threshold_db);
+        p.min_silence = arg_num("min_silence", p.min_silence);
+        p.window_ms = arg_num("window_ms", p.window_ms);
+        p.max_seconds = arg_num("max_seconds", p.max_seconds);
+        Ai::SilenceResult res;
+        std::string err;
+        if (!Ai::DetectSilences(path, p, arg_bool("envelope", false),
+                                &res, &err)) {
+            return fail(err);
+        }
+        Json::Value v(Json::objectValue);
+        v["path"] = path;
+        v["duration"] = res.duration_seconds;
+        v["threshold_db"] = res.threshold_db;
+        Json::Value spans(Json::arrayValue);
+        for (const Ai::SilenceSpan& s : res.silences) {
+            Json::Value j(Json::objectValue);
+            j["t0"] = s.t0;
+            j["t1"] = s.t1;
+            j["rms_db"] = s.rms_db;
+            spans.append(std::move(j));
+        }
+        v["silences"] = std::move(spans);
+        if (!res.envelope.empty()) {
+            Json::Value env(Json::arrayValue);
+            for (const Ai::AudioEnvelopeWindow& w : res.envelope) {
+                Json::Value j(Json::objectValue);
+                j["t"] = w.t;
+                j["rms_db"] = w.rms_db;
+                j["peak_db"] = w.peak_db;
+                env.append(std::move(j));
+            }
+            v["envelope"] = std::move(env);
+        }
+        clip_context(&v);
+        return wrap(std::move(v));
+    }
+    if (name == "ai.detect_scenes") {
+        const std::string path = resolve_media_path();
+        if (path.empty()) return fail("path required");
+        Ai::SceneDetectParams p;
+        p.threshold = static_cast<float>(arg_num("threshold", p.threshold));
+        p.min_scene = arg_num("min_scene", p.min_scene);
+        p.sample_step = arg_num("sample_step", p.sample_step);
+        p.max_seconds = arg_num("max_seconds", p.max_seconds);
+        std::vector<Ai::SceneCut> cuts;
+        std::string err;
+        SetStatus("AI: scanning for scene cuts…");
+        if (!Ai::DetectScenes(path, p, nullptr, nullptr, &cuts, &err)) {
+            return fail(err);
+        }
+        Json::Value v(Json::objectValue);
+        v["path"] = path;
+        Json::Value arr(Json::arrayValue);
+        for (const Ai::SceneCut& c : cuts) {
+            Json::Value j(Json::objectValue);
+            j["t"] = c.t;
+            j["strength"] = c.strength;
+            arr.append(std::move(j));
+        }
+        v["cuts"] = std::move(arr);
+        clip_context(&v);
+        return wrap(std::move(v));
+    }
+    if (name == "ai.loudness") {
+        const std::string path = resolve_media_path();
+        if (path.empty()) return fail("path required");
+        Ai::LoudnessResult res;
+        std::string err;
+        if (!Ai::MeasureLoudness(path, arg_num("max_seconds", 0.0),
+                                 &res, &err)) {
+            return fail(err);
+        }
+        Json::Value v(Json::objectValue);
+        v["path"] = path;
+        v["duration"] = res.duration_seconds;
+        v["integrated_lufs"] = res.integrated_lufs;
+        v["true_peak_dbfs"] = res.true_peak_dbfs;
+        clip_context(&v);
+        return wrap(std::move(v));
+    }
+
     Json::Value v(Json::objectValue);
     v["ok"] = false;
     v["error"] = "unknown_call";
@@ -7726,6 +8129,26 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                       true);
         }
     }
+    // CEF "editor.*" shell bridge: xer-ext:// extension pages queue
+    // requests from CEF worker threads; each one is a v3 action
+    // (usually "ve_call" -> DispatchExtHostCall) fulfilled here on the
+    // UI thread.
+    {
+        std::deque<ShellRequest> reqs;
+        {
+            std::lock_guard lock(shell_req_mutex_);
+            reqs.swap(shell_reqs_);
+        }
+        for (auto& req : reqs) {
+            try {
+                req.reply->set_value(
+                    DispatchExtensionAction(req.action, req.args));
+            } catch (...) {
+                // promise already satisfied (shouldn't happen) — the
+                // caller's timeout path is the safety net.
+            }
+        }
+    }
     // Shared AI job: land finished results (markers) on the UI thread.
     {
         bool ok = false, cancelled = false;
@@ -7737,6 +8160,10 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 std::lock_guard lock(ai_result_mutex_);
                 result = std::move(ai_result_);
                 ai_result_ = AiResult{};
+                // Extensions read the finished job through ai.last —
+                // keep a copy of the span set even when the legacy
+                // marker path below consumes `result`.
+                ai_last_ = result;
             }
             if (ok && !result.tags_clip_id.empty()) {
                 // Find-objects payload: ReplaceClip so the tag ranges

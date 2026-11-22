@@ -86,6 +86,15 @@ struct PreviewEngine::Impl {
 
     // ---- worker-owned playback state (worker thread only) ----
     Compositor comp_;
+    // Shared effect-chain result cache — injected into every
+    // compositor session this engine opens. Survives ReopenCompositor
+    // (every backward seek / loop wrap re-binds the compositor), so
+    // scrubbing back over already-rendered frames hits the cache
+    // instead of re-decoding + re-running stacked effects. Entries
+    // carry a full input hash, so surviving project edits is also
+    // safe — changed inputs simply miss.
+    std::shared_ptr<EffectFrameCache> frame_cache_ =
+        std::make_shared<EffectFrameCache>();
     AudioMixer mixer_;
     bool comp_open_ = false;
     bool mixer_open_ = false;
@@ -313,6 +322,7 @@ struct PreviewEngine::Impl {
         }
         CompositorOptions opts;
         opts.decoder_factory = factory_;
+        opts.frame_cache = frame_cache_;
         std::string err;
         std::vector<std::string> w;
         if (!comp_.Init(project_, opts, &err, &w)) {

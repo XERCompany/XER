@@ -14,6 +14,7 @@
 
 #include "frame.h"
 #include "generated_source.h"
+#include "icon_helpers.h"
 #include "js_fx.h"
 #include "media_catalog.h"
 #include "rendering/renderer.h"
@@ -41,7 +42,9 @@ constexpr float kEdgeGrabPx = 7.0f;
 constexpr float kHeaderButtonSize = 18.0f;
 constexpr float kHeaderButtonStep = 22.0f;
 constexpr float kClipLabelHeight = 17.0f; // name strip at a clip's top
-constexpr float kClipRadius = VeTheme::kRadiusMd;
+// Clip cards use a hair tighter rounding than buttons — the
+// CapCut/Movavi reference look sits at ~5px.
+constexpr float kClipRadius = 5.0f;
 constexpr float kKindBarWidth = 3.0f;     // colored bar on header's left
 // Corner-toolbar ghost buttons inside the header corner box.
 constexpr float kToolButtonSize = 20.0f;
@@ -60,16 +63,11 @@ constexpr double kFallbackSampleRate = 48000.0;  // when bounds are unknown
 
 // ---- timeline palette literals ----
 // Reference-Premiere colors with no Theme::Tokens equivalent yet —
-// candidates for new tokens (semantic tokens already adopted: timecode,
-// playhead, waveform, track_video/track_audio, warning_chip):
+// candidate for a new token (semantic tokens already adopted: timecode,
+// playhead, waveform, track_video/track_audio, warning_chip). Clip-type
+// colors live in VeTheme (kClipVideo/Audio/Title/Generated/Adjustment).
 //   accent_cyan      (active states: tool chip, snap-on, expanded chevron)
-//   clip_video_fill  (desaturated blue clip body + _alt hue flip)
-//   clip_audio_fill  (dark teal clip body + _alt hue flip)
 constexpr Color kAccentCyan{0.13f, 0.83f, 0.93f, 1.0f};      // #22d3ee
-constexpr Color kClipVideoFill{0.28f, 0.42f, 0.55f, 1.0f};   // desat. blue
-constexpr Color kClipVideoFillAlt{0.33f, 0.41f, 0.60f, 1.0f};
-constexpr Color kClipAudioFill{0.10f, 0.35f, 0.33f, 1.0f};   // dark teal
-constexpr Color kClipAudioFillAlt{0.10f, 0.32f, 0.40f, 1.0f};
 
 Color WithAlpha(Color color, float alpha) {
     color.a = alpha;
@@ -136,15 +134,22 @@ std::string FormatTime(double seconds) {
     return buffer;
 }
 
-// Clip body color for a track: reference-style desaturated blue for
-// video lanes, dark teal for audio, with a per-track hue flip so
-// neighbouring same-kind tracks stay distinguishable.
-Color ClipBaseFor(const Track& track, int index) {
-    const bool alt = (static_cast<std::size_t>(index) % 2u) != 0u;
-    if (track.kind == TrackKind::Video) {
-        return alt ? kClipVideoFillAlt : kClipVideoFill;
+// Saturated clip-TYPE accent for the card's header strip —
+// CapCut-style type coding: media on video lanes reads blue, audio
+// lanes teal (per-track hue alternation via VeTheme::ClipBaseColor),
+// title/text clips violet, generated sources (matte/bars) slate and
+// adjustment layers steel. The card body derives from this accent
+// (see Render) so every clip keeps its hue end to end.
+Color ClipTypeColor(const Clip& clip, const Track& track) {
+    const bool video = track.kind == TrackKind::Video;
+    if (video && clip.is_adjustment) return VeTheme::kClipAdjustment;
+    if (video && clip.source.kind != SourceKind::Media) {
+        return clip.source.kind == SourceKind::Text
+                   ? VeTheme::kClipTitle
+                   : VeTheme::kClipGenerated;
     }
-    return alt ? kClipAudioFillAlt : kClipAudioFill;
+    return VeTheme::ClipBaseColor(
+        video, static_cast<std::size_t>(clip.track));
 }
 
 // Track-kind badge accent (header kind bar, badge chip, row wash).
@@ -1096,10 +1101,23 @@ void TimelineWidget::Render(
         if (flags.empty()) {
             flags = is_video ? "video" : "audio";
         }
+        // Kind glyph (movie / equalizer) ahead of the flags — the
+        // badge carries the lane id, the icon carries the kind.
+        const float flags_y = label_rect.y + 24.0f;
+        float flags_x = name_x;
+        if (VeIcons::DrawIcon(
+                renderer, is_video ? "track.video" : "track.audio",
+                12,
+                flags.front() == 'v' || flags.front() == 'a'
+                    ? tokens.disabled
+                    : tokens.danger,
+                Rect{flags_x, flags_y + 1.0f, 12.0f, 12.0f})) {
+            flags_x += 16.0f;
+        }
         renderer.DrawText(
             flags,
-            Rect{name_x, label_rect.y + 24.0f,
-                 label_rect.x + label_rect.width - name_x - 6.0f,
+            Rect{flags_x, flags_y,
+                 label_rect.x + label_rect.width - flags_x - 6.0f,
                  15.0f},
             {flags.front() == 'v' || flags.front() == 'a'
                  ? tokens.disabled
@@ -1154,32 +1172,39 @@ void TimelineWidget::Render(
             rect.x > timeline_area_.x + timeline_area_.width) {
             continue;
         }
-        const Color base = ClipBaseFor(track, clip.track);
-        // The label strip is a darkened shade of the clip color — the
-        // classic NLE "header band" look.
-        const Color band = VeTheme::Mix(base, Color{0, 0, 0, 1}, 0.30f);
+        const Color type = ClipTypeColor(clip, track);
+        // Card body: a dark shade of the type accent — poster frames
+        // and waveform peaks stay readable over it while the card
+        // keeps its hue end to end. The resting border is the accent
+        // at half strength (CapCut's tinted-edge card look).
+        const Color card = VeTheme::Mix(type, tokens.input, 0.60f);
+        const Color edge = WithAlpha(type, 0.50f);
         const bool previewed = clip_previews_.count(clip.id) != 0u;
         if (previewed) {
             // Original position stays as a dim ghost under the
             // previewed span (Premiere's edit preview).
             const Rect real = RealClipRect(clip);
-            renderer.FillRect(real, WithAlpha(base, 0.14f),
+            renderer.FillRect(real, WithAlpha(type, 0.14f),
                               kClipRadius);
             renderer.StrokeRect(real, WithAlpha(tokens.border, 0.5f),
                                 1.0f, kClipRadius);
         }
         float alpha = clip.muted || track.hidden ? 0.30f : 1.0f;
         if (track.locked) alpha *= 0.5f;   // locked tracks dim
-        // Two-tone clip: fill the whole rounded rect in the darker
-        // band color, then lay the lighter body over everything below
-        // the label strip. The body's square top corners hide inside
-        // the band; its rounded bottom corners match the outline.
-        renderer.FillRect(rect, WithAlpha(band, alpha), kClipRadius);
-        const Rect body{rect.x, rect.y + kClipLabelHeight, rect.width,
-                        rect.height - kClipLabelHeight};
-        if (body.height > 0.0f) {
-            renderer.FillRect(body, WithAlpha(base, alpha * 0.62f),
-                              kClipRadius);
+        // Rounded card: dark-tinted body first, then the saturated
+        // accent strip across the top carrying the clip name. The
+        // strip's rounded top corners come free from the card's own
+        // radius; its bottom corners are squared off with a second
+        // fill so the strip reads as a flat accent band.
+        renderer.FillRect(rect, WithAlpha(card, alpha), kClipRadius);
+        const Rect strip{rect.x, rect.y, rect.width,
+                         std::min(kClipLabelHeight, rect.height)};
+        renderer.FillRect(strip, WithAlpha(type, alpha), kClipRadius);
+        if (strip.height > kClipRadius) {
+            renderer.FillRect(
+                Rect{strip.x, strip.y + strip.height - kClipRadius,
+                     strip.width, kClipRadius},
+                WithAlpha(type, alpha), 0.0f);
         }
         const bool selected = clip.id == selected_clip_id_;
         const bool hovered =
@@ -1190,7 +1215,7 @@ void TimelineWidget::Render(
                             ? kAccentCyan
                             : hovered
                                   ? WithAlpha(Color{1, 1, 1, 1}, 0.5f)
-                                  : WithAlpha(tokens.border, 0.8f);
+                                  : edge;
         renderer.StrokeRect(
             rect, stroke,
             previewed || selected ? 2.0f : 1.0f, kClipRadius);
@@ -1210,13 +1235,21 @@ void TimelineWidget::Render(
         }
         renderer.PopClip();
 
-        // Clip name inside the band — 6px left inset, vertically
-        // centered; never touches the rounded corners. Right-edge
-        // chips stack inward: "lock" tag, amber "fx", link rings.
+        // Clip name on the accent strip — 6px left inset, vertically
+        // centered; never touches the rounded corners. Light strips
+        // (adjustment steel) take dark text for contrast; everything
+        // else keeps near-white. Right-edge chips stack inward:
+        // "lock" tag, amber "fx", link rings.
+        const float type_lum =
+            type.r * 0.299f + type.g * 0.587f + type.b * 0.114f;
+        const Color label_on =
+            type_lum > 0.60f
+                ? Color{0.08f, 0.09f, 0.11f, 0.95f}
+                : Color{1.0f, 1.0f, 1.0f, 0.96f};
         const Color label_color =
             track.locked || clip.muted || track.hidden
-                ? WithAlpha(Color{1, 1, 1, 1}, 0.62f)
-                : Color{1.0f, 1.0f, 1.0f, 0.96f};
+                ? WithAlpha(label_on, 0.62f)
+                : label_on;
         const bool has_fx =
             !clip.effects.empty() || !clip.audio_fx.empty();
         // Junction badges straddle the cut on the label strip —
@@ -1271,8 +1304,9 @@ void TimelineWidget::Render(
                  std::max(0.0f, right_cursor - left_cursor - 2.0f),
                  kClipLabelHeight - 3.0f},
             {label_color, tokens.font_small, 600});
-        // Duration/rate sub-line under the band, left-aligned with
-        // the name's 6px inset.
+        // Duration/rate sub-line under the strip, left-aligned with
+        // the name's 6px inset. It sits on the dark card body, so it
+        // always reads light regardless of the strip's text color.
         std::string sub = FormatTime(clip.duration);
         if (std::fabs(clip.playback_rate - 1.0) > 1e-6) {
             char rate[16];
@@ -1284,8 +1318,7 @@ void TimelineWidget::Render(
             sub,
             Rect{rect.x + 6.0f, rect.y + kClipLabelHeight + 3.0f,
                  std::max(0.0f, rect.width - 12.0f), 14.0f},
-            {WithAlpha(Color{1, 1, 1, 1},
-                       label_color.a * 0.75f),
+            {WithAlpha(Color{1, 1, 1, 1}, alpha * 0.72f),
              tokens.font_small, 400});
 
         // AI tag ticks — ClipTag ranges are SOURCE seconds; the
@@ -1344,24 +1377,88 @@ void TimelineWidget::Render(
             WithAlpha(Color{1, 1, 1, 1}, 0.28f), 1.5f);
     }
 
-    // Transition badges at cuts — small rounded chips straddling the
-    // junction on the clip's top edge.
+    // Transition overlays at cuts — a hatched accent band spanning
+    // the whole transition window (the model centers `duration` on
+    // the junction) with bright edge bars that read as duration
+    // handles and a centered glyph chip: CapCut's junction indicator.
     for (const Transition& transition : project_->transitions) {
         const Clip* from = FindClip(*project_, transition.from_clip);
         const Clip* to = FindClip(*project_, transition.to_clip);
         if (from == nullptr || to == nullptr) continue;
-        const float x = XAtTime(ClipEndSeconds(*from));
+        if (from->track < 0 ||
+            from->track >= static_cast<int>(project_->tracks.size())) {
+            continue;
+        }
+        const double cut = ClipEndSeconds(*from);
+        const double half = std::max(0.05, transition.duration) * 0.5;
+        const float xc = XAtTime(cut);
+        float x0 = XAtTime(cut - half);
+        float x1 = XAtTime(cut + half);
         const Rect row = TrackRect(from->track);
-        const Rect badge{x - 9.0f, row.y + kClipInset + 1.0f, 18.0f,
-                         14.0f};
-        renderer.FillRect(badge, WithAlpha(tokens.accent, 0.9f), 4.0f);
-        renderer.StrokeRect(badge, WithAlpha(tokens.border, 0.7f), 1.0f,
-                            4.0f);
-        DrawCenteredText(renderer, "T",
-                         Rect{badge.x, badge.y + 0.5f, badge.width,
-                              badge.height},
-                         {tokens.accent_foreground, tokens.font_small,
-                          700});
+        const float top = row.y + kClipInset + 1.0f;
+        const float bottom =
+            row.y + row.height - kClipInset - 1.0f;
+        if (bottom <= top) continue;
+        // Degenerate zooms collapse the window to a sliver — keep a
+        // minimum readable span for the indicator.
+        if (x1 - x0 < 12.0f) {
+            x0 = xc - 6.0f;
+            x1 = xc + 6.0f;
+        }
+        const Rect region{x0, top, x1 - x0, bottom - top};
+        const Color tint = tokens.accent;
+        renderer.FillRect(region, WithAlpha(tint, 0.16f), 3.0f);
+        // Diagonal hatch inside the region — the "blend zone" read.
+        renderer.PushClip(region);
+        for (float hx = x0 - region.height; hx < x1; hx += 7.0f) {
+            renderer.DrawLine({hx, bottom},
+                              {hx + region.height, top},
+                              WithAlpha(tint, 0.14f), 1.0f);
+        }
+        renderer.PopClip();
+        // Duration handles — bright bars at both region edges.
+        renderer.FillRect(Rect{x0 - 1.5f, top, 3.0f, bottom - top},
+                          WithAlpha(tint, 0.85f), 1.5f);
+        renderer.FillRect(Rect{x1 - 1.5f, top, 3.0f, bottom - top},
+                          WithAlpha(tint, 0.85f), 1.5f);
+        // Centered indicator chip: dark pill with two inward
+        // triangles (dissolve glyph); the duration text joins when
+        // the region is wide enough to carry it.
+        char dur[16];
+        std::snprintf(dur, sizeof(dur), "%.1fs",
+                      transition.duration);
+        const auto dur_size = renderer.MeasureText(
+            dur, {tint, tokens.font_small, 600});
+        const bool show_dur =
+            region.width >= dur_size.width + 36.0f;
+        const float chip_w =
+            show_dur ? dur_size.width + 30.0f : 20.0f;
+        const Rect chip{xc - chip_w * 0.5f,
+                        top + (bottom - top) * 0.5f - 7.0f, chip_w,
+                        14.0f};
+        renderer.FillRect(chip, VeTheme::kOverlayChip, 7.0f);
+        renderer.StrokeRect(chip, WithAlpha(tint, 0.7f), 1.0f, 7.0f);
+        const float gcy = chip.y + chip.height * 0.5f;
+        const float gx = show_dur ? chip.x + 10.0f
+                                  : chip.x + chip.width * 0.5f;
+        // Left triangle apex-right + right triangle apex-left —
+        // apexes meet at the junction center.
+        renderer.DrawLine({gx - 4.0f, gcy - 3.5f}, {gx - 0.5f, gcy},
+                          tint, 1.3f);
+        renderer.DrawLine({gx - 0.5f, gcy}, {gx - 4.0f, gcy + 3.5f},
+                          tint, 1.3f);
+        renderer.DrawLine({gx + 4.0f, gcy - 3.5f}, {gx + 0.5f, gcy},
+                          tint, 1.3f);
+        renderer.DrawLine({gx + 0.5f, gcy}, {gx + 4.0f, gcy + 3.5f},
+                          tint, 1.3f);
+        if (show_dur) {
+            renderer.DrawText(
+                dur,
+                Rect{chip.x + 19.0f, chip.y + 0.5f,
+                     std::max(0.0f, chip.width - 21.0f),
+                     chip.height - 1.0f},
+                {tint, tokens.font_small, 600});
+        }
     }
     renderer.PopClip();   // tracks_viewport
 
@@ -1484,27 +1581,48 @@ void TimelineWidget::RenderHeaderButtons(
         }
         const Rect box{r.x + 2.0f, r.y + 2.0f, r.width - 4.0f,
                        r.height - 4.0f};
+        // Material icons from the shared pack (assets/icons.yaml);
+        // the hand-drawn vector glyphs stay as fallback for when the
+        // pack can't rasterize (missing assets, headless runs).
         switch (button) {
-            case 0:   // M — mute
-                DrawCenteredText(renderer, "M",
-                                 Rect{r.x, r.y + 1.5f, r.width,
-                                      r.height},
-                                 {glyph, tokens.font_small, 700});
+            case 0:   // mute
+                if (!VeIcons::DrawToggleIcon(
+                        renderer, track.muted, "track.mute",
+                        "track.unmute", 14, glyph, r)) {
+                    DrawCenteredText(
+                        renderer, "M",
+                        Rect{r.x, r.y + 1.5f, r.width, r.height},
+                        {glyph, tokens.font_small, 700});
+                }
                 break;
-            case 4:   // S — solo
-                DrawCenteredText(renderer, "S",
-                                 Rect{r.x, r.y + 1.5f, r.width,
-                                      r.height},
-                                 {glyph, tokens.font_small, 700});
+            case 4:   // solo
+                if (!VeIcons::DrawIcon(renderer, "track.solo", 14,
+                                       glyph, r)) {
+                    DrawCenteredText(
+                        renderer, "S",
+                        Rect{r.x, r.y + 1.5f, r.width, r.height},
+                        {glyph, tokens.font_small, 700});
+                }
                 break;
-            case 5:   // mic — record arm
-                DrawMicIcon(renderer, box, glyph);
+            case 5:   // record arm
+                if (!VeIcons::DrawIcon(renderer, "track.mic", 14,
+                                       glyph, r)) {
+                    DrawMicIcon(renderer, box, glyph);
+                }
                 break;
-            case 1:   // eye — visibility (slashed when hidden)
-                DrawEyeIcon(renderer, box, glyph, track.hidden);
+            case 1:   // visibility (slashed eye when hidden)
+                if (!VeIcons::DrawToggleIcon(
+                        renderer, track.hidden, "track.hidden",
+                        "track.visible", 14, glyph, r)) {
+                    DrawEyeIcon(renderer, box, glyph, track.hidden);
+                }
                 break;
             case 2:   // lock
-                DrawLockIcon(renderer, box, glyph);
+                if (!VeIcons::DrawToggleIcon(
+                        renderer, track.locked, "track.lock",
+                        "track.unlock", 14, glyph, r)) {
+                    DrawLockIcon(renderer, box, glyph);
+                }
                 break;
             default:
                 break;
@@ -1539,33 +1657,49 @@ void TimelineWidget::RenderToolbar(
                    : (hot ? tokens.foreground : tokens.muted);
         const Rect box{r.x + 2.0f, r.y + 2.0f, r.width - 4.0f,
                        r.height - 4.0f};
+        // Material icons from the shared pack with the hand-drawn
+        // vector glyphs as fallback.
         switch (i) {
-            case 0:
-                DrawMagnetIcon(renderer, box, glyph);
+            case 0:   // snap toggle
+                if (!VeIcons::DrawIcon(renderer, "edit.snap", 15,
+                                       glyph, r)) {
+                    DrawMagnetIcon(renderer, box, glyph);
+                }
                 break;
-            case 1:
-                DrawRazorIcon(renderer, box, glyph);
+            case 1:   // razor tool
+                if (!VeIcons::DrawIcon(renderer, "edit.razor", 15,
+                                       glyph, r)) {
+                    DrawRazorIcon(renderer, box, glyph);
+                }
                 break;
-            case 2:
-                DrawDiamond(
-                    renderer,
-                    Point{box.x + box.width * 0.5f,
-                          box.y + box.height * 0.5f},
-                    4.0f, glyph, 1.4f);
+            case 2:   // add marker at playhead
+                if (!VeIcons::DrawIcon(renderer, "edit.marker", 15,
+                                       glyph, r)) {
+                    DrawDiamond(
+                        renderer,
+                        Point{box.x + box.width * 0.5f,
+                              box.y + box.height * 0.5f},
+                        4.0f, glyph, 1.4f);
+                }
                 break;
-            case 3: {
-                // fx badge chip — amber, matching the per-clip chips.
-                const Rect chip{r.x, r.y + 4.0f, r.width, 12.0f};
-                renderer.FillRect(chip, WithAlpha(tokens.warning_chip,
-                                                  hot ? 1.0f : 0.8f),
-                                  3.0f);
-                DrawCenteredText(
-                    renderer, "fx",
-                    Rect{chip.x, chip.y, chip.width, chip.height},
-                    {Color{0.10f, 0.07f, 0.0f, 1.0f},
-                     tokens.font_small, 700});
+            case 3:
+                // fx summary — amber bolt from the pack; the amber
+                // "fx" chip stays as fallback.
+                if (!VeIcons::DrawIcon(renderer, "track.fx", 15,
+                                       tokens.warning_chip, r)) {
+                    const Rect chip{r.x, r.y + 4.0f, r.width, 12.0f};
+                    renderer.FillRect(
+                        chip,
+                        WithAlpha(tokens.warning_chip,
+                                  hot ? 1.0f : 0.8f),
+                        3.0f);
+                    DrawCenteredText(
+                        renderer, "fx",
+                        Rect{chip.x, chip.y, chip.width, chip.height},
+                        {Color{0.10f, 0.07f, 0.0f, 1.0f},
+                         tokens.font_small, 700});
+                }
                 break;
-            }
             default:
                 break;
         }

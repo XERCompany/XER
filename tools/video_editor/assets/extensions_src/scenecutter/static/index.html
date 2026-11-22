@@ -1,0 +1,125 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Scene Cutter</title>
+<style>
+  body { background:#1b1d21; color:#d8dae0; font:13px/1.45 "Segoe UI",sans-serif;
+         margin:0; padding:14px; }
+  h1 { font-size:15px; margin:0 0 4px; color:#fff; }
+  .sub { color:#8b8f98; margin:0 0 12px; }
+  .row { margin:10px 0; }
+  label { display:block; color:#aab; margin-bottom:4px; }
+  select,input { background:#25282e; color:#d8dae0; border:1px solid #3a3e46;
+                 border-radius:4px; padding:5px 7px; width:150px; }
+  button { background:#2f6fed; color:#fff; border:0; border-radius:4px;
+           padding:7px 14px; cursor:pointer; font-weight:600; }
+  button:disabled { background:#3a3e46; cursor:default; }
+  #log { background:#14161a; border:1px solid #2c2f36; border-radius:4px;
+         padding:8px; min-height:120px; max-height:280px; overflow:auto;
+         white-space:pre-wrap; font:11px/1.5 Consolas,monospace; }
+</style></head>
+<body>
+<h1>Scene Cutter</h1>
+<p class="sub">Visual cut detection: a 16&times;16 luma signature
+diffs successive frames to find hard cuts, then splits the clip or
+drops markers at each scene boundary.</p>
+<div class="row">
+  <label for="thr">Sensitivity threshold (0-1)</label>
+  <input id="thr" type="number" min="0.05" max="0.9" step="0.05"
+         value="0.35">
+</div>
+<div class="row">
+  <label for="minscene">Min scene length (s)</label>
+  <input id="minscene" type="number" min="0.2" max="10" step="0.1"
+         value="0.8">
+</div>
+<div class="row">
+  <label for="step">Sample step (s)</label>
+  <input id="step" type="number" min="0.1" max="2" step="0.05"
+         value="0.25">
+</div>
+<div class="row">
+  <label for="mode">Action</label>
+  <select id="mode">
+    <option value="cut">Split clip at cuts</option>
+    <option value="mark">Place markers at cuts</option>
+  </select>
+</div>
+<div class="row"><button id="go">Detect Scenes</button></div>
+<pre id="log"></pre>
+<script>
+const $ = id => document.getElementById(id);
+function log(msg) {
+  $("log").textContent += msg + "\n";
+  $("log").scrollTop = $("log").scrollHeight;
+}
+async function ve(name, args) {
+  try {
+    const r = await xer.callJson('editor.ve_call', {name, args: args || {}});
+    return (r && typeof r === 'object') ? r : {ok:false, error:'bad reply'};
+  } catch (e) { return {ok:false, error:String(e)}; }
+}
+function srcToTl(clip, srcT) {
+  return clip.start + (srcT - clip.in_point) / (clip.rate || 1);
+}
+async function run() {
+  $("go").disabled = true;
+  try {
+    const sel = await ve('selection.get');
+    const clip = sel.ok && sel.clip;
+    if (!clip || !clip.source) {
+      log("Select a video clip first.");
+      return;
+    }
+    log("Scanning for scene cuts (sync decode — UI pauses briefly): " +
+        clip.source);
+    const res = await ve('ai.detect_scenes', {
+      path: clip.source,
+      threshold: parseFloat($("thr").value) || 0.35,
+      min_scene: parseFloat($("minscene").value) || 0.8,
+      sample_step: parseFloat($("step").value) || 0.25,
+      max_seconds: 600
+    });
+    if (!res.ok) {
+      log("detect_scenes failed: " + (res.error || '?'));
+      return;
+    }
+    const end = clip.start + clip.duration, eps = 0.05;
+    const cuts = res.cuts
+      .map(c => srcToTl(clip, c.t))
+      .filter(t => t > clip.start + eps && t < end - eps)
+      .sort((a, b) => a - b);
+    log(res.cuts.length + " cut(s) found in source, " + cuts.length +
+        " inside the clip.");
+    if (!cuts.length) return;
+    if ($("mode").value === 'mark') {
+      let n = 0;
+      for (let i = 0; i < cuts.length; ++i) {
+        const r = await ve('project.add_marker',
+                           {t: cuts[i], name: 'Scene ' + (i + 1)});
+        if (r.ok) ++n;
+      }
+      log("Placed " + n + " scene marker(s).");
+      return;
+    }
+    let cur = clip.id, made = 0;
+    for (const t of cuts) {
+      const r = await ve('timeline.split_clip', {id: cur, at: t});
+      if (!r.ok) {
+        log("split at " + t.toFixed(2) + " failed: " + (r.error || '?'));
+        break;
+      }
+      cur = r.new_clip_id;
+      ++made;
+    }
+    log("Done — " + made + " scene cut(s) made. Undo reverses each.");
+  } finally {
+    $("go").disabled = false;
+  }
+}
+$("go").addEventListener('click', run);
+(async () => {
+  const sel = await ve('selection.get');
+  log(sel.ok && sel.clip
+        ? "Selected: " + (sel.clip.name || sel.clip.source || sel.clip.id)
+        : "No clip selected — pick a video clip on the timeline.");
+})();
+</script></body></html>

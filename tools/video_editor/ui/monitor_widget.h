@@ -239,6 +239,13 @@ private:
     Project project_;
     Compositor compositor_;
     bool compositor_ready_ = false;
+    // Shared effect-chain result cache for the internal (paused/
+    // still) render path — injected into every compositor rebuild, so
+    // backward scrubs (which rebind the snapshot) and param-edit
+    // re-checks over already-rendered frames hit instead of
+    // re-decoding + re-running stacked effects.
+    std::shared_ptr<EffectFrameCache> fx_cache_ =
+        std::make_shared<EffectFrameCache>();
 
     std::vector<std::uint8_t> frame_;
     int frame_width_ = 0;

@@ -695,6 +695,16 @@ struct ClipSession {
     double ext_end = 0.0;
     video::Frame frame;            // materialized selected source frame
     video::Frame layer;            // canvas-size warp output
+    // Last-layer memo — when the full input tuple (state hash +
+    // media/clip-local time + effective transform) repeats exactly,
+    // `layer` still holds that render and the whole clip pipeline is
+    // skipped. Only set for chains ChainCacheable() proves pure.
+    std::uint64_t memo_hash = 0;
+    bool memo_valid = false;
+    // ChainCacheable() verdict for clip.effects (immutable within a
+    // session) — tri-state so plugin-registry lookups happen once per
+    // session, not once per frame. -1 = not computed yet.
+    int chain_cacheable = -1;
 };
 
 enum class EnsureResult { kFrame, kNoContent, kError };
@@ -753,6 +763,123 @@ double EffectParamDouble(const ClipEffect& effect, std::size_t index,
         EffectParam(effect, index, static_cast<float>(fallback)));
 }
 
+// ------------------------------------------------------------------
+// Effect-chain cache key material (see effect_frame_cache.h). The
+// state hash folds every clip-space input to the post-mask frame:
+// source identity, the ORDERED (effect type, raw param bits) list,
+// mask field bits, canvas dims (generated matte/bars adopt them) and
+// the preview-quality tier (ApplyReduced changes pixels).
+// ------------------------------------------------------------------
+constexpr std::uint64_t kFnvOffset = 14695981039346656037ull;
+constexpr std::uint64_t kFnvPrime = 1099511628211ull;
+
+std::uint64_t HashRaw(std::uint64_t h, const void* data, std::size_t n) {
+    const auto* p = static_cast<const std::uint8_t*>(data);
+    for (std::size_t i = 0; i < n; ++i) {
+        h ^= static_cast<std::uint64_t>(p[i]);
+        h *= kFnvPrime;
+    }
+    return h;
+}
+std::uint64_t HashStr(std::uint64_t h, const std::string& s) {
+    return HashRaw(h, s.data(), s.size());
+}
+std::uint64_t HashU64(std::uint64_t h, std::uint64_t v) {
+    return HashRaw(h, &v, sizeof(v));
+}
+// Floats/doubles are hashed on their BIT pattern — any param change,
+// including sign-of-zero or NaN payloads, yields a new key (extra-safe:
+// a bit-identical param produces identical pixels by determinism).
+std::uint64_t HashF32(std::uint64_t h, float v) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &v, sizeof(bits));
+    return HashU64(h, bits);
+}
+std::uint64_t HashF64(std::uint64_t h, double v) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &v, sizeof(bits));
+    return HashU64(h, bits);
+}
+
+// True when every effect in the chain is a pure function of
+// (pixels, params): named kernels, host-compiled builtins (incl.
+// "plugin:<id>" records that resolve to a builtin — their DLL kernels
+// were ported in-house), and unknown types (skipped at apply time,
+// pixels untouched). Excluded: script: (receives clip-local time and
+// may keep ctx state), ocio: (profiles can rescan mid-session) and
+// plugin: resolving to a real DLL (third-party code may be stateful).
+bool ChainCacheable(const std::vector<ClipEffect>& effects) {
+    for (const ClipEffect& e : effects) {
+        const std::string& ty = e.type;
+        if (ty.rfind(kScriptFxPrefix, 0) == 0 ||
+            ty.rfind("ocio:", 0) == 0) {
+            return false;
+        }
+        if (ty.rfind("plugin:", 0) == 0) {
+            const PluginDesc* desc = PluginHost::ForEffectType(ty);
+            if (desc == nullptr || !desc->builtin) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+std::uint64_t ClipStateHash(const Clip& clip, double preview_quality,
+                            int canvas_w, int canvas_h) {
+    std::uint64_t h = kFnvOffset;
+    h = HashStr(h, clip.source_path);
+    h = HashU64(h, static_cast<std::uint64_t>(clip.source.kind));
+    h = HashStr(h, clip.source.param);
+    h = HashU64(h, static_cast<std::uint64_t>(clip.effects.size()));
+    for (const ClipEffect& e : clip.effects) {
+        h = HashStr(h, e.type);
+        h = HashU64(h, static_cast<std::uint64_t>(e.params.size()));
+        if (!e.params.empty()) {
+            h = HashRaw(h, e.params.data(),
+                        e.params.size() * sizeof(float));
+        }
+    }
+    h = HashU64(h, static_cast<std::uint64_t>(clip.masks.size()));
+    for (const ClipMask& m : clip.masks) {
+        h = HashU64(h, static_cast<std::uint64_t>(m.shape));
+        h = HashF32(h, m.cx);
+        h = HashF32(h, m.cy);
+        h = HashF32(h, m.w);
+        h = HashF32(h, m.h);
+        h = HashF32(h, m.feather);
+        h = HashU64(h, m.inverted ? 1ull : 0ull);
+    }
+    h = HashF64(h, preview_quality);
+    h = HashU64(h, (static_cast<std::uint64_t>(
+                        static_cast<std::uint32_t>(canvas_w))
+                    << 32) |
+                       static_cast<std::uint32_t>(canvas_h));
+    return h;
+}
+
+// Microsecond quantization for cache time fields — absorbs sub-µs FP
+// noise in t/src_t while staying far below any frame interval.
+std::int64_t QuantizeToUs(double v) {
+    return static_cast<std::int64_t>(std::llround(v * 1e6));
+}
+
+// Last-layer memo key: everything the warp-output layer depends on —
+// the clip-space frame identity (state_hash + time) plus the effective
+// transform. A repeat of the exact tuple skips decode, chain AND warp.
+std::uint64_t MemoHash(std::uint64_t state_hash, std::int64_t time_us,
+                       double u, const Transform& tr) {
+    std::uint64_t h = state_hash;
+    h = HashU64(h, static_cast<std::uint64_t>(time_us));
+    h = HashF64(h, u);
+    h = HashF32(h, tr.offset_x);
+    h = HashF32(h, tr.offset_y);
+    h = HashF32(h, tr.scale);
+    h = HashF32(h, tr.rotation_deg);
+    h = HashF32(h, tr.opacity);
+    return h;
+}
+
 }  // namespace
 
 // ------------------------------------------------------------------
@@ -782,6 +909,11 @@ struct Compositor::Impl {
     // through a downscale->effect->upscale detour (preview only).
     double preview_quality_ = 1.0;
     video::Frame fx_lo_;   // reduced-res work frame (grows once)
+    // Injected effect-chain result cache — borrowed, never owned;
+    // nullptr disables caching (export/screenshot compositors). The
+    // owner (PreviewEngine, MonitorWidget) keeps it alive across the
+    // session reopens that rebuild this compositor.
+    std::shared_ptr<EffectFrameCache> frame_cache;
     JsFxRuntime* JsFx() {
         if (!js_fx_tried) {
             js_fx_tried = true;
@@ -841,6 +973,7 @@ struct Compositor::Impl {
         if (!decoder_factory) {
             decoder_factory = DefaultDecoderFactory();
         }
+        frame_cache = options.frame_cache;
         skia_available = XER::Bridge::Skia::IsAvailable();
         cancelled.store(false, std::memory_order_relaxed);
 
@@ -957,6 +1090,7 @@ struct Compositor::Impl {
         warned_ambiguous = false;
         project_ = Project{};
         decoder_factory = nullptr;
+        frame_cache.reset();
         skia_available = false;
         initialized = false;
         duration = 0.0;
@@ -994,6 +1128,9 @@ struct Compositor::Impl {
         s.src_h = 0;
         s.frame.Release();
         s.layer.Release();
+        s.memo_hash = 0;
+        s.memo_valid = false;
+        s.chain_cacheable = -1;
     }
 
     void CloseFinishedSessions(double t) {
@@ -1515,13 +1652,87 @@ struct Compositor::Impl {
         // transform so animated opacity/scale still gates decode.
         if (effective.opacity <= 0.0f || effective.scale <= 0.0f) {
             ClearFrame(&s.layer);
+            s.memo_valid = false;
             return true;
         }
         if (clip.is_adjustment) {
+            // Adjustment output depends on the canvas composited BELOW
+            // it — not expressible in the cache key. Never memoized or
+            // frame-cached.
+            s.memo_valid = false;
             return RenderAdjustmentLayer(s, clip, effective, u,
                                          error_out);
         }
-        if (IsGeneratedSource(clip.source)) {
+
+        // ---- effect-chain cache / last-layer memo -------------------
+        // Key material is computed BEFORE any decode: a frame-cache hit
+        // skips decoder positioning AND the whole chain, a memo hit
+        // also skips the warp. Keys cover every clip-space input —
+        // param edits, source swaps, mask/transform changes and
+        // quality-tier flips all miss naturally (see
+        // effect_frame_cache.h for the eligibility rules).
+        const bool generated = IsGeneratedSource(clip.source);
+        // src_t = in_point + (t - timeline_start) * playback_rate —
+        // identical math to the decode branch below (handle regions
+        // read into the source, clamped to [0, media_duration] once
+        // the decoder reports one; EOF covers the unknown case).
+        double src_t = 0.0;
+        if (!generated) {
+            const double rate =
+                std::isfinite(clip.playback_rate) &&
+                        clip.playback_rate > 0.0
+                    ? clip.playback_rate
+                    : 1.0;
+            src_t = clip.in_point + (t - clip.timeline_start) * rate;
+            if (src_t < 0.0) {
+                src_t = 0.0;
+            }
+            if (s.media_duration > 0.0 && src_t > s.media_duration) {
+                src_t = s.media_duration;
+            }
+        }
+        // Generated clips are (currently) time-invariant but the API
+        // takes u — key on it anyway so a future animated source can
+        // never serve stale.
+        const std::int64_t time_us =
+            QuantizeToUs(generated ? u : src_t);
+        if (s.chain_cacheable < 0) {
+            s.chain_cacheable = ChainCacheable(clip.effects) ? 1 : 0;
+        }
+        const bool pure_chain = s.chain_cacheable == 1;
+        const std::uint64_t state_hash =
+            ClipStateHash(clip, preview_quality_, canvas_w, canvas_h);
+        const std::uint64_t memo_hash =
+            MemoHash(state_hash, time_us, u, effective);
+        if (pure_chain && s.memo_valid && s.memo_hash == memo_hash) {
+            return true;   // identical inputs — s.layer still holds it
+        }
+
+        // The frame cache pays for itself only when the chain does
+        // real work — an empty effect+mask chain is a memcpy, cheaper
+        // than the lookup+store copy.
+        const bool cacheable =
+            frame_cache != nullptr && pure_chain &&
+            (!clip.effects.empty() || !clip.masks.empty());
+        EffectFrameCache::Key ckey;
+        if (cacheable) {
+            ckey.clip_id = clip.id;
+            ckey.source_time_us = time_us;
+            ckey.state_hash = state_hash;
+            if (frame_cache->Lookup(ckey, &s.frame)) {
+                if (!WarpClipFrame(s.frame, effective, canvas_w,
+                                   canvas_h, &s.layer)) {
+                    return Fail(error_out, "clip warp failed");
+                }
+                s.memo_hash = memo_hash;
+                s.memo_valid = true;
+                return true;
+            }
+        }
+
+        // Miss path — the pre-cache pipeline, verbatim.
+        bool serve_honest = true;
+        if (generated) {
             // Generated clips (matte/bars/text) never open a decoder:
             // the intrinsic frame is produced procedurally — matte
             // and bars at canvas size, text at its measured size —
@@ -1535,25 +1746,6 @@ struct Compositor::Impl {
                                        "': generated source failed");
             }
         } else {
-            // src_t = in_point + (t - timeline_start) * playback_rate;
-            // handle regions read into the source (clamped to
-            // [0, media_duration] when the duration is known — decoder
-            // EOF covers the unknown case). A non-finite or
-            // non-positive rate falls back to 1.0 rather than
-            // propagating NaN pts targets.
-            const double rate =
-                std::isfinite(clip.playback_rate) &&
-                        clip.playback_rate > 0.0
-                    ? clip.playback_rate
-                    : 1.0;
-            double src_t =
-                clip.in_point + (t - clip.timeline_start) * rate;
-            if (src_t < 0.0) {
-                src_t = 0.0;
-            }
-            if (s.media_duration > 0.0 && src_t > s.media_duration) {
-                src_t = s.media_duration;
-            }
             const FrameSlot* slot = nullptr;
             const EnsureResult result =
                 EnsureFrame(s, src_t, &slot, error_out);
@@ -1562,6 +1754,7 @@ struct Compositor::Impl {
             }
             if (result == EnsureResult::kNoContent) {
                 ClearFrame(&s.layer);
+                s.memo_valid = false;
                 return true;
             }
             // Materialize the selected frame (slot buffers hold the
@@ -1579,6 +1772,14 @@ struct Compositor::Impl {
             }
             std::memcpy(s.frame.Data(), slot->pixels.data(),
                         slot->pixels.size());
+            // Honest-serve gate: only cache when the served frame is
+            // plausibly the nearest decode for src_t (~1.5 source
+            // frames). A backward-scrub serve can pick a slot far from
+            // the target — storing it under this key would poison
+            // later honest requests (the documented stale-frame path).
+            const double tolerance =
+                std::max(1.5 / s.fps, 0.002);
+            serve_honest = std::fabs(slot->pts - src_t) <= tolerance;
         }
         ApplyClipEffects(s, clip.effects, u);
         // Masks multiply the clip frame's alpha AFTER the effect
@@ -1588,9 +1789,16 @@ struct Compositor::Impl {
             !ApplyMaskPixels(&s.frame, clip.masks)) {
             return Fail(error_out, "clip mask apply failed");
         }
+        if (cacheable && serve_honest) {
+            frame_cache->Store(ckey, s.frame);
+        }
         if (!WarpClipFrame(s.frame, effective, canvas_w, canvas_h,
                            &s.layer)) {
             return Fail(error_out, "clip warp failed");
+        }
+        if (pure_chain) {
+            s.memo_hash = memo_hash;
+            s.memo_valid = true;
         }
         return true;
     }
@@ -2276,6 +2484,11 @@ void Compositor::SetPreviewQuality(float scale) {
 
 float Compositor::PreviewQuality() const {
     return static_cast<float>(impl_->preview_quality_);
+}
+
+EffectFrameCache::Stats Compositor::FrameCacheStats() const {
+    return impl_->frame_cache ? impl_->frame_cache->GetStats()
+                              : EffectFrameCache::Stats{};
 }
 
 const std::vector<std::string>& Compositor::Warnings() const {

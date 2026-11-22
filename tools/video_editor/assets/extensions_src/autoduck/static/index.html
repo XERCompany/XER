@@ -1,0 +1,162 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Auto Duck</title>
+<style>
+  body { background:#1b1d21; color:#d8dae0; font:13px/1.45 "Segoe UI",sans-serif;
+         margin:0; padding:14px; }
+  h1 { font-size:15px; margin:0 0 4px; color:#fff; }
+  .sub { color:#8b8f98; margin:0 0 12px; }
+  .row { margin:10px 0; }
+  label { display:block; color:#aab; margin-bottom:4px; }
+  select,input { background:#25282e; color:#d8dae0; border:1px solid #3a3e46;
+                 border-radius:4px; padding:5px 7px; width:170px; }
+  button { background:#2f6fed; color:#fff; border:0; border-radius:4px;
+           padding:7px 14px; cursor:pointer; font-weight:600; }
+  button:disabled { background:#3a3e46; cursor:default; }
+  #log { background:#14161a; border:1px solid #2c2f36; border-radius:4px;
+         padding:8px; min-height:120px; max-height:280px; overflow:auto;
+         white-space:pre-wrap; font:11px/1.5 Consolas,monospace; }
+</style></head>
+<body>
+<h1>Auto Duck</h1>
+<p class="sub">Sidechain ducking without a plugin: the selected
+<b>dialogue</b> clip is scanned for speech; the music clip gets a
+gain keyframe envelope that dips under every spoken phrase.</p>
+<div class="row">
+  <label for="music">Music clip (duck target)</label>
+  <select id="music"></select>
+</div>
+<div class="row">
+  <label for="duck">Duck depth (dB)</label>
+  <input id="duck" type="number" min="-30" max="0" value="-14">
+</div>
+<div class="row">
+  <label for="attack">Attack / release (s)</label>
+  <input id="attack" type="number" min="0.05" max="2" step="0.05"
+         value="0.25">
+</div>
+<div class="row">
+  <label for="thr">Speech threshold (dBFS)</label>
+  <input id="thr" type="number" min="-80" max="-10" value="-45">
+</div>
+<div class="row"><button id="go">Analyze &amp; Duck</button></div>
+<pre id="log"></pre>
+<script>
+const $ = id => document.getElementById(id);
+function log(msg) {
+  $("log").textContent += msg + "\n";
+  $("log").scrollTop = $("log").scrollHeight;
+}
+async function ve(name, args) {
+  try {
+    const r = await xer.callJson('editor.ve_call', {name, args: args || {}});
+    return (r && typeof r === 'object') ? r : {ok:false, error:'bad reply'};
+  } catch (e) { return {ok:false, error:String(e)}; }
+}
+function srcToTl(clip, srcT) {
+  return clip.start + (srcT - clip.in_point) / (clip.rate || 1);
+}
+async function refreshTargets() {
+  const sel = await ve('selection.get');
+  const voice = sel.ok && sel.clip;
+  const clips = (await ve('timeline.clips')).clips || [];
+  const selEl = $("music");
+  selEl.innerHTML = '';
+  for (const c of clips) {
+    if (!c.source || (voice && c.id === voice.id)) continue;
+    const o = document.createElement('option');
+    o.value = c.id;
+    o.textContent = (c.name || c.source.split(/[\\/]/).pop()) +
+                    "  [t" + c.track + "]";
+    selEl.appendChild(o);
+  }
+  log(voice ? "Dialogue sidechain: " +
+                (voice.name || voice.source.split(/[\\/]/).pop())
+            : "No clip selected — select the DIALOGUE clip.");
+  log(clips.length > 1 ? "Pick the music clip to duck."
+                       : "Add a music clip to the timeline.");
+}
+async function run() {
+  $("go").disabled = true;
+  try {
+    const sel = await ve('selection.get');
+    const voice = sel.ok && sel.clip;
+    if (!voice || !voice.source) {
+      log("Select the dialogue clip first.");
+      return;
+    }
+    const musicId = $("music").value;
+    if (!musicId) { log("No duck target — add a music clip."); return; }
+    const music = (await ve('timeline.clips')).clips
+      .find(c => c.id === musicId);
+    if (!music) { log("Target clip vanished."); return; }
+    const thr = parseFloat($("thr").value) || -45;
+    log("Analyzing speech envelope: " + voice.source);
+    const res = await ve('ai.detect_silences',
+                         {path: voice.source, threshold_db: thr,
+                          min_silence: 0.25});
+    if (!res.ok) {
+      log("detect_silences failed: " + (res.error || '?'));
+      return;
+    }
+    // Invert the silences against the voice clip's consumed source
+    // span -> speech-active spans in TIMELINE seconds.
+    const vEnd = voice.start + voice.duration;
+    const sils = res.silences
+      .map(s => ({a: srcToTl(voice, s.t0), b: srcToTl(voice, s.t1)}))
+      .filter(s => s.b > voice.start && s.a < vEnd)
+      .sort((x, y) => x.a - y.a);
+    const speech = [];
+    let cursor = voice.start;
+    for (const s of sils) {
+      const a = Math.max(s.a, voice.start), b = Math.min(s.b, vEnd);
+      if (a - cursor > 0.1) speech.push({a: cursor, b: a});
+      cursor = Math.max(cursor, b);
+    }
+    if (vEnd - cursor > 0.1) speech.push({a: cursor, b: vEnd});
+    // Keep only speech that overlaps the music clip.
+    const mEnd = music.start + music.duration;
+    const spans = speech
+      .map(s => ({a: Math.max(s.a, music.start),
+                  b: Math.min(s.b, mEnd)}))
+      .filter(s => s.b - s.a > 0.05);
+    if (!spans.length) {
+      log("No speech overlaps the music clip — nothing to duck.");
+      return;
+    }
+    const duck = parseFloat($("duck").value) || -14;
+    const ramp = Math.max(0.05, parseFloat($("attack").value) || 0.25);
+    // Build gain_db keys in music-clip-LOCAL seconds: base 0 dB,
+    // eased dip to `duck` under each speech span.
+    const keys = [{time: 0, value: 0}];
+    for (const s of spans) {
+      const a = s.a - music.start, b = s.b - music.start;
+      keys.push({time: Math.max(0, a - ramp), value: 0});
+      keys.push({time: Math.max(0, a), value: duck});
+      keys.push({time: Math.min(music.duration, b), value: duck});
+      keys.push({time: Math.min(music.duration, b + ramp), value: 0});
+    }
+    keys.sort((x, y) => x.time - y.time);
+    // Dedupe identical times (later wins) then emit.
+    const out = [];
+    for (const k of keys) {
+      if (out.length && Math.abs(k.time - out[out.length-1].time) < 1e-4) {
+        out[out.length-1] = k;
+      } else out.push(k);
+    }
+    const r = await ve('timeline.set_keyframes',
+                       {id: music.id, prop: 'gain_db',
+                        keys: out.map(k => ({time: k.time,
+                                             value: k.value,
+                                             ease: 'ease_in_out'}))});
+    if (!r.ok) { log("set_keyframes failed: " + (r.error || '?')); return; }
+    log("Ducked '" + (music.name || music.source) + "': " +
+        spans.length + " speech span(s), " + out.length +
+        " keyframe(s) at " + duck + " dB. Undoable.");
+  } finally {
+    $("go").disabled = false;
+  }
+}
+$("go").addEventListener('click', run);
+refreshTargets();
+setInterval(refreshTargets, 4000);
+</script></body></html>

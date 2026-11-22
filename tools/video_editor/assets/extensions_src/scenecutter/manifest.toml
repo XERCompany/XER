@@ -1,0 +1,18 @@
+[extension]
+id = "scenecutter"
+name = "Scene Cutter"
+version = "1.0"
+entry = "main.js"
+ui = "static/index.html"
+
+[files]
+requires = ["static/index.html"]
+
+[native]
+dlls = []
+lua = []
+py = []
+sources = []
+
+[pack]
+keep_sources = false

@@ -30,6 +30,7 @@
 #include <utility>
 #include <vector>
 
+#include "effect_frame_cache.h"  // EffectFrameCache (PUBLIC dep)
 #include "frame.h"            // video::Frame — XER_Video (PUBLIC dep)
 #include "media_decoder.h"    // IMediaDecoder + MediaDecoderFactory
 #include "timeline_model.h"
@@ -122,6 +123,14 @@ struct CompositorOptions {
     // Empty -> DefaultDecoderFactory() (real FFmpeg bridge). Tests
     // inject fakes.
     MediaDecoderFactory decoder_factory;
+    // Optional shared effect-chain result cache (see
+    // effect_frame_cache.h). Null -> caching disabled — the export
+    // default, since a sequential single-pass render never re-requests
+    // a frame. Preview/interactive callers inject an instance they own
+    // so the cache survives compositor session reopens (every backward
+    // seek / loop wrap re-binds the compositor — PreviewEngine) and
+    // scrub-back over already-rendered frames hits.
+    std::shared_ptr<EffectFrameCache> frame_cache;
 };
 
 // Frame-accurate timeline -> canvas BGRA renderer. UI-free, single
@@ -181,6 +190,11 @@ public:
     // clamp back to 1.0.
     void SetPreviewQuality(float scale);
     float PreviewQuality() const;
+
+    // Effect-chain cache counters — a zero Stats when no frame_cache
+    // was injected (export/screenshot compositors). Lightweight;
+    // intended for perf HUDs and smoke logs.
+    EffectFrameCache::Stats FrameCacheStats() const;
 
     // Non-fatal issues seen so far (Init warnings + runtime notes like
     // "clip X has no video stream"). Cleared by Init/Shutdown.

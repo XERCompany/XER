@@ -1,0 +1,130 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Beat Cutter</title>
+<style>
+  body { background:#1b1d21; color:#d8dae0; font:13px/1.45 "Segoe UI",sans-serif;
+         margin:0; padding:14px; }
+  h1 { font-size:15px; margin:0 0 4px; color:#fff; }
+  .sub { color:#8b8f98; margin:0 0 12px; }
+  .row { margin:10px 0; }
+  label { display:block; color:#aab; margin-bottom:4px; }
+  select,input[type=number],input[type=text] { background:#25282e; color:#d8dae0;
+    border:1px solid #3a3e46; border-radius:4px; padding:5px 7px; width:150px; }
+  button { background:#2f6fed; color:#fff; border:0; border-radius:4px;
+           padding:7px 14px; cursor:pointer; font-weight:600; }
+  button:disabled { background:#3a3e46; cursor:default; }
+  #log { background:#14161a; border:1px solid #2c2f36; border-radius:4px;
+         padding:8px; min-height:120px; max-height:280px; overflow:auto;
+         white-space:pre-wrap; font:11px/1.5 Consolas,monospace; }
+  .dim { color:#777; }
+</style></head>
+<body>
+<h1>Beat Cutter</h1>
+<p class="sub">Detect beats in the selected clip's audio and slice the
+timeline to the rhythm — or drop markers instead.</p>
+<div class="row">
+  <label for="mode">Action</label>
+  <select id="mode">
+    <option value="cut">Split clip at beats</option>
+    <option value="mark">Place markers at beats</option>
+  </select>
+</div>
+<div class="row">
+  <label for="every">Every Nth beat</label>
+  <input id="every" type="number" min="1" max="64" value="1">
+</div>
+<div class="row">
+  <label for="maxcuts">Max cuts</label>
+  <input id="maxcuts" type="number" min="1" max="500" value="200">
+</div>
+<div class="row"><button id="go">Detect &amp; Cut</button></div>
+<pre id="log"></pre>
+<script>
+const $ = id => document.getElementById(id);
+function log(msg) {
+  $("log").textContent += msg + "\n";
+  $("log").scrollTop = $("log").scrollHeight;
+}
+async function ve(name, args) {
+  try {
+    const r = await xer.callJson('editor.ve_call', {name, args: args || {}});
+    return (r && typeof r === 'object') ? r : {ok:false, error:'bad reply'};
+  } catch (e) { return {ok:false, error:String(e)}; }
+}
+function srcToTl(clip, srcT) {
+  return clip.start + (srcT - clip.in_point) / (clip.rate || 1);
+}
+async function waitAi(timeoutMs) {
+  const t0 = Date.now();
+  for (;;) {
+    const s = await ve('ai.status');
+    if (!s.running) return s;
+    if (Date.now() - t0 > timeoutMs) return null;
+    await new Promise(r => setTimeout(r, 200));
+  }
+}
+async function run() {
+  $("go").disabled = true;
+  try {
+    const sel = await ve('selection.get');
+    const clip = sel.ok && sel.clip;
+    if (!clip || !clip.source) {
+      log("Select a media clip on the timeline first.");
+      return;
+    }
+    log("Detecting beats: " + clip.source);
+    const q = await ve('ai.detect_beats', {path: clip.source});
+    if (!q.ok) { log("detect_beats failed: " + (q.error || '?')); return; }
+    const st = await waitAi(240000);
+    if (!st) { log("Timed out waiting for beat detection."); return; }
+    const last = await ve('ai.last');
+    if (!last.ok || last.kind !== 'beats' || !last.spans) {
+      log("No beat result (last_kind=" + (last.kind || 'none') + ").");
+      return;
+    }
+    const every = Math.max(1, parseInt($("every").value, 10) || 1);
+    const maxc = Math.max(1, parseInt($("maxcuts").value, 10) || 200);
+    let beats = last.spans.map(s => s.t0)
+      .filter((_, i) => i % every === 0)
+      .map(t => srcToTl(clip, t));
+    log(last.spans.length + " beat(s) detected" +
+        (last.detail ? " — " + last.detail : ""));
+    const eps = 0.05;
+    const end = clip.start + clip.duration;
+    beats = beats.filter(t => t > clip.start + eps && t < end - eps)
+                 .sort((a, b) => a - b);
+    const mode = $("mode").value;
+    if (mode === 'mark') {
+      let n = 0;
+      for (const t of beats) {
+        const r = await ve('project.add_marker', {t, name: 'Beat'});
+        if (r.ok) ++n;
+      }
+      log("Placed " + n + " beat marker(s).");
+      return;
+    }
+    // Split the clip piece-by-piece left to right: each split returns
+    // the tail piece id, which becomes the next cut target.
+    let cur = clip.id, cuts = 0;
+    for (const t of beats) {
+      if (cuts >= maxc) { log("Stopped at max cuts."); break; }
+      const r = await ve('timeline.split_clip', {id: cur, at: t});
+      if (!r.ok) {
+        log("split at " + t.toFixed(2) + " failed: " + (r.error || '?'));
+        break;
+      }
+      cur = r.new_clip_id;
+      ++cuts;
+    }
+    log("Done — " + cuts + " cut(s) made. Undo reverses each split.");
+  } finally {
+    $("go").disabled = false;
+  }
+}
+$("go").addEventListener('click', run);
+(async () => {
+  const sel = await ve('selection.get');
+  log(sel.ok && sel.clip
+        ? "Selected: " + (sel.clip.name || sel.clip.source || sel.clip.id)
+        : "No clip selected — pick a media clip on the timeline.");
+})();
+</script></body></html>

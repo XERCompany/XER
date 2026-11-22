@@ -1,0 +1,139 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Captionist</title>
+<style>
+  body { background:#1b1d21; color:#d8dae0; font:13px/1.45 "Segoe UI",sans-serif;
+         margin:0; padding:14px; }
+  h1 { font-size:15px; margin:0 0 4px; color:#fff; }
+  .sub { color:#8b8f98; margin:0 0 12px; }
+  .row { margin:10px 0; }
+  label { display:block; color:#aab; margin-bottom:4px; }
+  select,input { background:#25282e; color:#d8dae0; border:1px solid #3a3e46;
+                 border-radius:4px; padding:5px 7px; width:150px; }
+  button { background:#2f6fed; color:#fff; border:0; border-radius:4px;
+           padding:7px 14px; cursor:pointer; font-weight:600; }
+  button:disabled { background:#3a3e46; cursor:default; }
+  #log { background:#14161a; border:1px solid #2c2f36; border-radius:4px;
+         padding:8px; min-height:120px; max-height:280px; overflow:auto;
+         white-space:pre-wrap; font:11px/1.5 Consolas,monospace; }
+</style></head>
+<body>
+<h1>Captionist</h1>
+<p class="sub">Whisper-transcribe the selected clip and burn timed
+captions onto a new "Captions" track as editable title clips.</p>
+<div class="row">
+  <label for="size">Font size (px)</label>
+  <input id="size" type="number" min="10" max="200" value="56">
+</div>
+<div class="row">
+  <label for="color">Text color</label>
+  <input id="color" type="text" value="#FFFFFF">
+</div>
+<div class="row">
+  <label for="valign">Position</label>
+  <select id="valign">
+    <option value="bottom">Bottom</option>
+    <option value="middle">Middle</option>
+    <option value="top">Top</option>
+  </select>
+</div>
+<div class="row"><button id="go">Transcribe &amp; Caption</button></div>
+<pre id="log"></pre>
+<script>
+const $ = id => document.getElementById(id);
+function log(msg) {
+  $("log").textContent += msg + "\n";
+  $("log").scrollTop = $("log").scrollHeight;
+}
+async function ve(name, args) {
+  try {
+    const r = await xer.callJson('editor.ve_call', {name, args: args || {}});
+    return (r && typeof r === 'object') ? r : {ok:false, error:'bad reply'};
+  } catch (e) { return {ok:false, error:String(e)}; }
+}
+function srcToTl(clip, srcT) {
+  return clip.start + (srcT - clip.in_point) / (clip.rate || 1);
+}
+async function waitAi(timeoutMs, tick) {
+  const t0 = Date.now();
+  for (;;) {
+    const s = await ve('ai.status');
+    if (!s.running) return s;
+    if (tick && s.progress > 0) {
+      tick(Math.round(s.progress * 100));
+    }
+    if (Date.now() - t0 > timeoutMs) return null;
+    await new Promise(r => setTimeout(r, 400));
+  }
+}
+async function run() {
+  $("go").disabled = true;
+  try {
+    const sel = await ve('selection.get');
+    const clip = sel.ok && sel.clip;
+    if (!clip || !clip.source) {
+      log("Select a media clip with speech first.");
+      return;
+    }
+    log("Transcribing: " + clip.source + " (whisper — first run may "
+        + "need a ggml model in models/)");
+    const q = await ve('ai.transcribe', {path: clip.source});
+    if (!q.ok) { log("transcribe failed: " + (q.error || '?')); return; }
+    const st = await waitAi(600000, p => {
+      $("go").textContent = "Transcribing " + p + "%";
+    });
+    $("go").textContent = "Transcribe & Caption";
+    if (!st) { log("Timed out waiting for transcription."); return; }
+    const last = await ve('ai.last');
+    if (!last.ok || last.kind !== 'transcribe' || !last.spans ||
+        last.spans.length === 0) {
+      log("No transcript spans returned.");
+      return;
+    }
+    log(last.spans.length + " caption span(s)" +
+        (last.detail ? " — " + last.detail : ""));
+    const size = parseInt($("size").value, 10) || 56;
+    const color = $("color").value || "#FFFFFF";
+    const valign = $("valign").value;
+    const track = await ve('timeline.add_track',
+                           {kind: 'video', name: 'Captions'});
+    if (!track.ok) {
+      log("add_track failed: " + (track.error || '?'));
+      return;
+    }
+    const capTrack = track.index;
+    const end = clip.start + clip.duration;
+    let made = 0;
+    for (const s of last.spans) {
+      const text = (s.label || '').trim();
+      if (!text) continue;
+      const t0 = Math.max(clip.start, srcToTl(clip, s.t0));
+      const t1 = Math.min(end, srcToTl(clip, s.t1));
+      const dur = Math.max(0.4, t1 - t0);
+      if (t0 >= end || t1 <= clip.start) continue;
+      const param = JSON.stringify({
+        name: 'Caption',
+        text: text + " | size=" + size + " color=" + color +
+              " outline=2 outline_color=#000000 align=center valign=" +
+              valign + " w=1600"
+      });
+      const r = await ve('timeline.add_clip',
+                         {kind: 'text', param, start: t0,
+                          duration: dur, track: capTrack});
+      if (r.ok) ++made;
+      else log("add_clip@" + t0.toFixed(2) + ": " + (r.error || '?'));
+    }
+    log("Created " + made + " caption clip(s) on track " + capTrack +
+        " — fully editable, fully undoable.");
+  } finally {
+    $("go").disabled = false;
+    $("go").textContent = "Transcribe & Caption";
+  }
+}
+$("go").addEventListener('click', run);
+(async () => {
+  const sel = await ve('selection.get');
+  log(sel.ok && sel.clip
+        ? "Selected: " + (sel.clip.name || sel.clip.source || sel.clip.id)
+        : "No clip selected — pick a media clip with speech.");
+})();
+</script></body></html>

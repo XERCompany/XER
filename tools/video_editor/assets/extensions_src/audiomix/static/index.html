@@ -1,0 +1,123 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Audio Mix Assistant</title>
+<style>
+  body { background:#1b1d21; color:#d8dae0; font:13px/1.45 "Segoe UI",sans-serif;
+         margin:0; padding:14px; }
+  h1 { font-size:15px; margin:0 0 4px; color:#fff; }
+  .sub { color:#8b8f98; margin:0 0 12px; }
+  .row { margin:10px 0; }
+  label { display:block; color:#aab; margin-bottom:4px; }
+  select,input { background:#25282e; color:#d8dae0; border:1px solid #3a3e46;
+                 border-radius:4px; padding:5px 7px; width:170px; }
+  button { background:#2f6fed; color:#fff; border:0; border-radius:4px;
+           padding:7px 14px; cursor:pointer; font-weight:600; }
+  button:disabled { background:#3a3e46; cursor:default; }
+  table { border-collapse:collapse; width:100%; margin-top:8px; }
+  td,th { border-bottom:1px solid #2c2f36; padding:3px 6px;
+          font-size:11px; text-align:left; }
+  th { color:#8b8f98; }
+  #log { background:#14161a; border:1px solid #2c2f36; border-radius:4px;
+         padding:8px; min-height:100px; max-height:200px; overflow:auto;
+         white-space:pre-wrap; font:11px/1.5 Consolas,monospace; }
+  #tbl { max-height:180px; overflow:auto; }
+</style></head>
+<body>
+<h1>Audio Mix Assistant</h1>
+<p class="sub">Measure each clip's integrated loudness (LUFS) and true
+peak, then normalize gain to a target — real mixer-ready levels.</p>
+<div class="row">
+  <label for="target">Target loudness (LUFS)</label>
+  <input id="target" type="number" min="-40" max="-6" value="-16">
+</div>
+<div class="row">
+  <label for="ceiling">True-peak ceiling (dBTP)</label>
+  <input id="ceiling" type="number" min="-6" max="0" step="0.1"
+         value="-1">
+</div>
+<div class="row">
+  <label for="scope">Scope</label>
+  <select id="scope">
+    <option value="all">All media clips</option>
+    <option value="sel">Selected clip only</option>
+  </select>
+</div>
+<div class="row">
+  <button id="go">Analyze &amp; Normalize</button>
+  <button id="measure" style="background:#3a3e46">Measure only</button>
+</div>
+<div id="tbl"></div>
+<pre id="log"></pre>
+<script>
+const $ = id => document.getElementById(id);
+function log(msg) {
+  $("log").textContent += msg + "\n";
+  $("log").scrollTop = $("log").scrollHeight;
+}
+async function ve(name, args) {
+  try {
+    const r = await xer.callJson('editor.ve_call', {name, args: args || {}});
+    return (r && typeof r === 'object') ? r : {ok:false, error:'bad reply'};
+  } catch (e) { return {ok:false, error:String(e)}; }
+}
+function renderTable(rows) {
+  let h = '<table><tr><th>Clip</th><th>LUFS</th><th>TP</th>' +
+          '<th>Gain</th><th></th></tr>';
+  for (const r of rows) {
+    h += '<tr><td>' + r.name + '</td><td>' +
+         (isFinite(r.lufs) ? r.lufs.toFixed(1) : '—') + '</td><td>' +
+         (isFinite(r.tp) ? r.tp.toFixed(1) : '—') + '</td><td>' +
+         (r.gain !== undefined
+           ? (r.gain >= 0 ? '+' : '') + r.gain.toFixed(1) + ' dB'
+           : '—') + '</td><td>' + (r.note || '') + '</td></tr>';
+  }
+  $('tbl').innerHTML = h + '</table>';
+}
+async function analyze(apply) {
+  const target = parseFloat($("target").value) || -16;
+  const ceil = parseFloat($("ceiling").value) || -1;
+  const sel = await ve('selection.get');
+  let clips = (await ve('timeline.clips')).clips || [];
+  clips = clips.filter(c => c.source);   // media clips only
+  if ($("scope").value === 'sel') {
+    clips = clips.filter(c => sel.clip && c.id === sel.clip.id);
+  }
+  if (!clips.length) { log("No media clips to analyze."); return; }
+  const rows = [];
+  for (const c of clips) {
+    const name = (c.name || c.source.split(/[\\/]/).pop());
+    log("Measuring " + name + " …");
+    const r = await ve('ai.loudness', {path: c.source});
+    if (!r.ok) {
+      rows.push({name, lufs: NaN, tp: NaN, note: r.error || 'fail'});
+      continue;
+    }
+    let gain = target - r.integrated_lufs;
+    gain = Math.max(-30, Math.min(24, gain));
+    // True-peak guard: never let the clip's TP exceed the ceiling.
+    if (r.true_peak_dbfs + gain > ceil) {
+      gain = ceil - r.true_peak_dbfs;
+    }
+    gain = Math.round(gain * 10) / 10;
+    const row = {name, lufs: r.integrated_lufs, tp: r.true_peak_dbfs,
+                 gain, note: ''};
+    if (apply) {
+      const s = await ve('timeline.set_clip',
+                         {id: c.id, gain_db: gain});
+      row.note = s.ok ? 'set' : (s.error || 'fail');
+    }
+    rows.push(row);
+    renderTable(rows);
+  }
+  renderTable(rows);
+  log(apply ? "Normalized " + rows.length +
+                " clip(s) to " + target + " LUFS — undoable."
+            : "Measured " + rows.length + " clip(s).");
+}
+$("go").addEventListener('click', () => analyze(true));
+$("measure").addEventListener('click', () => analyze(false));
+(async () => {
+  const n = ((await ve('timeline.clips')).clips || [])
+    .filter(c => c.source).length;
+  log(n + " media clip(s) on the timeline.");
+})();
+</script></body></html>

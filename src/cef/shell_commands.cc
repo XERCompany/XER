@@ -417,6 +417,23 @@ bool HandleShellMessage(CefRefPtr<CefBrowser>, CefRefPtr<CefFrame> frame,
 
     ShellCommandHandler handler = FindShellCommand(command);
     const bool editor_cmd = command.rfind("editor.", 0) == 0;
+    if (editor_cmd) {
+        // The editor.* prefix reaches the host app's live project
+        // state — restrict it to verified extension pages (xer-ext://)
+        // so an arbitrary web page embedded in a shell window can
+        // never mutate the project.
+        const std::string url = frame->GetURL().ToString();
+        if (url.rfind("xer-ext://", 0) != 0) {
+            CefPostTask(TID_UI,
+                        base::BindOnce(&SendShellResult, frame, id,
+                                       false,
+                                       ErrJson("editor.* is only "
+                                               "available to "
+                                               "xer-ext:// extension "
+                                               "pages")));
+            return true;
+        }
+    }
     if (!handler && !editor_cmd) {
         CefPostTask(TID_UI,
                     base::BindOnce(&SendShellResult, frame, id, false,

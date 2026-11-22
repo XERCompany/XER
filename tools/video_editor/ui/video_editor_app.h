@@ -6,7 +6,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -112,6 +114,15 @@ public:
     // capture. Call AFTER the widget has joined a WidgetTree (the
     // Seek/SetPlayhead fan-out expects attached children).
     bool PrepareUiCapture(double seconds, int timeout_ms = 3000);
+
+    // CEF "editor.*" shell bridge entry point (xer-ext:// extension
+    // pages only — shell_commands.cc forwards editor.* commands
+    // here). Called from a CEF worker thread: parks the request in
+    // shell_reqs_ and blocks until Tick() runs it through
+    // DispatchExtensionAction (or a timeout kicks in). Returns the
+    // action's JSON result string.
+    std::string EnqueueEditorShellRequest(const std::string& action,
+                                          const std::string& args);
 
     XER::UI::Layout::Size GetMinSize() const override {
         return {960.0f, 620.0f};
@@ -501,7 +512,19 @@ private:
     // AsyncOp result and lands markers on the UI thread.
     Lab::AsyncOp ai_op_;
     struct AiResult {
+        // Rich span payload for the ai.* extension services: beats
+        // fill (t, t, "Beat"), transcribe fills (t0, t1, text),
+        // find-objects fills the ClipTag ranges. `markers` stays the
+        // flat (time, name) legacy view Tick() applies to the project.
+        struct Span {
+            double t0 = 0.0;
+            double t1 = 0.0;
+            std::string label;
+            float confidence = 0.0f;
+        };
+        std::string kind;  // "beats" | "transcribe" | "objects" | "bounce"
         std::vector<std::pair<double, std::string>> markers;
+        std::vector<Span> spans;
         std::string detail;
         std::string bounce_path;   // audio-plugin bounce output (WAV)
         // AI find-objects payload: the target clip + its new tag set.
@@ -511,7 +534,26 @@ private:
     };
     std::mutex ai_result_mutex_;
     AiResult ai_result_;
+    // Snapshot of the most recently finished job — ai.last serves it
+    // to extensions so they can build on the async result (e.g.
+    // caption clips from the transcript spans) after polling
+    // ai.status to completion.
+    AiResult ai_last_;
     float ai_progress_shown_ = -1.0f;
+
+    // CEF "editor.*" shell bridge (src/cef/shell_commands.cc):
+    // xer-ext:// extension pages call xer.call("editor.<action>") —
+    // the command lands on a CEF worker thread while every app action
+    // must run on the UI thread. Requests park here as promises;
+    // Tick() drains the queue through DispatchExtensionAction and
+    // fulfils them. The hook itself lives in video_editor_app.cc.
+    struct ShellRequest {
+        std::string action;
+        std::string args;
+        std::shared_ptr<std::promise<std::string>> reply;
+    };
+    std::mutex shell_req_mutex_;
+    std::deque<ShellRequest> shell_reqs_;
 
     // URL-download background job — same AsyncOp/marshal pattern as
     // ai_op_: the worker only writes url_result_/url_status_ under the

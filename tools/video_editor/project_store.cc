@@ -1587,6 +1587,7 @@ const std::vector<std::string>& VeServiceNames() {
         "timeline.lift_range", "timeline.slip", "timeline.slide",
         "timeline.set_rate", "timeline.nudge", "timeline.select_clip",
         "timeline.add_transition", "timeline.remove_transition",
+        "timeline.set_clip", "timeline.set_keyframes",
         // transport.*
         "transport.info", "transport.play", "transport.pause",
         "transport.stop", "transport.seek", "transport.frame_step",
@@ -1609,6 +1610,12 @@ const std::vector<std::string>& VeServiceNames() {
         "ui.rescan_extensions",
         // edit.*
         "edit.undo", "edit.redo", "edit.history",
+        // ai.* — the editor's analysis jobs (beats / whisper /
+        // find-objects) plus the sync compute services (silences,
+        // scenes, loudness) exposed to extensions.
+        "ai.status", "ai.last", "ai.cancel",
+        "ai.detect_beats", "ai.transcribe", "ai.find_objects",
+        "ai.detect_silences", "ai.detect_scenes", "ai.loudness",
     };
     return names;
 }

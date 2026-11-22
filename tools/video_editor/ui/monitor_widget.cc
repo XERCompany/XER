@@ -347,7 +347,9 @@ void MonitorWidget::RebuildCompositor() {
         Invalidate();
         return;
     }
-    if (!compositor_.Init(project_, CompositorOptions{}, &error,
+    CompositorOptions comp_options;
+    comp_options.frame_cache = fx_cache_;
+    if (!compositor_.Init(project_, comp_options, &error,
                           &warnings)) {
         status_text_ = error.empty() ? "Compositor init failed" : error;
         status_error_ = true;

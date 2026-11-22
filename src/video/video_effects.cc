@@ -8,9 +8,17 @@
 namespace video {
 
 // BGRA8 ↔ Skia uint32 (MakeColorRGBA(R,G,B,A) = 0xRRGGBBAA)
-static std::vector<uint32_t> FrameToSkia(const Frame& f) {
-    int n = f.Width() * f.Height();
-    std::vector<uint32_t> px(n);
+// The scratch is a per-thread persistent buffer: an effect chain runs
+// several Skia-bridged kernels per frame and each one used to heap-
+// allocate a fresh w*h*4 vector on the way in (same for the CPU
+// scratch buffers below). Capacity is retained across calls, so a
+// steady-state chain performs zero allocations. Callers must treat
+// the returned buffer as volatile — it is rewritten by the next
+// FrameToSkia call on this thread.
+static std::vector<uint32_t>& FrameToSkia(const Frame& f) {
+    thread_local std::vector<uint32_t> px;
+    const int n = f.Width() * f.Height();
+    px.resize(static_cast<size_t>(n));
     const uint8_t* d = f.Data();
     for (int i = 0; i < n; ++i)
         px[i] = XER::Bridge::Skia::MakeColorRGBA(d[i*4+2], d[i*4+1], d[i*4+0], d[i*4+3]);
@@ -47,7 +55,7 @@ void VideoEffects::Grayscale(Frame& frame) {
     if (XER::Bridge::Skia::IsAvailable()) {
         // Skia: set R=G=B to same value via per-pixel blend workaround;
         // easier CPU path but we still convert through Skia to keep pipeline consistent
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         for (auto& c : px) {
             uint8_t r = (c >> 24) & 0xFF;
             uint8_t g = (c >> 16) & 0xFF;
@@ -71,14 +79,15 @@ void VideoEffects::Grayscale(Frame& frame) {
 void VideoEffects::BoxBlur(Frame& frame, int radius) {
     if (!frame.IsValid() || radius <= 0) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterBlur(&px, frame.Width(), frame.Height(),
                                           radius, radius);
         SkiaToFrame(px, frame);
     } else {
         // CPU box blur (horizontal pass only for speed)
         int w = frame.Width(), h = frame.Height();
-        std::vector<uint8_t> tmp(w * h * 4);
+        thread_local std::vector<uint8_t> tmp;
+        tmp.resize(static_cast<size_t>(w) * h * 4);
         const uint8_t* src = frame.Data();
         for (int y = 0; y < h; ++y) {
             for (int x = 0; x < w; ++x) {
@@ -100,7 +109,7 @@ void VideoEffects::BoxBlur(Frame& frame, int radius) {
 void VideoEffects::GaussianBlur(Frame& frame, double sigma) {
     if (!frame.IsValid() || sigma <= 0.0) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterGaussianBlur(&px, frame.Width(), frame.Height(),
                                                    sigma, sigma);
         SkiaToFrame(px, frame);
@@ -112,7 +121,7 @@ void VideoEffects::GaussianBlur(Frame& frame, double sigma) {
 void VideoEffects::Sharpen(Frame& frame, double amount) {
     if (!frame.IsValid()) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterSharpen(&px, frame.Width(), frame.Height(),
                                              amount, 1.0, 0);
         SkiaToFrame(px, frame);
@@ -122,7 +131,7 @@ void VideoEffects::Sharpen(Frame& frame, double amount) {
 void VideoEffects::EdgeDetect(Frame& frame) {
     if (!frame.IsValid()) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterEdgeDetect(&px, frame.Width(), frame.Height());
         SkiaToFrame(px, frame);
     }
@@ -131,7 +140,7 @@ void VideoEffects::EdgeDetect(Frame& frame) {
 void VideoEffects::Emboss(Frame& frame) {
     if (!frame.IsValid()) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterEmboss(&px, frame.Width(), frame.Height(), 315.0, 1.5);
         SkiaToFrame(px, frame);
     }
@@ -140,7 +149,7 @@ void VideoEffects::Emboss(Frame& frame) {
 void VideoEffects::Vignette(Frame& frame, double strength, double radius) {
     if (!frame.IsValid()) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterVignette(&px, frame.Width(), frame.Height(),
                                               strength, radius);
         SkiaToFrame(px, frame);
@@ -150,7 +159,7 @@ void VideoEffects::Vignette(Frame& frame, double strength, double radius) {
 void VideoEffects::ChromaticAberration(Frame& frame, double offset) {
     if (!frame.IsValid()) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         int off = static_cast<int>(offset);
         XER::Bridge::Skia::FilterChromaticAberration(&px, frame.Width(), frame.Height(),
                                                          off, 0, -off, 0);
@@ -161,7 +170,7 @@ void VideoEffects::ChromaticAberration(Frame& frame, double offset) {
 void VideoEffects::Pixelate(Frame& frame, int block_size) {
     if (!frame.IsValid() || block_size <= 0) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterPixelate(&px, frame.Width(), frame.Height(), block_size);
         SkiaToFrame(px, frame);
     }
@@ -170,7 +179,7 @@ void VideoEffects::Pixelate(Frame& frame, int block_size) {
 void VideoEffects::OilPaint(Frame& frame, int radius) {
     if (!frame.IsValid() || radius <= 0) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterOilPaint(&px, frame.Width(), frame.Height(), radius, 20);
         SkiaToFrame(px, frame);
     }
@@ -179,7 +188,7 @@ void VideoEffects::OilPaint(Frame& frame, int radius) {
 void VideoEffects::MotionBlur(Frame& frame, double angle, int distance) {
     if (!frame.IsValid()) return;
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         XER::Bridge::Skia::FilterMotionBlur(&px, frame.Width(), frame.Height(),
                                                 angle, distance);
         SkiaToFrame(px, frame);
@@ -201,7 +210,10 @@ void VideoEffects::FlipV(Frame& frame) {
     if (!frame.IsValid()) return;
     int w = frame.Width(), h = frame.Height();
     uint8_t* px = frame.Data();
-    std::vector<uint8_t> row(w * 4);
+    thread_local std::vector<uint8_t> row(static_cast<size_t>(w) * 4);
+    if (row.size() < static_cast<size_t>(w) * 4) {
+        row.resize(static_cast<size_t>(w) * 4);
+    }
     for (int y = 0; y < h/2; ++y) {
         int a=y*w*4, b=(h-1-y)*w*4;
         std::memcpy(row.data(), px+a, w*4);
@@ -232,7 +244,7 @@ void VideoEffects::ChromaKey(Frame& frame, double key_r, double key_g,
         const double lo_l1 = lo * kL1Scale;
         const double hi_l1 = hi * kL1Scale;
         const int mask_tol = std::max(1, static_cast<int>(std::ceil(hi_l1)));
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         std::vector<uint8_t> mask;
         const uint32_t seed = XER::Bridge::Skia::MakeColorRGBA(
             static_cast<int>(std::clamp(key_r, 0.0, 255.0)),
@@ -297,7 +309,7 @@ void VideoEffects::ColorBalance(Frame& frame, const double lift[3],
         // is a different op (tonal shadow/midtone/highlight deltas) and
         // cannot express multiplicative gain, so AdjustChannelMixer is
         // the faithful route — same per-pixel formula as the CPU path.
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         const XER::Bridge::Skia::ChannelMixerCoeff
             out_r{gain[0], 0.0, 0.0, lift[0]},
             out_g{0.0, gain[1], 0.0, lift[1]},
@@ -328,7 +340,7 @@ void VideoEffects::Posterize(Frame& frame, int levels) {
     }
     levels = std::max(2, levels);
     if (XER::Bridge::Skia::IsAvailable()) {
-        auto px = FrameToSkia(frame);
+        auto& px = FrameToSkia(frame);
         if (XER::Bridge::Skia::AdjustPosterize(&px, frame.Width(),
                                                frame.Height(), levels)) {
             SkiaToFrame(px, frame);

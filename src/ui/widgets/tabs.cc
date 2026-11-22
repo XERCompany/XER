@@ -32,8 +32,9 @@ Tabs::Tabs() {
     SetFocusable(true);
 }
 
-void Tabs::AddTab(std::string label) {
+void Tabs::AddTab(std::string label, std::string tooltip) {
     labels_.push_back(std::move(label));
+    tooltips_.push_back(std::move(tooltip));
     if (active_index_ < 0) {
         active_index_ = 0;
     }
@@ -41,8 +42,22 @@ void Tabs::AddTab(std::string label) {
     Invalidate();
 }
 
+void Tabs::SetTabTooltip(int index, std::string tooltip) {
+    if (index < 0 || index >= static_cast<int>(labels_.size())) {
+        return;
+    }
+    if (tooltips_.size() < labels_.size()) {
+        tooltips_.resize(labels_.size());
+    }
+    tooltips_[static_cast<std::size_t>(index)] = std::move(tooltip);
+    if (index == hovered_tab_) {
+        SyncTabTooltip();
+    }
+}
+
 void Tabs::ClearTabs() {
     labels_.clear();
+    tooltips_.clear();
     tab_rects_.clear();
     active_index_ = -1;
     hovered_tab_ = -1;
@@ -68,6 +83,20 @@ void Tabs::SetStyle(Style style) {
     if (style_ == style) return;
     style_ = style;
     Invalidate();
+}
+
+void Tabs::SyncTabTooltip() {
+    std::string tip;
+    if (hovered_tab_ >= 0 &&
+        hovered_tab_ < static_cast<int>(tooltips_.size())) {
+        tip = tooltips_[static_cast<std::size_t>(hovered_tab_)];
+    }
+    // Clear first so the tree drops a tooltip still showing the
+    // previous tab's text; Tick() re-arms with the new text before
+    // the tree's own tooltip pass re-reads GetTooltip().
+    SetTooltip("");
+    pending_tooltip_ = std::move(tip);
+    tooltip_dirty_ = true;
 }
 
 void Tabs::ActivateTab(int index) {
@@ -122,8 +151,9 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
     if (active_index_ >= 0 && active_index_ < static_cast<int>(tab_rects_.size())) {
         if (pill) {
             const auto chip = PillRect(ind_x_.pos, ind_w_.pos, bounds);
-            renderer.FillRect(chip, tokens.secondary, chip.height * 0.5f);
-            renderer.StrokeRect(chip, tokens.border, 1.0f, chip.height * 0.5f);
+            // Filled accent chip on the active tab — the inactive
+            // tabs stay ghost (muted label, hover wash only).
+            renderer.FillRect(chip, tokens.accent, chip.height * 0.5f);
             // Focus ring hugs the active chip when the bar has keyboard focus.
             if (IsFocused()) {
                 renderer.StrokeRect(
@@ -163,7 +193,10 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
         const bool active = static_cast<int>(i) == active_index_;
         const bool hovered = static_cast<int>(i) == hovered_tab_;
 
-        Theme::Color text_color = active ? tokens.foreground : tokens.muted;
+        Theme::Color text_color =
+            active ? (pill ? tokens.accent_foreground
+                           : tokens.foreground)
+                   : tokens.muted;
         if (!active && hovered && IsEnabled()) {
             text_color = tokens.foreground;
         }
@@ -193,6 +226,10 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
 void Tabs::Tick(double dt_seconds) {
     if (!IsEffectivelyVisible()) {
         return;
+    }
+    if (tooltip_dirty_) {
+        SetTooltip(pending_tooltip_);
+        tooltip_dirty_ = false;
     }
     ind_x_.Update(static_cast<float>(dt_seconds));
     ind_w_.Update(static_cast<float>(dt_seconds));
@@ -239,6 +276,7 @@ bool Tabs::HandleEvent(const Event& event) {
             const int hit = HitTab(event.position);
             if (hit != hovered_tab_) {
                 hovered_tab_ = hit;
+                SyncTabTooltip();
                 Invalidate();
             }
             return hit >= 0;

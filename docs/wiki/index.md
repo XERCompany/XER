@@ -46,6 +46,11 @@ Goal started: 2026-11-15. Design doc:
   MI-GAN/LaMa, Real-ESRGAN, EfficientSAM, Depth-Anything-S, RF-DETR),
   license blocklist (Ultralytics AGPL, RMBG, SAM 3), MSYS2/vcpkg ORT
   fix paths (2026-11-22).
+- [2026-11-22-modern-nle-features.md](research/2026-11-22-modern-nle-features.md)
+  — competitor survey (Resolve 20, Premiere 25-27, CapCut, Descript,
+  FCP 11): top-10 ranked list — captions/text-edit/silence/ducking/
+  reframe all hang off already-vendored whisper+ONNX models
+  (2026-11-22).
 - [2026-11-21-nle-architectures.md](research/2026-11-21-nle-architectures.md)
   — NLE engine survey: MLT/Kdenlive/Shotcut, Olive node+render cache,
   Blender VSE proxies, OFX/Frei0r/libplacebo/VapourSynth matrix,

@@ -115,6 +115,17 @@
  *                              "after" picks the next clip on the
  *                              track when "to" is omitted
  *     timeline.remove_transition {from,to}
+ *     timeline.set_clip {id?,name?,muted?,gain_db?,pan?,fade_in?,
+ *                        fade_out?,in_point?,param?|text?} — generic
+ *                        property patch (ReplaceClip; `param`/`text`
+ *                        rewrites the generated-source payload, e.g.
+ *                        a title's caption text)
+ *     timeline.set_keyframes {id?,prop,keys:[{time,value,ease?}]} —
+ *                        prop: posx|posy|scale|rotation|opacity|
+ *                        gain_db; ease: linear(default)|ease_in|
+ *                        ease_out|ease_in_out|hold|ease_in_cubic|
+ *                        ease_out_cubic|expo_out|back|elastic|bounce;
+ *                        times are clip-local seconds
  *
  *   transport.* — playback:
  *     transport.info           → {"playing","playhead","rate","loop",
@@ -166,6 +177,42 @@
  *
  *   edit.* — history:
  *     edit.undo / edit.redo / edit.history → undo/redo + label stacks
+ *
+ *   ai.* — the editor's analysis jobs (shared background op; only
+ *     one runs at a time) plus synchronous compute helpers:
+ *     ai.status               → {"running","progress","last_kind",
+ *                                "last_detail","last_span_count"}
+ *     ai.last                 → the finished job's payload:
+ *                                {"kind","detail","clip_id"?,
+ *                                 "bounce_path"?,"spans":[{t0,t1,
+ *                                 label,confidence}],"markers":[...]}
+ *                                — beats fill point spans, transcribe
+ *                                fills text spans, find_objects fills
+ *                                labelled ranges (source seconds)
+ *     ai.cancel               → cooperative cancel of the running job
+ *     ai.detect_beats {path?}     → {"queued"} (default path: the
+ *                                 selected clip's source; results
+ *                                 land as markers + ai.last)
+ *     ai.transcribe {path?}       → {"queued"} (whisper; needs a
+ *                                 ggml model — see ai.status)
+ *     ai.find_objects {id?}       → {"queued"} (RF-DETR tag scan of
+ *                                 the clip's consumed source span)
+ *     ai.detect_silences {path?,threshold_db?,min_silence?,
+ *                         window_ms?,max_seconds?,envelope?}
+ *                               → {"silences":[{t0,t1,rms_db}],
+ *                                  envelope?,"duration","clip"?} —
+ *                                 SYNCHRONOUS: decodes on the calling
+ *                                 thread, so keep max_seconds bounded;
+ *                                 times are SOURCE seconds (use the
+ *                                 "clip" block {clip_id,start,
+ *                                 in_point,rate} to map onto the
+ *                                 timeline when a clip was the target)
+ *     ai.detect_scenes {path?,threshold?,min_scene?,sample_step?,
+ *                       max_seconds?} → {"cuts":[{t,strength}],"clip"?}
+ *                               — SYNCHRONOUS visual cut detection
+ *     ai.loudness {path?,max_seconds?} → {"integrated_lufs",
+ *                                 "true_peak_dbfs","duration","clip"?}
+ *                               — SYNCHRONOUS LUFS/true-peak pass
  *
  * v2 aliases kept for compatibility: "project.clips", "status".
  * "app.quit" deliberately does NOT exist — extensions may never take
