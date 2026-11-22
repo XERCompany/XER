@@ -116,7 +116,7 @@ void MonitorSurface::SetFrame(const std::vector<std::uint8_t>& bgra,
             static_cast<std::size_t>(height)) {
         return;
     }
-    frame_ = bgra;
+    frame_ = std::make_shared<const std::vector<std::uint8_t>>(bgra);
     frame_width_ = width;
     frame_height_ = height;
     Invalidate(VideoAreaRect());
@@ -129,7 +129,8 @@ void MonitorSurface::SetFrameProvider(FrameProvider provider) {
 
 bool MonitorSurface::HasFrame() const {
     return frame_width_ > 0 && frame_height_ > 0 &&
-           (!frame_.empty() || frame_provider_ != nullptr);
+           ((frame_ != nullptr && !frame_->empty()) ||
+            frame_provider_ != nullptr);
 }
 
 void MonitorSurface::SetStatusText(std::string text, bool is_error) {
@@ -384,7 +385,7 @@ void MonitorSurface::Paint(Rendering::Renderer& renderer,
     // Pull path wins when installed — the provider owns "what frame
     // now" (fake providers in smoke; push path otherwise).
     Frame provided;
-    const std::vector<std::uint8_t>* pixels = &frame_;
+    const std::vector<std::uint8_t>* pixels = frame_.get();
     if (frame_provider_ != nullptr) {
         provided = frame_provider_();
         if (provided.bgra != nullptr && provided.width > 0 &&

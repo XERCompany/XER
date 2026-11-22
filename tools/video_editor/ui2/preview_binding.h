@@ -29,6 +29,7 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "media_decoder.h"      // MediaDecoderFactory
@@ -132,6 +133,14 @@ public:
     // onto the panel's playing state.
     void DrainPending();
 
+    // ---- pull seams ------------------------------------------------
+    // The last engine-reported stereo peak levels (linear
+    // amplitude, {L,R}) — read under the marshal mutex. Lets meter
+    // consumers that can't ride the panel's SetPeakLevels push (the
+    // mixer's master strip) pull the same values. Zeros until the
+    // engine reports.
+    std::pair<float, float> PeakLevels() const;
+
 private:
     // Forwarding audio sink — engines capture the audio_sink pointer
     // at Init, so a device that appears later reaches the running
@@ -175,7 +184,7 @@ private:
 
     // Pending marshal slots — written by the engine worker, swapped
     // out by DrainPending (old pending_* parity).
-    std::mutex mutex_;
+    mutable std::mutex mutex_;
     std::vector<std::uint8_t> pending_frame_;
     int pending_w_ = 0, pending_h_ = 0;
     bool has_frame_ = false;

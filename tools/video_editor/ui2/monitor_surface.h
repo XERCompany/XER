@@ -107,6 +107,14 @@ public:
     bool HasFrame() const;
     int FrameWidth() const { return frame_width_; }
     int FrameHeight() const { return frame_height_; }
+    // The last pushed frame as a shared snapshot (no copy) — the
+    // scopes panel's frame source and the color eyedropper's sample
+    // seam both read through this. Empty bgra when unset or when a
+    // pull provider is the active feed (pulled frames aren't
+    // retained).
+    Frame CurrentFrame() const {
+        return {frame_, frame_width_, frame_height_};
+    }
     // One-line status drawn in place of the frame when none is
     // available ("Decoding…", "Audio only", errors).
     void SetStatusText(std::string text, bool is_error = false);
@@ -231,8 +239,9 @@ private:
     std::function<void(float)> on_zoom_changed_;
     std::shared_ptr<XER::UI::Widgets::Surface> surface_;
 
-    // Frame (push path) + provider (pull path).
-    std::vector<std::uint8_t> frame_;
+    // Frame (push path, shared so CurrentFrame() snapshots are free)
+    // + provider (pull path).
+    std::shared_ptr<const std::vector<std::uint8_t>> frame_;
     int frame_width_ = 0;
     int frame_height_ = 0;
     FrameProvider frame_provider_;

@@ -1,25 +1,44 @@
 #include "ve_app.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 #include <vector>
 
+#include "ai/audio_pcm.h"
+#include "ai/whisper_transcribe.h"
+#include "app_runtime/app_runtime.h"
 #include "builtin_fx.h"
+#include "captions.h"
+#include "cef/cef_ext_scheme.h"
+#include "color_panel.h"
 #include "effects_panel.h"
+#include "export_engine.h"
+#include "extensions/ext_host.h"
+#include "extensions_panel.h"
+#include "history_panel.h"
 #include "inspector_panel.h"
 #include "js_fx.h"
+#include "markers_panel.h"
 #include "media_panel.h"
+#include "mixer_panel.h"
 #include "media_prep.h"
 #include "monitor_panel.h"
 #include "overlays/toast.h"
+#include "photo_workspace.h"
 #include "plugin_host.h"
 #include "proxy_manager.h"
+#include "queue_panel.h"
 #include "rendering/renderer.h"
+#include "scopes_panel.h"
 #include "shell_widgets.h"
+#include "timecode.h"
 #include "timeline_bridge.h"
 #include "timeline_history.h"
 #include "timeline_strip.h"
 #include "timeline_surface.h"
+#include "transcript_edit.h"
+#include "transcript_panel.h"
 #include "ve_theme.h"
 #include "widgets/app_title_bar.h"
 #include "widgets/command.h"
@@ -79,7 +98,15 @@ VeApp::VeApp(std::string project_path, std::filesystem::path prefs_path)
     SetStatus("ui2 shell — M2 monitors + timeline");
 }
 
-VeApp::~VeApp() = default;
+VeApp::~VeApp() {
+    // Worker teardown: the whisper job touches only its own
+    // mutex-guarded slot, but the thread itself must not outlive the
+    // members it captures — cancel + join before the fields go.
+    transcript_cancel_ = true;
+    if (transcript_worker_.joinable()) transcript_worker_.join();
+    // export_engine_ tears itself down (ExportEngine::~ExportEngine
+    // Cancel()s + Wait()s the worker).
+}
 
 // ── structure accessors ──────────────────────────────────────────────
 
@@ -105,12 +132,14 @@ void VeApp::BuildShell() {
     nav_rail_->SetCollapsed(true);
     nav_rail_->SetItems(
         {{"Edit", "E"}, {"Fx", "F"}, {"Audio", "A", true},
-         {"Color", "C"}, {"Markers", "M", true}, {"Lab", "L"}});
+         {"Color", "C"}, {"Markers", "M", true}, {"Photo", "P"},
+         {"Lab", "L"}});
     nav_rail_->SetOnSelect([this](int index) {
         // Rail presets — same WorkspaceLayout data as the switcher.
         static const char* kNames[] = {"Editing", "Effects", "Audio",
-                                       "Color", "Markers", "Cut"};
-        if (index >= 0 && index < 6) {
+                                       "Color",    "Markers", "Photo",
+                                       "Cut"};
+        if (index >= 0 && index < 7) {
             ApplyWorkspaceByName(kNames[index]);
         }
     });
@@ -166,6 +195,14 @@ void VeApp::BuildShell() {
     WireMediaPanel();
     WireEffectsPanel();
     WireInspectorPanel();
+    WireColorPanel();
+    WireScopesPanel();
+    WireMixerPanel();
+    WireMarkersPanel();
+    WireHistoryPanel();
+    WireQueuePanel();
+    WireExtensionsPanel();
+    WireTranscriptPanel();
 
     status_ = StatusStrip::Create();
     status_->SetBadges({{"autosave", "Autosave off"},
@@ -195,12 +232,24 @@ void VeApp::BuildShell() {
 
 void VeApp::BuildDockPanels() {
     // M3 wave-1: real panels replace the M1 placeholders for Media,
-    // Effects and Inspector. Panels are created + hook-wired here;
-    // the media stack (catalog/prep/proxies) lazy-inits so smoke
-    // construction stays thread-free until the bin needs it.
+    // Effects and Inspector. Wave-2 adds Color, Mix and Scopes.
+    // Panels are created + hook-wired here; the media stack
+    // (catalog/prep/proxies) lazy-inits so smoke construction stays
+    // thread-free until the bin needs it.
     media_panel_ = MediaPanel::Create();
     effects_panel_ = EffectsPanel::Create();
     inspector_panel_ = InspectorPanel::Create();
+    color_panel_ = ColorPanel::Create();
+    scopes_panel_ = ScopesPanel::Create();
+    mixer_panel_ = MixerPanel::Create();
+    // M3 wave-3 right-dock panels — real surfaces replace the
+    // remaining M1 placeholders. Tab order below MUST match the
+    // kRightTab* constants in workspace_layout.h.
+    markers_panel_ = MarkersPanel::Create();
+    history_panel_ = HistoryPanel::Create();
+    queue_panel_ = QueuePanel::Create();
+    extensions_panel_ = ExtensionsPanel::Create();
+    transcript_panel_ = TranscriptPanel::Create();
 
     left_dock_->AddTab("Media", "Media bin — catalog browser",
                        media_panel_);
@@ -217,28 +266,26 @@ void VeApp::BuildDockPanels() {
 
     right_dock_->AddTab("Inspector", "Clip inspector",
                         inspector_panel_);
-    right_dock_->AddTab("Color", "Color panel (M3)",
-                        PH("dock.color", "Color",
-                           "Wheels / curves / LUT"));
-    right_dock_->AddTab("Markers", "Markers list (M3)",
-                        PH("dock.markers", "Markers",
-                           "Timeline marker table"));
-    right_dock_->AddTab("History", "Undo history (M3)",
-                        PH("dock.history", "History",
-                           "TimelineHistory browser"));
-    right_dock_->AddTab("Mix", "Audio mixer (M3)",
-                        PH("dock.mix", "Mix",
-                           "Track faders + meters"));
-    right_dock_->AddTab("Queue", "Export queue (M3)",
-                        PH("dock.queue", "Queue", "Render jobs"));
-    right_dock_->AddTab("Ext", "Extensions (M3)",
-                        PH("dock.ext", "Ext", "xer-ext host"));
-    right_dock_->AddTab("Scopes", "Video scopes (M3)",
-                        PH("dock.scopes", "Scopes",
-                           "Waveform / vectorscope"));
-    right_dock_->AddTab("Trn", "Transcript editor (M3)",
-                        PH("dock.trn", "Trn",
-                           "Text-based editing"));
+    right_dock_->AddTab("Color", "Color workspace — wheels, tint, "
+                                 "white balance",
+                        color_panel_);
+    right_dock_->AddTab("Markers", "Markers list — seek, edit, color",
+                        markers_panel_);
+    right_dock_->AddTab("History", "Undo history — jump to any state",
+                        history_panel_);
+    right_dock_->AddTab("Mix", "Audio mixer — track faders, pan, "
+                               "meters",
+                        mixer_panel_);
+    right_dock_->AddTab("Queue", "Export queue — render jobs",
+                        queue_panel_);
+    right_dock_->AddTab("Ext", "Extensions — xer-ext host",
+                        extensions_panel_);
+    right_dock_->AddTab("Scopes", "Video scopes — waveform, "
+                                  "histogram, more",
+                        scopes_panel_);
+    right_dock_->AddTab("Trn", "Transcript editor — text-based "
+                               "editing",
+                        transcript_panel_);
     left_dock_->SetOnChanged([this](int i) {
         prefs_.left_tab = i;
         MarkPrefsDirty();
@@ -264,9 +311,29 @@ void VeApp::RebuildOuterSplit() {
             : std::max(0.2f, 1.0f - l - r);
     top_split_->ClearPanels();
     top_split_->AddPanel(RP(left_dock_, l, 160.0f));
-    top_split_->AddPanel(RP(monitor_split_, c, 320.0f));
+    if (photo_mode_ && photo_workspace_ != nullptr) {
+        // "Photo" preset: the photo workspace band takes the center
+        // slot the monitor pair otherwise fills.
+        top_split_->AddPanel(RP(photo_workspace_, c, 320.0f));
+    } else {
+        top_split_->AddPanel(RP(monitor_split_, c, 320.0f));
+    }
     top_split_->AddPanel(RP(right_dock_, r, 160.0f));
     SyncDockCollapsed();
+}
+
+class PhotoWorkspace* VeApp::PhotoWorkspaceView() const {
+    return photo_workspace_.get();
+}
+
+void VeApp::EnsurePhotoWorkspace() {
+    if (photo_workspace_ != nullptr) return;
+    PhotoWorkspace::Hooks hooks;
+    hooks.on_status = [this](const std::string& text, bool is_error) {
+        SetStatus(text, is_error);
+    };
+    photo_workspace_ = PhotoWorkspace::Create(std::move(hooks));
+    photo_workspace_->EnsureDocument();
 }
 
 void VeApp::SyncDockCollapsed() {
@@ -324,6 +391,44 @@ void VeApp::RebuildMenus() {
          true, false, false, true},
         {"Export…", "",
          [this] { Notify("Export", "M2 — export pipeline"); }},
+        {"Open Photo Document…", "",
+         [this] {
+             ApplyWorkspaceByName("Photo");
+             if (photo_workspace_ != nullptr) {
+                 photo_workspace_->OpenDialog();
+             }
+         },
+         true, false, false, true},
+        {"Save Photo Document", "",
+         [this] {
+             if (photo_workspace_ != nullptr) {
+                 photo_workspace_->Save(/*choose_path=*/false);
+             } else {
+                 SetStatus("No photo document", true);
+             }
+         }},
+        {"Save Photo As…", "",
+         [this] {
+             ApplyWorkspaceByName("Photo");
+             if (photo_workspace_ != nullptr) {
+                 photo_workspace_->Save(/*choose_path=*/true);
+             }
+         }},
+        {"Export Photo PNG…", "",
+         [this] {
+             ApplyWorkspaceByName("Photo");
+             if (photo_workspace_ != nullptr) {
+                 photo_workspace_->ExportPng();
+             }
+         }},
+        {"New Photo Document…", "",
+         [this] {
+             ApplyWorkspaceByName("Photo");
+             if (photo_workspace_ != nullptr) {
+                 photo_workspace_->NewDocumentDialog();
+             }
+         },
+         true, false, false, true},
     };
     Menu edit{"Edit", 0, {}};
     edit.items = {
@@ -493,6 +598,7 @@ void VeApp::WireTimelineBridge() {
             s->SetSelectedClip(clip_id);
         }
         RefreshInspector();   // M3: selection provider re-pull
+        RefreshTranscriptSubject();   // wave-3: selection rebinds the subject
     };
     host.on_seek = [this](double t) { OnBridgeSeek(t); };
     host.on_project_changed = [this] { NotifyTimelineChanged(); };
@@ -542,6 +648,19 @@ void VeApp::NotifyTimelineChanged() {
     // M3: document edits (incl. undo/redo) invalidate the inspector's
     // Clip copies — re-pull through the provider.
     RefreshInspector();
+    // Same push for the wave-2 panels: the color target re-pulls
+    // (params rebuild only when the target clip changes — wheels keep
+    // their view state across doc edits), and the mixer re-syncs its
+    // strips against the track layout.
+    if (color_panel_ != nullptr) color_panel_->RefreshClip();
+    if (mixer_panel_ != nullptr) mixer_panel_->Refresh();
+    // Wave-3: marker table + history stacks re-pull on every
+    // document mutation (incl. undo/redo + macro boundaries); the
+    // transcript subject re-resolves its bound clip (a LiftRange may
+    // have split it).
+    RefreshMarkersPanel();
+    RefreshHistoryPanel();
+    RefreshTranscriptSubject();
 }
 
 void VeApp::OnBridgeSeek(double seconds) {
@@ -634,8 +753,24 @@ void VeApp::WireMonitorPanels() {
     ph.on_mark_out = [this] { ProgramSetWorkAreaPoint(false); };
     ph.on_lift = [this] { ProgramLiftExtract(false); };
     ph.on_extract = [this] { ProgramLiftExtract(true); };
-    // on_click_point stays unset — the SmartSelect seam arms with
-    // the M3 lab wiring (click points emit only while armed anyway).
+    // Armed click points: the color panel's white-balance eyedropper
+    // owns the seam for now (SmartSelect/lab arming lands with the
+    // lab wave — both can't be armed at once, first writer wins).
+    ph.on_click_point = [this](float nx, float ny) {
+        if (!color_pick_armed_) return;
+        color_pick_armed_ = false;
+        program_monitor_->SetClickPointsArmed(false);
+        if (color_panel_ == nullptr) return;
+        const auto frame =
+            program_monitor_->VideoSurface().CurrentFrame();
+        if (frame.bgra == nullptr) {
+            color_panel_->CancelPick();
+            SetStatus("No program frame to sample", true);
+            return;
+        }
+        color_panel_->ApplyPickedColor(
+            SampleProgramFrame(nx, ny));
+    };
     ph.on_status = status;
     program_monitor_->SetHooks(std::move(ph));
 
@@ -1400,6 +1535,11 @@ void VeApp::ApplyWorkspace(const WorkspaceLayout& ws) {
     if (title_bar_ != nullptr) {
         title_bar_->SetWorkspaceLabel(ws.name);
     }
+    // "Photo" swaps the top split's center for the photo band — the
+    // same slot the monitor pair fills in every other preset.
+    photo_mode_ = ws.name == "Photo";
+    if (photo_mode_) EnsurePhotoWorkspace();
+    RebuildOuterSplit();
     // Rebuild the outer split so the preset's timeline share applies.
     // Resizable has no post-hoc size setter; ClearPanels + AddPanel
     // re-registers the same child widgets with new fractions. The
@@ -1567,6 +1707,20 @@ void VeApp::Tick(double dt_seconds) {
                           " poster request(s) dropped",
                       true);
         }
+    }
+    // Wave-3 drivers: the export engine's Progress()/Status() drain
+    // into queue rows, the whisper worker's result slot into the
+    // transcript panel + cache. Both are poll-seams — the workers
+    // never touch widgets.
+    PumpExportQueue(dt_seconds);
+    PumpTranscriptJob();
+    // Playhead fan-out: the transcript's live-word highlight and the
+    // markers table's proximity accent read the shell-owned time.
+    if (transcript_panel_ != nullptr) {
+        transcript_panel_->SetPlayhead(playhead_);
+    }
+    if (markers_panel_ != nullptr) {
+        markers_panel_->SetPlayhead(playhead_);
     }
     if (prefs_dirty_) {
         prefs_flush_timer_ += dt_seconds;
@@ -2219,6 +2373,1026 @@ void VeApp::WireInspectorPanel() {
         };
     inspector_panel_->SetHooks(std::move(hooks));
     inspector_panel_->RefreshSelection();
+}
+
+// ---- M3 wave-2 panels: Color / Scopes / Mix ------------------------------
+
+void VeApp::WireColorPanel() {
+    if (color_panel_ == nullptr) return;
+    // Selection seam — InspectorPanel parity (single-clip surface).
+    color_panel_->SetClipProvider([this] {
+        std::vector<Clip> sel = SelectedClips();
+        return sel.empty() ? Clip{} : sel.front();
+    });
+
+    ColorHooks hooks;
+    hooks.on_color_changed =
+        [this](const std::string& clip_id,
+               const ColorParams& params) {
+            CommitClipColor(clip_id, params);
+        };
+    hooks.on_begin_macro = [this] {
+        if (history_ != nullptr) {
+            history_->BeginMacro("Color gesture");
+        }
+    };
+    hooks.on_end_macro = [this] {
+        if (history_ != nullptr) history_->EndMacro();
+    };
+    // White-balance eyedropper: arming turns the program monitor's
+    // click-point seam on — the armed click lands in
+    // WireMonitorPanels' on_click_point, which samples the current
+    // frame and feeds it back through ApplyPickedColor.
+    hooks.on_arm_pick = [this] {
+        color_pick_armed_ = true;
+        if (program_monitor_ != nullptr) {
+            program_monitor_->SetClickPointsArmed(true);
+        }
+    };
+    // Scope chips -> activate the Scopes dock tab (index 7 in the
+    // spec §5 order) + set its mode.
+    hooks.on_scope_mode = [this](int index) {
+        if (scopes_panel_ != nullptr && index >= 0 && index < 4) {
+            scopes_panel_->SetMode(
+                static_cast<ScopesPanel::Mode>(index));
+        }
+        if (right_dock_ != nullptr) {
+            right_dock_->SetActiveIndex(kRightTabScopes);
+        }
+    };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    color_panel_->SetHooks(std::move(hooks));
+    color_panel_->RefreshClip();
+}
+
+void VeApp::CommitClipColor(const std::string& clip_id,
+                            const ColorParams& params) {
+    if (history_ == nullptr) return;
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("Color commit: clip not found", true);
+        return;
+    }
+    Clip updated = *clip;
+
+    // Upsert helper: writes the param snapshot into an existing slot
+    // or appends the effect when it carries a non-default value (a
+    // neutral write to a missing effect stays absent so untouched
+    // clips keep an empty fx rack).
+    const auto upsert = [&updated](const char* type,
+                                   std::vector<float> values,
+                                   bool non_default) {
+        for (ClipEffect& fx : updated.effects) {
+            if (fx.type == type) {
+                fx.params = std::move(values);
+                return;
+            }
+        }
+        if (non_default) {
+            updated.effects.push_back({type, std::move(values)});
+        }
+    };
+
+    // temperature / tint — axes shared by the OKLCH picker cast and
+    // the eyedropper correction (color_panel.cc mapping).
+    upsert("builtin:xer.fx.temperature", {params.temperature},
+           params.temperature != 0.0f);
+    upsert("builtin:xer.fx.tint", {params.tint},
+           params.tint != 0.0f);
+
+    // Wheel LEVELS -> lift_gamma_gain {lift, gamma, gain}:
+    //   shadows.level -> lift   (-1..1 direct)
+    //   midtones.level -> gamma (2^level: +1 -> 2.0 brightens mids)
+    //   highlights.level -> gain (1 + level -> 0..2)
+    const auto& w = params.wheels;
+    const bool levels_non_default =
+        w[0].level != 0.0f || w[1].level != 0.0f ||
+        w[2].level != 0.0f;
+    upsert("builtin:xer.fx.lift_gamma_gain",
+           {std::clamp(w[0].level, -1.0f, 1.0f),
+            std::clamp(std::pow(2.0f, w[1].level), 0.2f, 4.0f),
+            std::clamp(1.0f + w[2].level, 0.0f, 4.0f)},
+           levels_non_default);
+
+    // Wheel OFFSETS -> channel_mixer diagonal gains. The kernel set
+    // has no band-local chroma op, so each wheel's offset folds to a
+    // global per-channel delta weighted by band (shadows .5, mids
+    // 1.0, highlights .5 — mids dominate, documented approximation).
+    // +x pushes R+/B- (warm/cool), +y pushes G-/R+B+ (magenta/green).
+    constexpr float kBandW[3] = {0.5f, 1.0f, 0.5f};
+    constexpr float kOffsetGain = 0.5f;   // full deflection -> ±0.5
+    float dr = 0.0f, dg = 0.0f, db = 0.0f;
+    bool offsets_non_default = false;
+    for (int i = 0; i < 3; ++i) {
+        const float ox = w[i].offset_x * kBandW[i] * kOffsetGain;
+        const float oy = w[i].offset_y * kBandW[i] * kOffsetGain;
+        if (w[i].offset_x != 0.0f || w[i].offset_y != 0.0f) {
+            offsets_non_default = true;
+        }
+        dr += ox + oy;
+        dg += -2.0f * oy;
+        db += -ox + oy;
+    }
+    upsert("builtin:xer.fx.channel_mixer",
+           {std::clamp(1.0f + dr, 0.0f, 2.0f),
+            std::clamp(1.0f + dg, 0.0f, 2.0f),
+            std::clamp(1.0f + db, 0.0f, 2.0f)},
+           offsets_non_default);
+
+    MediaBounds bounds;
+    if (const CatalogEntry* e = FindCatalogEntry(clip->source_path)) {
+        bounds.duration_seconds = e->duration_seconds;
+        bounds.has_video = e->HasVideo();
+    } else {
+        bounds.duration_seconds = clip->duration;
+    }
+    std::string error;
+    if (!history_->ReplaceClip(clip_id, updated, bounds, &error)) {
+        SetStatus("Color commit failed: " + error, true);
+        return;
+    }
+    // Continuous drags coalesce inside ReplaceClip; a fresh paint
+    // pass for the monitor lands with the next DrainPending.
+    NotifyTimelineChanged();
+}
+
+XER::UI::Theme::Color VeApp::SampleProgramFrame(float nx,
+                                                float ny) const {
+    // 5x5 mean around the frame-normalized point — the same region
+    // average the eyedropper widget's sample-radius knob applies.
+    const auto frame = program_monitor_ != nullptr
+                           ? program_monitor_->VideoSurface()
+                                 .CurrentFrame()
+                           : MonitorSurface::Frame{};
+    if (frame.bgra == nullptr || frame.width <= 0 ||
+        frame.height <= 0) {
+        return {0.5f, 0.5f, 0.5f, 1.0f};
+    }
+    const int cx = std::clamp(static_cast<int>(nx * frame.width), 0,
+                              frame.width - 1);
+    const int cy = std::clamp(static_cast<int>(ny * frame.height),
+                              0, frame.height - 1);
+    double r = 0.0, g = 0.0, b = 0.0;
+    int n = 0;
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            const int x = cx + dx, y = cy + dy;
+            if (x < 0 || y < 0 || x >= frame.width ||
+                y >= frame.height) {
+                continue;
+            }
+            const auto* px =
+                frame.bgra->data() +
+                (static_cast<std::size_t>(y) * frame.width + x) * 4;
+            b += px[0];
+            g += px[1];
+            r += px[2];
+            ++n;
+        }
+    }
+    if (n == 0) return {0.5f, 0.5f, 0.5f, 1.0f};
+    const float inv = 1.0f / (255.0f * n);
+    return {static_cast<float>(r * inv),
+            static_cast<float>(g * inv),
+            static_cast<float>(b * inv), 1.0f};
+}
+
+void VeApp::WireScopesPanel() {
+    if (scopes_panel_ == nullptr) return;
+    // Pull seam — the program monitor's last pushed frame (shared,
+    // no copy). Pull-provider feeds aren't retained by the surface,
+    // so scopes see the push path only (documented on
+    // MonitorSurface::CurrentFrame).
+    scopes_panel_->SetFrameSource([this]() -> ScopeFrame {
+        if (program_monitor_ == nullptr) return {};
+        const auto f =
+            program_monitor_->VideoSurface().CurrentFrame();
+        return {f.bgra, f.width, f.height};
+    });
+}
+
+void VeApp::WireMixerPanel() {
+    if (mixer_panel_ == nullptr) return;
+    mixer_panel_->SetDocument(&project_);
+
+    MixerHooks hooks;
+    const auto commit = [this](bool ok, const char* what,
+                               const std::string& error) {
+        if (!ok) {
+            SetStatus(std::string(what) + " failed: " + error,
+                      true);
+        }
+    };
+    hooks.on_track_gain = [this, commit](int track, float db) {
+        std::string error;
+        const bool ok = history_ != nullptr &&
+                        history_->SetTrackGainDb(track, db, &error);
+        commit(ok, "Track gain", error);
+        if (ok) NotifyTimelineChanged();
+    };
+    hooks.on_track_pan = [this, commit](int track, float pan) {
+        std::string error;
+        const bool ok = history_ != nullptr &&
+                        history_->SetTrackPan(track, pan, &error);
+        commit(ok, "Track pan", error);
+        if (ok) NotifyTimelineChanged();
+    };
+    hooks.on_track_mute = [this, commit](int track, bool muted) {
+        std::string error;
+        const bool ok = history_ != nullptr &&
+                        history_->SetTrackMuted(track, muted, &error);
+        commit(ok, "Track mute", error);
+        if (ok) NotifyTimelineChanged();
+    };
+    hooks.on_track_solo = [this](int, bool) {
+        // Track has no solo flag — honest deferred state (the S
+        // button stays toggleable for the M3+ model addition).
+        SetStatus("Solo isn't wired into the track model yet");
+    };
+    hooks.on_master_gain = [this, commit](float db) {
+        std::string error;
+        const bool ok = history_ != nullptr &&
+                        history_->SetMasterGainDb(db, &error);
+        commit(ok, "Master gain", error);
+        if (ok) {
+            // Live preview mirror — the binding forwards to the
+            // engine's audio gain outside history (old app parity).
+            program_engine_.SetMasterGainDb(db);
+            NotifyTimelineChanged();
+        }
+    };
+    hooks.on_begin_macro = [this] {
+        if (history_ != nullptr) {
+            history_->BeginMacro("Mixer gesture");
+        }
+    };
+    hooks.on_end_macro = [this] {
+        if (history_ != nullptr) history_->EndMacro();
+    };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    mixer_panel_->SetHooks(std::move(hooks));
+
+    // Levels seam — pull-based per strip. Master reads the program
+    // binding's last stereo peaks; per-track taps don't exist yet
+    // (PreviewEngine mixes to the stereo bus), so track strips get
+    // an honest zero until a per-track peak seam lands.
+    mixer_panel_->SetLevelsProvider([this](int track_index) {
+        if (track_index == MixerPanel::kMasterBus) {
+            return program_engine_.PeakLevels();
+        }
+        return std::pair<float, float>{0.0f, 0.0f};
+    });
+}
+
+// ---- M3 wave-3 panels: Markers / History / Queue / Ext / Transcript ---
+// Same ownership rules as wave-1/2: the panels hold presentation
+// snapshots only; every document mutation funnels through history_
+// (marker ops) or the engine seams (export, ExtHost, whisper worker).
+
+void VeApp::WireMarkersPanel() {
+    if (markers_panel_ == nullptr) return;
+    MarkersPanel::Hooks hooks;
+    hooks.on_seek = [this](double t) { Seek(t); };
+    hooks.playhead_seconds = [this] { return playhead_; };
+    hooks.format_timecode = [this](double t) {
+        return FormatTimecode(t, project_.fps_num, project_.fps_den);
+    };
+    hooks.on_add_marker = [this](const Marker& marker) {
+        if (history_ == nullptr) return;
+        std::string error;
+        if (!history_->AddMarker(marker, &error)) {
+            SetStatus("Add marker failed: " + error, true);
+            return;
+        }
+        NotifyTimelineChanged();
+        SetStatus("Marker added");
+    };
+    hooks.on_remove_marker = [this](double time) {
+        if (history_ != nullptr && history_->RemoveMarker(time)) {
+            NotifyTimelineChanged();
+            SetStatus("Marker removed");
+        }
+    };
+    // Rename/recolor is remove+add — one history macro so undo
+    // restores both halves (the panel's on_update_marker contract).
+    hooks.on_update_marker =
+        [this](double old_time, const Marker& updated) {
+            if (history_ == nullptr) return;
+            history_->BeginMacro("Edit marker");
+            history_->RemoveMarker(old_time);
+            std::string error;
+            const bool ok = history_->AddMarker(updated, &error);
+            history_->EndMacro();
+            if (!ok) {
+                SetStatus("Edit marker failed: " + error, true);
+                history_->Undo();   // restore the removed marker
+            }
+            NotifyTimelineChanged();
+        };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    markers_panel_->SetHooks(std::move(hooks));
+    RefreshMarkersPanel();
+}
+
+void VeApp::RefreshMarkersPanel() {
+    if (markers_panel_ == nullptr) return;
+    // Project markers sorted by time. The model has no clip-anchored
+    // markers yet — MarkerRow.scope exists for that feed and stays
+    // "Project" today (markers_panel.h seam doc).
+    std::vector<MarkerRow> rows;
+    rows.reserve(project_.markers.size());
+    for (const Marker& m : project_.markers) {
+        MarkerRow row;
+        row.marker = m;
+        rows.push_back(row);
+    }
+    std::sort(rows.begin(), rows.end(),
+              [](const MarkerRow& a, const MarkerRow& b) {
+                  return a.marker.time < b.marker.time;
+              });
+    markers_panel_->SetMarkers(std::move(rows));
+}
+
+void VeApp::WireHistoryPanel() {
+    if (history_panel_ == nullptr) return;
+    HistoryPanel::Hooks hooks;
+    // No jump-to-depth op exists on TimelineHistory — a click is N
+    // repeated Undo()/Redo() calls (history_panel.h contract).
+    hooks.on_undo_steps = [this](int steps) {
+        int done = 0;
+        for (; done < steps; ++done) {
+            if (history_ == nullptr || !history_->Undo()) break;
+        }
+        if (done > 0) {
+            NotifyTimelineChanged();
+            SetStatus("Undo " + std::to_string(done) +
+                      (done == 1 ? " step" : " steps"));
+        }
+    };
+    hooks.on_redo_steps = [this](int steps) {
+        int done = 0;
+        for (; done < steps; ++done) {
+            if (history_ == nullptr || !history_->Redo()) break;
+        }
+        if (done > 0) {
+            NotifyTimelineChanged();
+            SetStatus("Redo " + std::to_string(done) +
+                      (done == 1 ? " step" : " steps"));
+        }
+    };
+    hooks.on_clear = [this] {
+        if (history_ != nullptr) {
+            history_->Clear();
+            NotifyTimelineChanged();
+            SetStatus("History cleared");
+        }
+    };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    history_panel_->SetHooks(std::move(hooks));
+    RefreshHistoryPanel();
+}
+
+void VeApp::RefreshHistoryPanel() {
+    if (history_panel_ == nullptr || history_ == nullptr) return;
+    history_panel_->SetEntries(history_->UndoLabels(),
+                               history_->RedoLabels());
+}
+
+void VeApp::WireQueuePanel() {
+    if (queue_panel_ == nullptr) return;
+    QueuePanel::Hooks hooks;
+    // "+ Enqueue" composes a job for the current sequence. Output
+    // lands under the OS temp dir (a save-as picker lands with the
+    // export-settings wave — the path is surfaced on the row).
+    hooks.on_enqueue = [this] {
+        const int serial = ++export_serial_;
+        std::string base = "sequence";
+        if (!project_path_.empty()) {
+            base = project_path_;
+            const std::size_t slash = base.find_last_of("/\\");
+            if (slash != std::string::npos) base = base.substr(slash + 1);
+            const std::size_t dot = base.find_last_of('.');
+            if (dot != std::string::npos) base = base.substr(0, dot);
+        }
+        QueueJob job;
+        job.id = "export-" + std::to_string(serial);
+        job.name = base + ".mp4";
+        job.format = "H.264 MP4 · 8 Mbps";
+        job.detail =
+            project_.work_out > project_.work_in
+                ? "work area " +
+                      FormatTimecode(project_.work_in, project_.fps_num,
+                                     project_.fps_den) +
+                      "–" +
+                      FormatTimecode(project_.work_out,
+                                     project_.fps_num, project_.fps_den)
+                : "full sequence";
+        job.output_path =
+            (std::filesystem::temp_directory_path() / "xer_exports" /
+             (job.id + ".mp4"))
+                .string();
+        queue_panel_->Enqueue(std::move(job));
+    };
+    hooks.on_submit = [this](const std::string& id) {
+        StartQueuedExport(id);
+    };
+    hooks.on_cancel = [this](const std::string& id) {
+        if (id == export_active_id_ && export_engine_ != nullptr) {
+            export_engine_->Cancel();   // cooperative — status lands via pump
+        }
+        if (id == export_pending_id_) export_pending_id_.clear();
+    };
+    // Honest unsupported seams — ExportEngine has no pause/resume
+    // (queue_panel.h "engine seam" doc). Returning false lets the
+    // panel say so instead of faking a frozen row.
+    hooks.on_pause = [](const std::string&) { return false; };
+    hooks.on_resume = [](const std::string&) { return false; };
+    hooks.on_retry = [](const std::string&) {
+        // The panel itself requeues the row; on_submit re-fires when
+        // it reaches the head — nothing for the shell to store.
+    };
+    hooks.on_reveal = [this](const std::string& id) {
+        const QueueJob* job = queue_panel_->JobById(id);
+        if (job == nullptr || job->output_path.empty()) return;
+        (void)this;
+#if defined(_WIN32)
+        const std::wstring wide =
+            XER::Helper::Path::FromUtf8(job->output_path).wstring();
+        std::wstring cmd = L"/select,\"" + wide + L"\"";
+        ::ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                        cmd.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+        SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+    };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    queue_panel_->SetHooks(std::move(hooks));
+}
+
+void VeApp::StartQueuedExport(const std::string& job_id) {
+    if (queue_panel_ == nullptr) return;
+    if (export_engine_ != nullptr && export_engine_->IsRunning()) {
+        // Single worker: the cancelled head is still draining — hold
+        // the row queued and retry when PumpExportQueue frees the
+        // engine (avoids an immediate "already running" rejection).
+        queue_panel_->WithdrawSubmission(job_id);
+        export_pending_id_ = job_id;
+        return;
+    }
+    const QueueJob* job = queue_panel_->JobById(job_id);
+    if (job == nullptr) return;
+    ExportOptions options;
+    options.output_path = job->output_path;
+    if (options.output_path.empty()) {
+        queue_panel_->SetJobState(job_id, QueueJobState::Failed,
+                                  "no output path");
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(
+        std::filesystem::path(options.output_path).parent_path(), ec);
+    if (export_engine_ == nullptr) {
+        export_engine_ =
+            std::make_unique<XER::VideoEditor::ExportEngine>();
+    }
+    std::string error;
+    // No progress callback — Tick polls Progress()/Status() so the
+    // worker thread never touches widgets.
+    if (!export_engine_->Start(project_, options, {}, &error)) {
+        queue_panel_->SetJobState(job_id, QueueJobState::Failed,
+                                  error.empty() ? "export start failed"
+                                                : error);
+        SetStatus("Export failed: " + error, true);
+        return;
+    }
+    export_active_id_ = job_id;
+    export_elapsed_ = 0.0;
+    SetStatus("Exporting " + job->name);
+}
+
+void VeApp::PumpExportQueue(double dt_seconds) {
+    if (queue_panel_ == nullptr) return;
+    if (export_engine_ != nullptr && !export_active_id_.empty()) {
+        export_elapsed_ += dt_seconds;
+        if (export_engine_->IsRunning()) {
+            const ExportProgress p = export_engine_->Progress();
+            double eta = -1.0;
+            if (p.fraction > 0.01 && export_elapsed_ > 0.0) {
+                eta = export_elapsed_ * (1.0 - p.fraction) /
+                      p.fraction;
+            }
+            queue_panel_->SetJobProgress(export_active_id_,
+                                         p.fraction, eta);
+        } else {
+            const std::string id = export_active_id_;
+            export_active_id_.clear();
+            switch (export_engine_->Status()) {
+                case ExportStatus::kDone:
+                    queue_panel_->SetJobState(id, QueueJobState::Done);
+                    SetStatus("Export finished");
+                    break;
+                case ExportStatus::kCancelled:
+                    queue_panel_->SetJobState(id,
+                                              QueueJobState::Cancelled);
+                    SetStatus("Export cancelled");
+                    break;
+                case ExportStatus::kError:
+                    queue_panel_->SetJobState(
+                        id, QueueJobState::Failed,
+                        export_engine_->Error());
+                    SetStatus("Export failed: " +
+                                  export_engine_->Error(),
+                              true);
+                    break;
+                default:
+                    queue_panel_->SetJobState(
+                        id, QueueJobState::Cancelled, "engine stopped");
+                    break;
+            }
+            // Reap the finished worker now (non-blocking join).
+            export_engine_->Wait();
+        }
+    }
+    // A job parked while the engine drained gets resubmitted once the
+    // worker frees (fresh engine — Start() on a finished instance is
+    // legal, but a clean one keeps the state obvious).
+    if (!export_pending_id_.empty() &&
+        (export_engine_ == nullptr || !export_engine_->IsRunning())) {
+        const std::string id = export_pending_id_;
+        export_pending_id_.clear();
+        export_engine_.reset();
+        if (const QueueJob* job = queue_panel_->JobById(id);
+            job != nullptr) {
+            queue_panel_->SetJobState(id, QueueJobState::Running);
+            StartQueuedExport(id);
+        }
+    }
+}
+
+std::string VeApp::ExtensionsDir() const {
+    const auto& cfg = AppRuntime::SharedAssetsConfig();
+    if (cfg.assets_dir.empty()) return {};
+    return (cfg.assets_dir / "extensions").string();
+}
+
+void VeApp::RefreshExtensionsPanel(bool force) {
+    if (extensions_panel_ == nullptr) return;
+    if (force || !ext_scanned_) {
+        ext_scanned_ = true;
+        const std::string dir = ExtensionsDir();
+        if (!dir.empty()) {
+            // Scan() verifies every .xexrj and registers the verified
+            // ones with the xer-ext:// scheme (ext_host.h).
+            ExtHost::Shared().Scan(dir);
+        }
+    }
+    std::vector<ExtensionRow> rows;
+    for (const Extension& e : ExtHost::Shared().Entries()) {
+        ExtensionRow row;
+        row.id = e.manifest.id;
+        row.name = e.manifest.name.empty() ? e.manifest.id
+                                           : e.manifest.name;
+        row.version = e.manifest.version;
+        row.path = e.path;
+        row.verified = e.verified;
+        row.has_native = e.has_native;
+        row.has_ui = !e.manifest.ui.empty();
+        row.enabled = !disabled_extensions_.count(e.manifest.id);
+        row.status = e.verified
+            ? "verified"
+            : (e.verify_errors.empty() ? "unverified"
+                                       : e.verify_errors.front());
+        row.entry = e.manifest.entry;
+        row.ui_member = e.manifest.ui;
+        row.depends = e.manifest.required;
+        row.native_dlls = e.manifest.native_dll;
+        row.native_lua = e.manifest.native_lua;
+        row.native_py = e.manifest.native_py;
+        row.errors = e.verify_errors;
+        rows.push_back(std::move(row));
+    }
+    extensions_panel_->SetExtensions(std::move(rows));
+}
+
+void VeApp::WireExtensionsPanel() {
+    if (extensions_panel_ == nullptr) return;
+    // JS openUi() + the row's UI button funnel to the same handler.
+    // ui2 has no CEF web view yet — the honest seam resolves the URL
+    // and reports it; hosting the page lands with the CEF wave.
+    ExtHost::Shared().SetOpenUiFn([this](const std::string& url) {
+        Notify("Extension UI",
+               url + " — xer-ext hosting panel is deferred to the "
+                     "CEF wave");
+    });
+
+    ExtensionsPanel::Hooks hooks;
+    hooks.on_set_enabled =
+        [this](const std::string& id, bool enabled) {
+            // Session-only gating — ExtHost has no persistent
+            // enable/disable concept (extensions_panel.h seam doc).
+            if (enabled) disabled_extensions_.erase(id);
+            else disabled_extensions_.insert(id);
+            SetStatus(id + (enabled ? " enabled" : " disabled"));
+        };
+    hooks.on_run = [this](const std::string& id) {
+        const ExtHost::RunResult result = ExtHost::Shared().Run(id);
+        if (!result.ok) {
+            SetStatus("Run " + id + " failed: " + result.error, true);
+            return;
+        }
+        SetStatus("Ran " + id +
+                  (result.output.empty()
+                       ? ""
+                       : " — " + result.output));
+    };
+    hooks.on_open_ui = [this](const std::string& id) {
+        const ExtensionRow* row = extensions_panel_->ExtensionById(id);
+        if (row == nullptr || row->ui_member.empty()) return;
+        // Same URL ExtHost's JS openUi() would produce — routed
+        // through the installed open_ui_fn so both paths share the
+        // handler.
+        const std::string url =
+            Cef::ExtSchemeUrl(id, row->ui_member);
+        Notify("Extension UI",
+               url + " — xer-ext hosting panel is deferred to the "
+                     "CEF wave");
+    };
+    hooks.on_reveal = [this](const std::string& path) {
+        if (path.empty()) return;
+        (void)this;
+#if defined(_WIN32)
+        const std::wstring wide =
+            XER::Helper::Path::FromUtf8(path).wstring();
+        std::wstring cmd = L"/select,\"" + wide + L"\"";
+        ::ShellExecuteW(nullptr, L"open", L"explorer.exe",
+                        cmd.c_str(), nullptr, SW_SHOWNORMAL);
+#else
+        SetStatus("Reveal in Explorer is Windows-only", true);
+#endif
+    };
+    hooks.on_rescan = [this] { RefreshExtensionsPanel(true); };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    extensions_panel_->SetHooks(std::move(hooks));
+    RefreshExtensionsPanel();
+}
+
+// ---- transcript subject + whisper job ---------------------------------
+
+void VeApp::BindTranscriptTo(const std::string& media_path,
+                             const std::string& display_name) {
+    transcript_media_path_ = media_path;
+    transcript_media_name_ = display_name;
+    transcript_clip_id_.clear();
+    if (transcript_panel_ != nullptr) {
+        transcript_panel_->SetSubject(media_path, display_name,
+                                      nullptr);
+    }
+    // Cache replay (memory first, then the on-disk JSON cache).
+    const auto it = transcript_cache_.find(media_path);
+    if (it != transcript_cache_.end()) {
+        transcript_panel_->SetSegments(it->second);
+    } else if (!media_path.empty()) {
+        const auto cache_dir =
+            prefs_path_.parent_path() / "transcripts";
+        const auto json =
+            cache_dir / (TranscriptCacheKey(media_path) + ".json");
+        std::vector<Ai::TranscriptSegment> cached;
+        std::error_code ec;
+        if (std::filesystem::exists(json, ec) &&
+            LoadTranscriptCache(json.string(), media_path, &cached)) {
+            transcript_cache_[media_path] = cached;
+            transcript_panel_->SetSegments(std::move(cached));
+        }
+    }
+}
+
+void VeApp::BindTranscriptToClip(const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) return;
+    transcript_clip_id_ = clip_id;
+    transcript_media_path_ = clip->source_path;
+    std::string name = clip->source_path;
+    const std::size_t slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) name = name.substr(slash + 1);
+    transcript_media_name_ = name;
+    if (transcript_panel_ != nullptr) {
+        transcript_panel_->SetSubject(clip->source_path, name, clip);
+        const auto it = transcript_cache_.find(clip->source_path);
+        if (it != transcript_cache_.end()) {
+            transcript_panel_->SetSegments(it->second);
+        } else {
+            // Disk cache replay — same path as BindTranscriptTo.
+            const auto cache_dir =
+                prefs_path_.parent_path() / "transcripts";
+            const auto json =
+                cache_dir /
+                (TranscriptCacheKey(clip->source_path) + ".json");
+            std::vector<Ai::TranscriptSegment> cached;
+            std::error_code ec;
+            if (!clip->source_path.empty() &&
+                std::filesystem::exists(json, ec) &&
+                LoadTranscriptCache(json.string(), clip->source_path,
+                                    &cached)) {
+                transcript_cache_[clip->source_path] = cached;
+                transcript_panel_->SetSegments(std::move(cached));
+            }
+        }
+    }
+}
+
+void VeApp::RefreshTranscriptSubject() {
+    if (transcript_panel_ == nullptr || transcript_clip_id_.empty()) {
+        return;
+    }
+    const Clip* clip = FindClip(project_, transcript_clip_id_);
+    if (clip == nullptr) {
+        // The bound clip may have been split/ripple-deleted — adopt
+        // the first clip still consuming the same media so the
+        // source->timeline map stays live.
+        for (const Clip& c : project_.clips) {
+            if (c.source_path == transcript_media_path_) {
+                clip = &c;
+                transcript_clip_id_ = c.id;
+                break;
+            }
+        }
+    }
+    if (clip != nullptr) {
+        // Same media path → SetSubject keeps the words and refreshes
+        // only the mapping snapshot.
+        transcript_panel_->SetSubject(transcript_media_path_,
+                                      transcript_media_name_, clip);
+    }
+}
+
+void VeApp::InjectTranscript(
+    const std::vector<Ai::TranscriptSegment>& segments) {
+    if (!transcript_media_path_.empty()) {
+        transcript_cache_[transcript_media_path_] = segments;
+    }
+    if (transcript_panel_ != nullptr) {
+        transcript_panel_->SetSegments(segments);
+    }
+}
+
+void VeApp::StartTranscription() {
+    if (transcript_panel_ == nullptr) return;
+    if (transcript_media_path_.empty()) {
+        SetStatus("Bind a media clip to the transcript first", true);
+        return;
+    }
+    if (transcript_running_) {
+        SetStatus("Transcription already running");
+        return;
+    }
+    std::string detail;
+    if (!Ai::WhisperAvailable(&detail)) {
+        SetStatus("Whisper unavailable" +
+                      (detail.empty() ? std::string() : " — " + detail),
+                  true);
+        return;
+    }
+    const std::string model = Ai::FindWhisperModel();
+    if (model.empty()) {
+        SetStatus("No whisper model — set XER_WHISPER_MODEL or drop a "
+                  "ggml*.bin in models/", true);
+        return;
+    }
+    transcript_cancel_ = false;
+    transcript_progress_ = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(transcript_result_mutex_);
+        transcript_result_ready_ = false;
+        transcript_result_ok_ = false;
+        transcript_result_.clear();
+        transcript_result_error_.clear();
+    }
+    transcript_job_path_ = transcript_media_path_;
+    transcript_running_ = true;
+    transcript_panel_->SetJobState(true, 0.0f);
+    SetStatus("Transcribing " + transcript_media_name_ + "…");
+    const std::string path = transcript_job_path_;
+    const double cap = Ai::TranscribeMaxSeconds();
+    // Worker contract: decode PCM → whisper, write ONLY the
+    // mutex-guarded result slot; the UI thread drains it in
+    // PumpTranscriptJob (the old shell's async marshalling parity).
+    transcript_worker_ = std::thread(
+        [this, path, model, cap] {
+            Ai::Pcm pcm;
+            std::string error;
+            std::vector<Ai::TranscriptSegment> segments;
+            bool ok = false;
+            if (!transcript_cancel_.load() &&
+                Ai::ExtractMonoPcm(path, 16000, cap, &pcm, &error)) {
+                ok = Ai::Transcribe(
+                    pcm.samples, model,
+                    [this](float f) { transcript_progress_ = f; },
+                    &segments, &error);
+            }
+            std::lock_guard<std::mutex> lock(
+                transcript_result_mutex_);
+            transcript_result_ = std::move(segments);
+            transcript_result_error_ = error;
+            transcript_result_ok_ = ok && !transcript_cancel_.load();
+            transcript_result_ready_ = true;
+        });
+}
+
+void VeApp::PumpTranscriptJob() {
+    if (!transcript_running_.load()) return;
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> lock(transcript_result_mutex_);
+        ready = transcript_result_ready_;
+    }
+    if (!ready) {
+        if (transcript_panel_ != nullptr) {
+            transcript_panel_->SetJobState(true,
+                                         transcript_progress_.load());
+        }
+        return;
+    }
+    if (transcript_worker_.joinable()) transcript_worker_.join();
+    transcript_running_ = false;
+    std::vector<Ai::TranscriptSegment> segments;
+    std::string error;
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(transcript_result_mutex_);
+        segments = std::move(transcript_result_);
+        error = transcript_result_error_;
+        ok = transcript_result_ok_;
+        transcript_result_ready_ = false;
+    }
+    if (transcript_panel_ != nullptr) {
+        transcript_panel_->SetJobState(false, 0.0f);
+    }
+    if (!ok) {
+        SetStatus("Transcription failed" +
+                      (error.empty() ? std::string() : ": " + error),
+                  true);
+        return;
+    }
+    // Store: per-media memory cache + the on-disk JSON cache so a
+    // rebind (or restart) skips the whisper job entirely.
+    if (!transcript_job_path_.empty()) {
+        transcript_cache_[transcript_job_path_] = segments;
+        const auto cache_dir =
+            prefs_path_.parent_path() / "transcripts";
+        std::error_code ec;
+        std::filesystem::create_directories(cache_dir, ec);
+        const auto json =
+            cache_dir /
+            (TranscriptCacheKey(transcript_job_path_) + ".json");
+        if (!SaveTranscriptCache(json.string(), transcript_job_path_,
+                                 segments)) {
+            SetStatus("Transcript cache write failed", true);
+        }
+    }
+    if (transcript_panel_ != nullptr &&
+        transcript_job_path_ == transcript_media_path_) {
+        transcript_panel_->SetSegments(std::move(segments));
+    }
+    SetStatus("Transcription complete");
+}
+
+void VeApp::WireTranscriptPanel() {
+    if (transcript_panel_ == nullptr) return;
+    TranscriptPanel::Hooks hooks;
+    hooks.on_seek = [this](double t) { Seek(t); };
+    hooks.on_transcribe = [this] { StartTranscription(); };
+    hooks.on_ripple_delete = [this](double t0, double t1) {
+        if (history_ == nullptr) return;
+        std::string error;
+        if (!history_->LiftRange(t0, t1, /*close_gap=*/true, &error)) {
+            SetStatus("Ripple delete failed: " + error, true);
+            return;
+        }
+        NotifyTimelineChanged();
+        SetStatus("Ripple deleted " +
+                  FormatTimecode(t1 - t0, project_.fps_num,
+                                 project_.fps_den));
+    };
+    hooks.on_add_marker =
+        [this](double time, const std::string& name) {
+            if (history_ == nullptr) return;
+            Marker m;
+            m.time = time;
+            m.name = name;
+            std::string error;
+            if (!history_->AddMarker(m, &error)) {
+                SetStatus("Marker failed: " + error, true);
+                return;
+            }
+            NotifyTimelineChanged();
+            SetStatus("Marker added from selection");
+        };
+    hooks.on_make_captions = [this](double src_t0, double src_t1) {
+        if (history_ == nullptr || transcript_panel_ == nullptr) return;
+        const Clip* bound = FindClip(project_, transcript_clip_id_);
+        if (bound == nullptr) {
+            SetStatus("Captions need the bound timeline clip", true);
+            return;
+        }
+        CaptionStyle style;
+        style.preset =
+            CaptionPresetByName(transcript_caption_preset_);
+        // Build against a provisional track, then pick the real
+        // target: the first unlocked video track with no overlap
+        // (the bound clip's own track collides with it, so it is
+        // never a valid caption lane), else a new "Captions" track.
+        std::vector<Clip> clips = BuildCaptionClips(
+            transcript_panel_->Words(), *bound, src_t0, src_t1,
+            /*track_index=*/0, style);
+        if (clips.empty()) {
+            SetStatus("No caption clips in the selection range",
+                      true);
+            return;
+        }
+        const auto overlaps = [this, &clips](int track) {
+            for (const Clip& c : clips) {
+                for (const Clip& e : project_.clips) {
+                    if (e.track != track) continue;
+                    if (c.timeline_start <
+                            e.timeline_start + e.duration &&
+                        e.timeline_start <
+                            c.timeline_start + c.duration) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        int track = -1;
+        for (std::size_t i = 0; i < project_.tracks.size(); ++i) {
+            if (project_.tracks[i].kind == TrackKind::Video &&
+                !project_.tracks[i].locked &&
+                !overlaps(static_cast<int>(i))) {
+                track = static_cast<int>(i);
+                break;
+            }
+        }
+        history_->BeginMacro("Make captions");
+        if (track < 0) {
+            track = history_->AddTrack(TrackKind::Video, "Captions");
+        }
+        if (track < 0) {
+            history_->EndMacro();
+            SetStatus("No free video track for captions", true);
+            return;
+        }
+        int added = 0;
+        std::string error;
+        for (Clip c : clips) {
+            c.track = track;
+            MediaBounds bounds;
+            bounds.duration_seconds = c.duration;
+            bounds.has_video = true;
+            std::string new_id;
+            if (history_->AddClip(std::move(c), bounds, &new_id,
+                                  &error)) {
+                ++added;
+            } else {
+                break;
+            }
+        }
+        history_->EndMacro();
+        if (added == 0) {
+            SetStatus("Captions failed" +
+                          (error.empty() ? std::string()
+                                         : ": " + error),
+                      true);
+            if (history_->CanUndo()) history_->Undo();   // roll the macro
+            return;
+        }
+        NotifyTimelineChanged();
+        SetStatus("Created " + std::to_string(added) +
+                  " caption clip(s)");
+    };
+    hooks.on_caption_style = [this](const std::string& name) {
+        transcript_caption_preset_ =
+            name.empty() ? "classic" : name;
+    };
+    hooks.transcribe_ready = [] {
+        return Ai::WhisperAvailable() &&
+               !Ai::FindWhisperModel().empty();
+    };
+    hooks.on_status = [this](const std::string& s, bool err) {
+        SetStatus(s, err);
+    };
+    transcript_panel_->SetHooks(std::move(hooks));
 }
 
 }  // namespace XER::VideoEditor::Ui2

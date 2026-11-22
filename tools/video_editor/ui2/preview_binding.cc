@@ -399,4 +399,13 @@ void PreviewBinding::DrainPending() {
     }
 }
 
+// ---- pull seams ---------------------------------------------------------
+
+std::pair<float, float> PreviewBinding::PeakLevels() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    // has_peaks_ is consumed by DrainPending but the slots keep the
+    // last-reported values — exactly what a meter pull wants.
+    return {pending_peak_l_, pending_peak_r_};
+}
+
 }  // namespace XER::VideoEditor::Ui2

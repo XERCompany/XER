@@ -63,7 +63,9 @@
 #include "ui2/ui2_monitor_smoke.h"     // Ui2MonitorSmoke hook
 #include "ui2/ui2_timeline_smoke.h"    // Ui2TimelineSmoke hook
 #include "ui2/ui2_panels_smoke.h"      // Ui2PanelsSmoke hook
-#include "ui2/photo_workspace.h"       // Ui2PhotoWorkspaceSmoke hook
+#include "ui2/ui2_panels2_smoke.h"     // Ui2Panels2Smoke hook
+#include "ui2/ui2_color_mixer_smoke.h" // Ui2ColorMixerSmoke hook
+#include "ui2/photo_workspace.h"      // Ui2PhotoWorkspaceSmoke hook
 #include "ui2/ve_app.h"
 #include "ui2/ve_theme.h"
 
@@ -1648,6 +1650,8 @@ int main(int argc, char** argv) {
         // Exe-side registration: these checks exercise widget classes
         // that live in this target, not the UI-free core where
         // smoke_checks.cc compiles.
+        // photo_workspace: superseded — dropped with the legacy ui/
+        // shell; returns with the ui2 photo workspace (M4).
         XER::VideoEditor::Smoke::RegisterCheck(
             "color_widgets",
             &XER::VideoEditor::Ui2::ColorWidgetsSmoke);
@@ -1672,6 +1676,12 @@ int main(int argc, char** argv) {
         XER::VideoEditor::Smoke::RegisterCheck(
             "ui2_panels",
             &XER::VideoEditor::Ui2::Ui2PanelsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_panels2",
+            &XER::VideoEditor::Ui2::Ui2Panels2Smoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_color_mixer",
+            &XER::VideoEditor::Ui2::Ui2ColorMixerSmoke);
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);
@@ -1704,6 +1714,12 @@ int main(int argc, char** argv) {
         XER::VideoEditor::Smoke::RegisterCheck(
             "ui2_panels",
             &XER::VideoEditor::Ui2::Ui2PanelsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_panels2",
+            &XER::VideoEditor::Ui2::Ui2Panels2Smoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_color_mixer",
+            &XER::VideoEditor::Ui2::Ui2ColorMixerSmoke);
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);
