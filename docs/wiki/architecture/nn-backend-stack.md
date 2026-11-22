@@ -22,7 +22,7 @@ model/license choices in `research/2026-11-22-ai-model-stack.md`.
 
 ## Dead / broken paths (pit-of-failure list, 2026-11-22)
 
-Items 1–5 and 9 fixed 2026-11-22 (see notes); 6–8 remain.
+Items 1–6 and 9 fixed 2026-11-22 (see notes); 7–8 remain.
 
 1. ~~`ml/cuda_ops/*.cu` can never link~~ — FIXED: the `.cu` glob still
    requires `enable_language(CUDA)` (absent), but `predictor.cc` now
@@ -48,8 +48,22 @@ Items 1–5 and 9 fixed 2026-11-22 (see notes); 6–8 remain.
    `onnx::ModelProto` decode under `XER_AI_HAS_ONNX_PROTO` (MSYS2
    `ONNX::onnx_proto` is a real `libonnx_proto.dll`, not headers-only);
    byte scan remains as the no-protobuf fallback.
-6. `ENABLE_CUDNN` only reaches `async_io`; the `CuDNN::CuDNN` link in
-   `XER_ContentAI` is unconditional → option is mostly decorative.
+6. ~~`ENABLE_CUDNN` only reaches `async_io`; the `CuDNN::CuDNN` link in
+   `XER_ContentAI` is unconditional → option is mostly decorative~~ —
+   FIXED: made consistent with `ENABLE_CUDA`'s treatment. The option
+   now gates only the cudnn-header-dependent surface in `async_io`
+   (the `cudnn_*_engine.cc` sources and the `CuDNN::CuDNN`/`CUDA::cudart`
+   links, each additionally requiring the SDK-found target — local
+   `find_package` calls added since async_io configures before
+   `wrapper/cudnn`/`content/ai`), while `XER_BridgeCudnn` and the
+   `XER_ContentAI` link auto-detect via `find_package(CUDNN QUIET)`
+   exactly like `XER_BridgeCuda`/`CUDAToolkit`. Side fix of the same
+   wave: the nn_probe OpenCV delay-load list was a `;`-splice bug —
+   `XER_VE_NN_OPENCV_DLLS` carried only `libopencv_calib-500.dll`
+   (first `OpenCV_LIBS` entry), which is neither delay-imported nor
+   staged → false "runtime unloadable" (Win32 126) while the dnn path
+   worked. The probe now lists the modules the core actually
+   delay-imports (`opencv_core`, `opencv_imgproc`).
 7. `sd.exe` (`tools/SdGenerate/`): hand-rolled CPU UNet over
    safetensors; backend hint "cuda/cudnn" is a label only — no
    ORT/cuDNN call happens (`sd_gpu_dispatch.cc`,

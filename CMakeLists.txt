@@ -147,7 +147,12 @@ option(ENABLE_MEDIA "Enable media/content subsystems" ON)
 option(ENABLE_V8 "Enable the V8 JavaScript runtime" OFF)
 option(ENABLE_AI "Enable AI/ML content (ggml, ONNX, CUDA probes)" ON)
 option(ENABLE_CUDA "Enable CUDA kernels/toolkit paths (.cu sources, CUDA bridges)" OFF)
-option(ENABLE_CUDNN "Enable cuDNN paths" OFF)
+# ENABLE_CUDNN only gates the cuDNN-header-dependent engine sources and
+# link inside src/async_io (same split as ENABLE_CUDA above: the
+# XER_BridgeCudnn wrapper and the ContentAI link auto-detect via
+# find_package(CUDNN QUIET) with no option). Requires the NVIDIA cuDNN
+# SDK (CUDNN_ROOT, or unzipped into the CUDA toolkit dir).
+option(ENABLE_CUDNN "Enable cuDNN engine paths (async_io dnn_backends; needs the NVIDIA cuDNN SDK)" OFF)
 option(XER_BUILD_LLVM "Build the bundled LLVM/Clang" OFF)
 option(XER_BUILD_APP "Build the editor application" ON)
 option(XER_BUILD_XBUILD "Build the xbuild configuration utility" OFF)

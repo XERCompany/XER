@@ -22,6 +22,9 @@ const std::vector<WorkspaceLayout>& BuiltinWorkspaces() {
         {"Markers", true, true, 2, 0.38},
         // Lab experiments: lab tab up, editing split otherwise.
         {"Lab", true, true, 3, 0.32},
+        // Photo editor: special-cased by ApplyWorkspace — the fields
+        // are unused; the app swaps in the PhotoWorkspaceWidget.
+        {"Photo", true, true, 0, 0.32},
     };
     return kWorkspaces;
 }

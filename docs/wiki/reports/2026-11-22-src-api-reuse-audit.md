@@ -19,7 +19,7 @@ Question: where does `tools/` reimplement what `src/` already has?
 |---|---|---|---|---|
 | 1 | `compositor.cc` ~600 lines scalar pixel loops: `ApplyBlendModePixels` (7 modes, `:2132-2175`), `AlphaOverFrame`, `CrossfadePixel`, `ResampleBilinearBGRA`, `ApplyPosterizePixels`, `ApplyColorBalancePixels`, `ApplyChromaKeyPixels` | `Bridge::Skia::BlendModeApply/BlendSrcOver` (29 modes), `AdjustPosterize/ColorBalance`, `MaskFromColorRange`+`ApplyMask`, `ImageScale`/`video::utils::ResizeFrameWithSkia` | Low–Med | **highest** — 7→29 blend modes + SIMD paths |
 | 2 | `io/oiio_image.*` still-image path (~115 lines delay-load CMake + call sites) | `XER_Image::ImageLoader` magic-detect over `src/image/formats/` (exr/tiff/psd/raw/heif/webp/gif/svg) | Med | drops heavyweight 3p dep; **gap: DPX + Radiance HDR** — keep narrow OIIO fallback or write 2 small decoders |
-| 3 | 3× PCM format-conversion copies (`ai/audio_pcm.cc`, `audio_mixer.cc`, `media_catalog.cc`) + linear `ResampleLinear` | `AudioCore::AudioBitDepthConverter`, `AudioSampleRateConverter` (windowed-sinc) | Low–Med | dedup + sinc-quality upsample |
+| 3 | ~~3× PCM format-conversion copies (`ai/audio_pcm.cc`, `audio_mixer.cc`, `media_catalog.cc`)~~ + linear `ResampleLinear` | `AudioCore::AudioBitDepthConverter`, `AudioSampleRateConverter` (windowed-sinc) | Low–Med | **DONE** — all three now convert via `AudioBitDepthConverter` (audio_pcm wave-1, mixer/catalog wave-2); mixer keeps its layout-aware stereo downmix, catalog keeps all channels. `ResampleLinear`→sinc still open |
 | 4 | `plugins/xer_fx_*` ~13 kernel files (blur/color/style/distort/audio) | Skia bridge filter suite + `src/audio/effects_rack` | Med–High | needs plugin link strategy first (below) |
 | 5 | `playback/wasapi_sink.cc` — self-confessed copy of `src/content/video/video_audio_player.cc` WASAPI plumbing | extract shared sink into src/ | Med | one impl to fix bugs in |
 | 6 | Trivials: `HexToBgra` (`lab/color_pick.h`) → `ParseColorHex`; `media_prep`/`thumb_cache` raw pools → `IOThreadPool` | `skia_engine_bridge.h:38`, `src/async_io/io_thread_pool.h` | Trivial | opportunistic |
@@ -53,4 +53,8 @@ bitmap_font, timecode, timeline model/history.
 
 - `image_saver.h` encode coverage vs `Io::WriteImage`.
 - `XER_BridgeSkia` export into plugin MODULE DLL on this toolchain.
-- `audio_mixer.cc` downmix table vs src/audio channel matrices.
+- `audio_mixer.cc` downmix table vs src/audio channel matrices. —
+  VERIFIED: `XER::Media::ChannelMixer` (`src/media/base/channel_mixer.cc`)
+  is mono-duplicate / average-to-mono / L-R-passthrough only — no gain
+  matrix, no FFmpeg bitmask awareness, no LFE-drop/quad rules. The
+  editor's ITU-R BS.775-style table stays editor-local (noted in-source).

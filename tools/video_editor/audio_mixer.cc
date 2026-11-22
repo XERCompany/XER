@@ -15,6 +15,7 @@
 #include <set>
 #include <vector>
 
+#include "audio/audio_core/audio_bit_depth_converter.h"
 #include "generated_source.h"                  // IsGeneratedSource
 #include "js_fx.h"                             // JsFxRuntime
 #include "string_utils.h"                      // ToLowerAscii
@@ -27,6 +28,8 @@ namespace {
 
 namespace FFmpeg = XER::Bridge::FFmpeg;
 namespace Str = XER::Helper::String;
+using XER::Audio::Core::AudioBitDepth;
+using XER::Audio::Core::AudioBitDepthConverter;
 
 constexpr std::int64_t kNoPts =
     (std::numeric_limits<std::int64_t>::min)();  // AV_NOPTS_VALUE
@@ -123,12 +126,14 @@ double SourceTimeAt(const AudioClipSession& session, double tau) {
 
 // ------------------------------------------------------------------
 // Sample-format conversion — AudioFrameInfo -> stereo float @src_rate.
+// The raw -> float map is delegated to AudioBitDepthConverter (u8 bias,
+// int32 scale, double cast — the same math the retired per-kind reader
+// spelled out); what stays here is the layout-aware stereo downmix,
+// which is the editor's contract, not a format concern.
 // ------------------------------------------------------------------
 
-enum class PcmKind { kU8, kS16, kS32, kFlt, kDbl };
-
 struct PcmLayout {
-    PcmKind kind = PcmKind::kS16;
+    AudioBitDepth depth = AudioBitDepth::BITS_16;
     int bytes_per_sample = 2;
     bool planar = false;
 };
@@ -147,86 +152,21 @@ bool ParsePcmLayout(const FFmpeg::AudioFrameInfo& frame,
     PcmLayout layout;
     layout.planar = planar;
     if (fmt == "u8") {
-        layout.kind = PcmKind::kU8;
-        layout.bytes_per_sample = 1;
+        layout.depth = AudioBitDepth::BITS_8;
     } else if (fmt == "s16") {
-        layout.kind = PcmKind::kS16;
-        layout.bytes_per_sample = 2;
+        layout.depth = AudioBitDepth::BITS_16;
     } else if (fmt == "s32") {
-        layout.kind = PcmKind::kS32;
-        layout.bytes_per_sample = 4;
+        layout.depth = AudioBitDepth::BITS_32;
     } else if (fmt == "flt") {
-        layout.kind = PcmKind::kFlt;
-        layout.bytes_per_sample = 4;
+        layout.depth = AudioBitDepth::FLOAT_32;
     } else if (fmt == "dbl") {
-        layout.kind = PcmKind::kDbl;
-        layout.bytes_per_sample = 8;
+        layout.depth = AudioBitDepth::FLOAT_64;
     } else {
         return false;
     }
+    layout.bytes_per_sample = static_cast<int>(
+        AudioBitDepthConverter::GetBytesPerSample(layout.depth));
     *out = layout;
-    return true;
-}
-
-float ReadPcmSample(PcmKind kind, const std::uint8_t* p) {
-    switch (kind) {
-        case PcmKind::kU8:
-            return (static_cast<float>(*p) - 128.0f) / 128.0f;
-        case PcmKind::kS16: {
-            std::int16_t v;
-            std::memcpy(&v, p, sizeof(v));
-            return static_cast<float>(v) / 32768.0f;
-        }
-        case PcmKind::kS32: {
-            std::int32_t v;
-            std::memcpy(&v, p, sizeof(v));
-            return static_cast<float>(v) / 2147483648.0f;
-        }
-        case PcmKind::kFlt: {
-            float v;
-            std::memcpy(&v, p, sizeof(v));
-            return v;
-        }
-        case PcmKind::kDbl: {
-            double v;
-            std::memcpy(&v, p, sizeof(v));
-            return static_cast<float>(v);
-        }
-    }
-    return 0.0f;
-}
-
-// Reads channel `c` of frame `i` as a [-1,1]-ish float. Returns false
-// when the channel index is unavailable.
-inline bool ChannelValue(const FFmpeg::AudioFrameInfo& frame,
-                         const PcmLayout& layout, int frame_index,
-                         int channel, float* out) {
-    const int bps = layout.bytes_per_sample;
-    const std::uint8_t* base = frame.data.data();
-    if (layout.planar) {
-        if (channel >= static_cast<int>(frame.plane_sizes.size())) {
-            return false;
-        }
-        std::size_t offset = 0;
-        for (int c = 0; c < channel; ++c) {
-            offset += static_cast<std::size_t>(frame.plane_sizes[c]);
-        }
-        const std::size_t idx = offset +
-            static_cast<std::size_t>(frame_index) * bps;
-        if (idx + static_cast<std::size_t>(bps) > frame.data.size()) {
-            return false;
-        }
-        *out = ReadPcmSample(layout.kind, base + idx);
-        return true;
-    }
-    const std::size_t idx =
-        (static_cast<std::size_t>(frame_index) * frame.channels +
-         channel) *
-            static_cast<std::size_t>(bps);
-    if (idx + static_cast<std::size_t>(bps) > frame.data.size()) {
-        return false;
-    }
-    *out = ReadPcmSample(layout.kind, base + idx);
     return true;
 }
 
@@ -252,6 +192,13 @@ inline bool ChannelValue(const FFmpeg::AudioFrameInfo& frame,
 // Channels whose position is not listed (top/ambisonic/etc.) are
 // dropped. Layouts wider than 8 channels warn once per clip and fall
 // back to first-two = L/R (previous behavior).
+//
+// Kept editor-local (2026-11-22 reuse-audit check): the only src/
+// channel-layout util, XER::Media::ChannelMixer
+// (src/media/base/channel_mixer.cc), is a plain mono-duplicate /
+// average-to-mono / L-R-passthrough converter — it has no per-position
+// gain matrix, no FFmpeg bitmask awareness, and no LFE-drop/quad-family
+// rules, so there is nothing to delegate this table to.
 namespace ChannelBit {
 constexpr std::int64_t kFL = 1ll << 0;    // AV_CHAN_FRONT_LEFT
 constexpr std::int64_t kFR = 1ll << 1;    // AV_CHAN_FRONT_RIGHT
@@ -524,28 +471,78 @@ bool AppendBlock(AudioClipSession& session,
         }
     }
 
-    // Convert to stereo float through the layout-aware downmix map.
-    // Mono lands as a {1,1} entry (duplicate); unmapped/dropped
-    // positions (LFE, top channels) simply never contribute.
+    // Convert the payload to float once, then the layout-aware downmix
+    // map reads plain floats. Planar honors the declared plane_sizes
+    // stride and converts only the channels that feed the stereo mix
+    // (LFE/unmapped positions are skipped); interleaved converts the
+    // whole block in one shot — the AudioBitDepthConverter map mirrors
+    // ai/audio_pcm.cc's. Mono lands as a {1,1} entry (duplicate);
+    // unmapped/dropped positions simply never contribute.
     DownmixMap downmix;
     BuildDownmixMap(frame, &downmix);
     if (downmix.clipped_to_stereo && warn_out != nullptr) {
         *warn_out = "audio stream has " + std::to_string(channels) +
                     " channels; only the first two are mixed";
     }
+
+    AudioBitDepthConverter converter;
+    std::vector<float> block_f;                // interleaved: count*ch
+    std::vector<std::vector<float>> plane_f;   // planar: per used ch
+    if (layout.planar) {
+        plane_f.resize(static_cast<std::size_t>(channels));
+        std::vector<const std::uint8_t*> plane_ptr(
+            static_cast<std::size_t>(channels));
+        std::size_t offset = 0;
+        for (int c = 0; c < channels; ++c) {
+            plane_ptr[static_cast<std::size_t>(c)] =
+                frame.data.data() + offset;
+            offset += static_cast<std::size_t>(
+                frame.plane_sizes[static_cast<std::size_t>(c)]);
+        }
+        for (int e = 0; e < downmix.used; ++e) {
+            const int c = downmix.idx[e];
+            std::vector<float>& dst =
+                plane_f[static_cast<std::size_t>(c)];
+            if (!dst.empty()) continue;   // channel appears twice
+            dst.resize(static_cast<std::size_t>(count));
+            if (!converter.ConvertBuffer(
+                    plane_ptr[static_cast<std::size_t>(c)], layout.depth,
+                    dst.data(), AudioBitDepth::FLOAT_32,
+                    static_cast<std::size_t>(count))) {
+                if (error_out != nullptr) {
+                    *error_out = "audio sample conversion failed";
+                }
+                return false;
+            }
+        }
+    } else {
+        block_f.resize(static_cast<std::size_t>(count) *
+                       static_cast<std::size_t>(channels));
+        if (!converter.ConvertBuffer(frame.data.data(), layout.depth,
+                                     block_f.data(),
+                                     AudioBitDepth::FLOAT_32,
+                                     block_f.size())) {
+            if (error_out != nullptr) {
+                *error_out = "audio sample conversion failed";
+            }
+            return false;
+        }
+    }
+    const auto sample_at = [&](int i, int c) -> float {
+        return layout.planar
+            ? plane_f[static_cast<std::size_t>(c)]
+                     [static_cast<std::size_t>(i)]
+            : block_f[static_cast<std::size_t>(i) *
+                          static_cast<std::size_t>(channels) +
+                      static_cast<std::size_t>(c)];
+    };
     std::vector<float> stereo(
         static_cast<std::size_t>(count) * 2u);
     for (int i = 0; i < count; ++i) {
         float l = 0.0f;
         float r = 0.0f;
         for (int e = 0; e < downmix.used; ++e) {
-            float v = 0.0f;
-            if (!ChannelValue(frame, layout, i, downmix.idx[e], &v)) {
-                if (error_out != nullptr) {
-                    *error_out = "audio channel read out of bounds";
-                }
-                return false;
-            }
+            const float v = sample_at(i, downmix.idx[e]);
             l += v * downmix.gain_l[e];
             r += v * downmix.gain_r[e];
         }

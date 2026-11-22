@@ -37,6 +37,8 @@
 #include "cef/cef_ext_scheme.h"
 #include "compositor.h"
 #include "content/ai/find_object/find_object.h"  // YA.AIFindObject
+#include "content/ai/onnx_session/onnx_session.h"
+#include "lab/ai_ops.h"
 #include "content/video/video_info.h"
 #include "export_engine.h"
 #include "export_preset.h"
@@ -4266,6 +4268,141 @@ std::string CheckAiTags() {
     return {};
 }
 
+// Object Lab AI ops (lab/ai_ops.h on the shared YA.AIFindObject
+// onnx_session): BiRefNet alpha matting + EfficientSAM smart-select.
+// What MUST hold regardless of the environment: bad inputs and a
+// missing model produce reasons, never crashes. When the staged
+// models are installed (<exe>/assets/models/) the checks go further —
+// a synthetic bright-blob-on-dark frame must matte its blob brighter
+// than its background, and a click on the blob must produce a mask
+// that covers it. Both inferences run on CPU and take seconds-class
+// at 1024x1024, well inside the watchdog.
+std::string CheckAiLabOps() {
+    // ---- graceful-degradation contract (always verified) ----
+    std::string err;
+    video::Frame frame;
+    if (!Lab::AlphaMatte(frame, "whatever.onnx", {}, &err).empty()) {
+        return "AlphaMatte accepted an invalid frame";
+    }
+    if (err.empty()) {
+        return "AlphaMatte failed an invalid frame without a reason";
+    }
+    err.clear();
+    video::Frame good;
+    if (!good.Allocate(160, 120, video::PixelFormat::BGRA8)) {
+        return "frame allocation failed";
+    }
+    // Synthetic: dark background, bright fg blob — the strongest
+    // possible saliency cue for both models.
+    for (int y = 0; y < good.Height(); ++y) {
+        for (int x = 0; x < good.Width(); ++x) {
+            const bool fg = x >= 48 && x < 112 && y >= 32 && y < 88;
+            std::uint8_t* p = good.Data() +
+                              (static_cast<std::size_t>(y) *
+                                   good.Width() +
+                               x) *
+                                  4;
+            p[0] = p[1] = p[2] = fg ? 235 : 24;
+            p[3] = 255;
+        }
+    }
+    err.clear();
+    if (!Lab::SmartSelectMask(good, {}, "whatever.onnx", {}, &err)
+             .empty()) {
+        return "SmartSelectMask accepted zero points";
+    }
+    if (err.empty()) {
+        return "SmartSelectMask failed zero points without a reason";
+    }
+    err.clear();
+    if (!Lab::AlphaMatte(good, "definitely/missing.onnx", {}, &err)
+             .empty()) {
+        return "AlphaMatte accepted a missing model file";
+    }
+    if (err.empty()) {
+        return "AlphaMatte failed a missing model without a reason";
+    }
+
+    // ---- real-model path: only when the staged models are found ----
+    const std::string matte_model =
+        Lab::FindAiModel("birefnet_lite.onnx");
+    const std::string sam_model =
+        Lab::FindAiModel("efficientsam_ti.onnx");
+    std::fprintf(stdout, "  ai_lab_ops models: birefnet=%s sam=%s\n",
+                 matte_model.empty() ? "<none>" : "staged",
+                 sam_model.empty() ? "<none>" : "staged");
+    std::fflush(stdout);
+    if (XER::AI::Onnx::ActiveBackendId().empty()) {
+        return {};   // no inference runtime — graceful skip
+    }
+    if (!matte_model.empty()) {
+        err.clear();
+        const auto matte =
+            Lab::AlphaMatte(good, matte_model, {}, &err);
+        if (matte.empty()) {
+            return "BiRefNet matting failed: " + err;
+        }
+        if (matte.size() != 160u * 120u) {
+            return "matte has wrong size";
+        }
+        // Expected extremes: the fg blob must read clearly brighter
+        // than the background corner.
+        const auto at = [&](int x, int y) {
+            return matte[static_cast<std::size_t>(y) * 160 + x];
+        };
+        double fg = 0.0, bg = 0.0;
+        for (int y = 50; y < 70; ++y)
+            for (int x = 70; x < 90; ++x) fg += at(x, y);
+        for (int y = 2; y < 12; ++y)
+            for (int x = 2; x < 12; ++x) bg += at(x, y);
+        fg /= 400.0;
+        bg /= 100.0;
+        std::fprintf(stdout, "  ai_lab_ops matte: fg=%.1f bg=%.1f\n",
+                     fg, bg);
+        std::fflush(stdout);
+        if (fg <= bg + 20.0) {
+            return "matte did not separate fg blob from bg";
+        }
+        // RemoveBackground applies the matte as the frame alpha.
+        err.clear();
+        const video::Frame cut =
+            Lab::RemoveBackground(good, matte_model, {}, &err);
+        if (!cut.IsValid()) {
+            return "RemoveBackground failed: " + err;
+        }
+        const std::uint8_t* ca =
+            cut.Data() + (70 * cut.Width() + 80) * 4;
+        const std::uint8_t* cb = cut.Data() + (5 * cut.Width() + 5) * 4;
+        if (ca[3] <= cb[3]) {
+            return "cutout alpha not brighter on fg than bg";
+        }
+    }
+    if (!sam_model.empty()) {
+        err.clear();
+        const auto mask = Lab::SmartSelectMask(
+            good, {Lab::IntPoint{80, 60}}, sam_model, {}, &err);
+        if (mask.empty()) {
+            return "EfficientSAM select failed: " + err;
+        }
+        if (mask.size() != 160u * 120u) {
+            return "smart-select mask has wrong size";
+        }
+        const auto at = [&](int x, int y) {
+            return mask[static_cast<std::size_t>(y) * 160 + x];
+        };
+        int covered = 0;
+        for (int y = 45; y < 75; y += 5) {
+            for (int x = 65; x < 95; x += 5) {
+                if (at(x, y) > 0) ++covered;
+            }
+        }
+        if (at(80, 60) == 0 || covered < 20) {
+            return "smart-select mask does not cover the clicked blob";
+        }
+    }
+    return {};
+}
+
 // ---------------------------------------------------------------------------
 // photo_m1 — the critical M1 correctness property: stroke -> undo ->
 // redo must be pixel-exact through the tile-memento path, and tile
@@ -4832,6 +4969,7 @@ constexpr CheckEntry kChecks[] = {
     {"nn_backends", &CheckNnBackends},
     {"ai_find_object", &CheckAiFindObject},
     {"ai_tags", &CheckAiTags},
+    {"ai_lab_ops", &CheckAiLabOps},
     {"cuda_decode", &CheckCudaDecode},
     {"cuda_encode", &CheckCudaEncode},
     {"frame_render", &CheckFrameRender},

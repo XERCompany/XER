@@ -8,10 +8,28 @@ if(APPLE)
     file(GLOB_RECURSE _xer_apple_mm "${CMAKE_CURRENT_SOURCE_DIR}/*.mm")
     list(APPEND ASYNC_IO_SOURCES ${_xer_apple_mm})
 endif()
-if(NOT ENABLE_CUDNN)
+# CUDA/cuDNN are gated two ways, matching how ENABLE_CUDA treats its
+# deps elsewhere (src/content/ai, src/wrapper/{cuda,cudnn}):
+#   - find_package QUIET alone decides whether the SDK is usable and the
+#     XER_Bridge*/ContentAI link surfaces — no option needed;
+#   - the ENABLE_* option only opts into the sources/links that cannot
+#     compile without the SDK headers (cudnn_*_engine.cc needs cudnn.h,
+#     which in turn needs cuda_runtime_api.h).
+# The local find_package calls keep this directory self-contained: it is
+# configured BEFORE src/wrapper/cudnn and src/content/ai, so the
+# CuDNN::CuDNN / CUDA::cudart imported targets do not exist here yet
+# unless we locate them ourselves.
+if(ENABLE_CUDA OR ENABLE_CUDNN)
+    find_package(CUDAToolkit QUIET)
+endif()
+if(ENABLE_CUDNN)
+    find_package(CUDNN QUIET)   # cmake/deps/configs/CUDNN shim
+endif()
+if(NOT (ENABLE_CUDNN AND CUDNN_FOUND))
     # cudnn_bridge.cc handles dynamic loading on its own, so it builds with
     # or without cuDNN. Only the cudnn_*_engine.cc files require the linked
-    # cuDNN headers and are excluded when ENABLE_CUDNN is OFF.
+    # cuDNN headers; they build when ENABLE_CUDNN=ON *and* the SDK was
+    # actually located (option-on without the SDK used to break the build).
     list(FILTER ASYNC_IO_SOURCES EXCLUDE REGEX "/dnn_backends/cudnn_[a-z]+_engine\\.cc$")
 endif()
 
@@ -40,15 +58,20 @@ target_link_libraries(XER_AsyncIO
         XER_Hex
 )
 
-# Optional CUDA/cuDNN backend (only when explicitly enabled; the hardware
-# abstraction layer loads NVML dynamically so we never hard-depend on it).
-if(ENABLE_CUDA OR ENABLE_CUDNN)
+# Optional CUDA/cuDNN backend (only when explicitly enabled AND the SDK
+# was found; the hardware abstraction layer loads NVML dynamically so we
+# never hard-depend on it).
+if((ENABLE_CUDA OR ENABLE_CUDNN) AND TARGET CUDA::cudart)
     target_link_libraries(XER_AsyncIO PUBLIC CUDA::cudart)
     target_compile_definitions(XER_AsyncIO PRIVATE XER_ASYNC_IO_HAS_CUDA=1)
 endif()
-if(ENABLE_CUDNN)
+if(ENABLE_CUDNN AND TARGET CuDNN::CuDNN)
     target_link_libraries(XER_AsyncIO PUBLIC CuDNN::CuDNN)
     target_compile_definitions(XER_AsyncIO PRIVATE XER_ASYNC_IO_HAS_CUDNN=1)
+elseif(ENABLE_CUDNN)
+    message(STATUS "ENABLE_CUDNN=ON but no cuDNN SDK found "
+                   "(CUDNN_ROOT / CUDA toolkit dir) — cudnn_*_engine "
+                   "sources and the CuDNN link stay off")
 endif()
 
 # Optional Vulkan device enumeration.

@@ -2,6 +2,14 @@
 
 #include <string>
 
+// TODO(module-registry): src/modules/module_registry.h does not exist —
+// the whole module layer (a name -> factory table that installs each
+// builtin module's V8 object into the context, plus
+// modules::ImportModule / modules::ResolveCanonicalModuleName) is
+// missing. Until it is built, ImportModule() throws "unavailable in
+// this build" and every demo_app JS demo that calls ImportModule("...")
+// cannot run (nn-backend-stack.md dead-path item 8). The seam below is
+// already wired to pick the header up automatically once it lands.
 #if defined(__has_include)
 #if __has_include("modules/module_registry.h")
 #include "modules/module_registry.h"

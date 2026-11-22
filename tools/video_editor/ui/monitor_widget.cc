@@ -518,6 +518,18 @@ void MonitorWidget::SetEnginePlaying(bool playing) {
     Invalidate();
 }
 
+void MonitorWidget::SetOnFrameClick(
+    std::function<bool(int, int)> cb) {
+    on_frame_click_ = std::move(cb);
+}
+
+void MonitorWidget::SetMarkPoints(
+    std::vector<std::pair<int, int>> frame_points) {
+    if (mark_points_ == frame_points) return;
+    mark_points_ = std::move(frame_points);
+    Invalidate();
+}
+
 void MonitorWidget::SetFrameRenderSlot(std::uint32_t slot) {
     // Slot applies at the lazy Init on first Render — after that the
     // service keeps the id it was configured with.
@@ -857,6 +869,27 @@ void MonitorWidget::DrawOverlays(Rendering::Renderer& renderer,
                           1.0f);
         renderer.DrawLine({cx, cy - arm}, {cx, cy + arm}, title_color,
                           1.0f);
+    }
+
+    // Lab smart-select points: frame-px markers mapped into the fitted
+    // dest rect — accent ring + white center dot so they read on any
+    // footage.
+    if (!mark_points_.empty() && frame_width_ > 0 && frame_height_ > 0) {
+        const Color ring = WithAlpha(tokens.accent, 0.95f);
+        const Color dot = {1.0f, 1.0f, 1.0f, 0.95f};
+        for (const auto& [px, py] : mark_points_) {
+            const float sx =
+                dest.x + (static_cast<float>(px) + 0.5f) /
+                             frame_width_ * dest.width;
+            const float sy =
+                dest.y + (static_cast<float>(py) + 0.5f) /
+                             frame_height_ * dest.height;
+            constexpr float r = 6.0f;
+            renderer.DrawLine({sx - r, sy}, {sx + r, sy}, ring, 2.0f);
+            renderer.DrawLine({sx, sy - r}, {sx, sy + r}, ring, 2.0f);
+            renderer.FillRect({sx - 1.5f, sy - 1.5f, 3.0f, 3.0f}, dot,
+                              1.0f);
+        }
     }
 }
 
@@ -1207,6 +1240,23 @@ bool MonitorWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 EmitTime(time_);
             }
             return true;
+        }
+        // Lab smart-select: an armed handler gets frame-pixel clicks
+        // inside the fitted frame rect before playback toggles.
+        if (on_frame_click_ && frame_width_ > 0 && frame_height_ > 0) {
+            const auto dest = FrameDestRect();
+            if (dest.Contains(p) && dest.width > 0.0f &&
+                dest.height > 0.0f) {
+                const int fx = std::clamp(
+                    static_cast<int>((p.x - dest.x) * frame_width_ /
+                                     dest.width),
+                    0, frame_width_ - 1);
+                const int fy = std::clamp(
+                    static_cast<int>((p.y - dest.y) * frame_height_ /
+                                     dest.height),
+                    0, frame_height_ - 1);
+                if (on_frame_click_(fx, fy)) return true;
+            }
         }
         // Clicking the frame still toggles playback (Phase-1 behavior).
         if (VideoAreaRect().Contains(p)) {

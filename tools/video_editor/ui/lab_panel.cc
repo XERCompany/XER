@@ -59,6 +59,8 @@ const char* LabPanel::ModeName(Mode mode) {
         case Mode::Cutout: return "Cut out";
         case Mode::Remove: return "Remove";
         case Mode::CopyToLayer: return "Copy to layer";
+        case Mode::RemoveBackground: return "Remove background";
+        case Mode::SmartSelect: return "Smart select";
     }
     return "?";
 }
@@ -87,9 +89,24 @@ void LabPanel::EnsureChildren() {
         "To layer", Widgets::ButtonStyle::Secondary);
     layer_btn_->SetTooltip("Copy the region onto a new transparent layer");
     layer_btn_->SetOnClick([this] { SetMode(Mode::CopyToLayer); });
+    nobg_btn_ = std::make_shared<Widgets::Button>(
+        "No BG", Widgets::ButtonStyle::Secondary);
+    nobg_btn_->SetTooltip(
+        "AI remove background (BiRefNet) — whole frame, no region "
+        "needed");
+    nobg_btn_->SetOnClick(
+        [this] { SetMode(Mode::RemoveBackground); });
+    smart_btn_ = std::make_shared<Widgets::Button>(
+        "Smart", Widgets::ButtonStyle::Secondary);
+    smart_btn_->SetTooltip(
+        "AI smart select (EfficientSAM) — click the monitor to add "
+        "points, then Run");
+    smart_btn_->SetOnClick([this] { SetMode(Mode::SmartSelect); });
     mode_group_->AddChild(cutout_btn_);
     mode_group_->AddChild(remove_btn_);
     mode_group_->AddChild(layer_btn_);
+    mode_group_->AddChild(nobg_btn_);
+    mode_group_->AddChild(smart_btn_);
 
     // Region fields: each Field hosts a TextInput under its caption so
     // x/y/w/h are labeled instead of anonymous boxes. Enter inside any
@@ -119,6 +136,19 @@ void LabPanel::EnsureChildren() {
                &feather_field_, &feather_input_);
 
     lasso_label_ = std::make_shared<Widgets::Label>("Lasso: none", true);
+    points_label_ =
+        std::make_shared<Widgets::Label>("Points: none", true);
+    ai_mask_label_ =
+        std::make_shared<Widgets::Label>("AI mask: none", true);
+    ai_clear_btn_ = std::make_shared<Widgets::Button>(
+        "Clear", Widgets::ButtonStyle::Ghost);
+    ai_clear_btn_->SetTooltip(
+        "Clear smart-select points and the stored AI mask");
+    ai_clear_btn_->SetOnClick([this] {
+        ClearPoints();
+        if (hooks_.on_clear_mask) hooks_.on_clear_mask();
+        SetAiMaskText("AI mask: none");
+    });
 
     // Inpaint tuning: the Field caption doubles as the live readout —
     // UpdateRadiusLabel rewrites it as "Search radius: N px".
@@ -157,6 +187,9 @@ void LabPanel::EnsureChildren() {
     AddChild(h_field_);
     AddChild(feather_field_);
     AddChild(lasso_label_);
+    AddChild(points_label_);
+    AddChild(ai_mask_label_);
+    AddChild(ai_clear_btn_);
     AddChild(sep_region_);
     AddChild(radius_field_);
     AddChild(sep_run_);
@@ -187,6 +220,33 @@ void LabPanel::SetPolygon(std::vector<Lab::IntPoint> points) {
     Invalidate();
 }
 
+void LabPanel::AddPoint(Lab::IntPoint point) {
+    points_.push_back(point);
+    UpdatePointsLabel();
+    Invalidate();
+    if (hooks_.on_points_changed) hooks_.on_points_changed();
+}
+
+void LabPanel::ClearPoints() {
+    if (points_.empty()) return;
+    points_.clear();
+    UpdatePointsLabel();
+    Invalidate();
+    if (hooks_.on_points_changed) hooks_.on_points_changed();
+}
+
+void LabPanel::SetAiMaskText(const std::string& text) {
+    if (children_attached_) ai_mask_label_->SetText(text);
+}
+
+void LabPanel::UpdatePointsLabel() {
+    if (!children_attached_) return;
+    points_label_->SetText(
+        points_.empty()
+            ? "Points: none"
+            : "Points: " + std::to_string(points_.size()));
+}
+
 void LabPanel::SetMode(Mode mode) {
     if (mode_ == mode) return;
     mode_ = mode;
@@ -204,6 +264,12 @@ void LabPanel::SyncModeButtons() {
                               ? Widgets::ButtonStyle::Primary
                               : Widgets::ButtonStyle::Secondary);
     layer_btn_->SetStyle(mode_ == Mode::CopyToLayer
+                             ? Widgets::ButtonStyle::Primary
+                             : Widgets::ButtonStyle::Secondary);
+    nobg_btn_->SetStyle(mode_ == Mode::RemoveBackground
+                            ? Widgets::ButtonStyle::Primary
+                            : Widgets::ButtonStyle::Secondary);
+    smart_btn_->SetStyle(mode_ == Mode::SmartSelect
                              ? Widgets::ButtonStyle::Primary
                              : Widgets::ButtonStyle::Secondary);
 }
@@ -244,8 +310,17 @@ bool LabPanel::CollectParams(RunParams* params) {
         }
         *targets[i] = v;
     }
-    if (p.region.w <= 0 || p.region.h <= 0) {
+    p.points = points_;
+    // The AI modes don't consume the region: RemoveBackground mattes
+    // the whole frame, SmartSelect is driven by click points.
+    const bool ai_mode = mode_ == Mode::RemoveBackground ||
+                         mode_ == Mode::SmartSelect;
+    if (!ai_mode && (p.region.w <= 0 || p.region.h <= 0)) {
         SetStatus("Region w/h must be > 0", true);
+        return false;
+    }
+    if (mode_ == Mode::SmartSelect && p.points.empty()) {
+        SetStatus("Click the monitor to add select points", true);
         return false;
     }
     if (!ParseInt(feather_input_->GetValue(), &p.feather_px) ||
@@ -386,7 +461,18 @@ void LabPanel::Layout(const XER::UI::Layout::Rect& bounds) {
     feather_field_->Layout({inner_x, y, half_w, field_h}, tokens);
     lasso_label_->Layout(
         {inner_x + half_w + gap, y + caption_h, half_w, 28.0f}, tokens);
-    y += field_h + gap;
+    y += field_h + gap * 0.5f;
+
+    // Smart-select readouts: point count on the left, stored-mask
+    // status + Clear on the right — same muted-label convention as
+    // the lasso readout.
+    const float ai_row_h = 26.0f;
+    points_label_->Layout({inner_x, y, half_w, ai_row_h}, tokens);
+    ai_mask_label_->Layout(
+        {inner_x + half_w + gap, y, half_w - 48.0f, ai_row_h}, tokens);
+    ai_clear_btn_->Layout(
+        {inner_x + inner_w - 48.0f, y, 48.0f, ai_row_h}, tokens);
+    y += ai_row_h + gap * 0.5f;
 
     separator(sep_region_);
 

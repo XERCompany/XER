@@ -121,6 +121,17 @@ public:
     // App reports engine playing state for button/context-menu labels.
     void SetEnginePlaying(bool playing);
 
+    // Object-Lab smart-select seam: when set, a left click inside the
+    // fitted frame calls the handler with FRAME pixel coords and is
+    // consumed when it returns true (else the click falls through to
+    // the play/pause toggle). The host arms it only while the lab's
+    // SmartSelect mode is active, so normal monitor behavior is
+    // unchanged otherwise.
+    void SetOnFrameClick(std::function<bool(int fx, int fy)> cb);
+    // Frame-pixel markers drawn over the fitted frame (the lab's
+    // pending smart-select points). Empty clears the overlay.
+    void SetMarkPoints(std::vector<std::pair<int, int>> frame_points);
+
     // Overrides the RenderStore slot id used by the frame-render seam
     // when a render-worker pool is live — give every concurrent frame
     // source a distinct id (default 240) or their store writes race.
@@ -257,6 +268,9 @@ private:
     std::function<void(double)> on_seek_request_;
     std::function<void(int)> on_frame_step_;
     std::function<void(float)> on_quality_;
+    // Lab smart-select click seam — see SetOnFrameClick.
+    std::function<bool(int, int)> on_frame_click_;
+    std::vector<std::pair<int, int>> mark_points_;  // frame px
     bool engine_playing_ = false;
 
     // --- audio meters ---

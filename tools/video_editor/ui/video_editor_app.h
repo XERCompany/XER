@@ -41,6 +41,7 @@
 #include "nav_rail_widget.h"
 #include "new_layer_dialog.h"
 #include "plugins_panel_widget.h"
+#include "photo_workspace.h"
 #include "project_manager.h"
 #include "font_manager.h"
 #include "settings_dialog.h"
@@ -355,6 +356,13 @@ private:
     void Redo();
     void ToggleShortcutsOverlay();
     void ApplyWorkspace(const WorkspaceLayout& layout);
+    // The "Photo" workspace preset is special-cased: instead of a
+    // panel arrangement it swaps the whole content band for the
+    // PhotoWorkspaceWidget (the M3 photo-editor UI over the photo/
+    // Document+BrushEngine+PhotoHistory core). Any other preset drops
+    // back to the video layout.
+    void EnterPhotoMode();
+    void ExitPhotoMode();
     void RefreshWaveformPanel();
     void RefreshExportQueue();
     void InitAutosave();
@@ -586,6 +594,11 @@ private:
     std::shared_ptr<ExportQueuePanelWidget> export_queue_;
     std::shared_ptr<WaveformPanelWidget> waveform_panel_;
     std::shared_ptr<StatusToastWidget> status_toast_;
+    // Photo workspace (ui/photo_workspace.*): fills the content band
+    // below the title bar while photo_mode_ is on — video chrome is
+    // hidden, Ctrl+Z/Y/S/O/N route to the photo document instead.
+    std::shared_ptr<PhotoWorkspaceWidget> photo_workspace_;
+    bool photo_mode_ = false;
     // Home start screen — the LAST child so it paints/hit-tests above
     // the workspace (title bar stays on top of it in layout).
     std::shared_ptr<ProjectManagerScreen> project_manager_;
@@ -753,6 +766,16 @@ private:
     std::mutex lab_mutex_;
     std::string pending_lab_png_;
     bool has_pending_lab_ = false;
+    // SmartSelect payload: the lab worker stashes the produced mask
+    // under lab_mutex_; Tick moves it into lab_mask_ — the stored
+    // selection the next Cutout/Remove/ToLayer run consumes via
+    // RunParams::mask (on_run_prepare copies it on the UI thread).
+    std::shared_ptr<const std::vector<std::uint8_t>>
+        pending_lab_mask_;
+    int pending_lab_mask_w_ = 0, pending_lab_mask_h_ = 0;
+    bool has_pending_lab_mask_ = false;
+    std::shared_ptr<const std::vector<std::uint8_t>> lab_mask_;
+    int lab_mask_w_ = 0, lab_mask_h_ = 0;
 
     // ---- native extension bridge (VE.ExtensionsRuntime.exe) -------
     // ext_op_ serializes every request that EXECUTES extension code

@@ -24,9 +24,13 @@ file(GLOB_RECURSE AI_HEADERS
 # find_object/ ships as its own module — YA.AIFindObject under
 # XER_YA_DLLS, the XER_AIFindObject static lib otherwise — because the
 # detection feature must load/report-degraded independently of the
-# heavy XER_ContentAI archive. Keep it out of the catch-all glob.
+# heavy XER_ContentAI archive. onnx_session/ rides the same module
+# (shared dual-backend session for detection + lab matting/select).
+# Keep both out of the catch-all glob.
 list(FILTER AI_SOURCES EXCLUDE REGEX "/find_object/")
 list(FILTER AI_HEADERS EXCLUDE REGEX "/find_object/")
+list(FILTER AI_SOURCES EXCLUDE REGEX "/onnx_session/")
+list(FILTER AI_HEADERS EXCLUDE REGEX "/onnx_session/")
 
 # CUDA kernels need the CUDA toolkit; keep them out otherwise.
 if(NOT ENABLE_CUDA)
@@ -205,6 +209,10 @@ elseif(TARGET fbgemm_generic)
 endif()
 
 # cuDNN: GPU-accelerated DNN library (host-side link; kernels need CUDA).
+# Auto-detected like every other backend here — same rule as
+# CUDAToolkit/CUDA::cudart below: find_package QUIET decides. The
+# ENABLE_CUDNN option only gates the async_io engine sources that need
+# cudnn.h to compile; it does not gate this link.
 find_package(CUDNN QUIET)
 if(TARGET CuDNN::CuDNN)
     target_link_libraries(XER_ContentAI PUBLIC CuDNN::CuDNN)
@@ -534,9 +542,11 @@ endif()
 if(XER_YA_DLLS)
     xer_ya_module(YA_AIFindObject EXPORT_NAME YA.AIFindObject
         SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/find_object/find_object.cc
+                ${CMAKE_CURRENT_SOURCE_DIR}/onnx_session/onnx_session.cc
         DEPS ${_fo_libs})
     target_include_directories(YA_AIFindObject_objs PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/find_object
+        ${CMAKE_CURRENT_SOURCE_DIR}/onnx_session
         ${CMAKE_CURRENT_SOURCE_DIR}/../..)
     if(_fo_defs)
         target_compile_definitions(YA_AIFindObject_objs PRIVATE
@@ -551,9 +561,11 @@ if(XER_YA_DLLS)
     set(_fo_defs_target YA_AIFindObject_objs)
 else()
     add_library(XER_AIFindObject STATIC
-        find_object/find_object.cc find_object/find_object.h)
+        find_object/find_object.cc find_object/find_object.h
+        onnx_session/onnx_session.cc onnx_session/onnx_session.h)
     target_include_directories(XER_AIFindObject PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/find_object
+        ${CMAKE_CURRENT_SOURCE_DIR}/onnx_session
         ${CMAKE_CURRENT_SOURCE_DIR}/../..)
     if(_fo_libs)
         target_link_libraries(XER_AIFindObject PRIVATE ${_fo_libs})

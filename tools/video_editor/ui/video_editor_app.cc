@@ -43,6 +43,7 @@
 #include "helper/string_utils.h"
 #include "generated_source.h"
 #include "io/still_image.h"
+#include "lab/ai_ops.h"
 #include "lab/async_op.h"
 #include "lab/object_ops.h"
 #include "lut_manager.h"
@@ -956,6 +957,19 @@ void VideoEditorAppWidget::EnsureChildren() {
         preview_quality_ = scale;
         preview_engine_.SetQuality(scale);
     });
+    // Lab smart-select seam: clicks inside the fitted monitor frame
+    // become EfficientSAM prompt points while the Object Lab's
+    // SmartSelect mode is active and visible. Returning false lets
+    // the click fall through to the normal play/pause toggle.
+    monitor_->SetOnFrameClick([this](int fx, int fy) {
+        if (lab_panel_ == nullptr ||
+            lab_panel_->GetMode() != LabPanel::Mode::SmartSelect ||
+            !lab_panel_->IsVisible()) {
+            return false;
+        }
+        lab_panel_->AddPoint({fx, fy});
+        return true;
+    });
 
     // Source monitor (Premiere-style): a second PreviewEngine decodes
     // the loaded media file through a synthetic one-clip project and
@@ -1083,9 +1097,29 @@ void VideoEditorAppWidget::EnsureChildren() {
         snapshot->playhead = playhead_;
         snapshot->project_path = project_path_;
         params->context = std::move(snapshot);
+        // Stored smart-select mask — the worker prefers it over
+        // rect/lasso when its dims still match the rendered frame.
+        params->mask = lab_mask_;
     };
     lab_hooks.on_status = [this](const std::string& text, bool err) {
         SetStatus(text, err);
+    };
+    // Smart-select points -> monitor overlay markers (frame px).
+    lab_hooks.on_points_changed = [this] {
+        if (monitor_ == nullptr || lab_panel_ == nullptr) return;
+        std::vector<std::pair<int, int>> pts;
+        pts.reserve(lab_panel_->Points().size());
+        for (const Lab::IntPoint& p : lab_panel_->Points()) {
+            pts.emplace_back(p.x, p.y);
+        }
+        monitor_->SetMarkPoints(std::move(pts));
+    };
+    // The panel's Clear button drops the stored AI mask here in app
+    // state (the panel only shows the readout).
+    lab_hooks.on_clear_mask = [this] {
+        lab_mask_.reset();
+        lab_mask_w_ = 0;
+        lab_mask_h_ = 0;
     };
     lab_panel_ = std::make_shared<LabPanel>(lab_hooks);
 
@@ -5065,14 +5099,73 @@ bool VideoEditorAppWidget::RunLabOperation(
     using LabPanelMode = LabPanel::Mode;
     const Lab::IntRect rect{params.region.x, params.region.y,
                             params.region.w, params.region.h};
+    const std::size_t frame_px =
+        static_cast<std::size_t>(frame.Width()) * frame.Height();
+    // A stored smart-select mask wins over rect/lasso when it still
+    // matches the canvas (stale masks from an older canvas size are
+    // ignored, not misapplied).
+    const std::vector<std::uint8_t>* ai_mask =
+        (params.mask != nullptr && params.mask->size() == frame_px)
+            ? params.mask.get()
+            : nullptr;
+    const Lab::AiCallbacks ai_cb{
+        [&job] { return job.ShouldCancel(); },
+        [&job](float f) { job.ReportProgress(f); }};
     video::Frame result;
     bool ok = true;
-    if (params.mode == LabPanelMode::Remove) {
+    if (params.mode == LabPanelMode::RemoveBackground) {
+        // BiRefNet matting — whole frame, no region. The result is a
+        // same-size BGRA cutout (alpha = matte).
+        const std::string model =
+            Lab::FindAiModel("birefnet_lite.onnx");
+        if (model.empty()) {
+            job.Fail(Lab::AiModelHint("birefnet_lite.onnx"));
+            return false;
+        }
+        std::string ai_err;
+        result = Lab::RemoveBackground(frame, model, ai_cb, &ai_err);
+        ok = result.IsValid();
+        if (!ok) {
+            job.Fail(ai_err.empty() ? "background removal failed"
+                                    : ai_err);
+            return false;
+        }
+    } else if (params.mode == LabPanelMode::SmartSelect) {
+        // EfficientSAM click segmentation — the produced mask is
+        // stashed for the UI thread to store as the active selection;
+        // this mode produces no PNG.
+        const std::string model =
+            Lab::FindAiModel("efficientsam_ti.onnx");
+        if (model.empty()) {
+            job.Fail(Lab::AiModelHint("efficientsam_ti.onnx"));
+            return false;
+        }
+        std::string ai_err;
+        auto mask = Lab::SmartSelectMask(frame, params.points, model,
+                                         ai_cb, &ai_err);
+        if (mask.empty()) {
+            job.Fail(ai_err.empty() ? "smart select failed" : ai_err);
+            return false;
+        }
+        {
+            std::lock_guard<std::mutex> lock(lab_mutex_);
+            pending_lab_mask_ =
+                std::make_shared<const std::vector<std::uint8_t>>(
+                    std::move(mask));
+            pending_lab_mask_w_ = frame.Width();
+            pending_lab_mask_h_ = frame.Height();
+            has_pending_lab_mask_ = true;
+        }
+        job.ReportProgress(1.0f);
+        return true;
+    } else if (params.mode == LabPanelMode::Remove) {
         Lab::InpaintParams ip;
         ip.search_radius = params.search_radius;
         ip.should_cancel = [&job] { return job.ShouldCancel(); };
         ip.report_progress = [&job](float f) { job.ReportProgress(f); };
-        if (params.UseLasso()) {
+        if (ai_mask != nullptr) {
+            ok = Lab::InpaintMask(frame, *ai_mask, ip);
+        } else if (params.UseLasso()) {
             const auto mask = Lab::PolygonMask(
                 frame.Width(), frame.Height(), params.polygon,
                 params.feather_px);
@@ -5082,16 +5175,29 @@ bool VideoEditorAppWidget::RunLabOperation(
         }
         result = frame;   // shallow? Frame is a class — check copy
     } else if (params.mode == LabPanelMode::Cutout) {
-        result = params.UseLasso()
-            ? Lab::CutOutLasso(frame, params.polygon, params.feather_px)
-            : Lab::CutOutRect(frame, rect);
+        if (ai_mask != nullptr) {
+            result = Lab::CopyRegionToLayer(frame, *ai_mask);
+        } else {
+            result =
+                params.UseLasso()
+                    ? Lab::CutOutLasso(frame, params.polygon,
+                                       params.feather_px)
+                    : Lab::CutOutRect(frame, rect);
+        }
         ok = result.IsValid();
     } else {
-        const auto mask = params.UseLasso()
-            ? Lab::PolygonMask(frame.Width(), frame.Height(),
-                               params.polygon, params.feather_px)
-            : Lab::RectMask(frame.Width(), frame.Height(), rect);
-        result = Lab::CopyRegionToLayer(frame, mask);
+        if (ai_mask != nullptr) {
+            result = Lab::CopyRegionToLayer(frame, *ai_mask);
+        } else {
+            const auto region_mask =
+                params.UseLasso()
+                    ? Lab::PolygonMask(frame.Width(), frame.Height(),
+                                       params.polygon,
+                                       params.feather_px)
+                    : Lab::RectMask(frame.Width(), frame.Height(),
+                                    rect);
+            result = Lab::CopyRegionToLayer(frame, region_mask);
+        }
         ok = result.IsValid();
     }
     if (!ok) {
@@ -7778,6 +7884,25 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 source_playing_ = false;
                 source_monitor_->SetPlaying(false);
             }
+        }
+    }
+    // Land a finished SmartSelect mask (worker stashed it; selection
+    // state + panel readout stay on the UI thread).
+    {
+        std::lock_guard<std::mutex> lock(lab_mutex_);
+        if (has_pending_lab_mask_) {
+            lab_mask_ = std::move(pending_lab_mask_);
+            lab_mask_w_ = pending_lab_mask_w_;
+            lab_mask_h_ = pending_lab_mask_h_;
+            pending_lab_mask_.reset();
+            has_pending_lab_mask_ = false;
+            if (lab_panel_ != nullptr) {
+                lab_panel_->SetAiMaskText(
+                    "AI mask: " + std::to_string(lab_mask_w_) + "x" +
+                    std::to_string(lab_mask_h_) + " ready");
+            }
+            SetStatus("Smart select mask ready — Remove / To layer "
+                      "will use it");
         }
     }
     // Import a finished Lab result onto the timeline (worker wrote a

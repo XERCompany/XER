@@ -453,8 +453,21 @@ if(MINGW AND _ve_nn_libs)
     set(_ve_nn_probe_defs "")
     set(_ve_nn_probe_groups "")
     if(XER_WITH_OPENCV AND OpenCV_FOUND)
+        # Probe only the modules the editor core actually delay-imports
+        # (nn_probe.cc exercises cv:: core+imgproc; lld emits
+        # delay-import descriptors only for implibs whose symbols are
+        # referenced — YA.VideoEditor-Core carries exactly these two).
+        # OpenCV_LIBS spans ~55 MSYS2 modules that are neither
+        # delay-imported nor staged into bin/ — probing any of those
+        # reports a false "runtime unloadable" (libopencv_calib-500.dll,
+        # the first OpenCV_LIBS entry, hit exactly this: Win32 error 126
+        # on a perfectly healthy DLL that simply is not shipped).
+        # The payload is comma-joined: a raw ;-list would splice into
+        # _ve_nn_probe_groups as extra pseudo-groups.
+        string(REPLACE ";" "," _ve_ocv_probe_targets
+            "opencv_core;opencv_imgproc")
         list(APPEND _ve_nn_probe_groups
-            "XER_VE_NN_OPENCV_DLLS|${OpenCV_LIBS}")
+            "XER_VE_NN_OPENCV_DLLS|${_ve_ocv_probe_targets}")
     endif()
     if(XER_WITH_ONNX AND _ve_ort_target)
         list(APPEND _ve_nn_probe_groups
@@ -472,6 +485,9 @@ if(MINGW AND _ve_nn_libs)
         string(REGEX MATCH "^([^|]+)\\|(.*)$" _pm "${_probe_group}")
         set(_probe_def "${CMAKE_MATCH_1}")
         set(_probe_targets "${CMAKE_MATCH_2}")
+        # Comma-joined payload (see the OpenCV group above) back to a
+        # list; a no-op for the single-target groups.
+        string(REPLACE "," ";" _probe_targets "${_probe_targets}")
         set(_probe_ok "")
         foreach(_pt IN LISTS _probe_targets)
             if(TARGET ${_pt})

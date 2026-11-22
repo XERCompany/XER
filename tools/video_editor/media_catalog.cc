@@ -18,6 +18,7 @@
 
 #include <json/json.h>
 
+#include "audio/audio_core/audio_bit_depth_converter.h"
 #include "clip_poster.h"
 #include "content/video/video_info.h"
 #include "io/still_image.h"
@@ -250,10 +251,15 @@ constexpr int kReadBatch = 64;
 // bound as the mixer's kMaxGapFillSeconds.
 constexpr double kMaxGapFillSeconds = 30.0;
 
-enum class PcmKind { kU8, kS16, kS32, kFlt, kDbl };
+// The raw -> float sample map is delegated to
+// AudioCore::AudioBitDepthConverter (same math as audio_mixer.cc —
+// u8 bias, int32 scale, double cast); ParsePcmLayout only maps the
+// FFmpeg format name onto the audio-core enum.
+using XER::Audio::Core::AudioBitDepth;
+using XER::Audio::Core::AudioBitDepthConverter;
 
 struct PcmLayout {
-    PcmKind kind = PcmKind::kS16;
+    AudioBitDepth depth = AudioBitDepth::BITS_16;
     int bytes_per_sample = 2;
     bool planar = false;
 };
@@ -272,90 +278,79 @@ bool ParsePcmLayout(const FFmpeg::AudioFrameInfo& frame,
     PcmLayout layout;
     layout.planar = planar;
     if (fmt == "u8") {
-        layout.kind = PcmKind::kU8;
-        layout.bytes_per_sample = 1;
+        layout.depth = AudioBitDepth::BITS_8;
     } else if (fmt == "s16") {
-        layout.kind = PcmKind::kS16;
-        layout.bytes_per_sample = 2;
+        layout.depth = AudioBitDepth::BITS_16;
     } else if (fmt == "s32") {
-        layout.kind = PcmKind::kS32;
-        layout.bytes_per_sample = 4;
+        layout.depth = AudioBitDepth::BITS_32;
     } else if (fmt == "flt") {
-        layout.kind = PcmKind::kFlt;
-        layout.bytes_per_sample = 4;
+        layout.depth = AudioBitDepth::FLOAT_32;
     } else if (fmt == "dbl") {
-        layout.kind = PcmKind::kDbl;
-        layout.bytes_per_sample = 8;
+        layout.depth = AudioBitDepth::FLOAT_64;
     } else {
         return false;
     }
+    layout.bytes_per_sample = static_cast<int>(
+        AudioBitDepthConverter::GetBytesPerSample(layout.depth));
     *out = layout;
     return true;
 }
 
-float ReadPcmSample(PcmKind kind, const std::uint8_t* p) {
-    switch (kind) {
-        case PcmKind::kU8:
-            return (static_cast<float>(*p) - 128.0f) / 128.0f;
-        case PcmKind::kS16: {
-            std::int16_t v;
-            std::memcpy(&v, p, sizeof(v));
-            return static_cast<float>(v) / 32768.0f;
-        }
-        case PcmKind::kS32: {
-            std::int32_t v;
-            std::memcpy(&v, p, sizeof(v));
-            return static_cast<float>(v) / 2147483648.0f;
-        }
-        case PcmKind::kFlt: {
-            float v;
-            std::memcpy(&v, p, sizeof(v));
-            return v;
-        }
-        case PcmKind::kDbl: {
-            double v;
-            std::memcpy(&v, p, sizeof(v));
-            return static_cast<float>(v);
-        }
-    }
-    return 0.0f;
-}
+// One decoded block converted to float — planar keeps a vector per
+// channel (the declared plane_sizes stride is honored), interleaved a
+// single count*channels block. The peaks keep EVERY channel (no
+// downmix), so planar converts each declared plane.
+struct FloatBlock {
+    bool planar = false;
+    int channels = 0;
+    std::vector<float> interleaved;
+    std::vector<std::vector<float>> planes;
 
-// Reads channel `c` of frame `i` as a [-1,1] float — the mixer's
-// ChannelValue generalized past stereo (peaks keep every channel).
-// Callers validate the payload first, so the bounds checks below are
-// defensive only.
-bool ChannelValue(const FFmpeg::AudioFrameInfo& frame,
-                  const PcmLayout& layout, int frame_index,
-                  int channel, float* out) {
-    const int bps = layout.bytes_per_sample;
-    const std::uint8_t* base = frame.data.data();
+    float Sample(int frame_index, int channel) const {
+        return planar
+            ? planes[static_cast<std::size_t>(channel)]
+                    [static_cast<std::size_t>(frame_index)]
+            : interleaved[static_cast<std::size_t>(frame_index) *
+                              static_cast<std::size_t>(channels) +
+                          static_cast<std::size_t>(channel)];
+    }
+};
+
+// Converts the (already payload-validated) frame to float through the
+// audio-core converter. False only if the converter rejects a depth —
+// unreachable for the formats ParsePcmLayout accepts.
+bool ToFloatBlock(const FFmpeg::AudioFrameInfo& frame,
+                  const PcmLayout& layout, FloatBlock* out) {
+    const int count = frame.sample_count;
+    const int channels = frame.channels;
+    AudioBitDepthConverter converter;
+    out->planar = layout.planar;
+    out->channels = channels;
     if (layout.planar) {
-        if (channel >= static_cast<int>(frame.plane_sizes.size())) {
-            return false;
-        }
+        out->planes.resize(static_cast<std::size_t>(channels));
         std::size_t offset = 0;
-        for (int c = 0; c < channel; ++c) {
-            offset += static_cast<std::size_t>(frame.plane_sizes[c]);
+        for (int c = 0; c < channels; ++c) {
+            const std::uint8_t* plane = frame.data.data() + offset;
+            offset += static_cast<std::size_t>(
+                frame.plane_sizes[static_cast<std::size_t>(c)]);
+            std::vector<float>& dst =
+                out->planes[static_cast<std::size_t>(c)];
+            dst.assign(static_cast<std::size_t>(count), 0.0f);
+            if (!converter.ConvertBuffer(
+                    plane, layout.depth, dst.data(),
+                    AudioBitDepth::FLOAT_32,
+                    static_cast<std::size_t>(count))) {
+                return false;
+            }
         }
-        const std::size_t idx =
-            offset + static_cast<std::size_t>(frame_index) *
-                         static_cast<std::size_t>(bps);
-        if (idx + static_cast<std::size_t>(bps) > frame.data.size()) {
-            return false;
-        }
-        *out = ReadPcmSample(layout.kind, base + idx);
         return true;
     }
-    const std::size_t idx =
-        (static_cast<std::size_t>(frame_index) * frame.channels +
-         channel) *
-            static_cast<std::size_t>(bps);
-    if (idx + static_cast<std::size_t>(bps) > frame.data.size()) {
-        return false;
-    }
-    *out = ReadPcmSample(layout.kind, base + idx);
-    return true;
+    out->interleaved.assign(
+        static_cast<std::size_t>(count) *
+            static_cast<std::size_t>(channels), 0.0f);
+    return converter.ConvertBuffer(
+        frame.data.data(), layout.depth, out->interleaved.data(),
+        AudioBitDepth::FLOAT_32, out->interleaved.size());
 }
 
 // Running per-channel min/max accumulation over the absolute sample
@@ -416,14 +411,12 @@ void EmitZeroRun(PeakBuilder& b, std::int64_t count) {
     b.emitted += count;
 }
 
-void EmitSample(PeakBuilder& b, const FFmpeg::AudioFrameInfo& frame,
-                const PcmLayout& layout, int frame_index) {
+void EmitSample(PeakBuilder& b, const FloatBlock& fb, int frame_index) {
     const std::size_t bucket =
         static_cast<std::size_t>(b.emitted) / kPeaksSamplesPerPeak;
     EnsureBucket(b, bucket);
     for (int c = 0; c < b.channels; ++c) {
-        float v = 0.0f;
-        ChannelValue(frame, layout, frame_index, c, &v);
+        const float v = fb.Sample(frame_index, c);
         float& mn = b.mins[static_cast<std::size_t>(c)][bucket];
         float& mx = b.maxs[static_cast<std::size_t>(c)][bucket];
         if (v < mn) mn = v;
@@ -503,6 +496,13 @@ bool ConsumeAudioBlock(PeakBuilder& b,
         }
     }
 
+    // Convert the whole block to float once — every channel feeds the
+    // per-channel peak accumulation below.
+    FloatBlock fb;
+    if (!ToFloatBlock(frame, layout, &fb)) {
+        return Fail(error_out, "audio sample conversion failed");
+    }
+
     // Block media start: best_effort_timestamp preferred, else pts,
     // both * the audio time base; missing timestamps continue from the
     // emitted end (first block anchors at GetAudioStartSeconds — the
@@ -553,7 +553,7 @@ bool ConsumeAudioBlock(PeakBuilder& b,
             b.capped = true;
             break;
         }
-        EmitSample(b, frame, layout, static_cast<int>(i));
+        EmitSample(b, fb, static_cast<int>(i));
     }
     return true;
 }
