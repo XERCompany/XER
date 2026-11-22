@@ -579,6 +579,13 @@ if(WIN32)
         "${CMAKE_CURRENT_SOURCE_DIR}/ui/*.cc"
     )
     target_sources(video_editor PRIVATE ${VIDEO_EDITOR_UI_SOURCES})
+    # ui2/ — the rebuilt shell (spec docs/wiki/architecture/
+    # ve-ui-rebuild-spec.md). Parallel codebase: same exe, launched via
+    # --ui2 / XER_VE_UI2=1 until the M4 swap-over.
+    file(GLOB VIDEO_EDITOR_UI2_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/ui2/*.cc"
+    )
+    target_sources(video_editor PRIVATE ${VIDEO_EDITOR_UI2_SOURCES})
     target_link_libraries(video_editor PRIVATE XER_UI_Core)
     # CEF browser embedding — stub lib when the distribution is absent.
     if(TARGET XER_Cef)

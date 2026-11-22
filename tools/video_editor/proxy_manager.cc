@@ -407,9 +407,12 @@ int ProxyManager::EnforceStorageCap() {
             Path::FromUtf8(rec.proxy_path).lexically_normal();
         // Managed-dir guard: evictions only ever delete inside
         // ProxyDir — a hand-edited row pointing elsewhere is ignored,
-        // never unlinked. Component-wise prefix compare.
-        if (!std::equal(dir.begin(), dir.end(), file.begin(),
-                        file.end())) {
+        // never unlinked. Component-wise prefix compare: dir must be
+        // fully consumed as a prefix of file (std::equal's 4-iterator
+        // form would require equal lengths — always false here).
+        const auto [dir_it, file_it] = std::mismatch(
+            dir.begin(), dir.end(), file.begin(), file.end());
+        if (dir_it != dir.end()) {
             continue;
         }
         const std::int64_t size = FileSizeBytes(file);

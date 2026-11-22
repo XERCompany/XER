@@ -2178,9 +2178,10 @@ std::string CheckJsFx() {
 // audio effects onto a short PCM buffer.
 std::string CheckBuiltinFx() {
     const std::vector<std::string> ids = BuiltinFx::Ids();
-    // 49 migrated effects + xer.fx.smart_reframe (geometric — its ABI
-    // fn is an identity; the compositor applies it at the warp).
-    if (ids.size() != 50) {
+    // 49 migrated effects + xer.fx.smart_reframe + xer.fx.track_mosaic
+    // (both geometric — their ABI fns are identities; the compositor
+    // applies them at the warp/mask pass).
+    if (ids.size() != 51) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -2985,9 +2986,16 @@ std::string CheckProxyWorkflow() {
         return "failed to plant LRU fixture rows";
     }
     proxies.SetStorageCapBytes(6000);   // fits one of the two 4 KiB files
-    if (proxies.EnforceStorageCap() != 1) {
+    const int evicted = proxies.EnforceStorageCap();
+    if (evicted != 1) {
+        std::error_code ec;
+        const bool a_exists = std::filesystem::exists(file_a, ec);
+        const bool b_exists = std::filesystem::exists(file_b, ec);
         catalog.Close();
-        return "LRU sweep did not evict exactly one proxy";
+        return "LRU sweep did not evict exactly one proxy"
+               " (evicted=" + std::to_string(evicted) +
+               " a_exists=" + std::to_string(a_exists) +
+               " b_exists=" + std::to_string(b_exists) + ")";
     }
     {
         std::error_code ec;

@@ -28,6 +28,7 @@
 #include "export_engine.h"
 #include "frame_exporter.h"
 #include "media_worker_server.h"
+#include "helper/env_utils.h"   // XER_VE_UI2 switch
 #include "helper/path_utils.h"
 #include "media_catalog.h"
 #include "playback/audio_output.h"
@@ -48,9 +49,19 @@
 #include "ui/core/window.h"
 #include "ui/theme/theme.h"
 #include "ui/ve_theme.h"
+#include "ui/color_widgets_smoke.h"   // ColorWidgetsSmoke hook
+#include "ui/data_widgets_smoke.h"    // DataWidgetsSmoke hook
+#include "ui/media_widgets_smoke.h"   // MediaWidgetsSmoke hook
 #include "ui/photo_workspace.h"       // PhotoWorkspaceSmoke hook
+#include "ui/widget_kit_smoke.h"      // WidgetKitSmoke hook
 #include "ui/video_editor_app.h"
 #include "ui/widgets/app_title_bar.h"
+// ui2/ — the rebuilt shell (parallel codebase, spec
+// docs/wiki/architecture/ve-ui-rebuild-spec.md). Launched via --ui2
+// or XER_VE_UI2=1; the legacy ui/ shell stays the default.
+#include "ui2/ui2_shell_smoke.h"  // Ui2ShellSmoke hook
+#include "ui2/ve_app.h"
+#include "ui2/ve_theme.h"
 
 #include "rendering/windows/software_renderer.h"  // --screenshot --ui
 #include "theme/tokens.h"
@@ -135,6 +146,8 @@ void PrintUsage() {
                  "Headless CEF bring-up (runtime init + browser)\n"
               << "  video_editor --smoke-list                     "
                  "List the smoke check names\n"
+              << "  video_editor --ui2 [project]                  "
+                 "Launch the rebuilt ui2 shell (or XER_VE_UI2=1)\n"
               << "  video_editor --help                           "
                  "Show this help\n";
 }
@@ -1425,6 +1438,98 @@ int RunDiag() {
     std::cout << "\n=== end diag ===\n";
     return 0;
 }
+
+// `--ui2` / XER_VE_UI2=1: boots the rebuilt shell (ui2/ve_app.h) on
+// the same window/app bootstrap as RunGui. The old ui/ shell stays
+// untouched and default; the swap-over is a later milestone.
+bool UseUi2Shell() {
+    const std::string env = XER::Helper::GetEnv("XER_VE_UI2");
+    return env == "1" || env == "true" || env == "TRUE";
+}
+
+int RunGui2(const std::string& project_path) {
+    // Same assets bootstrap as the legacy path.
+    std::string boot_status;
+    auto boot = XER::VideoEditor::AppRuntime::Boot(&boot_status);
+    if (!boot_status.empty()) {
+        std::cerr << "assets: " << boot_status << "\n";
+    }
+    const auto& wcfg = boot.window;
+
+    auto& app = XER::UI::Core::Application::Instance();
+    app.SetAppName("VideoEditor - XER Creative Suite (ui2)");
+    if (!app.Initialize()) {
+        std::cerr << "Error: failed to initialize XER UI\n";
+        return 1;
+    }
+
+    auto window = std::make_shared<XER::UI::Core::Window>();
+    if (!window->Create(wcfg.title, wcfg.width, wcfg.height)) {
+        app.Shutdown();
+        std::cerr << "Error: failed to create editor window\n";
+        return 1;
+    }
+    if (wcfg.maximized) {
+        window->ToggleMaximize();
+    }
+    auto editor =
+        std::make_shared<XER::VideoEditor::Ui2::VeApp>(project_path);
+    window->SetContent(editor);
+    window->SetTheme(XER::UI::Theme::Variant::Dark);
+    XER::VideoEditor::Ui2::Theme::ApplyToWindow(
+        window.get(),
+        XER::VideoEditor::AppRuntime::SharedAssetsConfig()
+            .editor.accent_argb);
+    window->SetCustomTitleBar(true, 38.0f);
+    window->SetTitleBarHitTest([editor](XER::UI::Layout::Point point) {
+        auto* title_bar = editor->TitleBar();
+        return title_bar != nullptr && title_bar->IsInteractiveAt(point);
+    });
+    auto* title_bar = editor->TitleBar();
+    if (title_bar != nullptr) {
+        using WindowCommand =
+            XER::UI::Widgets::AppTitleBar::WindowCommand;
+        title_bar->SetOnWindowCommand([window](WindowCommand command) {
+            switch (command) {
+                case WindowCommand::Minimize:
+                    window->Minimize();
+                    break;
+                case WindowCommand::ToggleMaximize:
+                    window->ToggleMaximize();
+                    break;
+                case WindowCommand::Close:
+                    window->Close();
+                    break;
+            }
+        });
+        title_bar->SetThemeToggle(true, [window](bool dark) {
+            window->SetTheme(dark ? XER::UI::Theme::Variant::Dark
+                                  : XER::UI::Theme::Variant::Light);
+            if (dark) {
+                XER::VideoEditor::Ui2::Theme::ApplyToWindow(
+                    window.get(), XER::VideoEditor::AppRuntime::
+                                      SharedAssetsConfig()
+                                          .editor.accent_argb);
+            }
+        });
+    }
+    const auto sync_maximize = [window, title_bar] {
+        if (title_bar != nullptr) {
+            title_bar->SetMaximized(window->IsWindowMaximized());
+        }
+    };
+    window->SetOnResize([sync_maximize](int, int) { sync_maximize(); });
+    window->SetSizeLimits(960, 620, 0, 0);
+    window->SetFrameCallback([editor, sync_maximize] {
+        editor->TickTree(1.0 / 30.0);
+        sync_maximize();
+    }, 33);
+    window->Show();
+    const int result = app.Run();
+    app.Shutdown();
+    XER::Cef::Shutdown();
+    return result;
+}
 #endif
 
 #if defined(_WIN32)
@@ -1520,7 +1625,7 @@ int main(int argc, char** argv) {
 #endif
     if (args.size() < 2) {
 #if defined(_WIN32)
-        return RunGui({});
+        return UseUi2Shell() ? RunGui2({}) : RunGui({});
 #else
         PrintUsage();
         return 1;
@@ -1556,13 +1661,27 @@ int main(int argc, char** argv) {
         return RunDiag();
     }
 #endif
+    if (arg == "--ui2") {
+        // Rebuilt shell (ui2/). Optional project path follows.
+#if defined(_WIN32)
+        const std::string project =
+            args.size() >= 3 && !args[2].empty() &&
+                    args[2].front() != '-'
+                ? args[2]
+                : std::string{};
+        return RunGui2(project);
+#else
+        std::cerr << "Error: desktop editor is Windows-only\n";
+        return 1;
+#endif
+    }
     if (arg == "--open" || arg == "--gui") {
         if (args.size() < 3) {
             std::cerr << "Error: " << arg << " requires a project path\n";
             return 1;
         }
 #if defined(_WIN32)
-        return RunGui(args[2]);
+        return UseUi2Shell() ? RunGui2(args[2]) : RunGui(args[2]);
 #else
         std::cerr << "Error: desktop editor is Windows-only\n";
         return 1;
@@ -1610,6 +1729,21 @@ int main(int argc, char** argv) {
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui::PhotoWorkspaceSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "color_widgets",
+            &XER::VideoEditor::Ui::ColorWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "data_widgets",
+            &XER::VideoEditor::Ui::DataWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "widget_kit",
+            &XER::VideoEditor::Ui::WidgetKitSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "media_widgets",
+            &XER::VideoEditor::Ui::MediaWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_shell",
+            &XER::VideoEditor::Ui2::Ui2ShellSmoke);
 #endif
         return XER::VideoEditor::Smoke::RunAll();
     }
@@ -1618,6 +1752,21 @@ int main(int argc, char** argv) {
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui::PhotoWorkspaceSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "color_widgets",
+            &XER::VideoEditor::Ui::ColorWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "data_widgets",
+            &XER::VideoEditor::Ui::DataWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "widget_kit",
+            &XER::VideoEditor::Ui::WidgetKitSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "media_widgets",
+            &XER::VideoEditor::Ui::MediaWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_shell",
+            &XER::VideoEditor::Ui2::Ui2ShellSmoke);
 #endif
         for (const std::string& name :
              XER::VideoEditor::Smoke::CheckNames()) {
@@ -1628,7 +1777,7 @@ int main(int argc, char** argv) {
 
     if (!arg.empty() && arg.front() != '-') {
 #if defined(_WIN32)
-        return RunGui(arg);
+        return UseUi2Shell() ? RunGui2(arg) : RunGui(arg);
 #else
         std::cerr << "Error: desktop editor is Windows-only\n";
         return 1;
