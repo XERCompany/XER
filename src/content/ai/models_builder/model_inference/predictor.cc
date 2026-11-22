@@ -37,15 +37,29 @@
 #define XER_PRED_HAS_GGML 0
 #endif
 
-// BLAS dense path: cblas_sgemm from MKL/OpenBLAS (whichever provides cblas.h).
-#if __has_include(<cblas.h>)
+// BLAS dense path: cblas_sgemm from MKL/OpenBLAS. Gated on the CMake
+// link-time defines (set in src/content/ai/CMakeLists.txt when a BLAS
+// target is actually linked), NOT on header presence alone: a toolchain
+// may ship cblas.h while the library is not linked — e.g. the msys2
+// preset sets CMAKE_DISABLE_FIND_PACKAGE_OpenBLAS=ON, which would leave
+// cblas_sgemm unresolved if this file were pulled into a link.
+// Note MKL exposes the CBLAS API through <mkl_cblas.h>, not <cblas.h>.
+#if defined(XER_AI_HAS_OPENBLAS) && __has_include(<cblas.h>)
 #include <cblas.h>
+#define XER_PRED_HAS_CBLAS 1
+#elif defined(XER_AI_HAS_MKL) && __has_include(<mkl_cblas.h>)
+#include <mkl_cblas.h>
 #define XER_PRED_HAS_CBLAS 1
 #else
 #define XER_PRED_HAS_CBLAS 0
 #endif
 
-#if ENGINE_HAS_CUDA_BRIDGE && ENGINE_HAS_CUDNN_BRIDGE && __has_include(<cuda_runtime.h>) && __has_include(<cudnn.h>)
+// CUDA tensor kernels live in ml/cuda_ops/*.cu, which can only build when
+// the CUDA language is enabled project-wide (enable_language(CUDA)).
+// CMake defines XER_AI_HAS_CUDA_KERNELS only when those .cu objects are
+// really part of the target — ENABLE_CUDA alone is not sufficient and
+// would leave the CudaTensorKernel calls below unresolved at link time.
+#if ENGINE_HAS_CUDA_BRIDGE && ENGINE_HAS_CUDNN_BRIDGE && defined(XER_AI_HAS_CUDA_KERNELS) && __has_include(<cuda_runtime.h>) && __has_include(<cudnn.h>)
 #include "../../ml/cuda_ops/cuda_tensor_kernel.h"
 #define XER_AI_HAS_CUDA_CUDNN_HEADERS 1
 #else

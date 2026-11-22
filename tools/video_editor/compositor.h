@@ -105,18 +105,13 @@ bool ApplyMaskPixels(video::Frame* frame,
                      const std::vector<ClipMask>& masks);
 
 // Composites `src` onto `dst` (both packed straight-alpha BGRA8, same
-// dims) using `mode`: dst <- src OVER dst where the source's effective
-// rgb is the W3C-style blend of (backdrop, source):
-//   Cb    = blend(dst_rgb_norm, src_rgb_norm)     (per channel)
-//   Cs'   = sA*Cb + (1-sA)*src_rgb_norm           (spec'd effective src)
-//   out_c = (sA*Cs' + dA*(1-sA)*dst_rgb_norm)/oA  (standard alpha-over)
-//   out_a = alpha-over(sA, dA)
-// Opaque src over opaque dst yields exactly Cb. Blend formulas
-// (normalized 0..1): Add = min(1,b+s); Multiply = b*s;
-// Screen = 1-(1-b)(1-s); Overlay = b<=0.5 ? 2*b*s : 1-2*(1-b)*(1-s);
-// Darken = min(b,s); Lighten = max(b,s). BlendMode::Normal reduces
-// EXACTLY to plain alpha-over (Cb = src) — the compositor still keeps
-// its dedicated alpha-over fast path for Normal.
+// dims) using `mode`: Normal/SrcOver take the dedicated alpha-over
+// fast path; every other mode is delegated to
+// video::MixSystem::BlendFrames under its Skia blend name, giving the
+// full W3C Porter-Duff / separable / non-separable composite for all
+// 29 bridge modes. (Semantic delta vs the retired inline loop for the
+// original six modes: translucent layers now also weight by backdrop
+// alpha — identical for opaque composites.)
 // Returns false on size/format mismatch or invalid frames.
 bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
                           const video::Frame& src);

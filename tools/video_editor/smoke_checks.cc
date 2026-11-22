@@ -57,6 +57,10 @@
 #include "media_worker_client.h"
 #include "media_worker_protocol.h"
 #include "nn_probe.h"
+#include "photo/brush.h"
+#include "photo/document.h"
+#include "photo/photo_history.h"
+#include "photo/tile_store.h"
 #include "poster_cache.h"
 #include "project_autosave.h"
 #include "project_store.h"
@@ -710,7 +714,99 @@ std::string CheckCompositorRender() {
     return {};
 }
 
-// The `--screenshot` pipeline in-process: a project round-trips
+// Named layer blend modes: every BlendMode must route through
+// ApplyBlendModePixels -> MixSystem::BlendFrames and produce the W3C
+// result. Expected bytes are hand-computed from the W3C formulas on a
+// two-pixel fixture (tolerance 1 for float-vs-int rounding).
+std::string CheckBlendModes() {
+    const std::array<std::uint8_t, 4> kD = {100, 150, 200, 255};  // b,g,r,a
+    const std::array<std::uint8_t, 4> kS = {50, 100, 150, 255};
+    auto make = [](const std::array<std::uint8_t, 4>& px) {
+        video::Frame f;
+        if (!f.Allocate(1, 1, video::PixelFormat::BGRA8)) return f;
+        std::memcpy(f.Data(), px.data(), 4);
+        return f;
+    };
+    auto run = [&](BlendMode m, const std::array<std::uint8_t, 4>& s_px) {
+        video::Frame d = make(kD);
+        const video::Frame s = make(s_px);
+        if (!ApplyBlendModePixels(m, &d, s)) return video::Frame{};
+        return d;
+    };
+    auto expect = [](const video::Frame& f,
+                     const std::array<std::uint8_t, 4>& want, int tol,
+                     const char* what) -> std::string {
+        if (!f.IsValid()) {
+            return std::string(what) + ": blend returned false";
+        }
+        for (int c = 0; c < 4; ++c) {
+            const int got = f.Data()[c];
+            const int exp = want[static_cast<std::size_t>(c)];
+            if (std::abs(got - exp) > tol) {
+                return std::string(what) + ": channel " +
+                       std::to_string(c) + " got " + std::to_string(got) +
+                       " want ~" + std::to_string(exp);
+            }
+        }
+        return {};
+    };
+    struct Case {
+        BlendMode mode;
+        std::array<std::uint8_t, 4> want;   // bytes b,g,r,a
+        int tol;
+        const char* name;
+    };
+    const Case kCases[] = {
+        // Opaque-src-over-opaque-dst fixtures — the composite is exact.
+        {BlendMode::Normal,     kS,                 0, "normal"},
+        {BlendMode::SrcOver,    kS,                 0, "src_over"},
+        {BlendMode::Src,        kS,                 0, "src"},
+        {BlendMode::SrcIn,      kS,                 1, "src_in"},
+        {BlendMode::SrcATop,    kS,                 1, "src_atop"},
+        {BlendMode::Dst,        kD,                 0, "dst"},
+        {BlendMode::DstIn,      kD,                 1, "dst_in"},
+        {BlendMode::DstATop,    kD,                 1, "dst_atop"},
+        {BlendMode::Clear,      {0, 0, 0, 0},       0, "clear"},
+        {BlendMode::SrcOut,     {0, 0, 0, 0},       1, "src_out"},
+        {BlendMode::DstOut,     {0, 0, 0, 0},       1, "dst_out"},
+        {BlendMode::Xor,        {0, 0, 0, 0},       1, "xor"},
+        {BlendMode::Add,        {150, 250, 255, 255}, 1, "add"},
+        {BlendMode::Plus,       {150, 250, 255, 255}, 1, "plus"},
+        {BlendMode::Multiply,   {20, 59, 118, 255}, 1, "multiply"},
+        {BlendMode::Modulate,   {20, 59, 118, 255}, 1, "modulate"},
+        {BlendMode::Screen,     {130, 191, 232, 255}, 1, "screen"},
+        {BlendMode::Overlay,    {39, 127, 210, 255},  1, "overlay"},
+        {BlendMode::Darken,     {50, 100, 150, 255}, 0, "darken"},
+        {BlendMode::Lighten,    {100, 150, 200, 255}, 0, "lighten"},
+        {BlendMode::ColorDodge, {124, 247, 255, 255}, 1, "color_dodge"},
+        {BlendMode::ColorBurn,  {0, 0, 161, 255},  1, "color_burn"},
+        {BlendMode::HardLight,  {39, 118, 210, 255}, 1, "hard_light"},
+        {BlendMode::SoftLight,  {63, 137, 205, 255}, 1, "soft_light"},
+        {BlendMode::Difference, {50, 50, 50, 255}, 1, "difference"},
+        {BlendMode::Exclusion,  {111, 132, 115, 255}, 1, "exclusion"},
+        {BlendMode::Hue,        {100, 150, 200, 255}, 1, "hue"},
+        {BlendMode::Saturation, {100, 150, 200, 255}, 1, "saturation"},
+        {BlendMode::Color,      {100, 150, 200, 255}, 1, "color"},
+        {BlendMode::Luminosity, {50, 100, 150, 255},  1, "luminosity"},
+    };
+    for (const Case& c : kCases) {
+        const std::string fail =
+            expect(run(c.mode, kS), c.want, c.tol, c.name);
+        if (!fail.empty()) {
+            return fail;
+        }
+    }
+    // Translucent source: src-over alpha must blend to a=255 over an
+    // opaque backdrop with weighted color.
+    const std::array<std::uint8_t, 4> kHalf = {50, 100, 150, 128};
+    const video::Frame translucent = run(BlendMode::SrcOver, kHalf);
+    const std::string fail = expect(translucent, {75, 125, 175, 255}, 1,
+                                    "translucent src_over");
+    if (!fail.empty()) {
+        return fail;
+    }
+    return {};
+}
 // through ProjectStore, the program frame renders through the
 // headless Compositor and lands on disk as a PNG via
 // video::FrameExporter — the file must carry the PNG magic plus an
@@ -4090,6 +4186,163 @@ std::string CheckAiTags() {
     return {};
 }
 
+// ---------------------------------------------------------------------------
+// photo_m1 — the critical M1 correctness property: stroke -> undo ->
+// redo must be pixel-exact through the tile-memento path, and tile
+// copy-on-write must isolate clones. Headless; the only file touched
+// is a throwaway PNG in SmokeTempDir.
+// ---------------------------------------------------------------------------
+std::string CheckPhotoM1() {
+    namespace ph = Photo;
+
+    // 1) Tile copy-on-write: clones share tiles, writes isolate.
+    {
+        ph::TiledDevice dev(200, 140);
+        dev.WritePixel(10, 10, ph::Pixel::RGBA(255, 0, 0));
+        auto snap = dev.Clone();
+        dev.WritePixel(20, 10, ph::Pixel::RGBA(0, 255, 0));
+        if (snap->ReadPixel(20, 10) != ph::Pixel::Transparent()) {
+            return "COW: write to source leaked into clone";
+        }
+        snap->WritePixel(10, 10, ph::Pixel::RGBA(0, 0, 255));
+        if (dev.ReadPixel(10, 10) != ph::Pixel::RGBA(255, 0, 0)) {
+            return "COW: write to clone leaked into source";
+        }
+    }
+
+    // 2) Transaction memento -> rollback / re-apply pixel-exact.
+    {
+        ph::TiledDevice dev(200, 140);
+        dev.Fill({0, 0, 20, 20}, ph::Pixel::RGBA(200, 200, 200));
+        const auto before = dev.ReadRegion(dev.Bounds());
+        dev.BeginTransaction();
+        dev.Fill({0, 0, 64, 64}, ph::Pixel::RGBA(9, 9, 9));
+        auto m = dev.EndTransaction();
+        const auto after_fill = dev.ReadRegion(dev.Bounds());
+        if (before == after_fill) {
+            return "fill produced no change inside transaction";
+        }
+        auto inv = dev.ApplyMemento(*m);
+        if (dev.ReadRegion(dev.Bounds()) != before) {
+            return "memento undo not pixel-exact";
+        }
+        dev.ApplyMemento(*inv);
+        if (dev.ReadRegion(dev.Bounds()) != after_fill) {
+            return "memento redo not pixel-exact";
+        }
+    }
+
+    // 3) Document: fill -> brush stroke -> undo -> redo, all
+    //    pixel-exact via PhotoHistory + tile mementos.
+    ph::Document doc(192, 128);
+    ph::PhotoHistory hist(doc);
+    ph::LayerNode& layer = doc.AddRasterLayer("paint");
+    ph::TiledDevice* dev = doc.LayerDevice(layer.Id());
+    if (dev == nullptr) return "raster layer has no device";
+
+    if (!ph::FillLayer(doc, layer.Id(), ph::Pixel::RGBA(250, 250, 250),
+                       &hist)) {
+        return "FillLayer failed";
+    }
+    const auto pre_stroke = dev->ReadRegion(dev->Bounds());
+
+    ph::BrushParams params;
+    params.diameter_px = 18.0f;
+    params.hardness = 0.9f;
+    params.spacing = 0.3f;
+    params.flow = 0.8f;
+    params.jitter_pos = 0.15f;   // jitter on — must still round-trip
+    params.rng_seed = 7;         // deterministic
+    params.color = ph::Pixel::RGBA(30, 80, 220, 255);
+    ph::BrushEngine brush(params);
+    const std::vector<ph::StrokePoint> pts = {
+        {30.0f, 40.0f, 1.0f}, {60.0f, 60.0f, 0.9f},
+        {90.0f, 45.0f, 0.7f}, {120.0f, 70.0f, 1.0f},
+    };
+    ph::IntRect dirty;
+    if (!brush.PaintStrokeOnLayer(doc, layer.Id(), pts, &hist, &dirty)) {
+        return "PaintStrokeOnLayer failed";
+    }
+    if (dirty.IsEmpty()) return "stroke reported empty dirty rect";
+    const auto post_stroke = dev->ReadRegion(dev->Bounds());
+    if (pre_stroke == post_stroke) return "stroke changed no pixels";
+
+    if (!hist.Undo()) return "undo of stroke failed";
+    if (dev->ReadRegion(dev->Bounds()) != pre_stroke) {
+        return "stroke undo not pixel-exact";
+    }
+    if (!hist.Redo()) return "redo of stroke failed";
+    if (dev->ReadRegion(dev->Bounds()) != post_stroke) {
+        return "stroke redo not pixel-exact";
+    }
+    // Undo the fill too (it was recorded before the stroke).
+    if (!hist.Undo() || !hist.Undo()) return "undo chain broken";
+    if (dev->ReadRegion(dev->Bounds()) !=
+        std::vector<uint8_t>(
+            static_cast<size_t>(dev->Bounds().w) * dev->Bounds().h * 4,
+            0)) {
+        return "fill undo did not restore transparent layer";
+    }
+    if (!hist.Redo() || !hist.Redo()) return "redo chain broken";
+    if (dev->ReadRegion(dev->Bounds()) != post_stroke) {
+        return "fill+stroke redo not pixel-exact";
+    }
+
+    // 4) Eraser variant — alpha must drop where the stroke passes.
+    {
+        ph::BrushParams er;
+        er.eraser = true;
+        er.diameter_px = 24.0f;
+        er.hardness = 0.95f;
+        er.rng_seed = 3;
+        ph::BrushEngine eraser(er);
+        const std::vector<ph::StrokePoint> epts = {
+            {10.0f, 10.0f, 1.0f}, {50.0f, 10.0f, 1.0f},
+        };
+        if (!eraser.PaintStrokeOnLayer(doc, layer.Id(), epts, &hist,
+                                       nullptr)) {
+            return "eraser stroke failed";
+        }
+        if (dev->ReadPixel(30, 10).a >= 250) {
+            return "eraser did not reduce alpha";
+        }
+    }
+
+    // 5) PNG round trip through src/image loader/saver.
+    {
+        const std::string path =
+            Utf8Path(SmokeTempDir() / "photo_m1.png");
+        std::string err;
+        if (!doc.SavePng(path, &err)) {
+            return "SavePng failed: " + err;
+        }
+        auto back = ph::Document::OpenPng(path, &err);
+        if (!back) return "OpenPng failed: " + err;
+        if (back->CanvasWidth() != 192 || back->CanvasHeight() != 128) {
+            return "PNG round trip changed canvas size";
+        }
+    }
+
+    // 6) Gradient fill sanity + flatten produces a valid buffer.
+    {
+        XER::Bridge::Skia::GradientStops stops = {
+            {0.0f, ph::Pixel::RGBA(255, 0, 0).PackedU32()},
+            {1.0f, ph::Pixel::RGBA(0, 0, 255).PackedU32()},
+        };
+        ph::LayerNode& g = doc.AddRasterLayer("grad");
+        if (!ph::FillLinearGradient(doc, g.Id(), 0, 0, 192, 0, stops,
+                                    &hist)) {
+            return "FillLinearGradient failed";
+        }
+        const image::ImageBuffer flat = doc.Flatten();
+        if (!flat.IsValid() || flat.Width() != 192 ||
+            flat.Height() != 128) {
+            return "Flatten produced invalid buffer";
+        }
+    }
+    return {};
+}
+
 using CheckFn = std::string (*)();
 struct CheckEntry {
     const char* name;
@@ -4109,6 +4362,7 @@ constexpr CheckEntry kChecks[] = {
     {"generated_source", &CheckGeneratedSource},
     {"text_style_ext", &CheckTextStyleExt},
     {"compositor_render", &CheckCompositorRender},
+    {"blend_modes", &CheckBlendModes},
     {"screenshot_png", &CheckScreenshotPng},
     {"ui_screenshot_diff", &CheckUiScreenshotDiff},
     {"curves_lens", &CheckCurvesAndLens},
@@ -4143,6 +4397,7 @@ constexpr CheckEntry kChecks[] = {
     {"cuda_decode", &CheckCudaDecode},
     {"cuda_encode", &CheckCudaEncode},
     {"frame_render", &CheckFrameRender},
+    {"photo_m1", &CheckPhotoM1},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };

@@ -1,6 +1,7 @@
 #pragma once
 #include "frame.h"
 #include <memory>
+#include <string>
 
 namespace video {
 
@@ -24,6 +25,16 @@ public:
     std::unique_ptr<Frame> Blend(const Frame& a, const Frame& b,
                                   MixMode mode = MixMode::Alpha,
                                   float t = 0.5f);
+
+    /// Composite `src` over `dst` in place using any Skia blend-mode
+    /// name accepted by Bridge::Skia::NormalizeBlendModeName (all 29
+    /// names from BlendModeNames(), plus aliases like "src_over" or
+    /// "overlay"). Requires valid packed BGRA8/RGBA8 frames of equal
+    /// dimensions; returns false on invalid input. Unlike Mix() there
+    /// is no weight — the blend math (incl. src_over) is exactly the
+    /// bridge's per-pixel W3C compositing.
+    static bool BlendFrames(Frame& dst, const Frame& src,
+                            const std::string& blend_mode_name);
 };
 
 }  // namespace video

@@ -1,0 +1,237 @@
+// tile_store.h — TiledDevice: sparse 64x64-tile raster store with
+// copy-on-write tiles and transaction/memento undo, modeled on Krita's
+// KisTiledDataManager / KisMementoManager semantics (see
+// docs/wiki/research/2026-11-21-graphics-editor-stack.md §3).
+//
+// M1 notes:
+//  * Storage is RGBA8 (4 B/px, straight alpha). The format travels as
+//    image::PixelFormat so the store can promote to RGBA32F/RGBA_F16
+//    later — nothing outside this header may assume "8-bit" (the
+//    op-graph seam stays format-typed).
+//  * A tile is only allocated on first write; reads over holes return
+//    the device default pixel (Krita default-pixel semantics).
+//  * Copy-on-write: tiles are shared_ptr-managed. Clone() shares them;
+//    a write to a tile with refcount > 1 clones first. During an open
+//    transaction the FIRST write to a tile always clones — the old
+//    tile is kept immutable inside the memento so rollback is an
+//    O(touched-tiles) pointer swap.
+//  * Undo delta = TileMemento: coord -> old tile (nullptr = tile did
+//    not exist). ApplyMemento() swaps old state back in and returns
+//    the INVERSE memento, giving undo<->redo ping-pong for free.
+#pragma once
+
+#include <cstdint>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <vector>
+
+#include "image/core/pixel_format.h"
+
+namespace XER::VideoEditor::Photo {
+
+// Integer rect in document pixel space.
+struct IntRect {
+    int x = 0;
+    int y = 0;
+    int w = 0;
+    int h = 0;
+
+    bool IsEmpty() const { return w <= 0 || h <= 0; }
+    int Right() const { return x + w; }
+    int Bottom() const { return y + h; }
+    bool Contains(int px, int py) const {
+        return px >= x && px < x + w && py >= y && py < y + h;
+    }
+    bool operator==(const IntRect& o) const {
+        return x == o.x && y == o.y && w == o.w && h == o.h;
+    }
+    bool operator!=(const IntRect& o) const { return !(*this == o); }
+
+    static IntRect Intersect(const IntRect& a, const IntRect& b) {
+        const int x0 = a.x > b.x ? a.x : b.x;
+        const int y0 = a.y > b.y ? a.y : b.y;
+        const int x1 = a.Right() < b.Right() ? a.Right() : b.Right();
+        const int y1 = a.Bottom() < b.Bottom() ? a.Bottom() : b.Bottom();
+        if (x1 <= x0 || y1 <= y0) return {};
+        return {x0, y0, x1 - x0, y1 - y0};
+    }
+    static IntRect Union(const IntRect& a, const IntRect& b) {
+        if (a.IsEmpty()) return b;
+        if (b.IsEmpty()) return a;
+        const int x0 = a.x < b.x ? a.x : b.x;
+        const int y0 = a.y < b.y ? a.y : b.y;
+        const int x1 = a.Right() > b.Right() ? a.Right() : b.Right();
+        const int y1 = a.Bottom() > b.Bottom() ? a.Bottom() : b.Bottom();
+        return {x0, y0, x1 - x0, y1 - y0};
+    }
+};
+
+// One RGBA8 pixel, straight (non-premultiplied) alpha.
+struct Pixel {
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    uint8_t a = 0;
+
+    static Pixel RGBA(uint8_t r, uint8_t g, uint8_t b, uint8_t a = 255) {
+        return {r, g, b, a};
+    }
+    static Pixel Transparent() { return {}; }
+
+    bool operator==(const Pixel& o) const {
+        return r == o.r && g == o.g && b == o.b && a == o.a;
+    }
+    bool operator!=(const Pixel& o) const { return !(*this == o); }
+
+    // Bridge/Skia packed word (R<<24 | G<<16 | B<<8 | A) used by
+    // XER::Bridge::Skia flat APIs.
+    uint32_t PackedU32() const {
+        return (static_cast<uint32_t>(r) << 24) |
+               (static_cast<uint32_t>(g) << 16) |
+               (static_cast<uint32_t>(b) << 8) |
+               static_cast<uint32_t>(a);
+    }
+    static Pixel FromU32(uint32_t v) {
+        return {static_cast<uint8_t>((v >> 24) & 0xFF),
+                static_cast<uint8_t>((v >> 16) & 0xFF),
+                static_cast<uint8_t>((v >> 8) & 0xFF),
+                static_cast<uint8_t>(v & 0xFF)};
+    }
+};
+
+// A single 64x64 tile. Kept behind shared_ptr for copy-on-write; the
+// buffer is always kTileSize*kTileSize*bpp bytes of packed pixels in
+// the device format (RGBA8 at M1).
+struct Tile {
+    std::vector<uint8_t> data;
+};
+
+// Opaque undo delta produced by one transaction. Holds the OLD tile
+// pointer per touched coord (nullptr value = tile did not exist before
+// the transaction). Restoring is a pointer swap — no pixel copying on
+// the undo path itself.
+class TileMemento {
+public:
+    TileMemento() = default;
+    // Number of tiles whose pre-transaction state is recorded.
+    size_t SavedTileCount() const { return old_tiles_.size(); }
+    bool Empty() const { return old_tiles_.empty(); }
+
+private:
+    friend class TiledDevice;
+    std::unordered_map<int64_t, std::shared_ptr<Tile>> old_tiles_;
+};
+
+class TiledDevice {
+public:
+    static constexpr int kTileSize = 64;
+
+    // format: only image::PixelFormat::RGBA8 is writable at M1; the tag
+    // is stored so buffers/ops can promote to RGBA32F later.
+    TiledDevice(int width, int height,
+                image::PixelFormat format = image::PixelFormat::RGBA8,
+                Pixel default_pixel = Pixel::Transparent());
+    ~TiledDevice() = default;
+
+    TiledDevice(const TiledDevice&) = delete;
+    TiledDevice& operator=(const TiledDevice&) = delete;
+
+    // COW clone: shares all tiles with the source; the first write on
+    // either side clones the touched tile. (Krita uses the same trick
+    // for layer snapshots.)
+    std::unique_ptr<TiledDevice> Clone() const;
+
+    int Width() const { return width_; }
+    int Height() const { return height_; }
+    IntRect Bounds() const { return {0, 0, width_, height_}; }
+    image::PixelFormat Format() const { return format_; }
+    int BytesPerPixel() const;
+
+    Pixel DefaultPixel() const { return default_pixel_; }
+    void SetDefaultPixel(Pixel p);
+
+    // Bounding rect of allocated tiles, clipped to Bounds(). Empty when
+    // nothing has been painted.
+    IntRect Extent() const;
+
+    Pixel ReadPixel(int x, int y) const;
+    void WritePixel(int x, int y, Pixel p);
+    void Fill(const IntRect& rect, Pixel p);
+    // Reset every tile to the default pixel (drops the whole map; not
+    // transaction-recorded — call inside a transaction if undo needed).
+    void Clear();
+
+    // Region I/O on packed rows. ReadRegion returns rect.w*rect.h*4
+    // bytes of R,G,B,A; holes read back as the default pixel.
+    std::vector<uint8_t> ReadRegion(const IntRect& rect) const;
+    // src_stride_bytes: bytes per source row (0 = tightly packed).
+    void WriteRegion(const IntRect& rect, const uint8_t* src,
+                     size_t src_stride_bytes = 0);
+
+    // Same, in Skia-bridge packed u32 (R<<24|G<<16|B<<8|A).
+    std::vector<uint32_t> ReadRegionU32(const IntRect& rect) const;
+    void WriteRegionU32(const IntRect& rect,
+                        const std::vector<uint32_t>& src);
+
+    // Composite `src` (w x h, bridge-packed) onto the device so that
+    // src(0,0) lands at (dx,dy); only pixels inside `clip` (and bounds)
+    // are touched. Implemented via XER::Bridge::Skia::ImageComposite so
+    // all 29 named blend modes work. Must be called inside a
+    // transaction for undoability (the caller opens one — painting
+    // outside a transaction is legal but leaves no undo record).
+    bool CompositeRect(const IntRect& clip, const std::vector<uint32_t>& src,
+                       int src_w, int src_h, int dx, int dy,
+                       const std::string& blend_mode, float opacity);
+
+    // --- transactions / mementos (KisMementoManager analogue) -------
+    // At most one transaction may be open. While open, the first write
+    // to each tile snapshots the old tile into the memento.
+    void BeginTransaction();
+    // Closes the transaction and returns the captured delta (may be
+    // empty). Caller owns it — this is what undo commands store.
+    std::unique_ptr<TileMemento> EndTransaction();
+    // Closes the transaction and restores the pre-transaction state.
+    void AbortTransaction();
+    bool InTransaction() const { return active_memento_ != nullptr; }
+
+    // Swap the memento's recorded old state back into the device and
+    // return the INVERSE memento (the state just replaced). Undo calls
+    // this with the stroke memento; redo calls it with the returned
+    // inverse — pixel-exact ping-pong, O(touched tiles).
+    std::unique_ptr<TileMemento> ApplyMemento(const TileMemento& m);
+
+    size_t TileCount() const { return tiles_.size(); }
+    size_t TileMemoryBytes() const { return tiles_.size() * TileBytes(); }
+    // Slow test/debug helper: per-pixel compare over Bounds().
+    bool IdenticalPixels(const TiledDevice& other) const;
+
+private:
+    static constexpr int64_t KeyOf(int col, int row) {
+        return (static_cast<int64_t>(col) << 32) |
+               static_cast<uint32_t>(row);
+    }
+    size_t TileBytes() const {
+        return static_cast<size_t>(kTileSize) * kTileSize * BytesPerPixel();
+    }
+    const Tile* TileAt(int col, int row) const;
+    // Returns a mutable tile, performing the memento snapshot / COW
+    // clone as required. Never nullptr (allocates on demand).
+    Tile* TileForWrite(int col, int row);
+    // The lazily built tile filled entirely with default_pixel_ —
+    // shared by every "uniform default" tile so fills stay sparse.
+    const std::shared_ptr<Tile>& DefaultTile();
+
+    int width_;
+    int height_;
+    image::PixelFormat format_;
+    Pixel default_pixel_;
+    std::unordered_map<int64_t, std::shared_ptr<Tile>> tiles_;
+    std::shared_ptr<Tile> default_tile_;
+    // Owned delta of the open transaction (nullptr when none). Recorded
+    // tiles are shared_ptr'd, so the memento keeps the old state even
+    // when the device swaps in a clone.
+    std::unique_ptr<TileMemento> active_memento_;
+};
+
+}  // namespace XER::VideoEditor::Photo

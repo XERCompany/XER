@@ -1,66 +1,41 @@
 #include "ai/audio_pcm.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <memory>
 
+#include "audio/audio_core/audio_bit_depth_converter.h"
+#include "audio/audio_core/audio_sample_rate_converter.h"
 #include "media_decoder.h"
 #include "ffmpeg_engine_bridge.h"
 
 namespace XER::VideoEditor::Ai {
 namespace {
 
-// One AudioFrameInfo -> float mono at the stream's own rate.
-// FFmpeg formats seen from the tap: u8(u8p) s16(p) s32(p) flt(p) dbl(p).
-template <typename T>
-void ConvertInterleaved(const std::uint8_t* data, int frames, int channels,
-                        float scale, std::vector<float>* out) {
-    const T* s = reinterpret_cast<const T*>(data);
-    for (int i = 0; i < frames; ++i) {
-        float acc = 0.0f;
-        for (int c = 0; c < channels; ++c) {
-            acc += static_cast<float>(s[i * channels + c]) * scale;
-        }
-        out->push_back(acc / static_cast<float>(channels));
-    }
-}
+using XER::Audio::Core::AudioBitDepth;
+using XER::Audio::Core::AudioBitDepthConverter;
+using XER::Audio::Core::AudioSampleRateConverter;
+using XER::Audio::Core::ResampleQuality;
 
-template <typename T>
-void ConvertPlanar(const std::uint8_t* data,
-                   const std::vector<int>& plane_sizes, int frames,
-                   int channels, float scale, std::vector<float>* out) {
-    const std::size_t base = out->size();
-    out->resize(base + static_cast<std::size_t>(frames), 0.0f);
-    int offset = 0;
-    for (int c = 0; c < channels; ++c) {
-        const T* plane = reinterpret_cast<const T*>(data + offset);
-        offset += (c < static_cast<int>(plane_sizes.size()))
-                      ? plane_sizes[c]
-                      : frames * static_cast<int>(sizeof(T));
-        for (int i = 0; i < frames; ++i) {
-            (*out)[base + i] += static_cast<float>(plane[i]) * scale /
-                                static_cast<float>(channels);
-        }
-    }
-}
-
-// Bytes per sample for the FFmpeg formats the tap emits, or 0 for
+// Map the FFmpeg sample-format names the tap emits onto the audio-core
+// bit-depth enum (u8(u8p) s16(p) s32(p) flt(p) dbl(p)); false for
 // anything else (the caller then reports "unsupported format").
-int SampleBytes(const std::string& fmt) {
-    if (fmt == "flt" || fmt == "fltp") return 4;
-    if (fmt == "s16" || fmt == "s16p") return 2;
-    if (fmt == "s32" || fmt == "s32p") return 4;
-    if (fmt == "u8" || fmt == "u8p") return 1;
-    if (fmt == "dbl" || fmt == "dblp") return 8;
-    return 0;
+bool FormatToBitDepth(const std::string& fmt, AudioBitDepth* out) {
+    if (fmt == "u8"  || fmt == "u8p")  { *out = AudioBitDepth::BITS_8;   return true; }
+    if (fmt == "s16" || fmt == "s16p") { *out = AudioBitDepth::BITS_16;  return true; }
+    if (fmt == "s32" || fmt == "s32p") { *out = AudioBitDepth::BITS_32;  return true; }
+    if (fmt == "flt" || fmt == "fltp") { *out = AudioBitDepth::FLOAT_32; return true; }
+    if (fmt == "dbl" || fmt == "dblp") { *out = AudioBitDepth::FLOAT_64; return true; }
+    return false;
 }
 
 // Payload bounds check — same strictness as the media catalog's
 // ConsumeAudioBlock: planar needs one declared plane per channel,
 // each holding at least frames*bps bytes with every declared plane
-// inside data (ConvertPlanar uses the reported plane_sizes as its
-// step, so an oversized entry must be backed by real bytes too);
-// interleaved needs count*channels*bps bytes.
+// inside data (AppendMono's planar path uses the reported plane_sizes
+// as its step, so an oversized entry must be backed by real bytes
+// too); interleaved needs count*channels*bps bytes.
 bool FramePayloadValid(const XER::Bridge::FFmpeg::AudioFrameInfo& f,
                        int frames, int channels, int bps,
                        std::string* error) {
@@ -101,7 +76,13 @@ bool FramePayloadValid(const XER::Bridge::FFmpeg::AudioFrameInfo& f,
 // silence. The payload is bounds-checked before any sample is read —
 // decoder-reported sizes are untrusted (see media_catalog.cc's
 // ConsumeAudioBlock for the twin validation).
+//
+// Sample-format conversion is delegated to
+// AudioBitDepthConverter (u8 bias, int32/double handling identical to
+// the retired per-format templates); the channel mixdown stays here —
+// it is the editor's mono contract, not a format concern.
 bool AppendMono(const XER::Bridge::FFmpeg::AudioFrameInfo& f,
+                AudioBitDepthConverter* converter,
                 std::vector<float>* out, std::string* error) {
     const int frames = f.sample_count;
     const int channels = f.channels;
@@ -110,88 +91,89 @@ bool AppendMono(const XER::Bridge::FFmpeg::AudioFrameInfo& f,
         *error = "malformed audio frame";
         return false;
     }
-    const std::string& fmt = f.sample_format;
-    const int bps = SampleBytes(fmt);
-    if (bps == 0) {
-        *error = "unsupported sample format: " + fmt;
+    AudioBitDepth depth;
+    if (!FormatToBitDepth(f.sample_format, &depth)) {
+        *error = "unsupported sample format: " + f.sample_format;
         return false;
     }
+    const int bps = static_cast<int>(
+        AudioBitDepthConverter::GetBytesPerSample(depth));
     if (!FramePayloadValid(f, frames, channels, bps, error)) {
         return false;
     }
-    if (fmt == "flt" || fmt == "fltp") {
-        if (f.planar) {
-            ConvertPlanar<float>(f.data.data(), f.plane_sizes, frames,
-                                 channels, 1.0f, out);
-        } else {
-            ConvertInterleaved<float>(f.data.data(), frames, channels,
-                                      1.0f, out);
-        }
-    } else if (fmt == "s16" || fmt == "s16p") {
-        if (f.planar) {
-            ConvertPlanar<std::int16_t>(f.data.data(), f.plane_sizes,
-                                        frames, channels, 1.0f / 32768.0f,
-                                        out);
-        } else {
-            ConvertInterleaved<std::int16_t>(f.data.data(), frames,
-                                             channels, 1.0f / 32768.0f,
-                                             out);
-        }
-    } else if (fmt == "s32" || fmt == "s32p") {
-        const float k = 1.0f / 2147483648.0f;
-        if (f.planar) {
-            ConvertPlanar<std::int32_t>(f.data.data(), f.plane_sizes,
-                                        frames, channels, k, out);
-        } else {
-            ConvertInterleaved<std::int32_t>(f.data.data(), frames,
-                                             channels, k, out);
-        }
-    } else if (fmt == "u8" || fmt == "u8p") {
-        // u8 is unsigned-biased; normalize around 128 first.
+    const float inv_ch = 1.0f / static_cast<float>(channels);
+    if (f.planar) {
         const std::size_t base = out->size();
-        if (f.planar) {
-            ConvertPlanar<std::uint8_t>(f.data.data(), f.plane_sizes,
-                                        frames, channels, 1.0f / 128.0f,
-                                        out);
-        } else {
-            ConvertInterleaved<std::uint8_t>(f.data.data(), frames,
-                                             channels, 1.0f / 128.0f,
-                                             out);
+        out->resize(base + static_cast<std::size_t>(frames), 0.0f);
+        std::vector<float> plane_f(static_cast<std::size_t>(frames));
+        std::size_t offset = 0;
+        for (int c = 0; c < channels; ++c) {
+            const std::uint8_t* plane = f.data.data() + offset;
+            offset += static_cast<std::size_t>(
+                f.plane_sizes[static_cast<std::size_t>(c)]);
+            if (!converter->ConvertBuffer(plane, depth, plane_f.data(),
+                                          AudioBitDepth::FLOAT_32,
+                                          static_cast<std::size_t>(frames))) {
+                *error = "sample conversion failed: " + f.sample_format;
+                return false;
+            }
+            for (int i = 0; i < frames; ++i) {
+                (*out)[base + i] += plane_f[static_cast<std::size_t>(i)] * inv_ch;
+            }
         }
-        for (std::size_t i = base; i < out->size(); ++i) {
-            (*out)[i] -= 1.0f;
+    } else {
+        const std::size_t total =
+            static_cast<std::size_t>(frames) * channels;
+        std::vector<float> block(total);
+        if (!converter->ConvertBuffer(f.data.data(), depth, block.data(),
+                                      AudioBitDepth::FLOAT_32, total)) {
+            *error = "sample conversion failed: " + f.sample_format;
+            return false;
         }
-    } else if (fmt == "dbl" || fmt == "dblp") {
-        if (f.planar) {
-            ConvertPlanar<double>(f.data.data(), f.plane_sizes, frames,
-                                  channels, 1.0f, out);
-        } else {
-            ConvertInterleaved<double>(f.data.data(), frames, channels,
-                                       1.0f, out);
+        for (int i = 0; i < frames; ++i) {
+            float acc = 0.0f;
+            for (int c = 0; c < channels; ++c) {
+                acc += block[static_cast<std::size_t>(i) * channels + c];
+            }
+            out->push_back(acc * inv_ch);
         }
     }
     return true;
 }
 
-void ResampleLinear(const std::vector<float>& in, int src_rate,
-                    int dst_rate, std::vector<float>* out) {
-    if (src_rate <= 0 || dst_rate <= 0 || in.empty()) return;
+// One-shot mono resample through the audio-core converter. FAST quality
+// selects its linear-interpolation branch — the same math as the
+// hand-rolled resampler this replaces. (BEST would switch to windowed
+// sinc: better anti-aliasing but an intentional quality change, and its
+// tail length differs — kept for a follow-up if whisper STT accuracy
+// ever needs it.)
+bool ResampleMono(const std::vector<float>& in, int src_rate, int dst_rate,
+                  std::vector<float>* out, std::string* error) {
+    if (src_rate <= 0 || dst_rate <= 0 || in.empty()) {
+        out->clear();
+        return src_rate > 0 && dst_rate > 0;
+    }
     if (src_rate == dst_rate) {
         *out = in;
-        return;
+        return true;
     }
-    const double ratio =
-        static_cast<double>(src_rate) / static_cast<double>(dst_rate);
-    const std::size_t out_n =
-        static_cast<std::size_t>(in.size() / ratio);
-    out->resize(out_n);
-    for (std::size_t i = 0; i < out_n; ++i) {
-        const double src = i * ratio;
-        const std::size_t a = static_cast<std::size_t>(src);
-        const std::size_t b = std::min(a + 1, in.size() - 1);
-        const float frac = static_cast<float>(src - a);
-        (*out)[i] = in[a] * (1.0f - frac) + in[b] * frac;
+    AudioSampleRateConverter converter(ResampleQuality::FAST);
+    if (!converter.Initialize(src_rate, dst_rate)) {
+        *error = "sample-rate converter init failed";
+        return false;
     }
+    // Convert() sizes its own output; allocate the documented upper
+    // bound (ceil(n*ratio) plus a guard sample) then shrink to fit.
+    const std::size_t cap_n = static_cast<std::size_t>(std::ceil(
+        static_cast<double>(in.size()) * converter.GetRatio())) + 1;
+    out->assign(cap_n, 0.0f);
+    std::size_t produced = 0;
+    if (!converter.Convert(in.data(), in.size(), out->data(), produced)) {
+        *error = "sample-rate conversion failed";
+        return false;
+    }
+    out->resize(produced);
+    return true;
 }
 
 }  // namespace
@@ -237,6 +219,7 @@ bool ExtractMonoPcm(const std::string& utf8_path, int target_rate,
     // ConsumeAudioBlock): silently concatenating a different rate
     // would produce wrong PCM/duration for downstream consumers.
     // Returns false once a conversion error is latched.
+    AudioBitDepthConverter bit_depth;
     const auto drain = [&]() -> bool {
         while (decoder->ReadAudioFrames(&frames, 64)) {
             for (const auto& f : frames) {
@@ -251,7 +234,7 @@ bool ExtractMonoPcm(const std::string& utf8_path, int target_rate,
                         "mid-stream";
                     return false;
                 }
-                if (!AppendMono(f, &mono, &conv_error)) {
+                if (!AppendMono(f, &bit_depth, &mono, &conv_error)) {
                     return false;
                 }
             }
@@ -288,8 +271,13 @@ bool ExtractMonoPcm(const std::string& utf8_path, int target_rate,
     if (mono.size() > cap_samples) mono.resize(cap_samples);
 
     std::vector<float> resampled;
-    ResampleLinear(mono, src_rate,
-                   target_rate > 0 ? target_rate : src_rate, &resampled);
+    std::string resample_error;
+    if (!ResampleMono(mono, src_rate,
+                      target_rate > 0 ? target_rate : src_rate,
+                      &resampled, &resample_error)) {
+        if (error_out) *error_out = resample_error;
+        return false;
+    }
     out->samples = std::move(resampled);
     out->sample_rate = target_rate > 0 ? target_rate : src_rate;
     out->duration_seconds =

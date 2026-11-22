@@ -41,6 +41,11 @@ Goal started: 2026-11-15. Design doc:
   — Photoshop-class editor stack research: existing Skia/image/lab
   assets, Krita tile engine blueprint, GEGL/libmypaint/PhotoshopAPI
   verdicts, M1–M5 build order (2026-11-21).
+- [2026-11-22-ai-model-stack.md](research/2026-11-22-ai-model-stack.md)
+  — AI model stack research: license-clean ship candidates (BiRefNet,
+  MI-GAN/LaMa, Real-ESRGAN, EfficientSAM, Depth-Anything-S, RF-DETR),
+  license blocklist (Ultralytics AGPL, RMBG, SAM 3), MSYS2/vcpkg ORT
+  fix paths (2026-11-22).
 - [2026-11-21-nle-architectures.md](research/2026-11-21-nle-architectures.md)
   — NLE engine survey: MLT/Kdenlive/Shotcut, Olive node+render cache,
   Blender VSE proxies, OFX/Frei0r/libplacebo/VapourSynth matrix,
@@ -74,6 +79,10 @@ Goal started: 2026-11-15. Design doc:
   real GUI for verification: ui_drive.ps1 (click by exe-name+coords,
   window→PNG screenshot), the launch→wait→click→shot→check→kill loop,
   PostMessage caveats (2026-11-21).
+- [nn-backend-stack.md](architecture/nn-backend-stack.md) — backend
+  matrix (cv::dnn active, ORT broken-runtime, ggml required, MKL/dnnl
+  wired, cudnn/cuda-toolkit stubbed) + 9 dead-path traps + per-backend
+  enable paths (2026-11-22).
 - [extension-platform.md](architecture/extension-platform.md) —
   .xexrj/.xsjo/.xejslib wire formats, in-process Clang compile,
   LLJIT + LinkModules mesh, ve.core.h v1→v3 service table,
@@ -99,6 +108,10 @@ Goal started: 2026-11-15. Design doc:
   — smoke mode (14 checks), config.h generation, FFmpeg bridge
   fix, check_all.ps1, wave-2/3 queue.
 
+- [2026-11-22-api-max-and-photo-m1.md](progress/2026-11-22-api-max-and-photo-m1.md)
+  — three waves landed: compositor→Skia 29-mode swap + PCM→AudioCore;
+  NN dead-path cleanup (MKL active, ORT still stale-binary); Photo M1
+  core (TiledDevice COW + memento undo + dab brush) + open decisions.
 - [2026-11-21-lens-sync-icons.md](progress/2026-11-21-lens-sync-icons.md)
 - [2026-11-21-nle-redesign.md](progress/2026-11-21-nle-redesign.md) —
   Premiere-style visual redesign (4 waves): new theme tokens,
@@ -111,6 +124,10 @@ Goal started: 2026-11-15. Design doc:
   GUI-subsystem console rules
 
 ## Audit reports
+- [2026-11-22-src-api-reuse-audit.md](reports/2026-11-22-src-api-reuse-audit.md)
+  — tools/-vs-src/ duplication: compositor→Skia bridge top swap
+  (7→29 blend modes), OIIO→ImageLoader, PCM→AudioCore, plugin-kernel
+  strategy options (2026-11-22).
 - [2026-11-21-gap-and-env-audit.md](reports/2026-11-21-gap-and-env-audit.md)
   — ranked remaining gaps: sync-on-UI-thread, JS fx hazards, drag&drop,
   unsaved-changes; env: build locks, CI smoke, --diag, screenshot tests

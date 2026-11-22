@@ -568,61 +568,202 @@ uint32_t BlendSrcOver(uint32_t dst_rgba, uint32_t src_rgba) {
     return PackRGBA(channel(24), channel(16), channel(8), out_a);
 }
 
+namespace {
+
+// ---- BlendModeApply internals -----------------------------------------------
+// All blend math below works on normalized [0,1] channels: Porter-Duff
+// modes on PREMULTIPLIED components, the W3C separable / non-separable
+// blends on straight components wrapped in the W3C composite (the same
+// shape Skia's raster pipeline uses), output converted back to straight
+// alpha. This covers all 29 names in BlendModeNames() — previously only
+// srcOver/plus/multiply/screen had real implementations and the rest
+// silently degraded to src-over.
+
+float NormChannel(uint32_t rgba, int shift) {
+    return static_cast<float>((rgba >> shift) & 0xFF) / 255.0f;
+}
+
+// W3C separable blend on one normalized channel pair (backdrop b, source s).
+float SepBlendChannel(const std::string& mode, float b, float s) {
+    if (mode == "multiply")   return b * s;
+    if (mode == "screen")     return b + s - b * s;
+    if (mode == "overlay")    return b <= 0.5f ? 2.0f * b * s
+                                             : 1.0f - 2.0f * (1.0f - b) * (1.0f - s);
+    if (mode == "darken")     return std::min(b, s);
+    if (mode == "lighten")    return std::max(b, s);
+    if (mode == "colorDodge") return s >= 1.0f ? 1.0f
+                                             : std::min(1.0f, b / (1.0f - s));
+    if (mode == "colorBurn")  return s <= 0.0f ? 0.0f
+                                             : 1.0f - std::min(1.0f, (1.0f - b) / s);
+    if (mode == "hardLight")  return s <= 0.5f ? 2.0f * b * s
+                                             : 1.0f - 2.0f * (1.0f - b) * (1.0f - s);
+    if (mode == "softLight") {
+        if (s <= 0.5f) {
+            return b - (1.0f - 2.0f * s) * b * (1.0f - b);
+        }
+        const float d = b <= 0.25f ? ((16.0f * b - 12.0f) * b + 4.0f) * b
+                                   : std::sqrt(b);
+        return b + (2.0f * s - 1.0f) * (d - b);
+    }
+    if (mode == "difference") return std::fabs(b - s);
+    if (mode == "exclusion")  return b + s - 2.0f * b * s;
+    return s;
+}
+
+bool IsSeparableBlend(const std::string& mode) {
+    return mode == "multiply" || mode == "screen" || mode == "overlay" ||
+           mode == "darken" || mode == "lighten" ||
+           mode == "colorDodge" || mode == "colorBurn" ||
+           mode == "hardLight" || mode == "softLight" ||
+           mode == "difference" || mode == "exclusion";
+}
+
+bool IsNonSeparableBlend(const std::string& mode) {
+    return mode == "hue" || mode == "saturation" || mode == "color" ||
+           mode == "luminosity";
+}
+
+// W3C non-separable helpers — luminosity uses the spec's 0.3/0.59/0.11
+// weights (not the Rec.709 set used elsewhere in this module).
+float BlendLum(const float c[3]) {
+    return 0.3f * c[0] + 0.59f * c[1] + 0.11f * c[2];
+}
+float BlendSat(const float c[3]) {
+    return std::max({c[0], c[1], c[2]}) - std::min({c[0], c[1], c[2]});
+}
+void BlendClipColor(float c[3]) {
+    const float l = BlendLum(c);
+    const float n = std::min({c[0], c[1], c[2]});
+    const float x = std::max({c[0], c[1], c[2]});
+    if (n < 0.0f) {
+        const float f = l / (l - n);
+        for (int i = 0; i < 3; ++i) c[i] = l + (c[i] - l) * f;
+    }
+    if (x > 1.0f) {
+        const float f = (1.0f - l) / (x - l);
+        for (int i = 0; i < 3; ++i) c[i] = l + (c[i] - l) * f;
+    }
+}
+void BlendSetSat(float c[3], float s) {
+    // W3C SetSat: min comp -> 0, max comp -> s, mid scaled linearly; an
+    // achromatic input (max == min) collapses to zero chroma.
+    int lo = 0, hi = 0;
+    for (int i = 1; i < 3; ++i) {
+        if (c[i] < c[lo]) lo = i;
+        if (c[i] > c[hi]) hi = i;
+    }
+    const float d = c[hi] - c[lo];
+    if (d <= 0.0f) {
+        c[0] = c[1] = c[2] = 0.0f;
+        return;
+    }
+    const float lo_v = c[lo];
+    for (int i = 0; i < 3; ++i) {
+        if (i == lo)      c[i] = 0.0f;
+        else if (i == hi) c[i] = s;
+        else              c[i] = (c[i] - lo_v) * s / d;
+    }
+}
+void BlendSetLum(float c[3], float l) {
+    const float d = l - BlendLum(c);
+    for (int i = 0; i < 3; ++i) c[i] += d;
+    BlendClipColor(c);
+}
+void NonSeparableBlend(const std::string& mode, const float cb[3],
+                       const float cs[3], float out[3]) {
+    for (int i = 0; i < 3; ++i) out[i] = cs[i];
+    if (mode == "hue") {
+        BlendSetSat(out, BlendSat(cb));
+        BlendSetLum(out, BlendLum(cb));
+    } else if (mode == "color") {
+        BlendSetLum(out, BlendLum(cb));
+    } else {
+        for (int i = 0; i < 3; ++i) out[i] = cb[i];
+        if (mode == "saturation") {
+            BlendSetSat(out, BlendSat(cs));
+            BlendSetLum(out, BlendLum(cb));
+        } else {  // luminosity
+            BlendSetLum(out, BlendLum(cs));
+        }
+    }
+}
+
+}  // namespace
+
 uint32_t BlendModeApply(const std::string& mode_name, uint32_t dst_rgba, uint32_t src_rgba) {
     const std::string mode = NormalizeBlendModeName(mode_name);
-#if ENGINE_SKIA_NATIVE_INCLUDES
-    SkBlendMode sk_mode = SkBlendMode::kSrcOver;
-    if (TryMapBlendMode(mode, &sk_mode)) {
-        if (sk_mode == SkBlendMode::kSrc) {
-            return src_rgba;
+    if (mode == "clear")   return 0;
+    if (mode == "src")     return src_rgba;
+    if (mode == "dst")     return dst_rgba;
+    if (mode == "srcOver") return BlendSrcOver(dst_rgba, src_rgba);
+
+    const float sa = GetA(src_rgba) / 255.0f;
+    const float da = GetA(dst_rgba) / 255.0f;
+    const float sp[3] = {NormChannel(src_rgba, 24) * sa,
+                         NormChannel(src_rgba, 16) * sa,
+                         NormChannel(src_rgba, 8)  * sa};
+    const float dp[3] = {NormChannel(dst_rgba, 24) * da,
+                         NormChannel(dst_rgba, 16) * da,
+                         NormChannel(dst_rgba, 8)  * da};
+    float ao = 0.0f;
+    float co[3] = {0.0f, 0.0f, 0.0f};
+
+    // Porter-Duff family: result = fs*src + fd*dst in premultiplied
+    // space; alpha follows the same coefficient pair.
+    float fs = -1.0f, fd = -1.0f;
+    if      (mode == "dstOver") { fs = 1.0f - da; fd = 1.0f; }
+    else if (mode == "srcIn")   { fs = da;        fd = 0.0f; }
+    else if (mode == "dstIn")   { fs = 0.0f;      fd = sa; }
+    else if (mode == "srcOut")  { fs = 1.0f - da; fd = 0.0f; }
+    else if (mode == "dstOut")  { fs = 0.0f;      fd = 1.0f - sa; }
+    else if (mode == "srcATop") { fs = da;        fd = 1.0f - sa; }
+    else if (mode == "dstATop") { fs = 1.0f - da; fd = sa; }
+    else if (mode == "xor")     { fs = 1.0f - da; fd = 1.0f - sa; }
+
+    if (fs >= 0.0f) {
+        ao = sa * fs + da * fd;
+        for (int c = 0; c < 3; ++c) co[c] = sp[c] * fs + dp[c] * fd;
+    } else if (mode == "plus") {
+        // Premultiplied add, clamped ("lighter" in W3C terms).
+        ao = std::min(1.0f, sa + da);
+        for (int c = 0; c < 3; ++c) co[c] = std::min(1.0f, sp[c] + dp[c]);
+    } else if (mode == "modulate") {
+        ao = sa * da;
+        for (int c = 0; c < 3; ++c) co[c] = sp[c] * dp[c];
+    } else if (IsSeparableBlend(mode) || IsNonSeparableBlend(mode)) {
+        // W3C composite: co = (1-da)*sp + (1-sa)*dp + sa*da*B(cd,cs),
+        // out alpha = src-over alpha.
+        ao = sa + da * (1.0f - sa);
+        const float cs[3] = {sa > 0.0f ? sp[0] / sa : 0.0f,
+                             sa > 0.0f ? sp[1] / sa : 0.0f,
+                             sa > 0.0f ? sp[2] / sa : 0.0f};
+        const float cd[3] = {da > 0.0f ? dp[0] / da : 0.0f,
+                             da > 0.0f ? dp[1] / da : 0.0f,
+                             da > 0.0f ? dp[2] / da : 0.0f};
+        float b[3];
+        if (IsSeparableBlend(mode)) {
+            for (int c = 0; c < 3; ++c) b[c] = SepBlendChannel(mode, cd[c], cs[c]);
+        } else {
+            NonSeparableBlend(mode, cd, cs, b);
         }
-        if (sk_mode == SkBlendMode::kDst) {
-            return dst_rgba;
+        for (int c = 0; c < 3; ++c) {
+            co[c] = sp[c] * (1.0f - da) + dp[c] * (1.0f - sa) + sa * da * b[c];
         }
-        if (sk_mode == SkBlendMode::kClear) {
-            return 0;
-        }
+    } else {
+        // NormalizeBlendModeName always returns a known mode — this is
+        // unreachable; degrade to src-over rather than silently dropping.
+        return BlendSrcOver(dst_rgba, src_rgba);
     }
-    const SkColor src_native = ToSkColor(src_rgba);
-    const SkColor dst_native = ToSkColor(dst_rgba);
-    (void)src_native;
-    (void)dst_native;
-#endif
-    if (mode == "src") {
-        return src_rgba;
-    }
-    if (mode == "dst") {
-        return dst_rgba;
-    }
-    if (mode == "clear") {
+    if (ao <= 1e-6f) {
         return 0;
     }
-    if (mode == "plus") {
-        return PackRGBA(
-            ClampByte(static_cast<int>(GetR(src_rgba)) + static_cast<int>(GetR(dst_rgba))),
-            ClampByte(static_cast<int>(GetG(src_rgba)) + static_cast<int>(GetG(dst_rgba))),
-            ClampByte(static_cast<int>(GetB(src_rgba)) + static_cast<int>(GetB(dst_rgba))),
-            ClampByte(static_cast<int>(GetA(src_rgba)) + static_cast<int>(GetA(dst_rgba))));
-    }
-    if (mode == "multiply") {
-        return PackRGBA(
-            MulDiv255(GetR(src_rgba), GetR(dst_rgba)),
-            MulDiv255(GetG(src_rgba), GetG(dst_rgba)),
-            MulDiv255(GetB(src_rgba), GetB(dst_rgba)),
-            std::max(GetA(src_rgba), GetA(dst_rgba)));
-    }
-    if (mode == "screen") {
-        auto screen = [](uint8_t s, uint8_t d) {
-            return static_cast<uint8_t>(255 - ((255 - s) * (255 - d) + 127) / 255);
-        };
-        return PackRGBA(
-            screen(GetR(src_rgba), GetR(dst_rgba)),
-            screen(GetG(src_rgba), GetG(dst_rgba)),
-            screen(GetB(src_rgba), GetB(dst_rgba)),
-            std::max(GetA(src_rgba), GetA(dst_rgba)));
-    }
-
-    return BlendSrcOver(dst_rgba, src_rgba);
+    auto un = [&](int i) -> uint8_t {
+        return static_cast<uint8_t>(
+            std::clamp(co[i] / ao * 255.0f + 0.5f, 0.0f, 255.0f));
+    };
+    return PackRGBA(un(0), un(1), un(2),
+                    static_cast<uint8_t>(
+                        std::clamp(ao * 255.0f + 0.5f, 0.0f, 255.0f)));
 }
 
 Matrix3x3 MatrixIdentity() {
@@ -1024,6 +1165,78 @@ bool RasterDrawImage(std::vector<uint32_t>* dst_pixels,
     (void)dx;
     (void)dy;
     (void)blend_mode;
+    return false;
+#endif
+}
+
+bool ImageCompositeWarp(std::vector<uint32_t>* dst_pixels,
+                        int dst_width,
+                        int dst_height,
+                        const std::vector<uint32_t>& src_pixels,
+                        int src_width,
+                        int src_height,
+                        const Matrix3x3& matrix,
+                        float opacity) {
+#if ENGINE_SKIA_NATIVE_RASTER
+    if (dst_pixels == nullptr || src_width <= 0 || src_height <= 0) {
+        return false;
+    }
+    // Bitmaps are N32Premul: premultiply the straight-alpha packs on the
+    // way in so canvas compositing is correct for translucent sources,
+    // and unpremultiply the extracted values on the way back.
+    std::vector<uint32_t> dst_pre(*dst_pixels);
+    for (auto& c : dst_pre) c = PremultiplyAlpha(c);
+    std::vector<uint32_t> src_pre(src_pixels);
+    for (auto& c : src_pre) c = PremultiplyAlpha(c);
+
+    SkBitmap dst_bitmap;
+    if (!BuildBitmapFromPixels(dst_pre, dst_width, dst_height, &dst_bitmap)) {
+        return false;
+    }
+    SkBitmap src_bitmap;
+    if (!BuildBitmapFromPixels(src_pre, src_width, src_height, &src_bitmap)) {
+        return false;
+    }
+
+    const SkScalar sm[9] = {
+        static_cast<SkScalar>(matrix[0]), static_cast<SkScalar>(matrix[1]),
+        static_cast<SkScalar>(matrix[2]), static_cast<SkScalar>(matrix[3]),
+        static_cast<SkScalar>(matrix[4]), static_cast<SkScalar>(matrix[5]),
+        static_cast<SkScalar>(matrix[6]), static_cast<SkScalar>(matrix[7]),
+        static_cast<SkScalar>(matrix[8])};
+    SkMatrix warp;
+    warp.set9(sm);
+
+    SkPaint paint;
+    paint.setAntiAlias(true);
+    paint.setAlphaf(std::clamp(opacity, 0.0f, 1.0f));
+    paint.setBlendMode(SkBlendMode::kSrcOver);
+
+    SkCanvas canvas(dst_bitmap);
+    canvas.concat(warp);
+    const sk_sp<SkImage> src_image = src_bitmap.asImage();
+    if (src_image != nullptr) {
+        canvas.drawImage(src_image.get(), 0, 0,
+                         SkSamplingOptions(SkFilterMode::kLinear), &paint);
+    }
+
+    dst_pixels->assign(static_cast<size_t>(dst_width) * dst_height, 0);
+    for (int y = 0; y < dst_height; ++y) {
+        for (int x = 0; x < dst_width; ++x) {
+            (*dst_pixels)[static_cast<size_t>(y) * dst_width + x] =
+                UnpremultiplyAlpha(PackFromSkColor(*dst_bitmap.getAddr32(x, y)));
+        }
+    }
+    return true;
+#else
+    (void)dst_pixels;
+    (void)dst_width;
+    (void)dst_height;
+    (void)src_pixels;
+    (void)src_width;
+    (void)src_height;
+    (void)matrix;
+    (void)opacity;
     return false;
 #endif
 }

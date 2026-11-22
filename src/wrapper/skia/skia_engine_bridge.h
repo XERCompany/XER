@@ -218,6 +218,15 @@ bool ImageComposite(std::vector<uint32_t>* dst, int dst_w, int dst_h,
                     int dx, int dy,
                     const std::string& blend_mode, float alpha = 1.0f);
 
+// Draw `src` into `dst` under a forward 3x3 affine/perspective warp
+// (`matrix` maps source pixel space into destination space) at `opacity`
+// in [0,1], composited src-over with bilinear sampling. Returns false
+// when the native raster backend is unavailable — callers keep their own
+// CPU path as the fallback.
+bool ImageCompositeWarp(std::vector<uint32_t>* dst, int dst_w, int dst_h,
+                        const std::vector<uint32_t>& src, int src_w, int src_h,
+                        const Matrix3x3& matrix, float opacity);
+
 // ── Colour adjustments ─────────────────────────────────────────────────────
 
 // Brightness [-255…+255], contrast [-255…+255]

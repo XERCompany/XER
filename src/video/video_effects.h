@@ -49,6 +49,23 @@ public:
     static void FlipH(Frame& frame);
     static void FlipV(Frame& frame);
 
+    /// Chroma key: pixels within `tolerance` of the key colour become
+    /// transparent; `softness` feathers the cutoff with a smoothstep
+    /// ramp over [tolerance-softness, tolerance+softness]. Multiplies
+    /// existing alpha (keying never restores it); RGB untouched.
+    /// Skia path uses MaskFromColorRange + ApplyMask.
+    static void ChromaKey(Frame& frame, double key_r, double key_g,
+                          double key_b, double tolerance, double softness);
+
+    /// Lift/gain color balance: out_c = clamp(in_c * gain_c + lift_c*255)
+    /// per RGB channel ({r,g,b} index order); alpha untouched.
+    static void ColorBalance(Frame& frame, const double lift[3],
+                             const double gain[3]);
+
+    /// Posterize each RGB channel to `levels` evenly spaced values
+    /// (alpha untouched). `levels` is clamped to [2,255].
+    static void Posterize(Frame& frame, int levels);
+
     /// Apply grayscale only inside mask polygon.
     static void GrayscaleWithMask(Frame& frame, const MaskPointsVector& mask);
 };

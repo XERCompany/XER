@@ -56,7 +56,9 @@ std::string ActivationToString(Core::ActivationType type) {
 
 bool OnnxExporter::IsAvailable() const {
 	const Utility::ExternalLibraryAvailability libs = Utility::DetectExternalLibraries();
-	return libs.has_onnx;
+	// Serialization needs the ONNX/protobuf model definitions, not the
+	// onnxruntime inference engine.
+	return libs.has_onnx_proto;
 }
 
 bool OnnxExporter::ExportModel(const Core::Model& model, const std::string& output_path) const {

@@ -18,6 +18,7 @@ file(GLOB VIDEO_EDITOR_CORE_SOURCES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/color/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/io/*.cc"
     "${CMAKE_CURRENT_SOURCE_DIR}/extensions/*.cc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/photo/*.cc"
 )
 # Exclude the exe's main() from the core lib glob (it must not be
 # compiled into XER_VideoEditor_Core).
@@ -51,6 +52,13 @@ set(_ve_core_deps
     XER_AudioCore      # VST3 host (plugin_wrappers) + DSP
 )
 
+# Photo workspace core (photo/: TiledDevice/Document/brush/history).
+# Reuses src/image types — ImageBuffer for flatten, ImageLoader/
+# ImageSaver for PNG I/O, ColorSpace for the working-space tag.
+if(TARGET XER_Image)
+    list(APPEND _ve_core_deps XER_Image)
+endif()
+
 # AI object detection (ai_tags.cc -> src/content/ai/find_object). The
 # YA.AIFindObject module is delay-load-friendly: it probes its own
 # backend DLLs before first call, so it reports unavailable rather
@@ -80,10 +88,10 @@ if(XER_YA_DLLS)
     foreach(_ya_ve_ext IN ITEMS
             "YA_VideoEditor_OCIO|YA.VideoEditor-OCIO"
             "YA_VideoEditor_Engine|YA.VideoEditor-Engine"
-            "YA_Extenstions|YA.Extenstions"
+            "YA_Extensions|YA.Extensions"
             "YA_ProjectStoreSQL_VE|YA.ProjectStoreSQL-VideoEditor"
             "YA_VideoEditor_FrameVideo|YA.VideoEditor-FrameVideo"
-            "YA_VideoEditor_ToolsDesgin|YA.VideoEditor-ToolsDesgin")
+            "YA_VideoEditor_ToolsDesign|YA.VideoEditor-ToolsDesign")
         string(REGEX MATCH "^([^|]+)\\|(.*)$" _m "${_ya_ve_ext}")
         xer_ya_module(${CMAKE_MATCH_1} EXPORT_NAME ${CMAKE_MATCH_2}
             DEPS ${_ve_core_deps} YA_VideoEditor_Core)
@@ -94,7 +102,7 @@ if(XER_YA_DLLS)
     xer_ya_bundle(XER_VideoEditor_Core
         MODULES YA_VideoEditor_Core YA_VideoEditor_Engine
                 YA_VideoEditor_OCIO YA_VideoEditor_FrameVideo
-                YA_VideoEditor_ToolsDesgin YA_Extenstions
+                YA_VideoEditor_ToolsDesign YA_Extensions
                 YA_ProjectStoreSQL_VE YA_Records
         DEPS ${_ve_core_deps}
         INCLUDES ${CMAKE_CURRENT_SOURCE_DIR}

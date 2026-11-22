@@ -81,7 +81,12 @@ bool ResizeFrameWithSkia(const Frame& src, Frame& dst) {
     const uint8_t* src_data = src.Data();
     for (int i = 0; i < src_pixels; ++i) src_px[i] = ReadPackedPixel(src_data + i * 4, src.Format());
 
-    XER::Bridge::Skia::RasterDrawImage(&dst_px, dst.Width(), dst.Height(), src_px, src.Width(), src.Height(), 0, 0, "src");
+    // RasterDrawImage blits 1:1 at an offset — it does NOT resample.
+    // ImageScale performs the actual bilinear resize the contract
+    // promises (pixel centers at i+0.5, edges clamped).
+    XER::Bridge::Skia::ImageScale(src_px, src.Width(), src.Height(),
+                                  dst.Width(), dst.Height(), &dst_px,
+                                  /*bilinear=*/true);
 
     uint8_t* dst_data = dst.Data();
     for (int i = 0; i < dst_pixels; ++i) WritePackedPixel(dst_px[i], dst.Format(), dst_data + i * 4);

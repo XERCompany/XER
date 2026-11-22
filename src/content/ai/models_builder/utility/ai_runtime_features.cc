@@ -107,10 +107,14 @@ constexpr uint32_t kZstdFrameMagic = 0xFD2FB528U;
 #define XER_AI_HAS_OPENVINO_HEADER 0
 #endif
 
-#if __has_include(<onnx/onnx_pb.h>)
-#define XER_AI_HAS_ONNX_HEADER 1
+// <onnx/onnx_pb.h> presence only proves the protobuf model definitions
+// are available (XER_AI_HAS_ONNX_PROTO) — it says nothing about the
+// onnxruntime inference engine, which is reported separately via the
+// XER_AI_HAS_ONNX link-time define.
+#if __has_include(<onnx/onnx_pb.h>) || defined(XER_AI_HAS_ONNX_PROTO)
+#define XER_AI_HAS_ONNX_PROTO_HEADER 1
 #else
-#define XER_AI_HAS_ONNX_HEADER 0
+#define XER_AI_HAS_ONNX_PROTO_HEADER 0
 #endif
 
 #if __has_include(<tensorflow/c/c_api.h>)
@@ -148,13 +152,23 @@ ExternalLibraryAvailability DetectExternalLibraries() {
     availability.has_xnnpack = XER_AI_HAS_XNNPACK_HEADER == 1;
     availability.has_flatbuffers = XER_AI_HAS_FLATBUFFERS_HEADER == 1;
     availability.has_openvino = XER_AI_HAS_OPENVINO_HEADER == 1;
-    availability.has_onnx = XER_AI_HAS_ONNX_HEADER == 1;
+    // has_onnx reports the inference RUNTIME only: it is set below from
+    // the XER_AI_HAS_ONNX link-time define (onnxruntime target linked).
+    availability.has_onnx_proto = XER_AI_HAS_ONNX_PROTO_HEADER == 1;
     availability.has_tensorflow = XER_AI_HAS_TENSORFLOW_HEADER == 1;
     availability.has_pthreadpool = XER_AI_HAS_PTHREADPOOL_HEADER == 1;
     availability.has_fp16 = XER_AI_HAS_FP16_HEADER == 1;
 
     // Backends wired through CMake (XER_AI_HAS_* compile definitions set by
     // src/content/ai/CMakeLists.txt when the vcpkg port is present).
+#ifdef XER_AI_HAS_ONNX
+    // onnxruntime inference engine linked — distinct from
+    // has_onnx_proto (protobuf model definitions only).
+    availability.has_onnx = true;
+#endif
+#ifdef XER_AI_HAS_ONNX_PROTO
+    availability.has_onnx_proto = true;
+#endif
 #ifdef XER_AI_HAS_GGML
     availability.has_ggml = true;
 #endif
@@ -279,7 +293,7 @@ ExternalLibraryAvailability DetectExternalLibraries() {
 std::string BuildRuntimeBanner() {
     const ExternalLibraryAvailability libs = DetectExternalLibraries();
 
-    const std::array<bool, 51> values = {
+    const std::array<bool, 52> values = {
         libs.has_range_v3,
         libs.has_absl,
         libs.has_zlib,
@@ -294,6 +308,7 @@ std::string BuildRuntimeBanner() {
         libs.has_flatbuffers,
         libs.has_openvino,
         libs.has_onnx,
+        libs.has_onnx_proto,
         libs.has_tensorflow,
         libs.has_pthreadpool,
         libs.has_fp16,

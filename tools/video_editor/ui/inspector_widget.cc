@@ -54,21 +54,52 @@ const std::set<std::string>& KnownEffects() {
 
 const char* BlendModeName(BlendMode mode) {
     switch (mode) {
-        case BlendMode::Normal:   return "Normal";
-        case BlendMode::Add:      return "Add";
-        case BlendMode::Multiply: return "Multiply";
-        case BlendMode::Screen:   return "Screen";
-        case BlendMode::Overlay:  return "Overlay";
-        case BlendMode::Darken:   return "Darken";
-        case BlendMode::Lighten:  return "Lighten";
+        case BlendMode::Normal:     return "Normal";
+        case BlendMode::Add:        return "Add";
+        case BlendMode::Multiply:   return "Multiply";
+        case BlendMode::Screen:     return "Screen";
+        case BlendMode::Overlay:    return "Overlay";
+        case BlendMode::Darken:     return "Darken";
+        case BlendMode::Lighten:    return "Lighten";
+        case BlendMode::Clear:      return "Clear";
+        case BlendMode::Src:        return "Src";
+        case BlendMode::Dst:        return "Dst";
+        case BlendMode::SrcOver:    return "Src Over";
+        case BlendMode::DstOver:    return "Dst Over";
+        case BlendMode::SrcIn:      return "Src In";
+        case BlendMode::DstIn:      return "Dst In";
+        case BlendMode::SrcOut:     return "Src Out";
+        case BlendMode::DstOut:     return "Dst Out";
+        case BlendMode::SrcATop:    return "Src Atop";
+        case BlendMode::DstATop:    return "Dst Atop";
+        case BlendMode::Xor:        return "Xor";
+        case BlendMode::Plus:       return "Plus";
+        case BlendMode::Modulate:   return "Modulate";
+        case BlendMode::ColorDodge: return "Color Dodge";
+        case BlendMode::ColorBurn:  return "Color Burn";
+        case BlendMode::HardLight:  return "Hard Light";
+        case BlendMode::SoftLight:  return "Soft Light";
+        case BlendMode::Difference: return "Difference";
+        case BlendMode::Exclusion:  return "Exclusion";
+        case BlendMode::Hue:        return "Hue";
+        case BlendMode::Saturation: return "Saturation";
+        case BlendMode::Color:      return "Color";
+        case BlendMode::Luminosity: return "Luminosity";
     }
     return "Normal";
 }
 
 const std::vector<const char*>& BlendModeNames() {
+    // Order must match the BlendMode enum ordinals — BlendModeFromName
+    // casts the index back to the enum.
     static const std::vector<const char*> names = {
         "Normal", "Add", "Multiply", "Screen", "Overlay", "Darken",
         "Lighten",
+        "Clear", "Src", "Dst", "Src Over", "Dst Over", "Src In",
+        "Dst In", "Src Out", "Dst Out", "Src Atop", "Dst Atop", "Xor",
+        "Plus", "Modulate", "Color Dodge", "Color Burn", "Hard Light",
+        "Soft Light", "Difference", "Exclusion", "Hue", "Saturation",
+        "Color", "Luminosity",
     };
     return names;
 }

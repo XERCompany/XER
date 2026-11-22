@@ -61,13 +61,37 @@ bool TrackKindFromString(const std::string& text, TrackKind* out) {
 
 const char* BlendModeToString(BlendMode mode) {
     switch (mode) {
-        case BlendMode::Normal: return "normal";
-        case BlendMode::Add: return "add";
-        case BlendMode::Multiply: return "multiply";
-        case BlendMode::Screen: return "screen";
-        case BlendMode::Overlay: return "overlay";
-        case BlendMode::Darken: return "darken";
-        case BlendMode::Lighten: return "lighten";
+        case BlendMode::Normal:     return "normal";
+        case BlendMode::Add:        return "add";
+        case BlendMode::Multiply:   return "multiply";
+        case BlendMode::Screen:     return "screen";
+        case BlendMode::Overlay:    return "overlay";
+        case BlendMode::Darken:     return "darken";
+        case BlendMode::Lighten:    return "lighten";
+        case BlendMode::Clear:      return "clear";
+        case BlendMode::Src:        return "src";
+        case BlendMode::Dst:        return "dst";
+        case BlendMode::SrcOver:    return "src_over";
+        case BlendMode::DstOver:    return "dst_over";
+        case BlendMode::SrcIn:      return "src_in";
+        case BlendMode::DstIn:      return "dst_in";
+        case BlendMode::SrcOut:     return "src_out";
+        case BlendMode::DstOut:     return "dst_out";
+        case BlendMode::SrcATop:    return "src_atop";
+        case BlendMode::DstATop:    return "dst_atop";
+        case BlendMode::Xor:        return "xor";
+        case BlendMode::Plus:       return "plus";
+        case BlendMode::Modulate:   return "modulate";
+        case BlendMode::ColorDodge: return "color_dodge";
+        case BlendMode::ColorBurn:  return "color_burn";
+        case BlendMode::HardLight:  return "hard_light";
+        case BlendMode::SoftLight:  return "soft_light";
+        case BlendMode::Difference: return "difference";
+        case BlendMode::Exclusion:  return "exclusion";
+        case BlendMode::Hue:        return "hue";
+        case BlendMode::Saturation: return "saturation";
+        case BlendMode::Color:      return "color";
+        case BlendMode::Luminosity: return "luminosity";
     }
     return "normal";  // unreachable
 }
@@ -77,6 +101,9 @@ bool BlendModeFromString(const std::string& text, BlendMode* out) {
         const char* name;
         BlendMode mode;
     } kModes[] = {
+        // The original seven keep their editor wire names; the extended
+        // set uses snake_case spellings accepted by the Skia bridge's
+        // NormalizeBlendModeName aliases.
         {"normal", BlendMode::Normal},
         {"add", BlendMode::Add},
         {"multiply", BlendMode::Multiply},
@@ -84,6 +111,30 @@ bool BlendModeFromString(const std::string& text, BlendMode* out) {
         {"overlay", BlendMode::Overlay},
         {"darken", BlendMode::Darken},
         {"lighten", BlendMode::Lighten},
+        {"clear", BlendMode::Clear},
+        {"src", BlendMode::Src},
+        {"dst", BlendMode::Dst},
+        {"src_over", BlendMode::SrcOver},
+        {"dst_over", BlendMode::DstOver},
+        {"src_in", BlendMode::SrcIn},
+        {"dst_in", BlendMode::DstIn},
+        {"src_out", BlendMode::SrcOut},
+        {"dst_out", BlendMode::DstOut},
+        {"src_atop", BlendMode::SrcATop},
+        {"dst_atop", BlendMode::DstATop},
+        {"xor", BlendMode::Xor},
+        {"plus", BlendMode::Plus},
+        {"modulate", BlendMode::Modulate},
+        {"color_dodge", BlendMode::ColorDodge},
+        {"color_burn", BlendMode::ColorBurn},
+        {"hard_light", BlendMode::HardLight},
+        {"soft_light", BlendMode::SoftLight},
+        {"difference", BlendMode::Difference},
+        {"exclusion", BlendMode::Exclusion},
+        {"hue", BlendMode::Hue},
+        {"saturation", BlendMode::Saturation},
+        {"color", BlendMode::Color},
+        {"luminosity", BlendMode::Luminosity},
     };
     for (const auto& entry : kModes) {
         if (text == entry.name) {

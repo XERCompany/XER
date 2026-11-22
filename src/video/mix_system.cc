@@ -97,4 +97,32 @@ std::unique_ptr<Frame> MixSystem::Blend(const Frame& a, const Frame& b,
     return out;
 }
 
+bool MixSystem::BlendFrames(Frame& dst, const Frame& src,
+                            const std::string& blend_mode_name) {
+    if (!dst.IsValid() || !src.IsValid()) return false;
+    if (dst.Width() != src.Width() || dst.Height() != src.Height()) {
+        return false;
+    }
+    // The BGRA8<->packed helpers below assume BGRA byte order.
+    if (dst.Format() != PixelFormat::BGRA8 ||
+        src.Format() != PixelFormat::BGRA8) {
+        return false;
+    }
+    const int n = dst.Width() * dst.Height();
+    // Normalize once (unknown names degrade to srcOver). BlendModeApply
+    // keeps working even when the native raster backend is absent — it
+    // is pure C++ per-pixel W3C math.
+    const std::string mode =
+        XER::Bridge::Skia::NormalizeBlendModeName(blend_mode_name);
+    const uint8_t* sp = src.Data();
+    uint8_t* dp = dst.Data();
+    for (int i = 0; i < n; ++i) {
+        uint8_t* d = dp + static_cast<size_t>(i) * 4;
+        const uint32_t out = XER::Bridge::Skia::BlendModeApply(
+            mode, bgra_to_skia(d), bgra_to_skia(sp + i * 4));
+        skia_to_bgra(out, d);
+    }
+    return true;
+}
+
 }  // namespace video

@@ -24,7 +24,8 @@ struct SdRuntimeCapabilities {
     bool cudnn_available = false;
     bool cutlass_available = false;
     bool openvino_available = false;
-    bool onnx_available = false;
+    bool onnx_available = false;       // onnxruntime inference engine
+    bool onnx_proto_available = false; // ONNX/protobuf defs only (no runtime)
     bool tensorflow_available = false;
     bool opencv_available = false;
     bool ffmpeg_available = false;

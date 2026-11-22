@@ -90,18 +90,23 @@ find_package(utf8_range CONFIG QUIET)
 find_package(ONNX QUIET)
 if(TARGET ONNX::onnx_proto)
     # ONNX::onnx_proto carries the protobuf-generated model definitions
-    # (<onnx/onnx_pb.h>) used by the reader/vino adapters.
+    # (<onnx/onnx_pb.h>) used by the reader/vino adapters. This is the
+    # model-definition library only — NOT an inference runtime — so it
+    # publishes XER_AI_HAS_ONNX_PROTO; XER_AI_HAS_ONNX is reserved for
+    # onnxruntime below.
     target_link_libraries(XER_ContentAI PUBLIC ONNX::onnx_proto)
-    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX_PROTO=1)
 elseif(TARGET ONNX::onnx)
     target_link_libraries(XER_ContentAI PUBLIC ONNX::onnx)
-    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX_PROTO=1)
 endif()
 
 find_package(onnxruntime QUIET)
 # Target names differ by provider: MSYS2 clang64 and the vcpkg port both
 # export onnxruntime::onnxruntime; older packages used a bare
-# "onnxruntime" or ONNX::onnxruntime name.
+# "onnxruntime" or ONNX::onnxruntime name. XER_AI_HAS_ONNX means "the
+# onnxruntime inference engine is linked" — protobuf-only installs do
+# NOT set it.
 if(TARGET onnxruntime::onnxruntime)
     target_link_libraries(XER_ContentAI PUBLIC onnxruntime::onnxruntime)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_ONNX=1)
@@ -214,12 +219,24 @@ if(TARGET cudnn_frontend)
 endif()
 
 # CUDA toolkit: runtime headers/libs for host-side GPU code paths.
-# ml/cuda_ops (.cu kernels) stay excluded unless ENABLE_CUDA is set, which
-# also requires the CUDA language enabled project-wide.
 find_package(CUDAToolkit QUIET)
 if(CUDAToolkit_FOUND)
     target_link_libraries(XER_ContentAI PUBLIC CUDA::cudart)
     target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_CUDA_LIB=1)
+endif()
+
+# CUDA tensor kernels (ml/cuda_ops/*.cu): the source glob above only
+# picks up *.cc, and the .cu files additionally need the CUDA language
+# enabled project-wide (enable_language(CUDA) — currently absent, so
+# they can never compile). XER_AI_HAS_CUDA_KERNELS is therefore defined
+# ONLY when the .cu objects are really added to this target; predictor.cc
+# gates its CudaTensorKernel calls on it so ENABLE_CUDA without the
+# kernels can't produce unresolved symbols.
+if(ENABLE_CUDA AND CMAKE_CUDA_COMPILER_LOADED)
+    file(GLOB _ai_cuda_kernel_sources
+        "${CMAKE_CURRENT_SOURCE_DIR}/ml/cuda_ops/*.cu")
+    target_sources(XER_ContentAI PRIVATE ${_ai_cuda_kernel_sources})
+    target_compile_definitions(XER_ContentAI PUBLIC XER_AI_HAS_CUDA_KERNELS=1)
 endif()
 
 # Protocol Buffers: serialization backbone for ONNX/custom op definitions.

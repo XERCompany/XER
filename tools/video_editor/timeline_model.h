@@ -35,8 +35,19 @@ struct Transform {
 struct ClipEffect { std::string type; std::vector<float> params; };
 
 // Photoshop-style layer blend applied when the clip's rendered layer is
-// composited over what is below it on the canvas.
-enum class BlendMode { Normal, Add, Multiply, Screen, Overlay, Darken, Lighten };
+// composited over what is below it on the canvas. The first seven keep
+// their ordinal values and wire names for existing .xerproj files; the
+// remaining entries cover the full Skia bridge blend-mode set (see
+// Bridge::Skia::BlendModeNames()). SrcOver/Plus are listed separately
+// from Normal/Add so project files can name either spelling — they
+// composite identically.
+enum class BlendMode {
+    Normal, Add, Multiply, Screen, Overlay, Darken, Lighten,
+    Clear, Src, Dst, SrcOver, DstOver, SrcIn, DstIn, SrcOut, DstOut,
+    SrcATop, DstATop, Xor, Plus, Modulate, ColorDodge, ColorBurn,
+    HardLight, SoftLight, Difference, Exclusion, Hue, Saturation,
+    Color, Luminosity,
+};
 
 enum class MaskShape { Rect, Ellipse };
 // Soft mask defined in CLIP-FRAME fractions (applied to the decoded

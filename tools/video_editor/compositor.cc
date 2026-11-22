@@ -1,8 +1,10 @@
 // compositor.cc — see compositor.h for the contract. All pixel work is
-// CPU packed-BGRA8 straight-alpha; Skia is touched ONLY for the
-// IsAvailable() probe that gates Skia-only ClipEffect warnings — the
-// effect math itself lives in video::VideoEffects (which may use Skia
-// filters internally).
+// packed-BGRA8 straight-alpha; per-pixel compositing math (src-over,
+// named blend modes, crossfade premultiply) routes through
+// XER::Bridge::Skia helpers and video::MixSystem::BlendFrames, while
+// effect math lives in video::VideoEffects (which may use Skia filters
+// internally). Custom kernels with no src/ equivalent (transitions,
+// warps, masks, glass/bokeh) stay as local CPU loops.
 #include "compositor.h"
 
 #include <algorithm>
@@ -20,8 +22,10 @@
 #include "color/ocio_transform.h"
 #include "generated_source.h"
 #include "js_fx.h"
+#include "mix_system.h"
 #include "plugin_host.h"
 #include "video_effects.h"
+#include "video_utils.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
 namespace XER::VideoEditor {
@@ -48,12 +52,26 @@ inline std::uint8_t Clamp8(double v) {
     return static_cast<std::uint8_t>(std::clamp(v + 0.5, 0.0, 255.0));
 }
 
+// BGRA8 <-> bridge-packed uint32 (R<<24|G<<16|B<<8|A) — same packing
+// the Skia bridge uses internally, so BlendSrcOver/BlendModeApply round
+// trips exactly through these.
+inline std::uint32_t PackSkia(const std::uint8_t* bgra) {
+    return XER::Bridge::Skia::MakeColorRGBA(bgra[2], bgra[1], bgra[0],
+                                          bgra[3]);
+}
+inline void UnpackSkia(std::uint32_t rgba, std::uint8_t* bgra) {
+    bgra[0] = static_cast<std::uint8_t>((rgba >> 8) & 0xFF);   // B
+    bgra[1] = static_cast<std::uint8_t>((rgba >> 16) & 0xFF);  // G
+    bgra[2] = static_cast<std::uint8_t>((rgba >> 24) & 0xFF);  // R
+    bgra[3] = static_cast<std::uint8_t>(rgba & 0xFF);          // A
+}
+
 // Classic src-over for straight-alpha pixels: dst <- src OVER dst.
-//   sa = src.a/255, da = dst.a/255, oa = sa + da*(1-sa)
-//   out_c = (src_c*sa + dst_c*da*(1-sa)) / oa     (guard oa~0 -> 0)
-//   out_a = oa
-// Fast paths: sa==0 -> dst unchanged; sa==1 -> src verbatim (oa==1
-// makes the general formula collapse to src exactly).
+// Routes through Bridge::Skia::BlendSrcOver — the same straight-alpha
+// formula the retired inline loop used, just shared instead of
+// duplicated (the bridge impl is pure C++, so no Skia-runtime gate is
+// needed). Fast paths kept: sa==0 -> dst unchanged; sa==255 -> src
+// verbatim.
 inline void AlphaOverPixel(std::uint8_t* dst, const std::uint8_t* src) {
     const int sa = src[3];
     if (sa == 0) {
@@ -66,18 +84,9 @@ inline void AlphaOverPixel(std::uint8_t* dst, const std::uint8_t* src) {
         dst[3] = 255;
         return;
     }
-    const double s = sa / 255.0;
-    const double d = dst[3] / 255.0;
-    const double oa = s + d * (1.0 - s);
-    if (oa <= 1e-9) {
-        dst[0] = dst[1] = dst[2] = dst[3] = 0;
-        return;
-    }
-    const double keep = d * (1.0 - s);
-    for (int c = 0; c < 3; ++c) {
-        dst[c] = Clamp8((src[c] * s + dst[c] * keep) / oa);
-    }
-    dst[3] = Clamp8(oa * 255.0);
+    UnpackSkia(XER::Bridge::Skia::BlendSrcOver(PackSkia(dst),
+                                             PackSkia(src)),
+               dst);
 }
 
 void AlphaOverFrame(video::Frame* dst, const video::Frame& src) {
@@ -162,11 +171,11 @@ bool SampleBilinearBGRA(const std::uint8_t* px, int w, int h,
 // convention as SampleBilinearBGRA — with edges clamped. `dst` must
 // already be allocated to the target size.
 //
-// Integer 8.8 fixed-point weights + precomputed per-column taps:
-// this runs on every preview frame around each reduced-quality
-// effect, so it must stay cheap relative to the kernels it wraps
-// (a naive per-pixel SampleBilinearBGRA resample can cost MORE than
-// the saved kernel time on the lighter effects).
+// Primary path is the shared video::utils::ResizeFrameWithSkia (same
+// center convention via the bridge's ImageScale). When the Skia
+// bridge is unavailable it returns false and the integer 8.8
+// fixed-point fallback below runs instead — kept so no-Skia builds
+// still get a real resample.
 void ResampleBilinearBGRA(const video::Frame& src, video::Frame* dst) {
     const int sw = src.Width();
     const int sh = src.Height();
@@ -181,6 +190,9 @@ void ResampleBilinearBGRA(const video::Frame& src, video::Frame* dst) {
     if (sw == dw && sh == dh) {
         std::memcpy(dpx, spx,
                     static_cast<std::size_t>(dw) * dh * 4);
+        return;
+    }
+    if (video::utils::ResizeFrameWithSkia(src, *dst)) {
         return;
     }
     // Per-column source taps, shared by every row.
@@ -299,9 +311,18 @@ void SlideOffsets(Transition::Type type, double w, int width, int height,
     }
 }
 
-// Premultiplied-alpha lerp for one pixel (crossfade).
+// Premultiplied-alpha lerp for one pixel (crossfade), expressed through
+// the bridge's alpha helpers: premultiply both ends, lerp all four
+// premultiplied channels, unpremultiply. Same math as the retired
+// inline loop (premult rgb weighted by each side's alpha, then divide
+// by the lerped alpha); channel rounding now goes through the bridge's
+// (v*a+127)/255 int path, within 1 ulp of the old double math.
 inline void CrossfadePixel(const std::uint8_t* u, const std::uint8_t* o,
                            double w, double iw, std::uint8_t* out) {
+    const std::uint32_t up =
+        XER::Bridge::Skia::PremultiplyAlpha(PackSkia(u));
+    const std::uint32_t op =
+        XER::Bridge::Skia::PremultiplyAlpha(PackSkia(o));
     const double ua = u[3] / 255.0;
     const double oa = o[3] / 255.0;
     const double pa = ua * iw + oa * w;
@@ -309,10 +330,19 @@ inline void CrossfadePixel(const std::uint8_t* u, const std::uint8_t* o,
         out[0] = out[1] = out[2] = out[3] = 0;
         return;
     }
-    for (int c = 0; c < 3; ++c) {
-        out[c] = Clamp8((u[c] * ua * iw + o[c] * oa * w) / pa);
+    std::uint8_t ch[4];
+    for (int c = 0; c < 4; ++c) {
+        const int shift = 24 - c * 8;   // R,G,B,A packing order
+        const double uc = (up >> shift) & 0xFF;
+        const double oc = (op >> shift) & 0xFF;
+        ch[c] = Clamp8(uc * iw + oc * w);
     }
-    out[3] = Clamp8(pa * 255.0);
+    const std::uint32_t prem =
+        (static_cast<std::uint32_t>(ch[0]) << 24) |
+        (static_cast<std::uint32_t>(ch[1]) << 16) |
+        (static_cast<std::uint32_t>(ch[2]) << 8) |
+        static_cast<std::uint32_t>(ch[3]);
+    UnpackSkia(XER::Bridge::Skia::UnpremultiplyAlpha(prem), out);
 }
 
 // ------------------------------------------------------------------
@@ -376,106 +406,47 @@ double MaskCoverage(const ClipMask& mask, int w, int h,
 }
 
 // ------------------------------------------------------------------
-// Blend helpers — W3C-style separable blend modes, normalized 0..1.
+// Blend helpers — every named BlendMode maps onto a Skia bridge blend
+// name for video::MixSystem::BlendFrames. Normal keeps the dedicated
+// alpha-over path; Add maps to "plus" (the premultiplied-add mode the
+// old Add kernel approximated).
 // ------------------------------------------------------------------
 
-// One blend channel: b = backdrop norm, s = source norm. Normal
-// returns the source unchanged (callers keep a dedicated alpha-over
-// fast path for it anyway).
-inline double BlendChannelValue(BlendMode mode, double b, double s) {
+const char* BlendModeSkiaName(BlendMode mode) {
     switch (mode) {
-        case BlendMode::Add:
-            return std::min(1.0, b + s);
-        case BlendMode::Multiply:
-            return b * s;
-        case BlendMode::Screen:
-            return 1.0 - (1.0 - b) * (1.0 - s);
-        case BlendMode::Overlay:
-            return b <= 0.5 ? 2.0 * b * s
-                            : 1.0 - 2.0 * (1.0 - b) * (1.0 - s);
-        case BlendMode::Darken:
-            return std::min(b, s);
-        case BlendMode::Lighten:
-            return std::max(b, s);
-        default:
-            return s;   // Normal + any future mode: source
+        case BlendMode::Normal:      return "srcOver";
+        case BlendMode::SrcOver:     return "srcOver";
+        case BlendMode::Add:         return "plus";
+        case BlendMode::Multiply:    return "multiply";
+        case BlendMode::Screen:      return "screen";
+        case BlendMode::Overlay:     return "overlay";
+        case BlendMode::Darken:      return "darken";
+        case BlendMode::Lighten:     return "lighten";
+        case BlendMode::Clear:       return "clear";
+        case BlendMode::Src:         return "src";
+        case BlendMode::Dst:         return "dst";
+        case BlendMode::DstOver:     return "dstOver";
+        case BlendMode::SrcIn:       return "srcIn";
+        case BlendMode::DstIn:       return "dstIn";
+        case BlendMode::SrcOut:      return "srcOut";
+        case BlendMode::DstOut:      return "dstOut";
+        case BlendMode::SrcATop:     return "srcATop";
+        case BlendMode::DstATop:     return "dstATop";
+        case BlendMode::Xor:         return "xor";
+        case BlendMode::Plus:        return "plus";
+        case BlendMode::Modulate:    return "modulate";
+        case BlendMode::ColorDodge:  return "colorDodge";
+        case BlendMode::ColorBurn:   return "colorBurn";
+        case BlendMode::HardLight:   return "hardLight";
+        case BlendMode::SoftLight:   return "softLight";
+        case BlendMode::Difference:  return "difference";
+        case BlendMode::Exclusion:   return "exclusion";
+        case BlendMode::Hue:         return "hue";
+        case BlendMode::Saturation:  return "saturation";
+        case BlendMode::Color:       return "color";
+        case BlendMode::Luminosity:  return "luminosity";
     }
-}
-
-// ------------------------------------------------------------------
-// CPU-only ClipEffect helpers — src/video has no chroma-key, color
-// balance, or posterize primitive, so these run per-pixel here on
-// packed BGRA8 straight-alpha frames (same contract as the rest of
-// the pipeline; alpha is never touched unless documented).
-// ------------------------------------------------------------------
-
-// Chroma key: pixels within `tolerance` of the key color (Euclidean
-// distance in RGB, 0..~441 range) become transparent; `softness`
-// feathers the cutoff —
-//   keep = smoothstep(tolerance - softness, tolerance + softness, d)
-// multiplying the EXISTING alpha (keying never restores it). RGB is
-// left as-is (no despill — a spill pass can be stacked as another
-// effect if needed).
-void ApplyChromaKeyPixels(video::Frame* frame, double key_r,
-                          double key_g, double key_b, double tolerance,
-                          double softness) {
-    const int count = frame->Width() * frame->Height();
-    std::uint8_t* px = frame->Data();
-    const double lo = tolerance - softness;
-    const double hi = tolerance + softness;
-    for (int i = 0; i < count; ++i) {
-        std::uint8_t* p = px + static_cast<std::size_t>(i) * 4u;
-        if (p[3] == 0) {
-            continue;   // already transparent — nothing to key
-        }
-        const double dr = static_cast<double>(p[2]) - key_r;
-        const double dg = static_cast<double>(p[1]) - key_g;
-        const double db = static_cast<double>(p[0]) - key_b;
-        const double dist =
-            std::sqrt(dr * dr + dg * dg + db * db);
-        double keep;
-        if (hi <= lo) {
-            keep = dist > tolerance ? 1.0 : 0.0;   // hard edge
-        } else {
-            const double t =
-                std::clamp((dist - lo) / (hi - lo), 0.0, 1.0);
-            keep = t * t * (3.0 - 2.0 * t);   // smoothstep
-        }
-        p[3] = Clamp8(p[3] * keep);
-    }
-}
-
-// Lift/gain color balance (Premiere-style shadow/lift + gain):
-//   out_c = clamp(in_c * gain_c + lift_c * 255)
-// per RGB channel; alpha untouched. `lift`/`gain` are indexed
-// {r, g, b} — BGRA byte order means channel 2 is R.
-void ApplyColorBalancePixels(video::Frame* frame, const double lift[3],
-                             const double gain[3]) {
-    const int count = frame->Width() * frame->Height();
-    std::uint8_t* px = frame->Data();
-    for (int i = 0; i < count; ++i) {
-        std::uint8_t* p = px + static_cast<std::size_t>(i) * 4u;
-        for (int c = 0; c < 3; ++c) {
-            const int rgb = 2 - c;   // pixel channel for {r,g,b}[c]
-            p[rgb] = Clamp8(p[rgb] * gain[c] + lift[c] * 255.0);
-        }
-    }
-}
-
-// Posterize: each RGB channel quantized to `levels` evenly spaced
-// values in [0,255] — out = round(in*(L-1)/255) * 255/(L-1). Alpha
-// untouched. `levels` is pre-clamped to [2,256] by the dispatcher.
-void ApplyPosterizePixels(video::Frame* frame, int levels) {
-    const int count = frame->Width() * frame->Height();
-    std::uint8_t* px = frame->Data();
-    const double steps = static_cast<double>(levels - 1);
-    for (int i = 0; i < count; ++i) {
-        std::uint8_t* p = px + static_cast<std::size_t>(i) * 4u;
-        for (int c = 0; c < 3; ++c) {
-            p[c] = Clamp8(std::lround(p[c] * steps / 255.0) *
-                          (255.0 / steps));
-        }
-    }
+    return "srcOver";
 }
 
 // ------------------------------------------------------------------
@@ -1348,8 +1319,8 @@ struct Compositor::Impl {
                     EffectParamDouble(effect, 3, 120.0), 0.0, 600.0);
                 const double softness = std::clamp(
                     EffectParamDouble(effect, 4, 40.0), 0.0, 600.0);
-                ApplyChromaKeyPixels(&frame, kr, kg, kb, tolerance,
-                                     softness);
+                video::VideoEffects::ChromaKey(frame, kr, kg, kb,
+                                               tolerance, softness);
             } else if (type == "color_balance") {
                 // {lift_r,lift_g,lift_b} in [-1,1] (scaled x255),
                 // {gain_r,gain_g,gain_b} in [0,4].
@@ -1366,10 +1337,10 @@ struct Compositor::Impl {
                             1.0),
                         0.0, 4.0);
                 }
-                ApplyColorBalancePixels(&frame, lift, gain);
+                video::VideoEffects::ColorBalance(frame, lift, gain);
             } else if (type == "posterize") {
-                ApplyPosterizePixels(
-                    &frame,
+                video::VideoEffects::Posterize(
+                    frame,
                     std::clamp(EffectParamInt(effect, 0, 4), 2, 256));
             } else if (type == "lens_sphere") {
                 // {radius frac of min dim, bend 0..2, chroma px,
@@ -2138,40 +2109,22 @@ bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
         dst->Height() != src.Height()) {
         return false;
     }
-    if (mode == BlendMode::Normal) {
+    if (mode == BlendMode::Normal || mode == BlendMode::SrcOver) {
         AlphaOverFrame(dst, src);   // identical math, dedicated path
         return true;
     }
-    const int count = dst->Width() * dst->Height();
-    std::uint8_t* d = dst->Data();
-    const std::uint8_t* s = src.Data();
-    for (int i = 0; i < count; ++i) {
-        const std::uint8_t* sp = s + i * 4;
-        std::uint8_t* dp = d + i * 4;
-        const double sa = sp[3] / 255.0;
-        if (sa <= 0.0) {
-            continue;   // transparent source leaves dst untouched
-        }
-        const double da = dp[3] / 255.0;
-        const double oa = sa + da * (1.0 - sa);
-        if (oa <= 1e-9) {
-            dp[0] = dp[1] = dp[2] = dp[3] = 0;
-            continue;
-        }
-        const double keep = da * (1.0 - sa);
-        for (int c = 0; c < 3; ++c) {
-            const double sn = sp[c] / 255.0;
-            const double dn = dp[c] / 255.0;
-            const double cb = BlendChannelValue(mode, dn, sn);
-            // Effective source color lerped between the blend result
-            // and the raw source by the source coverage, then a
-            // standard alpha-over combine onto the backdrop.
-            const double eff = sa * cb + (1.0 - sa) * sn;
-            dp[c] = Clamp8(255.0 * (sa * eff + keep * dn) / oa);
-        }
-        dp[3] = Clamp8(oa * 255.0);
-    }
-    return true;
+    // All named modes route through the shared frame-level blend —
+    // W3C Porter-Duff / separable / non-separable compositing in
+    // MixSystem::BlendFrames -> Bridge::Skia::BlendModeApply.
+    //
+    // Intentional semantic change vs the retired loop for the original
+    // six modes (Add/Multiply/Screen/Overlay/Darken/Lighten): the old
+    // code weighted the blend only by source alpha; the W3C composite
+    // also weights by backdrop alpha — identical for opaque layers
+    // (the common case), marginally different for translucent ones,
+    // matching Skia.
+    return video::MixSystem::BlendFrames(*dst, src,
+                                         BlendModeSkiaName(mode));
 }
 
 bool WarpClipFrame(const video::Frame& src, const Transform& tr,

@@ -4,22 +4,13 @@
 #include <algorithm>
 #include <cmath>
 
+#include "wrapper/skia/skia_engine_bridge.h"
+
 namespace XER::VideoEditor::Lab {
 namespace {
 
 bool IsBgra(const video::Frame& frame) {
     return frame.IsValid() && frame.Format() == video::PixelFormat::BGRA8;
-}
-
-int HexDigit(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    return -1;
-}
-
-char HexChar(int nibble) {
-    return "0123456789ABCDEF"[nibble & 0xF];
 }
 
 }  // namespace
@@ -73,42 +64,25 @@ float ColorDistance(const std::array<std::uint8_t, 4>& a,
 
 std::array<std::uint8_t, 4> HexToBgra(const std::string& text) {
     std::array<std::uint8_t, 4> out{0, 0, 0, 255};   // opaque black
-    std::size_t start = 0;
-    if (!text.empty() && text.front() == '#') start = 1;
-    const std::size_t digits = text.size() - start;
-    if (digits != 6 && digits != 8) return out;
-    int nibbles[8];
-    for (std::size_t i = 0; i < digits; ++i) {
-        const int v = HexDigit(text[start + i]);
-        if (v < 0) return out;
-        nibbles[i] = v;
+    // Same grammar the bridge parser accepts: optional '#', 6 or 8
+    // case-insensitive RRGGBB[AA] digits; malformed -> opaque black.
+    std::uint32_t rgba = 0;
+    if (!XER::Bridge::Skia::ParseColorHex(text, &rgba)) {
+        return out;
     }
-    const auto byte = [&nibbles](std::size_t i) {
-        return static_cast<std::uint8_t>(nibbles[i] * 16 + nibbles[i + 1]);
-    };
-    out[2] = byte(0);   // R
-    out[1] = byte(2);   // G
-    out[0] = byte(4);   // B
-    if (digits == 8) {
-        out[3] = byte(6);   // A
-    }
+    out[2] = static_cast<std::uint8_t>((rgba >> 24) & 0xFF);   // R
+    out[1] = static_cast<std::uint8_t>((rgba >> 16) & 0xFF);   // G
+    out[0] = static_cast<std::uint8_t>((rgba >> 8) & 0xFF);    // B
+    out[3] = static_cast<std::uint8_t>(rgba & 0xFF);           // A
     return out;
 }
 
 std::string BgraToHex(const std::array<std::uint8_t, 4>& bgra,
                       bool include_alpha) {
-    // String order is RRGGBB[AA]; the array is {b,g,r,a}.
-    const int count = include_alpha ? 8 : 6;
-    std::string out;
-    out.reserve(static_cast<std::size_t>(count) + 1);
-    out.push_back('#');
-    const std::uint8_t channels[4] = {bgra[2], bgra[1], bgra[0], bgra[3]};
-    const int channel_count = include_alpha ? 4 : 3;
-    for (int c = 0; c < channel_count; ++c) {
-        out.push_back(HexChar(channels[c] >> 4));
-        out.push_back(HexChar(channels[c] & 0xF));
-    }
-    return out;
+    // ColorToHex emits the same canonical "#RRGGBB[AA]" uppercase form.
+    const std::uint32_t rgba = XER::Bridge::Skia::MakeColorRGBA(
+        bgra[2], bgra[1], bgra[0], bgra[3]);
+    return XER::Bridge::Skia::ColorToHex(rgba, include_alpha);
 }
 
 }  // namespace XER::VideoEditor::Lab

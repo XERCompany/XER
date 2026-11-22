@@ -131,7 +131,10 @@ SdGenerationResult SdPipeline::Generate(const SdGenerationRequest& request) {
     result.metadata["cudnn"] = caps.cudnn_available ? "true" : "false";
     result.metadata["cutlass"] = caps.cutlass_available ? "true" : "false";
     result.metadata["openvino"] = caps.openvino_available ? "true" : "false";
+    // "onnx" reports the onnxruntime engine only; protobuf-only installs
+    // surface separately under "onnx_proto".
     result.metadata["onnx"] = caps.onnx_available ? "true" : "false";
+    result.metadata["onnx_proto"] = caps.onnx_proto_available ? "true" : "false";
     result.metadata["tensorflow"] = caps.tensorflow_available ? "true" : "false";
     result.metadata["cuda"] = caps.cuda_available ? "true" : "false";
     result.metadata["opencv"] = caps.opencv_available ? "true" : "false";

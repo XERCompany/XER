@@ -23,6 +23,10 @@
     using PfnCudnnError   = const char* (*)(cudnnStatus_t_alias);
 #endif
 
+// NOTE: the whole dnn_backends/ directory currently has no callers —
+// CuDnnBridge is wired into XER_AsyncIO but nothing instantiates it.
+// It is kept as an availability-only probe path (see
+// docs/wiki/architecture/nn-backend-stack.md).
 namespace XER::AsyncIO::IO::DNNBackends {
 
 #if !defined(XER_ASYNC_IO_HAS_CUDNN)
@@ -37,10 +41,23 @@ struct DynamicCudnn {
     bool Load() {
         if (lib) return true;
 #if defined(_WIN32)
-        lib = static_cast<void*>(LoadLibraryA("cudnn64_*.dll"));
-        if (!lib) lib = static_cast<void*>(LoadLibraryA("cudnn.dll"));
+        // LoadLibraryA does NOT expand wildcards — the old
+        // "cudnn64_*.dll" probe could never resolve. Probe the concrete
+        // NVIDIA runtime names instead (newest first; cudnn.dll covers
+        // vcpkg/MSYS2-style unversioned installs).
+        static constexpr const char* kCudnnDllNames[] = {
+            "cudnn64_9.dll",
+            "cudnn64_8.dll",
+            "cudnn64_7.dll",
+            "cudnn.dll",
+        };
+        for (const char* name : kCudnnDllNames) {
+            lib = static_cast<void*>(LoadLibraryA(name));
+            if (lib) break;
+        }
 #else
         lib = dlopen("libcudnn.so", RTLD_LAZY | RTLD_LOCAL);
+        if (!lib) lib = dlopen("libcudnn.so.9", RTLD_LAZY | RTLD_LOCAL);
         if (!lib) lib = dlopen("libcudnn.so.8", RTLD_LAZY | RTLD_LOCAL);
         if (!lib) lib = dlopen("libcudnn.so.7", RTLD_LAZY | RTLD_LOCAL);
 #endif

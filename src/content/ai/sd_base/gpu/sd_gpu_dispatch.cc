@@ -30,7 +30,10 @@ SdRuntimeCapabilities SdGpuDispatch::Detect() {
     caps.cudnn_available = libs.has_cudnn;
     caps.cutlass_available = libs.has_cutlass;
     caps.openvino_available = libs.has_openvino;
+    // has_onnx = onnxruntime linked (real inference); has_onnx_proto =
+    // protobuf model defs only — must not select an ONNX backend.
     caps.onnx_available = libs.has_onnx;
+    caps.onnx_proto_available = libs.has_onnx_proto;
     caps.tensorflow_available = libs.has_tensorflow;
     caps.opencv_available = libs.has_opencv && XER::Bridge::OpenCV::IsAvailable();
     caps.ffmpeg_available = XER::Bridge::FFmpeg::IsAvailable();

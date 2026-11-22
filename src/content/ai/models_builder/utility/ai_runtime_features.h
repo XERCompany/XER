@@ -21,7 +21,13 @@ struct ExternalLibraryAvailability {
     bool has_xnnpack = false;
     bool has_flatbuffers = false;
     bool has_openvino = false;
+    // Split ONNX reporting: has_onnx means the onnxruntime inference
+    // engine is linked (XER_AI_HAS_ONNX); has_onnx_proto means only the
+    // ONNX/protobuf model-definition library is available
+    // (XER_AI_HAS_ONNX_PROTO / <onnx/onnx_pb.h>). A protobuf-only install
+    // can parse .onnx files but cannot run inference.
     bool has_onnx = false;
+    bool has_onnx_proto = false;
     bool has_tensorflow = false;
     bool has_pthreadpool = false;
     bool has_fp16 = false;

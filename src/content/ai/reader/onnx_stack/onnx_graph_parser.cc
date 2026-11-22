@@ -5,6 +5,16 @@
 #include <cstring>
 #include <string_view>
 
+// XER_AI_HAS_ONNX_PROTO is defined by src/content/ai/CMakeLists.txt when
+// ONNX::onnx_proto / ONNX::onnx is actually linked — it provides the
+// protobuf-generated model definitions (<onnx/onnx_pb.h>). Note this is
+// deliberately distinct from XER_AI_HAS_ONNX (the onnxruntime inference
+// engine): protobuf availability makes this a real parser, not a
+// runtime.
+#if defined(XER_AI_HAS_ONNX_PROTO)
+#include <onnx/onnx_pb.h>
+#endif
+
 namespace XER::ModelsBuilder::Reader::Onnx {
 
 namespace {
@@ -23,6 +33,42 @@ bool OnnxGraphParser::ParseBuffer(const uint8_t* buffer,
 		return false;
 	}
 
+#if defined(XER_AI_HAS_ONNX_PROTO)
+	// Real parse path: ONNX::onnx_proto is linked, so decode the actual
+	// ModelProto instead of guessing at op names from a byte scan.
+	onnx::ModelProto model;
+	if (!model.ParseFromArray(buffer, static_cast<int>(size))) {
+		return false;
+	}
+
+	const onnx::GraphProto& onnx_graph = model.graph();
+	size_t anon_index = 0;
+	for (const onnx::NodeProto& proto_node : onnx_graph.node()) {
+		OnnxNode node;
+		node.op_type = proto_node.op_type();
+		node.name = proto_node.name().empty()
+			? ("node_" + std::to_string(anon_index++) + "_" + node.op_type)
+			: proto_node.name();
+		node.inputs.assign(proto_node.input().begin(), proto_node.input().end());
+		node.outputs.assign(proto_node.output().begin(), proto_node.output().end());
+		graph.nodes.push_back(std::move(node));
+	}
+
+	for (const onnx::ValueInfoProto& output : onnx_graph.output()) {
+		graph.outputs.push_back(output.name());
+	}
+	if (graph.outputs.empty() && !graph.nodes.empty() &&
+			!graph.nodes.back().outputs.empty()) {
+		graph.outputs.push_back(graph.nodes.back().outputs.front());
+	}
+
+	graph.metadata = ExtractMetadata(buffer, size);
+	graph.metadata["nodes"] = std::to_string(graph.nodes.size());
+	return true;
+#else
+	// Fallback WITHOUT the protobuf lib: a byte scan for known op-name
+	// tokens. This can only guess at graph structure — build with
+	// XER_AI_HAS_ONNX_PROTO for a real decode.
 	const std::string_view bytes(reinterpret_cast<const char*>(buffer), size);
 
 	struct OpSignature {
@@ -71,6 +117,7 @@ bool OnnxGraphParser::ParseBuffer(const uint8_t* buffer,
 	graph.metadata = ExtractMetadata(buffer, size);
 	graph.metadata["nodes"] = std::to_string(graph.nodes.size());
 	return true;
+#endif
 }
 
 std::map<std::string, std::string> OnnxGraphParser::ExtractMetadata(const uint8_t* buffer,
@@ -82,6 +129,22 @@ std::map<std::string, std::string> OnnxGraphParser::ExtractMetadata(const uint8_
 
 	const std::string_view bytes(reinterpret_cast<const char*>(buffer), size);
 	meta["bytes"] = std::to_string(size);
+
+#if defined(XER_AI_HAS_ONNX_PROTO)
+	// Real metadata from the decoded ModelProto.
+	onnx::ModelProto model;
+	if (model.ParseFromArray(buffer, static_cast<int>(size))) {
+		meta["ir_version"] = std::to_string(model.ir_version());
+		meta["producer_name"] = model.producer_name();
+		meta["producer_version"] = model.producer_version();
+		meta["graph_name"] = model.graph().name();
+		meta["nodes"] = std::to_string(model.graph().node_size());
+		meta["contains_onnx"] = "true";
+		return meta;
+	}
+	meta["parse_error"] = "true";
+#endif
+
 	meta["contains_onnx"] = ContainsToken(bytes, "onnx") ? "true" : "false";
 	meta["producer_pytorch"] = ContainsToken(bytes, "pytorch") ? "true" : "false";
 	meta["producer_tensorflow"] = ContainsToken(bytes, "tensorflow") ? "true" : "false";
@@ -90,4 +153,3 @@ std::map<std::string, std::string> OnnxGraphParser::ExtractMetadata(const uint8_
 }
 
 }  // namespace XER::ModelsBuilder::Reader::Onnx
-

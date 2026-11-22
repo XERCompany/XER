@@ -38,6 +38,21 @@ bool AudioBitDepthConverter::ConvertBuffer(
                            static_cast<uint8_t*>(output_buffer), sample_count);
     }
 
+    if (input_depth == AudioBitDepth::BITS_8 && output_depth == AudioBitDepth::FLOAT_32) {
+        return Convert8ToFloat(static_cast<const uint8_t*>(input_buffer),
+                               static_cast<float*>(output_buffer), sample_count);
+    }
+
+    if (input_depth == AudioBitDepth::BITS_32 && output_depth == AudioBitDepth::FLOAT_32) {
+        return Convert32ToFloat(static_cast<const int32_t*>(input_buffer),
+                                static_cast<float*>(output_buffer), sample_count);
+    }
+
+    if (input_depth == AudioBitDepth::FLOAT_64 && output_depth == AudioBitDepth::FLOAT_32) {
+        return ConvertDoubleToFloat(static_cast<const double*>(input_buffer),
+                                    static_cast<float*>(output_buffer), sample_count);
+    }
+
     if (input_depth == AudioBitDepth::BITS_16 && output_depth == AudioBitDepth::FLOAT_32) {
         return Convert16ToFloat(static_cast<const int16_t*>(input_buffer),
                                static_cast<float*>(output_buffer), sample_count);
@@ -80,12 +95,14 @@ size_t AudioBitDepthConverter::GetBytesPerSample(AudioBitDepth depth) {
         case AudioBitDepth::BITS_24: return 3;
         case AudioBitDepth::BITS_32: return 4;
         case AudioBitDepth::FLOAT_32: return 4;
+        case AudioBitDepth::FLOAT_64: return 8;
         default: return 0;
     }
 }
 
 bool AudioBitDepthConverter::IsFloatingPoint(AudioBitDepth depth) {
-    return depth == AudioBitDepth::FLOAT_32;
+    return depth == AudioBitDepth::FLOAT_32 ||
+           depth == AudioBitDepth::FLOAT_64;
 }
 
 bool AudioBitDepthConverter::IsSupported(AudioBitDepth depth) {
@@ -93,7 +110,8 @@ bool AudioBitDepthConverter::IsSupported(AudioBitDepth depth) {
            depth == AudioBitDepth::BITS_16 ||
            depth == AudioBitDepth::BITS_24 ||
            depth == AudioBitDepth::BITS_32 ||
-           depth == AudioBitDepth::FLOAT_32;
+           depth == AudioBitDepth::FLOAT_32 ||
+           depth == AudioBitDepth::FLOAT_64;
 }
 
 bool AudioBitDepthConverter::NormalizeSamples(float* samples, size_t count, float gain) {
@@ -128,10 +146,34 @@ bool AudioBitDepthConverter::Convert16To8(const int16_t* in, uint8_t* out, size_
     return true;
 }
 
+bool AudioBitDepthConverter::Convert8ToFloat(const uint8_t* in, float* out, size_t count) {
+    const float scale = 1.0f / 128.0f;
+    for (size_t i = 0; i < count; ++i) {
+        // u8 PCM is unsigned-biased around 128.
+        out[i] = (static_cast<float>(in[i]) - 128.0f) * scale;
+    }
+    return true;
+}
+
 bool AudioBitDepthConverter::Convert16ToFloat(const int16_t* in, float* out, size_t count) {
     const float scale = 1.0f / 32768.0f;
     for (size_t i = 0; i < count; ++i) {
         out[i] = in[i] * scale;
+    }
+    return true;
+}
+
+bool AudioBitDepthConverter::Convert32ToFloat(const int32_t* in, float* out, size_t count) {
+    const float scale = 1.0f / 2147483648.0f;   // 2^-31
+    for (size_t i = 0; i < count; ++i) {
+        out[i] = static_cast<float>(in[i]) * scale;
+    }
+    return true;
+}
+
+bool AudioBitDepthConverter::ConvertDoubleToFloat(const double* in, float* out, size_t count) {
+    for (size_t i = 0; i < count; ++i) {
+        out[i] = static_cast<float>(in[i]);
     }
     return true;
 }

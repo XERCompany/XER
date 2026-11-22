@@ -12,7 +12,8 @@ enum class AudioBitDepth {
     BITS_16,
     BITS_24,
     BITS_32,
-    FLOAT_32
+    FLOAT_32,
+    FLOAT_64
 };
 
 class AudioBitDepthConverter {
@@ -53,7 +54,10 @@ private:
 
     bool Convert8To16(const uint8_t* in, int16_t* out, size_t count);
     bool Convert16To8(const int16_t* in, uint8_t* out, size_t count);
+    bool Convert8ToFloat(const uint8_t* in, float* out, size_t count);
     bool Convert16ToFloat(const int16_t* in, float* out, size_t count);
+    bool Convert32ToFloat(const int32_t* in, float* out, size_t count);
+    bool ConvertDoubleToFloat(const double* in, float* out, size_t count);
     bool ConvertFloatTo16(const float* in, int16_t* out, size_t count);
 };
 
