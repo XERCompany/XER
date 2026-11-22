@@ -355,3 +355,13 @@ or a theme-side helper mirroring `ClipBaseColor`/`ClipTypeColor`.
   `research/2026-11-22-modern-nle-features.md`,
   `research/2026-11-21-graphics-editor-stack.md`,
   `progress/2026-11-22-api-max-and-photo-m1.md`.
+
+## Status update — 2026-11-22 (post-M4)
+
+As of commit `e378d65` (branch `feat/ui-kit-ve-shell`):
+
+- **M1–M4 complete.** Legacy `tools/video_editor/ui/` fully removed (`317540a`, −42k lines); `ui2/` is the sole shell. All smokes green: 72 checks (`SMOKE RESULT OK`).
+- **Real surfaces**: `TimelineSurface` (9 letter tools, junction handles, media seams), `MonitorSurface` + transport + `PreviewBinding` (JKL ladder, exclusive playback, scope routing), `PhotoCanvasSurface` + 16-tool photo workspace (`cc6c438`).
+- **Panels**: media bin (BinGridSurface + drag session), effects (tree + legacy param defaults), inspector (scrub rows, fx rack), color (OKLCH picker + L/G/G wheels → `xer.fx.lift_gamma_gain`), scopes (real waveform+histogram; vectorscope/parade stubs), mixer (strips + meters), markers/history/queue/extensions/transcript (word-seek, word-timed captions, ripple delete).
+- **Known honest stubs** (documented in code): vectorscope/parade math, queue pause/resume (engine API missing), extension UI hosting (needs CEF wave), speaker labels, clip-scope markers, queue output path defaults to OS temp.
+- **Notable fixed bug**: `VeApp::TickTree` never called `Widget::TickTree` → no widget ticks in the real app (marshal/meters/double-click all dead).
