@@ -9,7 +9,9 @@
 #include <memory>
 #include <string>
 
+#include "monitor_panel.h"
 #include "shell_widgets.h"
+#include "timeline_strip.h"
 #include "shortcut_router.h"
 #include "ve_app.h"
 #include "ve_theme.h"
@@ -94,7 +96,10 @@ std::string CheckWorkspaces(VeApp& app) {
 
 std::string CheckRouter(VeApp& app, W::WidgetTree& tree) {
     // 'j' (TextInput — unmodified letters never produce KeyDown) hits
-    // the program-scope binding by default.
+    // the program-scope binding by default: the M2 binding runs a
+    // real shuttle step on the empty project (no clips decode
+    // anything) and latches the panel's playing state.
+    app.ProgramPlayback().SetAutocache(false);
     if (!tree.HandleEvent(Text("j"))) {
         return "'j' not dispatched";
     }
@@ -102,14 +107,20 @@ std::string CheckRouter(VeApp& app, W::WidgetTree& tree) {
         std::string::npos) {
         return "'j' did not reach the program shuttle binding";
     }
-    // Last-active-viewer routing: switch to the source scope and the
-    // same key must hit the source binding.
+    if (!app.ProgramMonitor()->IsPlaying()) {
+        return "program shuttle did not reach the panel";
+    }
+    app.ProgramShuttleStop();
+    // Last-active-viewer routing: switch to the source scope — the
+    // same key dispatches to the source binding (a no-op until a
+    // clip loads; ui2_monitor covers the real source transport).
     app.Shortcuts().ActivateScope(ShortcutRouter::kScopeSource);
+    if (app.Shortcuts().ActiveScope() !=
+        std::string(ShortcutRouter::kScopeSource)) {
+        return "ActivateScope did not switch to source";
+    }
     if (!tree.HandleEvent(Text("j"))) {
         return "'j' not dispatched in source scope";
-    }
-    if (app.Status()->StatusText().find("Source") == std::string::npos) {
-        return "source-scope binding did not shadow program";
     }
     app.Shortcuts().ActivateScope(ShortcutRouter::kScopeProgram);
     // Tool letters bind globally.

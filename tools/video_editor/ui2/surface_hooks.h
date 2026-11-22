@@ -161,6 +161,18 @@ struct TimelineHooks {
     // the clip, focuses the Transcript dock and (cache miss)
     // starts the whisper job — media clips only.
     std::function<void(const std::string&)> on_edit_transcript;
+    // Optional gesture bracketing (ui2 addition fulfilling the
+    // documented "wrap the burst of same-gesture commits in ONE
+    // history macro" requirement above): the surface fires
+    // on_gesture_begin(label) before the first edit hook of a
+    // pointer/key gesture and on_gesture_end() after the last —
+    // every hook call in between (linked co-move bursts, ripple
+    // trims, multi-member trims) belongs to that gesture. The
+    // bridge maps the pair onto TimelineHistory::BeginMacro/
+    // EndMacro. Unset -> every hook call commits individually
+    // (legacy behavior).
+    std::function<void(const char*)> on_gesture_begin;
+    std::function<void()> on_gesture_end;
 };
 
 // MonitorSurface (S2) hook contract — the frame is drawn by the

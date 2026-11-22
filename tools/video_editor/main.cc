@@ -60,6 +60,8 @@
 // docs/wiki/architecture/ve-ui-rebuild-spec.md). Launched via --ui2
 // or XER_VE_UI2=1; the legacy ui/ shell stays the default.
 #include "ui2/ui2_shell_smoke.h"  // Ui2ShellSmoke hook
+#include "ui2/ui2_monitor_smoke.h"  // Ui2MonitorSmoke hook
+#include "ui2/ui2_timeline_smoke.h"  // Ui2TimelineSmoke hook
 #include "ui2/ve_app.h"
 #include "ui2/ve_theme.h"
 
@@ -1744,6 +1746,12 @@ int main(int argc, char** argv) {
         XER::VideoEditor::Smoke::RegisterCheck(
             "ui2_shell",
             &XER::VideoEditor::Ui2::Ui2ShellSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_monitor",
+            &XER::VideoEditor::Ui2::Ui2MonitorSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_timeline",
+            &XER::VideoEditor::Ui2::Ui2TimelineSmoke);
 #endif
         return XER::VideoEditor::Smoke::RunAll();
     }
@@ -1767,6 +1775,12 @@ int main(int argc, char** argv) {
         XER::VideoEditor::Smoke::RegisterCheck(
             "ui2_shell",
             &XER::VideoEditor::Ui2::Ui2ShellSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_monitor",
+            &XER::VideoEditor::Ui2::Ui2MonitorSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_timeline",
+            &XER::VideoEditor::Ui2::Ui2TimelineSmoke);
 #endif
         for (const std::string& name :
              XER::VideoEditor::Smoke::CheckNames()) {

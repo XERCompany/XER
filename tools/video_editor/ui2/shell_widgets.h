@@ -195,48 +195,7 @@ private:
     std::vector<Badge> badges_;
 };
 
-// ── TimelineStrip ────────────────────────────────────────────────────
-// Bottom timeline band: a slim tool strip (tool tabs + snap toggle
-// placeholder) over a tracks Surface stand-in. Exposes the S1 hook
-// bundle so the shell can wire TimelineHooks before the real
-// TimelineSurface lands in M2.
-class TimelineStrip final : public Widgets::Widget {
-public:
-    static std::shared_ptr<TimelineStrip> Create();
-
-    // Tool ids mirror the old shell's ToolId order (V/C/B/N/Y/U/R/H/Z).
-    void SetTool(int index);
-    int ActiveTool() const { return tool_index_; }
-    void SetOnToolChanged(std::function<void(int)> cb);
-    void SetOnSnapToggled(std::function<void(bool)> cb);
-    void SetSnapEnabled(bool enabled);
-    bool SnapEnabled() const { return snap_enabled_; }
-
-    std::shared_ptr<Widgets::Widget> TracksSurface() const {
-        return tracks_;
-    }
-
-    void Render(Rendering::Renderer& renderer,
-                const Theme::Tokens& tokens) override;
-    void Layout(const Layout::Rect& bounds) override;
-    using Widget::Layout;
-    void Tick(double) override {}
-    bool HandleEvent(const Widgets::Event&) override { return false; }
-
-    Layout::Size GetMinSize() const override;
-    Layout::Size GetPreferredSize() const override;
-    Layout::Size GetMaxSize() const override;
-
-private:
-    TimelineStrip() = default;
-
-    std::shared_ptr<Widgets::Tabs> tools_;
-    std::shared_ptr<Widgets::Widget> tracks_;
-    int tool_index_ = 0;
-    bool snap_enabled_ = true;
-    std::function<void(int)> on_tool_changed_;
-    std::function<void(bool)> on_snap_toggled_;
-    float tool_strip_height_ = 30.0f;
-};
+// TimelineStrip moved to ui2/timeline_strip.{h,cc} — the M2 build
+// hosts the real TimelineSurface + tool row there.
 
 }  // namespace XER::VideoEditor::Ui2
