@@ -7,14 +7,23 @@
 //   [8B]  "XERPHOTO" magic
 //   [4B]  header JSON byte length (LE)
 //   [..]  header JSON:
-//         { "format":"xerphoto", "version":1,
+//         { "format":"xerphoto", "version":2,
 //           "canvas":{"w":W,"h":H,"color_space":"sRGB"},
 //           "blob":{"uncompressed_size":N},
 //           "layers":[ {kind,name,visible,locked,opacity,blend,
-//                       children[] | pixels{x,y,w,h,offset,size}} ]}
+//                       children[] | pixels{x,y,w,h,offset,size}
+//                       | adjustment{op,params[]}
+//                       [, mask{x,y,w,h,offset,size}] }]}
 //   [..]  zlib stream (XER::Common::CompressionCodec) — layer pixel
 //         blobs concatenated in document order; each raster layer's
-//         pixels field locates its w*h*4-byte extent region.
+//         pixels field locates its w*h*4-byte extent region, each
+//         mask field locates its w*h*1-byte A8 coverage region.
+//
+// Version notes:
+//   v1 (M2) — group/raster kinds only, no mask/adjustment fields.
+//   v2 (M4) — "adjustment" kind (op + params) and optional "mask"
+//             coverage extents on any node. Readers accept v1 and v2;
+//             missing fields default to no-mask / default spec.
 //
 // Layer ids are NOT persisted — load rebuilds the tree with fresh
 // ids, matching how OpenPng seeds a Background layer.

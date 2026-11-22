@@ -30,6 +30,7 @@
 #include <vector>
 
 #include "audio/effects_rack/fx_distortion_tube.h"
+#include "voice_isolate.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
 namespace XER::VideoEditor::BuiltinFx {
@@ -1156,6 +1157,34 @@ int soft_clip(XER_AudioBuffer* b, const float* p, int32_t n) {
     return tube.ProcessBlock(b->samples, total, b->samples) ? 0 : 1;
 }
 
+// p0 amount 0..1 (wet blend, default 1) — AI voice isolation / noise
+// reduction on the staged GTCRN ONNX model (voice_isolate.cc —
+// 16 kHz streaming enhancement per channel, resampled in/out,
+// blended with the dry signal by `amount`). Unlike the DSP kernels
+// above this one requires a staged model file and a loadable ONNX
+// backend: when either is missing it fails with a reason instead of
+// silently passing audio through — the bounce workflow surfaces that
+// failure to the user.
+int voice_isolate(XER_AudioBuffer* b, const float* p, int32_t n) {
+    if (!AudioValid(b)) return 0;
+    const float amount = std::clamp(Param(p, n, 0, 1.f), 0.f, 1.f);
+    std::string error;
+    if (!VoiceIsolate::ProcessBuffer(b->samples, b->frames,
+                                     b->channels, b->sample_rate,
+                                     amount, &error)) {
+        return 1;
+    }
+    return 0;
+}
+
+// Smart Reframe is a geometric, track-driven effect — the compositor
+// applies it at the warp stage. This identity keeps the registered ABI
+// entry inert for any generic pixel-fx path that still invokes it.
+int smart_reframe_noop(XER_VideoFrame* /*frame*/, const float* /*p*/,
+                       int32_t /*n*/) {
+    return 0;
+}
+
 PluginDesc Desc(const char* id, const char* name, XER_PluginKind kind,
                 XER_ApplyVideoFn video, XER_ApplyAudioFn audio) {
     PluginDesc d;
@@ -1264,6 +1293,24 @@ const std::vector<PluginDesc>& Effects() {
              &edge_glow, nullptr),
         Desc("xer.fx.tone_split", "Tone Split", XER_PLUGIN_VIDEO_FX,
              &tone_split, nullptr),
+        // ── video (Smart Reframe — geometric, compositor-driven) ──
+        // The descriptor registers the canonical id, params and picker
+        // entry; actual cropping is NOT a pixel op — it needs the
+        // clip's analyzed subject track + current source time, so
+        // compositor.cc applies it at the warp stage and skips this
+        // type in ApplyClipEffects. The identity fn keeps the ABI
+        // entry harmless when a generic video-fx path invokes it.
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.smart_reframe", "Smart Reframe",
+                     XER_PLUGIN_VIDEO_FX, &smart_reframe_noop, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"target_ratio", 0.1f, 4.0f, 0.5625f},  // w/h (9:16)
+                {"smoothing", 0.0f, 1.0f, 0.5f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
         // ── audio (former xer_audio_fx) ──
         Desc("xer.af.echo", "Echo", XER_PLUGIN_AUDIO_FX, nullptr,
              &echo),
@@ -1277,6 +1324,17 @@ const std::vector<PluginDesc>& Effects() {
              nullptr, &onepole_lp),
         Desc("xer.af.soft_clip", "Soft Clip", XER_PLUGIN_AUDIO_FX,
              nullptr, &soft_clip),
+        // ── audio (AI denoise — GTCRN ONNX, voice_isolate.cc) ──
+        [] {
+            PluginDesc d =
+                Desc("xer.af.voice_isolate", "Voice Isolate (AI)",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &voice_isolate);
+            static const XER_ParamDesc kParams[] = {
+                {"amount", 0.f, 1.f, 1.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
     };
     return kEffects;
 }

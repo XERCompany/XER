@@ -31,6 +31,7 @@
 
 #include "compositor.h"
 #include "frame_render/frame_render.h"   // YA.FrameRender seam
+#include "lab/object_ops.h"              // IntPoint — mask contour
 #include "layout/geometry.h"
 #include "timeline_model.h"
 #include "widgets/widget.h"
@@ -131,6 +132,15 @@ public:
     // Frame-pixel markers drawn over the fitted frame (the lab's
     // pending smart-select points). Empty clears the overlay.
     void SetMarkPoints(std::vector<std::pair<int, int>> frame_points);
+    // Stored AI selection mask (w*h 0..255 coverage bytes at frame
+    // resolution — the SmartSelect result). Drawn over the fitted
+    // frame as a semi-transparent accent fill with a traced boundary
+    // edge so the selection is visible before an op consumes it.
+    // nullptr clears it; dims that don't match the shown frame are
+    // skipped, never misapplied (same rule RunParams::mask uses).
+    void SetMaskOverlay(
+        std::shared_ptr<const std::vector<std::uint8_t>> mask,
+        int width, int height);
 
     // Overrides the RenderStore slot id used by the frame-render seam
     // when a render-worker pool is live — give every concurrent frame
@@ -211,6 +221,9 @@ private:
     // The rect the decoded frame is letterboxed into inside
     // VideoAreaRect() (the video_area itself when no frame).
     XER::UI::Layout::Rect FrameDestRect() const;
+    // Builds the cached premul tint bitmap + traced contour for
+    // mask_overlay_ (no-op while the same mask+accent are cached).
+    void EnsureMaskOverlayBuilt(XER::UI::Theme::Color accent);
     // Effective loop range [in,out): explicit range, else project work
     // area, else {0,0} meaning "whole timeline".
     std::pair<double, double> EffectiveLoopRange() const;
@@ -278,6 +291,16 @@ private:
     // Lab smart-select click seam — see SetOnFrameClick.
     std::function<bool(int, int)> on_frame_click_;
     std::vector<std::pair<int, int>> mark_points_;  // frame px
+    // Stored AI selection mask — see SetMaskOverlay. The premul tint
+    // bitmap and traced contour are built lazily per stored mask and
+    // rebuilt when the mask object changes (mask_built_for_ key).
+    std::shared_ptr<const std::vector<std::uint8_t>> mask_overlay_;
+    int mask_overlay_w_ = 0;
+    int mask_overlay_h_ = 0;
+    std::vector<std::uint8_t> mask_bgra_;          // premul accent tint
+    std::vector<Lab::IntPoint> mask_contour_;      // frame-px boundary
+    const void* mask_built_for_ = nullptr;         // rebuild key
+    float built_accent_[4] = {};                   // accent used to tint
     bool engine_playing_ = false;
 
     // --- audio meters ---

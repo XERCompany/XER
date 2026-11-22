@@ -101,6 +101,45 @@ float DistanceToPolygon(float px, float py,
     return best;
 }
 
+// Iterative Douglas-Peucker on a contour (open chain): returns the
+// kept vertex subset in order. tolerance <= 0 keeps everything.
+std::vector<IntPoint> SimplifyPolygon(
+    const std::vector<IntPoint>& pts, float tolerance) {
+    if (pts.size() <= 2 || tolerance <= 0.0f) return pts;
+    std::vector<std::uint8_t> keep(pts.size(), 0);
+    keep.front() = keep.back() = 1;
+    std::vector<std::pair<size_t, size_t>> stack;
+    stack.emplace_back(0, pts.size() - 1);
+    while (!stack.empty()) {
+        const auto [a, b] = stack.back();
+        stack.pop_back();
+        if (b <= a + 1) continue;
+        float best = -1.0f;
+        size_t best_i = a;
+        for (size_t i = a + 1; i < b; ++i) {
+            const float d = PointSegmentDistance(
+                static_cast<float>(pts[i].x), static_cast<float>(pts[i].y),
+                static_cast<float>(pts[a].x), static_cast<float>(pts[a].y),
+                static_cast<float>(pts[b].x), static_cast<float>(pts[b].y));
+            if (d > best) {
+                best = d;
+                best_i = i;
+            }
+        }
+        if (best > tolerance) {
+            keep[best_i] = 1;
+            stack.emplace_back(a, best_i);
+            stack.emplace_back(best_i, b);
+        }
+    }
+    std::vector<IntPoint> out;
+    out.reserve(pts.size());
+    for (size_t i = 0; i < pts.size(); ++i) {
+        if (keep[i]) out.push_back(pts[i]);
+    }
+    return out;
+}
+
 // Chamfer (1, ~sqrt2) distance to the mask boundary — used only to
 // select the band of pixels that need an exact segment distance; the
 // band threshold is generous so approximation error is harmless.
@@ -488,6 +527,91 @@ std::vector<std::uint8_t> PolygonMask(
         }
     }
     return mask;
+}
+
+std::vector<IntPoint> MaskToPolygon(
+    const std::vector<std::uint8_t>& mask, int frame_w, int frame_h,
+    float tolerance_px) {
+    if (frame_w <= 0 || frame_h <= 0 ||
+        mask.size() < static_cast<size_t>(frame_w) * frame_h) {
+        return {};
+    }
+    auto inside = [&](int x, int y) {
+        return x >= 0 && x < frame_w && y >= 0 && y < frame_h &&
+               mask[static_cast<size_t>(y) * frame_w + x] >= 128;
+    };
+    // First inside pixel in scan order anchors the outer contour —
+    // its top edge is guaranteed to be a boundary edge (nothing
+    // inside above it), which gives the walk a deterministic start.
+    IntPoint start{-1, -1};
+    for (int y = 0; y < frame_h && start.x < 0; ++y) {
+        for (int x = 0; x < frame_w; ++x) {
+            if (inside(x, y)) {
+                start = {x, y};
+                break;
+            }
+        }
+    }
+    if (start.x < 0) return {};
+
+    // Crack-following boundary trace on the cell-corner lattice: walk
+    // edges that keep inside pixels on the right. An edge leaving
+    // corner (cx,cy) in direction d is a boundary edge iff the cell on
+    // its inside side is set and the cell on its outside side is not.
+    // At each corner prefer turning right (hug the inside), then
+    // straight, then left, then the u-turn (isolated pixels).
+    // Directions: 0=E, 1=S, 2=W, 3=N.
+    static const int kDx[4] = {1, 0, -1, 0};
+    static const int kDy[4] = {0, 1, 0, -1};
+    // {inside-side cell, outside-side cell} relative to the corner an
+    // edge departs from, per direction.
+    static const IntPoint kIn[4] = {{0, 0}, {-1, 0}, {-1, -1}, {0, -1}};
+    static const IntPoint kOut[4] = {{0, -1}, {0, 0}, {-1, 0}, {-1, -1}};
+    auto edge_ok = [&](int cx, int cy, int d) {
+        return inside(cx + kIn[d].x, cy + kIn[d].y) &&
+               !inside(cx + kOut[d].x, cy + kOut[d].y);
+    };
+
+    std::vector<IntPoint> contour;
+    int cx = start.x, cy = start.y, dir = 0;
+    contour.push_back({cx, cy});
+    // Boundary edges are visited once per direction — the walk is
+    // finite; the cap guards against a malformed-mask hang anyway.
+    const size_t cap =
+        static_cast<size_t>(frame_w) * frame_h * 4 + 64;
+    for (size_t guard = 0; guard < cap; ++guard) {
+        const int order[4] = {(dir + 1) % 4, dir, (dir + 3) % 4,
+                              (dir + 2) % 4};
+        int nd = -1;
+        for (int t = 0; t < 4 && nd < 0; ++t) {
+            if (edge_ok(cx, cy, order[t])) nd = order[t];
+        }
+        if (nd < 0) break;
+        // Closed when the walk is back at the start corner choosing
+        // the start direction — the next edge would retrace the
+        // first. The first pick is exempt: it IS the start corner
+        // choosing the start direction by construction.
+        if (contour.size() > 1 && cx == start.x && cy == start.y &&
+            nd == 0) {
+            break;
+        }
+        cx += kDx[nd];
+        cy += kDy[nd];
+        dir = nd;
+        contour.push_back({cx, cy});
+    }
+    if (contour.size() < 3) return contour;
+
+    std::vector<IntPoint> simplified =
+        SimplifyPolygon(contour, tolerance_px);
+    // Corner coords are the true mask edge; clamp into frame bounds
+    // and keep at least a triangle so the polygon stays a valid
+    // lasso/PolygonMask input.
+    for (auto& pt : simplified) {
+        pt.x = std::clamp(pt.x, 0, frame_w);
+        pt.y = std::clamp(pt.y, 0, frame_h);
+    }
+    return simplified.size() >= 3 ? simplified : contour;
 }
 
 // ------------------------------------------------------------------

@@ -3,9 +3,11 @@
 // FillLayer convention.
 #include "photo/layer_ops.h"
 
+#include <cmath>
 #include <utility>
 #include <vector>
 
+#include "photo/adjust_ops.h"
 #include "photo/photo_history.h"
 
 namespace XER::VideoEditor::Photo {
@@ -118,14 +120,56 @@ public:
             lower->Device() == nullptr || lower->Locked()) {
             return false;
         }
-        const int w = doc.CanvasWidth();
-        const int h = doc.CanvasHeight();
-        const std::vector<uint32_t> src =
-            CompositeSubtreeU32(*upper, w, h);
         TiledDevice* dev = lower->Device();
         dev->BeginTransaction();
-        dev->CompositeRect(dev->Bounds(), src, w, h, 0, 0,
-                           upper->BlendMode(), upper->Opacity());
+        if (upper->Kind() == LayerKind::kAdjustment) {
+            // M4: merging an adjustment bakes the op onto the lower
+            // layer's pixels (blend = lerp at opacity*mask, the same
+            // math the compositor uses when the layer is live).
+            const IntRect ext = dev->Extent();
+            if (!ext.IsEmpty()) {
+                std::vector<uint32_t> before =
+                    dev->ReadRegionU32(ext);
+                std::vector<uint32_t> after = before;
+                if (ApplyAdjustment(upper->Adjustment(), &after, ext.w,
+                                    ext.h)) {
+                    const TiledDevice* mask = upper->Mask();
+                    const std::vector<uint8_t> cov =
+                        mask != nullptr
+                            ? mask->ReadRegionCoverage(ext)
+                            : std::vector<uint8_t>();
+                    for (int y = 0; y < ext.h; ++y) {
+                        for (int x = 0; x < ext.w; ++x) {
+                            const size_t i =
+                                static_cast<size_t>(y) * ext.w + x;
+                            float k = upper->Opacity();
+                            if (mask != nullptr) {
+                                k *= static_cast<float>(cov[i]) /
+                                     255.0f;
+                            }
+                            const int ki = static_cast<int>(
+                                std::lround(k * 255.0f));
+                            if (ki <= 0) continue;
+                            if (ki >= 255) {
+                                before[i] = after[i];
+                            } else {
+                                before[i] = LerpU32Cov(
+                                    before[i], after[i],
+                                    static_cast<uint8_t>(ki));
+                            }
+                        }
+                    }
+                    dev->WriteRegionU32(ext, before);
+                }
+            }
+        } else {
+            const int w = doc.CanvasWidth();
+            const int h = doc.CanvasHeight();
+            const std::vector<uint32_t> src =
+                CompositeSubtreeU32(*upper, w, h);
+            dev->CompositeRect(dev->Bounds(), src, w, h, 0, 0,
+                               upper->BlendMode(), upper->Opacity());
+        }
         back_ = dev->EndTransaction();
         lower_id_ = lower->Id();
         parent_id_ = parent->Id();

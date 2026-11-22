@@ -52,6 +52,7 @@
 #include "ai/beat_markers.h"
 #include "ai/scene_detect.h"
 #include "ai/silence_detect.h"
+#include "ai/smart_reframe.h"
 #include "ai/whisper_transcribe.h"
 #include "ai_tags.h"
 #include "playback/audio_sink_factory.h"
@@ -395,6 +396,12 @@ private:
         project.fps_num = s.fps_num;
         project.fps_den = s.fps_den;
         project.bg_color = s.bg;
+        // Proxy workflow fields round-trip through the same undoable
+        // command — undo restores the toggle + generation settings.
+        project.use_proxies = s.use_proxies;
+        project.proxy_ingest = s.proxy_ingest;
+        project.proxy_max_dim = s.proxy_max_dim;
+        project.proxy_crf = s.proxy_crf;
     }
     ProjectSettings before_;
     ProjectSettings next_;
@@ -772,7 +779,22 @@ void VideoEditorAppWidget::EnsureChildren() {
     };
     media_hooks.on_select = [this](const std::string& path) {
         selected_media_path_ = path;
+        // The transcript dock only adopts the bin selection when it
+        // has no clip binding — RefreshTranscriptPanel arbitrates.
+        RefreshTranscriptPanel();
         SetStatus("Selected media: " + Basename(path));
+    };
+    media_hooks.on_edit_transcript = [this](const std::string& path) {
+        EditMediaByTranscript(path);
+    };
+    // Proxy workflow — context-menu "Create proxy" / "Cancel proxy
+    // build" (media_bin_widget.cc). Settings come off the project.
+    media_hooks.on_create_proxy = [this](const std::string& path) {
+        RequestProxyBuild(path);
+    };
+    media_hooks.on_cancel_proxy = [this](const std::string& path) {
+        proxy_manager_.Cancel(path);
+        SetStatus("Proxy cancelled: " + Basename(path));
     };
     media_hooks.on_open_source = [this](const std::string& path) {
         OpenInSourceMonitor(path);
@@ -913,6 +935,9 @@ void VideoEditorAppWidget::EnsureChildren() {
             return;
         }
         std::string error;
+        // Stop a queued/running proxy build for the leaving media —
+        // MediaCatalog::Remove then drops the row + managed file.
+        proxy_manager_.Cancel(entry->path);
         // MediaCatalog::Remove is keyed by row id (media_catalog.cc).
         if (!catalog_.Remove(entry->id, true, &error)) {
             SetStatus("Remove failed: " + error, true);
@@ -960,6 +985,9 @@ void VideoEditorAppWidget::EnsureChildren() {
         // routing through Seek() would fight the engine.
         inspector_->SetPlayhead(playhead_);
         if (markers_panel_) markers_panel_->SetPlayhead(playhead_);
+        if (transcript_panel_) {
+            transcript_panel_->SetPlayhead(playhead_);
+        }
         if (waveform_panel_ && waveform_panel_->IsVisible()) {
             waveform_panel_->SetPlayhead(playhead_);
         }
@@ -1108,6 +1136,14 @@ void VideoEditorAppWidget::EnsureChildren() {
         [this](const std::string& id) { FindObjectsForClip(id); };
     inspector_hooks.on_ai_clear_tags =
         [this](const std::string& id) { ClearClipTags(id); };
+    inspector_hooks.on_smart_reframe =
+        [this](const std::string& id, double ratio) {
+            SetSmartReframeTarget(id, ratio);
+        };
+    inspector_hooks.on_smart_reframe_analyze =
+        [this](const std::string& id, double ratio) {
+            SmartReframeForClip(id, ratio);
+        };
     inspector_ = std::make_shared<InspectorWidget>(inspector_hooks);
 
     EffectsPanelWidget::Hooks effects_hooks;
@@ -1138,6 +1174,40 @@ void VideoEditorAppWidget::EnsureChildren() {
     };
     markers_panel_ =
         std::make_shared<MarkersPanelWidget>(markers_hooks);
+
+    // Transcript dock (text-based editing) — the panel renders words
+    // from the per-media transcript cache; every action funnels
+    // through hooks (Seek / the shared AI job / LiftRange / markers /
+    // caption clips) so the widget stays model-free.
+    TranscriptPanelWidget::Hooks transcript_hooks;
+    transcript_hooks.on_seek = [this](double t) { Seek(t); };
+    transcript_hooks.on_transcribe = [this] {
+        if (!transcript_media_path_.empty()) {
+            TranscribeForPanel(transcript_media_path_);
+        }
+    };
+    transcript_hooks.on_ripple_delete =
+        [this](double t0, double t1) {
+            RippleDeleteTimelineRange(t0, t1);
+        };
+    transcript_hooks.on_add_marker =
+        [this](double t, const std::string& name) {
+            AddMarkerAt(t, name);
+        };
+    transcript_hooks.on_make_captions =
+        [this](double s0, double s1) {
+            MakeCaptionsForSourceRange(s0, s1);
+        };
+    transcript_hooks.transcribe_ready = [] {
+        return Ai::WhisperAvailable() &&
+               !Ai::FindWhisperModel().empty();
+    };
+    transcript_hooks.on_status =
+        [this](const std::string& text, bool err) {
+            SetStatus(text, err);
+        };
+    transcript_panel_ =
+        std::make_shared<TranscriptPanelWidget>(transcript_hooks);
 
     LabPanel::Hooks lab_hooks;
     lab_hooks.on_run =
@@ -1171,11 +1241,15 @@ void VideoEditorAppWidget::EnsureChildren() {
         monitor_->SetMarkPoints(std::move(pts));
     };
     // The panel's Clear button drops the stored AI mask here in app
-    // state (the panel only shows the readout).
+    // state (the panel only shows the readout) plus the monitor's
+    // selection overlay.
     lab_hooks.on_clear_mask = [this] {
         lab_mask_.reset();
         lab_mask_w_ = 0;
         lab_mask_h_ = 0;
+        if (monitor_ != nullptr) {
+            monitor_->SetMaskOverlay(nullptr, 0, 0);
+        }
     };
     lab_panel_ = std::make_shared<LabPanel>(lab_hooks);
 
@@ -1393,8 +1467,8 @@ void VideoEditorAppWidget::EnsureChildren() {
     right_tabs_ = std::make_shared<Widgets::Tabs>();
     right_tabs_->SetStyle(Widgets::Tabs::Style::Pill);
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Ext, 10 Lyr — the right_tab_ indexing documented in
-    // the header.
+    // 8 Color, 9 Ext, 10 Lyr, 11 Trn — the right_tab_ indexing
+    // documented in the header.
     static constexpr struct {
         const char* label;
         const char* tooltip;
@@ -1404,19 +1478,19 @@ void VideoEditorAppWidget::EnsureChildren() {
         {"Hist", "History"},       {"Mix", "Audio Mixer"},
         {"Q", "Export Queue"},     {"Plg", "Plugins"},
         {"Color", "Color"},        {"Ext", "Extensions"},
-        {"Lyr", "Layers"},
+        {"Lyr", "Layers"},         {"Trn", "Transcript"},
     };
     for (const auto& tab : kRightTabs) {
         right_tabs_->AddTab(tab.label, tab.tooltip);
     }
-    right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 10));
+    right_tabs_->SetActiveIndex(std::clamp(right_tab_, 0, 11));
     right_tabs_->SetOnChanged(
         [this](int index) { SetRightTab(index); });
     tab_strip_ = std::make_shared<TabStripScroll>(right_tabs_);
     // A layout-seeded right_tab_ bypasses SetRightTab, so the strip
     // never scrolled — reveal the active tab here instead.
     tab_strip_->RevealFraction(
-        (std::clamp(right_tab_, 0, 10) + 0.5f) / 11.0f);
+        (std::clamp(right_tab_, 0, 11) + 0.5f) / 12.0f);
 
     PluginsPanelWidget::Hooks plugin_hooks;
     plugin_hooks.on_add_effect = [this](const std::string& type) {
@@ -1615,6 +1689,8 @@ void VideoEditorAppWidget::EnsureChildren() {
     timeline_hooks.on_ripple_delete = [this](const std::string& id) {
         RippleDeleteClipById(id);
     };
+    timeline_hooks.on_edit_transcript =
+        [this](const std::string& id) { EditClipByTranscript(id); };
     timeline_hooks.on_split_clip = [this](const std::string& id, double t) {
         SplitClip(id, t);
     };
@@ -1637,6 +1713,11 @@ void VideoEditorAppWidget::EnsureChildren() {
         [this](const std::string& id, Transition::Type type,
                double duration, const std::string& script) {
             AddTransitionAfter(id, type, duration, script);
+        };
+    timeline_hooks.on_set_transition_duration =
+        [this](const std::string& from, const std::string& to,
+               double duration) {
+            SetTransitionDurationBy(from, to, duration);
         };
     timeline_hooks.on_add_marker =
         [this](double t, const std::string& name) {
@@ -1711,6 +1792,10 @@ void VideoEditorAppWidget::EnsureChildren() {
         [this](const std::string& id) { FindObjectsForClip(id); };
     timeline_hooks.on_ai_clear_tags =
         [this](const std::string& id) { ClearClipTags(id); };
+    timeline_hooks.on_smart_reframe =
+        [this](const std::string& id, double ratio) {
+            SmartReframeForClip(id, ratio);
+        };
     // Timeline corner-toolbar magnet — same flip as the main-toolbar
     // Snap button / S shortcut so all three stay in sync.
     timeline_hooks.on_snap_toggle = [this](bool on) {
@@ -1844,6 +1929,7 @@ void VideoEditorAppWidget::EnsureChildren() {
     AddChild(color_panel_);
     AddChild(extensions_panel_);
     AddChild(layers_panel_);
+    AddChild(transcript_panel_);
     AddChild(waveform_panel_);
     AddChild(status_toast_);
     AddChild(tab_strip_);
@@ -2115,6 +2201,10 @@ void VideoEditorAppWidget::RebuildTitleBarMenus() {
             right_panel_visible_ = true;
             SetRightTab(10);
         }, true, right_tab_ == 10),
+        item("Transcript", "", [this] {
+            right_panel_visible_ = true;
+            SetRightTab(11);
+        }, true, right_tab_ == 11),
         item("Keyboard Shortcuts", "?", [this] {
             ToggleShortcutsOverlay();
         }),
@@ -2178,6 +2268,10 @@ void VideoEditorAppWidget::ShowProjectSettingsDialog() {
     settings.fps_num = project_.fps_num;
     settings.fps_den = project_.fps_den;
     settings.bg = project_.bg_color;
+    settings.use_proxies = project_.use_proxies;
+    settings.proxy_ingest = project_.proxy_ingest;
+    settings.proxy_max_dim = project_.proxy_max_dim;
+    settings.proxy_crf = project_.proxy_crf;
     settings_dialog_->SetProjectName(
         project_path_.empty() ? "Untitled.xerproj"
                               : Basename(project_path_));
@@ -2525,6 +2619,12 @@ bool VideoEditorAppWidget::ImportMediaFile(const std::string& path,
         return false;
     }
     selected_media_path_ = path;
+    // Ingest "create proxies" (Premiere's ingest preset): non-video
+    // rows and already-small sources are silently skipped inside
+    // Request — no extra gate needed here.
+    if (project_.proxy_ingest) {
+        RequestProxyBuild(path);
+    }
     return true;
 }
 
@@ -2954,6 +3054,9 @@ void VideoEditorAppWidget::SelectClip(const std::string& clip_id) {
     // Timeline menu items ("Edit Title…", "Speed/Duration…") snapshot
     // the selection at build time — refresh so they track it.
     RebuildTitleBarMenus();
+    // The transcript dock follows the selection when the new clip is
+    // media-bearing (it keeps its old binding otherwise).
+    RefreshTranscriptPanel();
     SetStatus(clip_id.empty() ? "Selection cleared"
                               : "Selected " + clip_id);
 }
@@ -2974,6 +3077,7 @@ void VideoEditorAppWidget::Seek(double seconds) {
         play_btn_->SetText("Play");
     }
     if (markers_panel_) markers_panel_->SetPlayhead(playhead_);
+    if (transcript_panel_) transcript_panel_->SetPlayhead(playhead_);
     if (waveform_panel_ && waveform_panel_->IsVisible()) {
         waveform_panel_->SetPlayhead(playhead_);
     }
@@ -3089,6 +3193,13 @@ void VideoEditorAppWidget::EnsurePreviewEngine() {
     EnsurePlatformAudioSink(&program_audio_sink_);
     PreviewOptions options;
     options.audio_sink = &program_sink_binding_;
+    // Proxy seam: the compositor resolves clip.source_path through
+    // DecodePathFor once per session (ready proxy when the project
+    // has them enabled, the source otherwise). The audio mixer never
+    // resolves — proxies carry no audio.
+    options.media_resolver = [this](const std::string& path) {
+        return DecodePathFor(path);
+    };
     std::string error;
     preview_ready_ = preview_engine_.Init(project_, options,
                                         engine_sink_.get(), &error);
@@ -3375,6 +3486,21 @@ void VideoEditorAppWidget::AddTransitionPair(
     SetStatus(std::string("Added ") + TransitionTypeLabel(type));
 }
 
+void VideoEditorAppWidget::SetTransitionDurationBy(
+    const std::string& from_id, const std::string& to_id,
+    double duration) {
+    std::string error;
+    if (!history_.SetTransitionDuration(from_id, to_id, duration,
+                                        &error)) {
+        SetStatus("Transition duration failed: " + error, true);
+        return;
+    }
+    NotifyProjectChanged();
+    char buf[48];
+    std::snprintf(buf, sizeof(buf), "Transition %.2f s", duration);
+    SetStatus(buf);
+}
+
 void VideoEditorAppWidget::ApplyDefaultTransition() {
     // Nearest adjacent pair on a video track to the playhead wins —
     // Ctrl+D in Premiere applies the default transition to the edit
@@ -3545,6 +3671,11 @@ void VideoEditorAppWidget::EnsureSourceEngine() {
     }
     PreviewOptions options;
     options.audio_sink = &source_sink_binding_;
+    // Same proxy seam as the program engine — the source monitor
+    // previews the proxy too (Premiere behavior).
+    options.media_resolver = [this](const std::string& path) {
+        return DecodePathFor(path);
+    };
     std::string error;
     source_ready_ =
         source_engine_.Init(source_project_, options,
@@ -4674,6 +4805,15 @@ void VideoEditorAppWidget::DetectBeatsForMedia(
 }
 
 void VideoEditorAppWidget::TranscribeMedia(const std::string& path) {
+    StartTranscription(path, /*markers=*/true);
+}
+
+void VideoEditorAppWidget::TranscribeForPanel(const std::string& path) {
+    StartTranscription(path, /*markers=*/false);
+}
+
+void VideoEditorAppWidget::StartTranscription(const std::string& path,
+                                              bool markers) {
     if (ai_op_.IsRunning() || ai_op_.HasResult()) {
         SetStatus("An AI task is already running", true);
         return;
@@ -4694,7 +4834,7 @@ void VideoEditorAppWidget::TranscribeMedia(const std::string& path) {
     SetStatus("Transcribing: " + Basename(path) + "…");
     ai_progress_shown_ = -1.0f;
     const bool started = ai_op_.Start(
-        [this, path, model](const Lab::JobControl& ctl) {
+        [this, path, model, markers](const Lab::JobControl& ctl) {
             Ai::Pcm pcm;
             std::string error;
             // 16 kHz mono is the whisper contract; cap at 10 minutes.
@@ -4713,14 +4853,20 @@ void VideoEditorAppWidget::TranscribeMedia(const std::string& path) {
             {
                 std::lock_guard lock(ai_result_mutex_);
                 ai_result_ = AiResult{};
-                ai_result_.kind = "transcribe";
+                // "transcribe" feeds the legacy markers path;
+                // "transcript" (the dock's job) skips marker drops —
+                // Tick routes both through the transcript cache.
+                ai_result_.kind = markers ? "transcribe" : "transcript";
+                ai_result_.media_path = path;
                 for (const auto& seg : segments) {
-                    std::string label = seg.text;
-                    if (label.size() > 48) {
-                        label = label.substr(0, 45) + "…";
+                    if (markers) {
+                        std::string label = seg.text;
+                        if (label.size() > 48) {
+                            label = label.substr(0, 45) + "…";
+                        }
+                        if (label.empty()) label = "Speech";
+                        ai_result_.markers.emplace_back(seg.t0, label);
                     }
-                    if (label.empty()) label = "Speech";
-                    ai_result_.markers.emplace_back(seg.t0, label);
                     AiResult::Span s;
                     s.t0 = seg.t0;
                     s.t1 = seg.t1;
@@ -4733,6 +4879,226 @@ void VideoEditorAppWidget::TranscribeMedia(const std::string& path) {
             return true;
         });
     if (!started) SetStatus("An AI task is already running", true);
+}
+
+std::string VideoEditorAppWidget::TranscriptCacheDir() const {
+    // "<base>/XER/VideoEditor/transcripts" — a sibling of records.db /
+    // catalog.db, so the cache follows the app's per-user data root.
+    const std::string db =
+        Records::RecentProjectsStore::DefaultDbPath();
+    return Path::ToUtf8(Path::FromUtf8(db).parent_path() /
+                        "transcripts");
+}
+
+void VideoEditorAppWidget::StoreTranscriptResult(
+    const std::string& path,
+    const std::vector<Ai::TranscriptSegment>& spans) {
+    TranscriptDoc doc;
+    doc.spans = spans;
+    doc.words = TranscriptWordsFromSegments(spans);
+    const std::string key = TranscriptCacheKey(path);
+    transcript_cache_[key] = std::move(doc);
+    // Disk mirror — best effort (a read-only data dir just loses the
+    // persistence, never the feature).
+    SaveTranscriptCache(TranscriptCacheDir() + "/" + key + ".json",
+                        path, spans);
+}
+
+bool VideoEditorAppWidget::TryLoadTranscript(
+    const std::string& path, std::vector<TranscriptWord>* words,
+    std::vector<Ai::TranscriptSegment>* spans) {
+    const std::string key = TranscriptCacheKey(path);
+    if (const auto it = transcript_cache_.find(key);
+        it != transcript_cache_.end()) {
+        if (words != nullptr) *words = it->second.words;
+        if (spans != nullptr) *spans = it->second.spans;
+        return true;
+    }
+    std::vector<Ai::TranscriptSegment> disk;
+    if (LoadTranscriptCache(TranscriptCacheDir() + "/" + key + ".json",
+                            path, &disk)) {
+        StoreTranscriptResult(path, disk);   // re-prime the map
+        if (spans != nullptr) *spans = disk;
+        if (words != nullptr) {
+            *words = TranscriptWordsFromSegments(disk);
+        }
+        return true;
+    }
+    return false;
+}
+
+void VideoEditorAppWidget::RefreshTranscriptPanel() {
+    if (transcript_panel_ == nullptr) return;
+    // Follow the selection: a selected MEDIA clip becomes the subject.
+    if (const Clip* sel = FindClip(project_, selected_clip_id_);
+        sel != nullptr && !sel->source_path.empty() &&
+        sel->source.kind == SourceKind::Media && !sel->is_adjustment) {
+        transcript_clip_id_ = sel->id;
+        transcript_media_path_ = sel->source_path;
+    } else if (!transcript_clip_id_.empty() &&
+               FindClip(project_, transcript_clip_id_) == nullptr) {
+        // The bound clip was deleted or split away (LiftRange cuts
+        // generate new ids) — rebind to a surviving clip on the same
+        // media before dropping to media-bound mode.
+        transcript_clip_id_.clear();
+        for (const Clip& c : project_.clips) {
+            if (c.source_path == transcript_media_path_ &&
+                c.source.kind == SourceKind::Media) {
+                transcript_clip_id_ = c.id;
+                break;
+            }
+        }
+    }
+    // Cold start: nothing bound yet — the bin selection seeds a
+    // media-bound transcript.
+    if (transcript_media_path_.empty() &&
+        !selected_media_path_.empty()) {
+        transcript_media_path_ = selected_media_path_;
+    }
+    const Clip* bound =
+        transcript_clip_id_.empty()
+            ? nullptr
+            : FindClip(project_, transcript_clip_id_);
+    if (transcript_media_path_.empty()) {
+        transcript_panel_->SetSubject("", "", nullptr);
+        return;
+    }
+    std::string name;
+    if (bound != nullptr) {
+        name = bound->name.empty() ? Basename(bound->source_path)
+                                   : bound->name;
+    } else {
+        name = Basename(transcript_media_path_);
+    }
+    transcript_panel_->SetSubject(transcript_media_path_, name, bound);
+    std::vector<TranscriptWord> words;
+    if (TryLoadTranscript(transcript_media_path_, &words, nullptr)) {
+        transcript_panel_->SetWords(std::move(words));
+    } else {
+        transcript_panel_->SetWords({});
+    }
+}
+
+void VideoEditorAppWidget::RippleDeleteTimelineRange(double t0,
+                                                    double t1) {
+    std::string error;
+    if (!history_.LiftRange(t0, t1, /*close_gap=*/true, &error)) {
+        SetStatus("Ripple delete failed: " +
+                      (error.empty() ? "no editable range" : error),
+                  true);
+        return;
+    }
+    if (transcript_panel_) transcript_panel_->ClearSelection();
+    NotifyProjectChanged();
+    SetStatus("Ripple deleted transcript range");
+}
+
+void VideoEditorAppWidget::MakeCaptionsForSourceRange(
+    double src_t0, double src_t1) {
+    const Clip* clip = FindClip(project_, transcript_clip_id_);
+    if (clip == nullptr) {
+        SetStatus("Captions need a media clip on the timeline", true);
+        return;
+    }
+    const auto it =
+        transcript_cache_.find(TranscriptCacheKey(clip->source_path));
+    if (it == transcript_cache_.end() || it->second.spans.empty()) {
+        SetStatus("No transcript for captions", true);
+        return;
+    }
+    // Captionist's clip recipe — the "Captions" lane + the same
+    // Text-source style string its extension emits.
+    history_.BeginMacro("Caption clips");
+    const int track = history_.AddTrack(TrackKind::Video, "Captions");
+    if (track < 0) {
+        history_.EndMacro();
+        SetStatus("Unable to add a Captions track", true);
+        return;
+    }
+    int made = 0;
+    std::string last_error;
+    const MediaBounds bounds{0.0, true};   // generated — unbounded
+    for (const auto& span : it->second.spans) {
+        if (span.t1 <= src_t0 || span.t0 >= src_t1) continue;
+        double tl0 = 0.0, tl1 = 0.0;
+        if (!SourceRangeToTimeline(*clip, span.t0, span.t1, &tl0,
+                                   &tl1)) {
+            continue;
+        }
+        Clip cap;
+        cap.id = NewClipId();
+        cap.name = "Caption";
+        cap.source.kind = SourceKind::Text;
+        cap.track = track;
+        cap.timeline_start = tl0;
+        cap.duration = std::max(0.4, tl1 - tl0);
+        cap.source.param =
+            span.text +
+            " | size=56 color=#FFFFFF outline=2 "
+            "outline_color=#000000 align=center valign=bottom w=1600";
+        std::string error;
+        if (history_.AddClip(std::move(cap), bounds, nullptr,
+                             &error)) {
+            ++made;
+        } else {
+            last_error = std::move(error);
+        }
+    }
+    history_.EndMacro();
+    if (transcript_panel_) transcript_panel_->ClearSelection();
+    NotifyProjectChanged();
+    SetStatus("Created " + std::to_string(made) +
+              " caption clip(s)" +
+              (last_error.empty() ? "" : " — " + last_error));
+}
+
+void VideoEditorAppWidget::EditClipByTranscript(
+    const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr || clip->source_path.empty() ||
+        clip->source.kind != SourceKind::Media) {
+        SetStatus("Clip has no media source to transcribe", true);
+        return;
+    }
+    SelectClip(clip_id);
+    right_panel_visible_ = true;
+    SetRightTab(11);   // Trn
+    RefreshTranscriptPanel();
+    // Auto-kick the whisper job when nothing is cached — the Descript
+    // flow opens the panel already transcribing.
+    if (transcript_cache_.find(
+            TranscriptCacheKey(clip->source_path)) ==
+            transcript_cache_.end() &&
+        Ai::WhisperAvailable() && !Ai::FindWhisperModel().empty() &&
+        !ai_op_.IsRunning() && !ai_op_.HasResult()) {
+        TranscribeForPanel(clip->source_path);
+    }
+}
+
+void VideoEditorAppWidget::EditMediaByTranscript(
+    const std::string& path) {
+    if (path.empty()) return;
+    // Prefer the timeline clip on this media — it carries the
+    // source->timeline mapping the edit actions need.
+    for (const Clip& c : project_.clips) {
+        if (c.source_path == path &&
+            c.source.kind == SourceKind::Media) {
+            EditClipByTranscript(c.id);
+            return;
+        }
+    }
+    transcript_clip_id_.clear();
+    transcript_media_path_ = path;
+    selected_media_path_ = path;
+    right_panel_visible_ = true;
+    SetRightTab(11);
+    RefreshTranscriptPanel();
+    if (transcript_cache_.find(TranscriptCacheKey(path)) ==
+            transcript_cache_.end() &&
+        Ai::WhisperAvailable() && !Ai::FindWhisperModel().empty() &&
+        !ai_op_.IsRunning() && !ai_op_.HasResult()) {
+        TranscribeForPanel(path);
+    }
 }
 
 void VideoEditorAppWidget::BounceAudioFx(
@@ -4875,6 +5241,154 @@ void VideoEditorAppWidget::ClearClipTags(const std::string& clip_id) {
     SetStatus("AI tags cleared");
 }
 
+namespace {
+// Human aspect label for a w/h ratio — the canonical menu targets
+// get their names back; anything else prints numerically.
+std::string FormatAspectLabel(double ratio) {
+    for (const auto& [label, r] :
+         {std::pair{"9:16", 0.5625}, std::pair{"1:1", 1.0},
+          std::pair{"4:5", 0.8}, std::pair{"16:9", 16.0 / 9.0},
+          std::pair{"4:3", 4.0 / 3.0}}) {
+        if (std::fabs(ratio - r) < 1e-3) return label;
+    }
+    char buf[24];
+    std::snprintf(buf, sizeof(buf), "%g:1", ratio);
+    return buf;
+}
+
+// True when `type` names the smart-reframe effect under any registered
+// spelling (canonical "builtin:", "plugin:" or bare id).
+bool IsSmartReframeType(const std::string& type) {
+    std::string id = type;
+    if (id.rfind("builtin:", 0) == 0) {
+        id = id.substr(8);
+    } else if (id.rfind("plugin:", 0) == 0) {
+        id = id.substr(7);
+    }
+    return id == Ai::kSmartReframeId;
+}
+
+// Upserts the smart-reframe effect on `clip` at `ratio`, preserving
+// an existing smoothing param (params[1]) when present. Returns true
+// when the effect was already there (param updated in place).
+bool ApplySmartReframeEffect(Clip* clip, double ratio) {
+    for (ClipEffect& e : clip->effects) {
+        if (!IsSmartReframeType(e.type)) continue;
+        if (e.params.empty()) {
+            e.params.push_back(static_cast<float>(ratio));
+        } else {
+            e.params[0] = static_cast<float>(ratio);
+        }
+        if (e.params.size() < 2) {
+            e.params.push_back(0.5f);   // default smoothing
+        }
+        return true;
+    }
+    clip->effects.push_back(
+        {"builtin:" + std::string(Ai::kSmartReframeId),
+         {static_cast<float>(ratio), 0.5f}});
+    return false;
+}
+}  // namespace
+
+void VideoEditorAppWidget::SmartReframeForClip(
+    const std::string& clip_id, double target_ratio) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("No clip selected for Smart Reframe", true);
+        return;
+    }
+    if (clip->source.kind != SourceKind::Media ||
+        clip->source_path.empty() || clip->is_adjustment) {
+        SetStatus("Smart Reframe needs a media clip on the timeline",
+                  true);
+        return;
+    }
+    if (ai_op_.IsRunning() || ai_op_.HasResult()) {
+        SetStatus("An AI task is already running", true);
+        return;
+    }
+    // Resolve the model up front — same pre-flight as FindObjects.
+    const std::string model = Ai::FindObjectModel();
+    if (model.empty()) {
+        SetStatus(Ai::FindObjectModelHint(), true);
+        return;
+    }
+    const std::string labels = Ai::FindObjectLabels(model);
+    const Clip clip_copy = *clip;
+    SetStatus("Smart Reframe: " + Basename(clip->source_path) + "…");
+    ai_progress_shown_ = -1.0f;
+    const double ratio =
+        std::isfinite(target_ratio) && target_ratio > 0.0
+            ? target_ratio
+            : 9.0 / 16.0;
+    const bool started = ai_op_.Start(
+        [this, clip_copy, model, labels,
+         ratio](const Lab::JobControl& ctl) {
+            ClipReframe track;
+            std::string error;
+            Ai::ReframeScanParams params;
+            if (!Ai::ScanClipSubject(
+                    clip_copy, model, labels, params,
+                    [&ctl](float p) { ctl.ReportProgress(p); },
+                    [&ctl] { return ctl.ShouldCancel(); }, &track,
+                    &error)) {
+                ctl.Fail(std::move(error));
+                return false;
+            }
+            {
+                std::lock_guard lock(ai_result_mutex_);
+                ai_result_ = AiResult{};
+                ai_result_.kind = "reframe";
+                ai_result_.reframe_clip_id = clip_copy.id;
+                ai_result_.reframe = std::move(track);
+                ai_result_.reframe_ratio = ratio;
+                // Span view for ai.last consumers: subject-center
+                // samples (in SOURCE seconds).
+                for (const ReframeSample& s :
+                     ai_result_.reframe.samples) {
+                    AiResult::Span sp;
+                    sp.t0 = sp.t1 = s.t;
+                    sp.label = s.scene_boundary ? "cut" : "subject";
+                    sp.confidence = s.confidence;
+                    ai_result_.spans.push_back(std::move(sp));
+                }
+            }
+            return true;
+        });
+    if (!started) SetStatus("An AI task is already running", true);
+}
+
+void VideoEditorAppWidget::SetSmartReframeTarget(
+    const std::string& clip_id, double target_ratio) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("No clip selected for Smart Reframe", true);
+        return;
+    }
+    const double ratio =
+        std::isfinite(target_ratio) && target_ratio > 0.0
+            ? target_ratio
+            : 9.0 / 16.0;
+    if (clip->reframe.samples.empty()) {
+        // No analyzed track yet — picking a target kicks the scan.
+        SmartReframeForClip(clip_id, ratio);
+        return;
+    }
+    Clip next = *clip;
+    ApplySmartReframeEffect(&next, ratio);
+    std::string error;
+    if (!history_.ReplaceClip(clip_id, next,
+                              BoundsForPath(clip->source_path),
+                              &error)) {
+        SetStatus("Smart Reframe failed: " + error, true);
+        return;
+    }
+    inspector_->SetClip(FindClip(project_, clip_id));
+    NotifyProjectChanged();
+    SetStatus("Smart Reframe target " + FormatAspectLabel(ratio));
+}
+
 void VideoEditorAppWidget::AddMarkerAt(double t,
                                        const std::string& name) {
     Marker marker;
@@ -4988,7 +5502,7 @@ void VideoEditorAppWidget::SetTrackFlag(int track, char which, bool on) {
 }
 
 void VideoEditorAppWidget::SetRightTab(int tab) {
-    right_tab_ = std::clamp(tab, 0, 10);   // 0 Insp .. 10 Lyr
+    right_tab_ = std::clamp(tab, 0, 11);   // 0 Insp .. 11 Trn
     if (right_tabs_) {
         // SetActiveIndex never fires on_changed_ (ActivateTab does),
         // so user clicks and programmatic switches meet here safely.
@@ -4998,7 +5512,7 @@ void VideoEditorAppWidget::SetRightTab(int tab) {
         // Scrolls the strip so a programmatically-activated tab (View
         // menu, workspace preset, extension UI open) is visible too,
         // not just selected.
-        tab_strip_->RevealFraction((right_tab_ + 0.5f) / 11.0f);
+        tab_strip_->RevealFraction((right_tab_ + 0.5f) / 12.0f);
     }
     RequestLayout();
     Invalidate();
@@ -5493,6 +6007,10 @@ void VideoEditorAppWidget::NotifyProjectChanged() {
         layers_panel_->SetActiveTrack(TargetVideoTrack());
         layers_panel_->SetSelectedClip(selected_clip_id_);
     }
+    // Transcript dock re-binds its subject/clip mapping and refreshes
+    // the playhead highlight after every project mutation.
+    RefreshTranscriptPanel();
+    if (transcript_panel_) transcript_panel_->SetPlayhead(playhead_);
     RefreshWaveformPanel();
     monitor_->SetProject(project_);
     // Monitor-card chrome title — same name the title-bar pill shows.
@@ -7366,6 +7884,46 @@ const CatalogEntry* VideoEditorAppWidget::FindCatalogEntry(
     return it == catalog_entries_.end() ? nullptr : &*it;
 }
 
+std::string VideoEditorAppWidget::DecodePathFor(
+    const std::string& path) const {
+    // proxies_enabled_ is the Tick-synced atomic mirror of
+    // project_.use_proxies — resolvers run on worker threads where
+    // reading project_ directly would race the UI. ResolveDecodePath
+    // itself is internally synchronized and falls through to the
+    // source whenever no fresh+ready proxy exists.
+    if (!proxies_enabled_.load(std::memory_order_acquire)) {
+        return path;
+    }
+    return proxy_manager_.ResolveDecodePath(path);
+}
+
+void VideoEditorAppWidget::RequestProxyBuild(
+    const std::string& path) {
+    if (path.empty()) return;
+    if (!catalog_.IsOpen()) {
+        std::string error;
+        catalog_.Open(&error);   // best-effort — Request re-checks
+    }
+    ProxySettings settings;
+    settings.max_dim = project_.proxy_max_dim;
+    settings.crf = project_.proxy_crf;
+    if (proxy_manager_.Request(path, settings)) {
+        SetStatus("Proxy queued: " + Basename(path));
+    }
+    // Request rejects audio-only rows, stills, unreadable files and
+    // sources already under the size cap — all benign "no proxy
+    // needed" answers; the bin badge simply stays off. Keeping this
+    // quiet matters for ingest, which calls us per imported file.
+}
+
+MediaPrep::Options VideoEditorAppWidget::BuildPrepOptions() {
+    MediaPrep::Options options;
+    options.path_resolver = [this](const std::string& path) {
+        return DecodePathFor(path);
+    };
+    return options;
+}
+
 void VideoEditorAppWidget::Render(
     XER::UI::Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens) {
@@ -7638,6 +8196,9 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
     if (layers_panel_) {
         layers_panel_->SetVisible(right_eff && right_tab_ == 10);
     }
+    if (transcript_panel_) {
+        transcript_panel_->SetVisible(right_eff && right_tab_ == 11);
+    }
     tab_strip_->SetVisible(right_eff);
     if (right_eff) {
         const float tab_h = 30.0f;
@@ -7650,8 +8211,8 @@ void VideoEditorAppWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             inspector_,  effects_panel_, markers_panel_, lab_panel_,
             history_panel_, mixer_panel_, export_queue_,
             plugins_panel_, color_panel_, extensions_panel_,
-            layers_panel_};
-        panels[std::clamp(right_tab_, 0, 10)]->Layout(
+            layers_panel_, transcript_panel_};
+        panels[std::clamp(right_tab_, 0, 11)]->Layout(
             {inspector_x, panel_y + tab_h, right_w - gap,
              std::max(60.0f, central_h - tab_h)}, tokens);
     }
@@ -8114,6 +8675,27 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
         RefreshCatalog();
         if (timeline_) timeline_->NotifyMediaChanged();
     }
+    // Proxy pipeline: keep the worker-thread flag in step with the
+    // project toggle (a flip re-inits the compositor so sessions
+    // re-resolve their decode path), refresh the bin on every
+    // proxies-row transition (pending -> ready | failed -> badge),
+    // and surface the running job's one-line progress. A ready proxy
+    // only takes effect through the re-resolve — same seam the
+    // toggle uses.
+    if (proxies_enabled_.exchange(project_.use_proxies,
+                                  std::memory_order_acq_rel) !=
+        project_.use_proxies) {
+        preview_dirty_ = true;
+    }
+    if (proxy_manager_.ConsumeCatalogDirty()) {
+        RefreshCatalog();
+        if (project_.use_proxies) preview_dirty_ = true;
+    }
+    if (const std::string activity = proxy_manager_.DescribeActivity();
+        activity != proxy_activity_) {
+        proxy_activity_ = activity;
+        if (!activity.empty()) SetStatus(activity);
+    }
     // Import-poster requests dropped on a full queue are never retried
     // — surface them coalesced, rate-limited, instead of spamming the
     // status bar per drop.
@@ -8165,6 +8747,29 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 // marker path below consumes `result`.
                 ai_last_ = result;
             }
+            // Either whisper job ("transcribe" markers or "transcript"
+            // dock) fills the per-media transcript cache — same words
+            // back the panel, the captionist extension and future
+            // text-edit surfaces.
+            if (ok && !result.media_path.empty() &&
+                (result.kind == "transcribe" ||
+                 result.kind == "transcript") &&
+                !result.spans.empty()) {
+                std::vector<Ai::TranscriptSegment> segs;
+                segs.reserve(result.spans.size());
+                for (const AiResult::Span& s : result.spans) {
+                    Ai::TranscriptSegment seg;
+                    seg.t0 = s.t0;
+                    seg.t1 = s.t1;
+                    seg.text = s.label;
+                    segs.push_back(std::move(seg));
+                }
+                StoreTranscriptResult(result.media_path,
+                                      std::move(segs));
+            }
+            if (transcript_panel_) {
+                transcript_panel_->SetJobState(false, 0.0f);
+            }
             if (ok && !result.tags_clip_id.empty()) {
                 // Find-objects payload: ReplaceClip so the tag ranges
                 // are undoable + validated; the clip may have been
@@ -8191,6 +8796,43 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 } else {
                     SetStatus("AI tags: clip no longer exists", true);
                 }
+            } else if (ok && !result.reframe_clip_id.empty()) {
+                // Smart-reframe payload: ReplaceClip lands the subject
+                // track + the effect at the scanned target aspect
+                // (undoable, validated); the clip may be gone.
+                if (const Clip* clip =
+                        FindClip(project_, result.reframe_clip_id);
+                    clip != nullptr) {
+                    Clip next = *clip;
+                    const std::size_t count =
+                        result.reframe.samples.size();
+                    next.reframe = std::move(result.reframe);
+                    ApplySmartReframeEffect(&next, result.reframe_ratio);
+                    std::string rep_error;
+                    if (history_.ReplaceClip(
+                            result.reframe_clip_id, next,
+                            BoundsForPath(clip->source_path),
+                            &rep_error)) {
+                        inspector_->SetClip(
+                            FindClip(project_,
+                                     result.reframe_clip_id));
+                        NotifyProjectChanged();
+                        SetStatus(
+                            "Smart Reframe " +
+                            FormatAspectLabel(result.reframe_ratio) +
+                            (count > 0
+                                 ? ": " + std::to_string(count) +
+                                       " samples"
+                                 : ": no subject found — center "
+                                   "crop"));
+                    } else {
+                        SetStatus("Smart Reframe failed: " + rep_error,
+                                  true);
+                    }
+                } else {
+                    SetStatus("Smart Reframe: clip no longer exists",
+                              true);
+                }
             } else if (ok && !result.bounce_path.empty()) {
                 std::int64_t id = 0;
                 std::string imp_err;
@@ -8207,6 +8849,14 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
                 } else {
                     SetStatus("Bounce import failed: " + imp_err, true);
                 }
+            } else if (ok && result.kind == "transcript") {
+                // The dock's own whisper run lands here — spans are
+                // already cached above; just refresh the panel view.
+                RefreshTranscriptPanel();
+                SetStatus("Transcript ready" +
+                          (result.detail.empty()
+                               ? ""
+                               : " — " + result.detail));
             } else if (ok && !result.markers.empty()) {
                 history_.BeginMacro("AI markers");
                 int added = 0;
@@ -8232,6 +8882,9 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             }
         } else if (ai_op_.IsRunning()) {
             const float p = ai_op_.Progress();
+            if (transcript_panel_) {
+                transcript_panel_->SetJobState(true, p);
+            }
             if (p != ai_progress_shown_ && p > 0.0f) {
                 ai_progress_shown_ = p;
                 SetStatus("AI running: " +
@@ -8435,6 +9088,9 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
         timeline_->SetPlayhead(playhead_);
         inspector_->SetPlayhead(playhead_);
         if (markers_panel_) markers_panel_->SetPlayhead(playhead_);
+        if (transcript_panel_) {
+            transcript_panel_->SetPlayhead(playhead_);
+        }
         if (waveform_panel_ && waveform_panel_->IsVisible()) {
             waveform_panel_->SetPlayhead(playhead_);
         }
@@ -8505,6 +9161,12 @@ void VideoEditorAppWidget::Tick(double dt_seconds) {
             lab_mask_h_ = pending_lab_mask_h_;
             pending_lab_mask_.reset();
             has_pending_lab_mask_ = false;
+            // Show the stored mask on the program monitor until an op
+            // consumes it or the panel clears it.
+            if (monitor_ != nullptr) {
+                monitor_->SetMaskOverlay(lab_mask_, lab_mask_w_,
+                                         lab_mask_h_);
+            }
             if (lab_panel_ != nullptr) {
                 lab_panel_->SetAiMaskText(
                     "AI mask: " + std::to_string(lab_mask_w_) + "x" +

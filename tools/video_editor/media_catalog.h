@@ -53,6 +53,11 @@ struct CatalogEntry {
     std::string probe_json;           // serialized VideoInfo fields
     std::string poster_path;          // UTF-8, empty when none
     std::int64_t added_at_unix = 0;
+    // Proxy status joined from the `proxies` table (proxy_manager.cc):
+    // 0 none, 1 pending, 2 ready, 3 failed — mirrors ProxyStatus. The
+    // media-bin badge reads this directly; resolution goes through
+    // GetProxy/ProxyManager::ResolveDecodePath (file + mtime checks).
+    int proxy_state = 0;
     // Timeline classification rule — any imported file lands on
     // exactly one track kind:
     //   HasVideo() == true   -> TrackKind::Video. Includes stills:
@@ -88,6 +93,31 @@ struct AudioPeaks {
 // on-disk cache).
 bool DecodeAudioPeaks(const std::string& canon_path, AudioPeaks* out,
                       std::string* error_out = nullptr);
+
+// ---- proxy workflow (proxy_manager.cc) -------------------------------
+//
+// One row per canonical media path in the `proxies` table. `pending`
+// and `failed` rows carry no usable file; `ready` rows name a managed
+// proxy file under ProxyDir() alongside the source's size+mtime at
+// generation time — ProxyManager re-validates all three before a
+// decode path resolves to the proxy.
+enum class ProxyStatus : int {
+    kNone = 0,      // no row (GetProxy returns false)
+    kPending = 1,   // queued or encoding right now
+    kReady = 2,     // proxy file usable for decode
+    kFailed = 3,    // last generation attempt failed (error field)
+};
+
+struct ProxyRecord {
+    std::string path;               // canonical source path (PK)
+    std::string proxy_path;         // UTF-8 abs; empty until ready
+    ProxyStatus status = ProxyStatus::kNone;
+    std::int64_t src_size = 0;      // source file size at generation
+    std::int64_t src_mtime = 0;     // source mtime (unix s) at generation
+    int max_dim = 0;                // long-edge cap the proxy was built with
+    std::string error;              // last failure reason
+    std::int64_t updated_at_unix = 0;
+};
 
 class MediaCatalog {
 public:
@@ -160,6 +190,23 @@ public:
     static bool GetPosterAt(const std::string& utf8_path,
                             double seconds, video::Frame* frame_out,
                             std::string* error_out = nullptr);
+
+    // ---- proxy records (proxies table) ------------------------------
+    // Managed proxy files live in <db_dir>/proxies/ — sibling to the
+    // poster dir. Cheap; used by ProxyManager to place files.
+    std::string ProxyDir() const;
+    // Upsert one proxy record (INSERT OR REPLACE on canonical path).
+    bool SetProxyRecord(const ProxyRecord& record,
+                        std::string* error_out = nullptr);
+    // Reads the record for `utf8_path` (canonicalized internally).
+    // False when no row exists (status kNone) — a missing catalog row
+    // is not an error.
+    bool GetProxy(const std::string& utf8_path, ProxyRecord* out,
+                  std::string* error_out = nullptr) const;
+    // Drops the row (state back to none). The FILE under ProxyDir() is
+    // the caller's problem (ProxyManager deletes it).
+    bool RemoveProxy(const std::string& utf8_path,
+                     std::string* error_out = nullptr);
 
 private:
     // db_mutex_ held (called from Open only).

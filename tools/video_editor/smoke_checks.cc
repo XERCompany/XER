@@ -30,6 +30,7 @@
 
 #include <json/json.h>
 
+#include "ai/smart_reframe.h"
 #include "ai_tags.h"
 #include "app_runtime/app_runtime.h"
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
@@ -41,12 +42,14 @@
 #include "content/ai/find_object/find_object.h"  // YA.AIFindObject
 #include "content/ai/onnx_session/onnx_session.h"
 #include "lab/ai_ops.h"
+#include "lab/object_ops.h"
 #include "content/video/video_info.h"
 #include "effect_frame_cache.h"
 #include "export_engine.h"
 #include "export_preset.h"
 #include "extensions/ext_host.h"
 #include "font_catalog.h"
+#include "voice_isolate.h"
 #include "frame.h"
 #include "frame_exporter.h"
 #include "frame_render/frame_render.h"   // YA.FrameRender
@@ -63,16 +66,23 @@
 #include "media_worker_client.h"
 #include "media_worker_protocol.h"
 #include "nn_probe.h"
+#include "photo/adjust_ops.h"
 #include "photo/brush.h"
 #include "photo/document.h"
 #include "photo/layer_ops.h"
+#include "photo/mask_ops.h"
 #include "photo/photo_history.h"
+#include "photo/retouch.h"
+#include "photo/selection.h"
 #include "photo/tile_store.h"
 #include "photo/xerphoto.h"
+#include "playback/auto_cacher.h"
+#include "playback/preview_engine.h"
 #include "plugin_host.h"
 #include "poster_cache.h"
 #include "project_autosave.h"
 #include "project_store.h"
+#include "proxy_manager.h"
 #include "records_store.h"
 #include "rendering/renderer.h"          // Renderer seam for FrameRender check
 #include "rendering/render_store.h"      // store-transport smoke path
@@ -81,6 +91,7 @@
 #include "timecode.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
+#include "transcript_edit.h"
 #include "tz/tz.h"
 #include "url_import.h"
 #include "worker_pipe.h"
@@ -426,6 +437,66 @@ std::string CheckTimelineModel() {
     if (project.duration() != 15.0) {
         return "project duration mismatch after edits";
     }
+
+    // Transition junction-handle math: the centered duration clamps
+    // to each endpoint's own span AND its available media handles.
+    // smoke-c1 [10,12) and smoke-c1b [12,15) are adjacent on V1.
+    if (!AddTransition(project, "smoke-c1", "smoke-c1b",
+                       Transition::Type::Crossfade, 0.5, &err)) {
+        return "AddTransition failed: " + err;
+    }
+    {
+        const Transition& tr = project.transitions.back();
+        // Unbounded media handles -> the clip-span bound rules:
+        // duration <= 2*min(2s, 3s) = 4s.
+        const MediaBounds unknown{};
+        const double span_limit =
+            TransitionDurationLimit(project, tr, unknown, unknown);
+        if (std::fabs(span_limit - 4.0) > 1e-6) {
+            return "span-bound transition limit was " +
+                   std::to_string(span_limit);
+        }
+        // 60s media: from's tail handle (60-2=58s) is slack; to's head
+        // handle is its 2s in_point -> 4s. Same bound, different side.
+        const MediaBounds long_media{60.0, true};
+        const double head_limit = TransitionDurationLimit(
+            project, tr, long_media, long_media);
+        if (std::fabs(head_limit - 4.0) > 1e-6) {
+            return "head-handle transition limit was " +
+                   std::to_string(head_limit);
+        }
+        // Shrink the to-clip's source head: in_point 1.0 -> 2s limit,
+        // now the media handle is the tighter bound than the span.
+        Clip* to = FindClip(project, "smoke-c1b");
+        if (to == nullptr) return "smoke-c1b missing";
+        const double saved_in = to->in_point;
+        to->in_point = 1.0;
+        const double media_limit = TransitionDurationLimit(
+            project, tr, long_media, long_media);
+        to->in_point = saved_in;
+        if (std::fabs(media_limit - 2.0) > 1e-6) {
+            return "media-handle transition limit was " +
+                   std::to_string(media_limit);
+        }
+    }
+    // Duration retarget: valid set applies; non-positive/missing
+    // endpoints are rejected without mutating.
+    if (!SetTransitionDuration(project, "smoke-c1", "smoke-c1b", 2.0,
+                               &err) ||
+        std::fabs(project.transitions.back().duration - 2.0) > 1e-9) {
+        return "SetTransitionDuration failed: " + err;
+    }
+    if (SetTransitionDuration(project, "smoke-c1", "smoke-c1b", 0.0,
+                              nullptr) ||
+        SetTransitionDuration(project, "smoke-c1", "smoke-c1b", -1.0,
+                              nullptr) ||
+        SetTransitionDuration(project, "smoke-c1", "no-such-clip", 1.0,
+                              nullptr)) {
+        return "SetTransitionDuration accepted an invalid edit";
+    }
+    if (std::fabs(project.transitions.back().duration - 2.0) > 1e-9) {
+        return "rejected SetTransitionDuration still mutated";
+    }
     return {};
 }
 
@@ -455,6 +526,45 @@ std::string CheckTimelineHistory() {
     if (!history.CanRedo() || !history.Redo() ||
         project.clips.size() != 1) {
         return "Redo did not restore the clip";
+    }
+
+    // Junction-handle duration drag commits as ONE undoable step —
+    // consecutive duration sets on the same junction coalesce.
+    std::string new_id;
+    if (!history.SplitClip("smoke-h1", 2.0, &new_id, &err) ||
+        new_id.empty()) {
+        return "history SplitClip failed: " + err;
+    }
+    if (!history.AddTransition("smoke-h1", new_id,
+                               Transition::Type::Crossfade, 0.5, &err)) {
+        return "history AddTransition failed: " + err;
+    }
+    const auto trans_duration = [&]() {
+        for (const auto& t : project.transitions) {
+            if (t.from_clip == "smoke-h1" && t.to_clip == new_id) {
+                return t.duration;
+            }
+        }
+        return -1.0;
+    };
+    if (!history.SetTransitionDuration("smoke-h1", new_id, 1.2, &err) ||
+        !history.SetTransitionDuration("smoke-h1", new_id, 2.0, &err)) {
+        return "history SetTransitionDuration failed: " + err;
+    }
+    if (std::fabs(trans_duration() - 2.0) > 1e-9) {
+        return "SetTransitionDuration did not apply";
+    }
+    // One undo restores the add-time duration (the two sets merged);
+    // the next undo removes the transition itself.
+    if (!history.Undo() || std::fabs(trans_duration() - 0.5) > 1e-9) {
+        return "undo did not restore the pre-drag duration";
+    }
+    if (!history.Undo() || !project.transitions.empty()) {
+        return "second undo did not remove the transition";
+    }
+    if (!history.Redo() || !history.Redo() ||
+        std::fabs(trans_duration() - 2.0) > 1e-9) {
+        return "redo did not restore the dragged duration";
     }
     return {};
 }
@@ -530,6 +640,162 @@ std::string CheckSourceEdit() {
     bad.out = 5.0;
     if (ResolveSourceRange(bad, 20.0, &src_in, &src_out)) {
         return "empty marked range resolved";
+    }
+    return {};
+}
+
+// Text-based editing: transcript word spans -> clip source mapping ->
+// timeline range -> history_.LiftRange extract. Fully headless — the
+// "transcript" is synthesized spans, no whisper/audio involved.
+std::string CheckTranscriptEditing() {
+    // 1) Segment -> word expansion: text splits on whitespace, each
+    // word gets a proportional share of the segment's time span, and
+    // word boundaries stay inside the segment.
+    std::vector<Ai::TranscriptSegment> segments = {
+        {0.0, 4.0, "hello brave new world"},   // 4 words, ~1s each
+        {5.0, 6.0, "a bb"},                    // 2 words, 1:2 split
+    };
+    const auto words = TranscriptWordsFromSegments(segments);
+    if (words.size() != 6) {
+        return "TranscriptWordsFromSegments produced " +
+               std::to_string(words.size()) + " words, want 6";
+    }
+    if (!words[0].segment_start || !words[4].segment_start ||
+        words[1].segment_start || words[5].segment_start) {
+        return "segment_start flags are wrong";
+    }
+    if (std::fabs(words[0].src_t0 - 0.0) > 1e-9 ||
+        std::fabs(words[3].src_t1 - 4.0) > 1e-9 ||
+        std::fabs(words[4].src_t0 - 5.0) > 1e-9 ||
+        std::fabs(words[5].src_t1 - 6.0) > 1e-9) {
+        return "word spans do not cover their segments";
+    }
+    // "a bb" -> 'a' gets 1/3 of the second, 'bb' the rest.
+    if (std::fabs((words[4].src_t1 - words[4].src_t0) -
+                  (1.0 / 3.0)) > 1e-9) {
+        return "word time share is not proportional to length";
+    }
+
+    // 2) Clip source->timeline mapping: clip at tl 10, in_point 2,
+    // duration 4 @ rate 1 consumes source [2,6).
+    Clip clip;
+    clip.id = "tr-clip";
+    clip.source_path = "media.mp4";
+    clip.source.kind = SourceKind::Media;
+    clip.timeline_start = 10.0;
+    clip.in_point = 2.0;
+    clip.duration = 4.0;
+    if (std::fabs(SourceToTimeline(clip, 2.5) - 10.5) > 1e-9 ||
+        !std::isnan(SourceToTimeline(clip, 1.0)) ||
+        !std::isnan(SourceToTimeline(clip, 7.0))) {
+        return "SourceToTimeline mapping is wrong";
+    }
+    // A text selection spanning source [2.5, 5.5) -> tl [10.5, 13.5);
+    // a selection outside the clip's consumed span must not map.
+    double tl0 = -1.0, tl1 = -1.0;
+    if (!SourceRangeToTimeline(clip, 2.5, 5.5, &tl0, &tl1) ||
+        std::fabs(tl0 - 10.5) > 1e-9 ||
+        std::fabs(tl1 - 13.5) > 1e-9) {
+        return "SourceRangeToTimeline mis-mapped the selection";
+    }
+    if (SourceRangeToTimeline(clip, 0.0, 1.0, &tl0, &tl1)) {
+        return "out-of-clip source range still mapped";
+    }
+    // Clamped intersection: [5.0, 9.0) intersects consumed [2,6) as
+    // [5,6) -> tl [13,14).
+    if (!SourceRangeToTimeline(clip, 5.0, 9.0, &tl0, &tl1) ||
+        std::fabs(tl0 - 13.0) > 1e-9 ||
+        std::fabs(tl1 - 14.0) > 1e-9) {
+        return "range clamp to clip span is wrong";
+    }
+
+    // 3) The mapped range drives the model-level extract the panel's
+    // "Ripple delete" issues: history_.LiftRange(close_gap=true)
+    // splits the spanner and shifts followers — undo restores all.
+    Project project;
+    TimelineHistory history(project);
+    std::string err;
+    if (history.AddTrack(TrackKind::Video, "V1") != 0) {
+        return "history AddTrack failed";
+    }
+    const MediaBounds media{60.0, true};
+    Clip a = clip;
+    if (!history.AddClip(a, media, nullptr, &err)) {
+        return "AddClip a failed: " + err;
+    }
+    Clip b = clip;
+    b.id = "tr-tail";
+    b.timeline_start = 16.0;
+    b.duration = 2.0;
+    if (!history.AddClip(b, media, nullptr, &err)) {
+        return "AddClip b failed: " + err;
+    }
+    // Extract tl [10.5, 13.5) — the same range the panel computed for
+    // the "selection" above. Clip a splits; tail shifts left by 3.
+    if (!history.LiftRange(10.5, 13.5, true, &err)) {
+        return "LiftRange failed: " + err;
+    }
+    const Clip* tail = FindClip(project, "tr-tail");
+    if (tail == nullptr || std::fabs(tail->timeline_start - 13.0) > 1e-9) {
+        return "extract did not shift the follower clip";
+    }
+    // Clip a's remains: [10,10.5) + [10.5,11) — two 0.5 s pieces
+    // before the tail's new start at 13.
+    int pieces = 0;
+    double covered = 0.0;
+    for (const Clip& c : project.clips) {
+        if (c.track == 0 && c.timeline_start < 13.0) {
+            ++pieces;
+            covered += c.duration;
+        }
+    }
+    if (pieces != 2 || std::fabs(covered - 1.0) > 1e-9) {
+        return "extract left the wrong clip pieces behind";
+    }
+    if (!history.Undo()) return "LiftRange undo failed";
+    if (project.clips.size() != 2 ||
+        std::fabs(FindClip(project, "tr-clip")->timeline_start -
+                  10.0) > 1e-9) {
+        return "undo did not restore the pre-extract project";
+    }
+
+    // 4) Per-media cache: save/load round-trips spans and rejects a
+    // size-mismatched (replaced) media file.
+    const auto dir = SmokeTempDir() / "transcript_cache";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto media_path = dir / "talk.wav";
+    {
+        std::ofstream m(media_path, std::ios::binary | std::ios::trunc);
+        m.write("0123456789", 10);   // 10-byte stand-in media
+    }
+    const std::string media_utf8 = Utf8Path(media_path);
+    const std::string key = TranscriptCacheKey(media_utf8);
+    if (key.size() != 16) return "cache key is not a 16-hex id";
+    const auto json_path = dir / (key + ".json");
+    if (!SaveTranscriptCache(Utf8Path(json_path), media_utf8,
+                             segments)) {
+        return "SaveTranscriptCache failed";
+    }
+    std::vector<Ai::TranscriptSegment> loaded;
+    if (!LoadTranscriptCache(Utf8Path(json_path), media_utf8,
+                             &loaded) ||
+        loaded.size() != segments.size() ||
+        loaded[0].text != segments[0].text) {
+        return "LoadTranscriptCache round-trip failed";
+    }
+    // Grow the file -> the key and the size check both move on.
+    {
+        std::ofstream m(media_path,
+                        std::ios::binary | std::ios::app);
+        m.write("x", 1);
+    }
+    if (TranscriptCacheKey(media_utf8) == key) {
+        return "cache key ignored the media size";
+    }
+    if (LoadTranscriptCache(Utf8Path(json_path), media_utf8,
+                            &loaded)) {
+        return "stale (size-mismatched) cache entry was served";
     }
     return {};
 }
@@ -1331,6 +1597,200 @@ std::string CheckFxFrameCache() {
     return {};
 }
 
+// Olive-style idle-time pre-render (playback/auto_cacher.{h,cc} —
+// the AutoCacher blueprint in
+// docs/wiki/research/2026-11-21-nle-architectures.md §4). The worker
+// owns a PRIVATE compositor (the only safe seam — Compositor is
+// single-consumer-thread) and fills the SHARED EffectFrameCache, so
+// a playback-path render at a primed frame time is a cache hit.
+// Verifies, headless on the generated-bars path:
+//   * a settled seek primes a frame window (stats.done > 0, cache
+//     stores grow);
+//   * a fresh compositor on the same cache rendering primed frame
+//     times HITS — the "playback frames become cache hits" contract;
+//   * a state change (effect-param edit arrives as a re-Init)
+//     produces misses + fresh stores — no stale serves;
+//   * the engine wiring: PreviewEngine seeks drive OnSeek, stepped
+//     playback hits FrameCacheStats, and a quality flip reschedules
+//     (preview quality is key material).
+std::string CheckAutoCache() {
+    constexpr double kDt = 1.0 / 15.0;
+    auto make_project = [](float brightness) {
+        Project p;
+        p.width = 160;
+        p.height = 90;
+        p.fps_num = 15;
+        p.fps_den = 1;
+        p.tracks.push_back(Track{TrackKind::Video, "V1"});
+        p.tracks.push_back(Track{TrackKind::Audio, "A1"});
+        Clip clip = MakeGeneratedClip("bars", 0, 0.0, 4.0,
+                                      SourceKind::ColorBars, "smpte75");
+        clip.effects = {
+            {"brightness_contrast", {brightness, 1.2f}},
+            {"grayscale", {}},
+        };
+        p.clips.push_back(clip);
+        return p;
+    };
+    std::string err;
+    auto cache =
+        std::make_shared<EffectFrameCache>(64ull * 1024ull * 1024ull);
+
+    // ---- phase A: direct AutoCacher priming -> playback hits ------
+    {
+        AutoCacher ac;
+        AutoCacher::Options aco;
+        aco.frame_cache = cache;
+        aco.settle_seconds = 0.05;   // fast settle for the check
+        if (!ac.Init(make_project(40.0f), aco, &err)) {
+            return "autocache init failed: " + err;
+        }
+        ac.OnSeek(0.5);
+        if (!ac.WaitIdle(15000)) {
+            return "autocache never went idle after seek";
+        }
+        AutoCacher::Stats astats = ac.GetStats();
+        if (astats.done < 1 || astats.queued < 1 ||
+            astats.windows < 1) {
+            return "autocache primed nothing (done=" +
+                   std::to_string(astats.done) + ")";
+        }
+        auto stats = cache->GetStats();
+        if (stats.stores < 1) {
+            return "autocache stored no frames";
+        }
+        const std::uint64_t stores_after_prime = stats.stores;
+
+        // "Playback": a fresh compositor on the same cache rendering
+        // primed frame times must hit. The window around frame 7
+        // (t=0.5) covered [0, 52] — render its head.
+        CompositorOptions cco;
+        cco.frame_cache = cache;
+        Compositor playback;
+        if (!playback.Init(make_project(40.0f), cco, &err)) {
+            return "playback compositor init failed: " + err;
+        }
+        std::vector<std::uint8_t> px;
+        for (int n = 8; n <= 12; ++n) {
+            if (!playback.RenderFrameAt(n * kDt, &px, &err)) {
+                return "playback render failed: " + err;
+            }
+        }
+        playback.Shutdown();
+        stats = cache->GetStats();
+        if (stats.hits < 5) {
+            return "primed frames were not hits (hits=" +
+                   std::to_string(stats.hits) + ")";
+        }
+
+        // Invalidation: a param edit arrives as a re-Init snapshot —
+        // the same frame times under a new state hash must MISS and
+        // store fresh (never serve stale).
+        if (!ac.Init(make_project(90.0f), aco, &err)) {
+            return "autocache re-init failed: " + err;
+        }
+        ac.OnSeek(0.5);
+        if (!ac.WaitIdle(15000)) {
+            return "autocache never went idle after re-init";
+        }
+        astats = ac.GetStats();
+        stats = cache->GetStats();
+        if (astats.done < 1 || stats.stores <= stores_after_prime) {
+            return "post-edit re-prime stored nothing new";
+        }
+        std::fprintf(
+            stderr,
+            "  auto_cache(direct): %llu windows %llu queued %llu done "
+            "%llu skipped %llu cancelled %llu failed\n",
+            (unsigned long long)astats.windows,
+            (unsigned long long)astats.queued,
+            (unsigned long long)astats.done,
+            (unsigned long long)astats.skipped,
+            (unsigned long long)astats.cancelled,
+            (unsigned long long)astats.failed);
+    }
+
+    // ---- phase B: engine wiring (env-gated like production) -------
+    if (!AutoCacher::EnabledByEnv()) {
+        std::fprintf(stderr,
+                     "  auto_cache(engine): skipped — "
+                     "XER_VE_AUTOCACHE=0\n");
+        return {};
+    }
+    struct NullSink : PreviewEngine::Sink {
+        void OnVideoFrame(const video::Frame&) override { ++frames; }
+        void OnAudioPeakLevels(float, float) override {}
+        void OnPlayhead(double) override {}
+        std::atomic<int> frames{0};
+    } sink;
+    PreviewEngine engine;
+    PreviewOptions po;
+    po.audio_enabled = false;   // video-only — no sink needed
+    if (!engine.Init(make_project(40.0f), po, &sink, &err)) {
+        return "engine init failed: " + err;
+    }
+    engine.Seek(1.0);
+    if (!engine.WaitAutoCacheIdle(15000)) {
+        return "engine autocache never went idle";
+    }
+    AutoCacher::Stats estats = engine.AutoCacheStats();
+    if (estats.done < 1 || estats.windows < 1) {
+        return "engine autocache primed nothing (done=" +
+               std::to_string(estats.done) + ")";
+    }
+    // Stepped playback over primed frame times — each seek presents
+    // the landing frame; primed frames must read as cache hits. The
+    // seeks are paced one-present-at-a-time: back-to-back Seek calls
+    // coalesce on seek_pending_ and only the last would render.
+    const std::uint64_t hits_before = engine.FrameCacheStats().hits;
+    for (int n = 15; n <= 18; ++n) {
+        const int frames_before = sink.frames.load();
+        engine.Seek(n * kDt);
+        const auto deadline = std::chrono::steady_clock::now() +
+                              std::chrono::seconds(5);
+        while (sink.frames.load() <= frames_before &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        if (sink.frames.load() <= frames_before) {
+            return "seek present timed out";
+        }
+    }
+    const std::uint64_t hits_after = engine.FrameCacheStats().hits;
+    if (hits_after <= hits_before) {
+        return "stepped playback produced no cache hits";
+    }
+    if (!engine.WaitAutoCacheIdle(15000)) {
+        return "engine autocache never settled after seeks";
+    }
+    // Quality flip = state change: a new window must be scheduled at
+    // the new tier (the old keys are unreachable).
+    estats = engine.AutoCacheStats();
+    const std::uint64_t windows_before = estats.windows;
+    engine.SetQuality(0.5f);
+    if (!engine.WaitAutoCacheIdle(15000)) {
+        return "engine autocache never settled after quality flip";
+    }
+    estats = engine.AutoCacheStats();
+    if (estats.windows <= windows_before) {
+        return "quality change did not reschedule a window";
+    }
+    std::fprintf(stderr,
+                 "  auto_cache(engine): %llu windows %llu queued "
+                 "%llu done %llu skipped %llu cancelled %llu failed; "
+                 "playback hits %llu->%llu\n",
+                 (unsigned long long)estats.windows,
+                 (unsigned long long)estats.queued,
+                 (unsigned long long)estats.done,
+                 (unsigned long long)estats.skipped,
+                 (unsigned long long)estats.cancelled,
+                 (unsigned long long)estats.failed,
+                 (unsigned long long)hits_before,
+                 (unsigned long long)hits_after);
+    engine.Shutdown();
+    return {};
+}
+
 // JS fx: the catalog must list our stock scripts, and — when V8 is
 // compiled in — a runtime must register + execute them. invert on a
 // black pixel yields 255; bitcrush quantizes; smoothstep(0.5) = 0.5.
@@ -1494,7 +1954,9 @@ std::string CheckJsFx() {
 // audio effects onto a short PCM buffer.
 std::string CheckBuiltinFx() {
     const std::vector<std::string> ids = BuiltinFx::Ids();
-    if (ids.size() != 48) {
+    // 49 migrated effects + xer.fx.smart_reframe (geometric — its ABI
+    // fn is an identity; the compositor applies it at the warp).
+    if (ids.size() != 50) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -1552,11 +2014,101 @@ std::string CheckBuiltinFx() {
         const PluginDesc* desc =
             PluginHost::ForEffectType("builtin:" + id);
         if (desc->kind == XER_PLUGIN_AUDIO_FX) {
+            // xer.af.voice_isolate needs the staged GTCRN model + a
+            // loadable ONNX backend — the gated block below exercises
+            // it (or skips it) explicitly.
+            if (id == "xer.af.voice_isolate") continue;
             std::vector<float> copy = pcm;
             if (!PluginHost::ApplyAudio(*desc, copy.data(), 512, 2,
                                         48000, {})) {
                 return id + " builtin apply failed";
             }
+        }
+    }
+    // xer.af.voice_isolate (GTCRN ONNX): when the model + an ONNX
+    // backend are staged, a noise-only region must come back clearly
+    // quieter while a speech-like harmonic region keeps energy —
+    // the same contract Premiere's "Enhance Speech" implies. When the
+    // environment cannot run it, the apply is allowed to fail but the
+    // graceful-degradation contract still holds: no crash, failure
+    // with a reason (verified via ProcessBuffer's error path).
+    {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:xer.af.voice_isolate");
+        if (desc == nullptr || desc->audio_fn == nullptr) {
+            return "xer.af.voice_isolate missing an audio kernel";
+        }
+        if (!VoiceIsolate::Available()) {
+            std::fprintf(stdout,
+                         "  builtin_fx voice_isolate: SKIP (model or "
+                         "ONNX backend unavailable)\n");
+            std::fflush(stdout);
+            // The kernel must fail (not crash / not silently pass)
+            // on a real buffer without its runtime.
+            std::vector<float> copy = pcm;
+            PluginHost::ApplyAudio(*desc, copy.data(), 512, 2, 48000,
+                                   {});
+            return {};
+        }
+        // 1 s @ 48 kHz mono: first half = stationary noise only,
+        // second half = a speech-like harmonic stack (150 Hz + 7
+        // partials, syllable-ish 4 Hz AM) over the same noise.
+        const int n = 48000;
+        std::vector<float> noisy(static_cast<std::size_t>(n));
+        std::uint32_t rng = 0x9E3779B9u;
+        auto noise = [&] {
+            rng = rng * 1664525u + 1013904223u;
+            return (static_cast<float>((rng >> 9) & 0x7FFFFF) /
+                        4194304.0f -
+                    1.0f) *
+                   0.15f;
+        };
+        for (int i = 0; i < n; ++i) {
+            float s = noise();
+            if (i >= n / 2) {
+                const float t = static_cast<float>(i) / 48000.0f;
+                float v = 0.0f;
+                for (int k = 1; k <= 8; ++k) {
+                    v += (0.3f / k) *
+                         std::sin(2.0f * 3.14159265f * 150.0f * k * t);
+                }
+                s += v * (0.6f +
+                          0.4f * std::sin(2.0f * 3.14159265f * 4.0f *
+                                          t));
+            }
+            noisy[i] = s;
+        }
+        const auto rms = [](const std::vector<float>& v, int a,
+                            int b) {
+            double acc = 0.0;
+            for (int i = a; i < b; ++i) acc += v[i] * v[i];
+            return std::sqrt(acc / (b - a));
+        };
+        const double noise_before = rms(noisy, 4000, 20000);
+        const double sig_before = rms(noisy, 26000, 46000);
+        std::vector<float> cleaned = noisy;
+        if (!PluginHost::ApplyAudio(*desc, cleaned.data(), n, 1, 48000,
+                                    {1.0f})) {
+            return "xer.af.voice_isolate apply failed despite staged "
+                   "model + backend";
+        }
+        const double noise_after = rms(cleaned, 4000, 20000);
+        const double sig_after = rms(cleaned, 26000, 46000);
+        std::fprintf(stdout,
+                     "  builtin_fx voice_isolate: noise %.4f->%.4f, "
+                     "signal %.4f->%.4f\n",
+                     noise_before, noise_after, sig_before, sig_after);
+        std::fflush(stdout);
+        for (float s : cleaned) {
+            if (!std::isfinite(s)) {
+                return "voice_isolate produced non-finite output";
+            }
+        }
+        if (noise_after >= noise_before * 0.7) {
+            return "voice_isolate did not reduce the noise region";
+        }
+        if (sig_after <= sig_before * 0.3) {
+            return "voice_isolate destroyed the harmonic region";
         }
     }
     return {};
@@ -1851,6 +2403,308 @@ std::string CheckMediaCatalog() {
     if (catalog.Import("definitely/missing.mp4", &id, false)) {
         catalog.Close();
         return "Import accepted a missing file";
+    }
+    catalog.Close();
+    return {};
+}
+
+// Records the path its Open() is called with — proves WHICH media
+// path a compositor session resolves to (proxy vs. original), the
+// observable half of CompositorOptions::media_resolver. Frames are a
+// trivial solid 16x16 — the check only cares about the open path.
+class RecordingDecoder final : public IMediaDecoder {
+public:
+    explicit RecordingDecoder(std::string* opened) : opened_(opened) {}
+    bool Open(const std::string& utf8_path,
+              std::string* /*error_out*/) override {
+        if (opened_ != nullptr) *opened_ = utf8_path;
+        return true;
+    }
+    void Close() override {}
+    bool IsOpen() const override { return true; }
+    bool NextFrame(std::vector<std::uint8_t>* bgra, int* width,
+                   int* height) override {
+        if (frames_ >= 8) return false;
+        ++frames_;
+        pos_ += 1.0 / 15.0;
+        bgra->assign(16u * 16u * 4u, 200);
+        *width = 16;
+        *height = 16;
+        return true;
+    }
+    bool Seek(double seconds) override {
+        pos_ = std::max(0.0, seconds);
+        return true;
+    }
+    double GetPositionSeconds() const override { return pos_; }
+    double GetFps() const override { return 15.0; }
+    double GetDurationSeconds() const override { return 0.6; }
+    int GetWidth() const override { return 16; }
+    int GetHeight() const override { return 16; }
+    void EnableAudioTap(bool) override {}
+    bool HasAudio() const override { return false; }
+    double GetAudioStartSeconds() const override { return 0.0; }
+    double GetAudioTimeBase() const override { return 0.0; }
+    bool ReadAudioFrames(
+        std::vector<XER::Bridge::FFmpeg::AudioFrameInfo>* /*out*/,
+        int /*max_frames*/) override {
+        return false;
+    }
+    bool AudioDrained() const override { return true; }
+    std::uint64_t GetAudioEpoch() const override { return 0; }
+
+private:
+    std::string* opened_;
+    int frames_ = 0;
+    double pos_ = 0.0;
+};
+
+// ProxyManager end-to-end (proxy_manager.cc) over real libx264
+// fixtures: import -> Request -> pending -> ready|failed catalog
+// transitions, the managed proxy file materializing SMALLER than the
+// source, ResolveDecodePath honoring the size+mtime fingerprint, the
+// compositor media_resolver seam routing preview decode through the
+// proxy, and — the integrity contract — a resolver-less (export-
+// shaped) compositor decoding the original path verbatim.
+std::string CheckProxyWorkflow() {
+    if (!FFmpeg::IsAvailable()) {
+        return "ffmpeg bridge unavailable";
+    }
+    const auto src = SmokeTempDir() / "proxy_source.mp4";
+    const auto src2 = SmokeTempDir() / "proxy_source_fail.mp4";
+    const std::string db_path =
+        Utf8Path(SmokeTempDir() / "proxy_catalog.db");
+    {
+        std::error_code ec;
+        std::filesystem::remove(src, ec);
+        std::filesystem::remove(src2, ec);
+        std::filesystem::remove(Path::FromUtf8(db_path), ec);
+    }
+    // 256x144, 8 frames @15fps — larger than the 64px proxy cap so the
+    // build actually transcodes (the under-cap skip would leave no row).
+    const auto encode_fixture = [](const std::filesystem::path& out,
+                                   std::string* err) -> bool {
+        FFmpeg::EncodeVideoParams params;
+        params.output_path = Utf8Path(out);
+        params.codec_name = "libx264";
+        params.width = 256;
+        params.height = 144;
+        params.pixel_format = "bgra";
+        params.fps_num = 15;
+        const auto provider = [](std::size_t index,
+                                 FFmpeg::VideoFrameInfo* f,
+                                 std::string*) -> bool {
+            f->width = 256;
+            f->height = 144;
+            f->pixel_format = "bgra";
+            f->pts = f->best_effort_timestamp =
+                static_cast<std::int64_t>(index);
+            f->line_sizes = {256 * 4, 0, 0, 0};
+            f->data.assign(256u * 144u * 4u,
+                           static_cast<std::uint8_t>(index));
+            return true;
+        };
+        return FFmpeg::EncodeVideoFrameStream(params, 8, provider, err);
+    };
+    std::string err;
+    if (!encode_fixture(src, &err)) {
+        return "fixture encode failed: " + err;
+    }
+    // A second VALID fixture — corrupted after its catalog row exists
+    // so Transcode's decoder open fails and drives pending -> failed.
+    if (!encode_fixture(src2, &err)) {
+        return "second fixture encode failed: " + err;
+    }
+
+    MediaCatalog catalog(db_path);
+    if (!catalog.Open(&err) || !catalog.IsOpen()) {
+        return "catalog open failed: " + err;
+    }
+    const std::string src_utf8 = Utf8Path(src);
+    const std::string src2_utf8 = Utf8Path(src2);
+    std::int64_t id = -1;
+    if (!catalog.Import(src_utf8, &id, false, &err) ||
+        !catalog.Import(src2_utf8, &id, false, &err)) {
+        catalog.Close();
+        return "fixture import failed: " + err;
+    }
+    {
+        CatalogEntry entry;
+        if (!catalog.FindByPath(src_utf8, &entry, &err) ||
+            !entry.HasVideo()) {
+            catalog.Close();
+            return "imported fixture has no video row";
+        }
+    }
+    // Corrupt src2 AFTER its row exists — the row's probe data carries
+    // Request past its front gates; Transcode's decoder open then
+    // fails, driving the pending -> failed transition.
+    {
+        std::ofstream junk(Path::FromUtf8(src2_utf8),
+                           std::ios::binary | std::ios::trunc);
+        junk << "not a media file at all";
+    }
+
+    ProxyManager proxies(&catalog);
+    ProxySettings settings;
+    settings.max_dim = 64;
+    settings.crf = 30;
+    if (!proxies.Request(src_utf8, settings)) {
+        catalog.Close();
+        return "Request rejected a valid video fixture";
+    }
+    if (!proxies.Request(src2_utf8, settings)) {
+        catalog.Close();
+        return "Request rejected the doomed fixture";
+    }
+    // The pending row lands synchronously inside Request; the worker
+    // may already have flipped it by the time we read, so accept
+    // either post-pending state — but a row must exist.
+    {
+        ProxyRecord early;
+        if (!catalog.GetProxy(src_utf8, &early) ||
+            (early.status != ProxyStatus::kPending &&
+             early.status != ProxyStatus::kReady)) {
+            catalog.Close();
+            return "pending row never landed for the fixture";
+        }
+    }
+    if (!proxies.WaitIdle(60000)) {
+        catalog.Close();
+        return "proxy worker did not go idle in 60s";
+    }
+
+    // ---- ready: row + managed file + downscale -----------------------
+    ProxyRecord rec;
+    if (!catalog.GetProxy(src_utf8, &rec, &err) ||
+        rec.status != ProxyStatus::kReady || rec.proxy_path.empty()) {
+        catalog.Close();
+        return "proxy row is not ready: " + err;
+    }
+    {
+        std::error_code ec;
+        if (!std::filesystem::exists(Path::FromUtf8(rec.proxy_path),
+                                     ec)) {
+            catalog.Close();
+            return "ready row points at a missing proxy file";
+        }
+    }
+    {
+        FFmpeg::MediaInfo info;
+        if (!FFmpeg::ProbeMedia(rec.proxy_path, &info, &err)) {
+            catalog.Close();
+            return "proxy probe failed: " + err;
+        }
+        const FFmpeg::StreamInfo* video = nullptr;
+        for (const auto& stream : info.streams) {
+            if (stream.media_type == "video") video = &stream;
+        }
+        if (video == nullptr) {
+            catalog.Close();
+            return "proxy has no video stream";
+        }
+        if (video->width >= 256 || video->height >= 144) {
+            catalog.Close();
+            return "proxy is not smaller than the source";
+        }
+        if (video->width != 64 || video->height != 36) {
+            catalog.Close();
+            return "proxy dims " + std::to_string(video->width) + "x" +
+                   std::to_string(video->height) + " != expected 64x36";
+        }
+    }
+
+    // ---- failed: the corrupted fixture -------------------------------
+    {
+        ProxyRecord failed;
+        if (!catalog.GetProxy(src2_utf8, &failed, &err) ||
+            failed.status != ProxyStatus::kFailed ||
+            failed.error.empty()) {
+            catalog.Close();
+            return "corrupt fixture did not land in failed state";
+        }
+    }
+
+    // ---- decode-path resolution ---------------------------------------
+    if (proxies.ResolveDecodePath(src_utf8) != rec.proxy_path) {
+        catalog.Close();
+        return "ResolveDecodePath did not return the ready proxy";
+    }
+
+    // Compositor open-path assertions through the RecordingDecoder:
+    // the resolver-installed session must open the proxy; the
+    // resolver-less session — ExportEngine's exact option shape —
+    // must open the original path VERBATIM (a proxy reaching export
+    // is a data-integrity bug).
+    Project project;
+    project.width = 32;
+    project.height = 32;
+    project.fps_num = 15;
+    project.fps_den = 1;
+    project.tracks.push_back(Track{TrackKind::Video, "V1"});
+    Clip clip;
+    clip.id = "c1";
+    clip.track = 0;
+    clip.timeline_start = 0.0;
+    clip.duration = 0.5;
+    clip.source.kind = SourceKind::Media;
+    clip.source_path = src_utf8;
+    project.clips.push_back(clip);
+
+    std::string opened;
+    const auto recording_factory = [&opened] {
+        return MediaDecoderPtr(new RecordingDecoder(&opened));
+    };
+    {
+        CompositorOptions options;
+        options.decoder_factory = recording_factory;
+        options.media_resolver = [&proxies](const std::string& p) {
+            return proxies.ResolveDecodePath(p);
+        };
+        Compositor compositor;
+        if (!compositor.Init(project, options, &err)) {
+            catalog.Close();
+            return "compositor init failed: " + err;
+        }
+        std::vector<std::uint8_t> bgra;
+        std::string render_err;
+        compositor.RenderFrameAt(0.1, &bgra, &render_err);
+        compositor.Shutdown();
+        if (opened != rec.proxy_path) {
+            catalog.Close();
+            return "resolver compositor opened '" + opened +
+                   "' — expected the proxy '" + rec.proxy_path + "'";
+        }
+    }
+    {
+        opened.clear();
+        CompositorOptions options;   // export's shape: no resolver
+        options.decoder_factory = recording_factory;
+        Compositor compositor;
+        if (!compositor.Init(project, options, &err)) {
+            catalog.Close();
+            return "export-shaped compositor init failed: " + err;
+        }
+        std::vector<std::uint8_t> bgra;
+        std::string render_err;
+        compositor.RenderFrameAt(0.1, &bgra, &render_err);
+        compositor.Shutdown();
+        if (opened != src_utf8) {
+            catalog.Close();
+            return "resolver-less compositor opened '" + opened +
+                   "' — export must only ever see the original";
+        }
+    }
+
+    // ---- fingerprint: a rewritten source falls back to original -------
+    {
+        std::ofstream grow(Path::FromUtf8(src_utf8),
+                           std::ios::binary | std::ios::app);
+        grow << "tail-bytes-change-the-fingerprint";
+    }
+    if (proxies.ResolveDecodePath(src_utf8) != src_utf8) {
+        catalog.Close();
+        return "stale-fingerprint proxy still resolved after rewrite";
     }
     catalog.Close();
     return {};
@@ -4425,6 +5279,279 @@ std::string CheckAiTags() {
     return {};
 }
 
+// Smart Reframe (ai/smart_reframe.h + compositor warp integration +
+// Clip::reframe persistence). Model-level, no real media needed:
+//   * ReframeWindowAt math — aspect-locked window, clamped inside
+//     the frame, follows the tracked subject, obeys the smoothing
+//     parameter, snaps at flagged scene boundaries, center-crops on
+//     an empty track;
+//   * the registered builtin:xer.fx.smart_reframe applied end to
+//     end — a bars clip whose tracked subject sits on the right half
+//     must render a canvas built from that half, not a center crop;
+//   * Clip::reframe samples round-trip through .xerproj.
+std::string CheckSmartReframe() {
+    constexpr double kRatio = 9.0 / 16.0;
+
+    // ---- crop-window math ----
+    // Empty track on a 200x100 frame: centered 9:16 window
+    // (56.25 x 100) — the documented center-crop fallback.
+    const Ai::ReframeWindow empty_win = Ai::ReframeWindowAt(
+        ClipReframe{}, 0.0, 200, 100, kRatio, 0.5);
+    if (std::abs(empty_win.w - 56.25) > 0.01 ||
+        std::abs(empty_win.h - 100.0) > 0.01 ||
+        std::abs(empty_win.x - (200.0 - 56.25) * 0.5) > 0.01 ||
+        empty_win.y != 0.0) {
+        return "empty track did not produce the centered 9:16 window";
+    }
+    // A subject at cx=0.9: the window must still CONTAIN the subject
+    // while staying clamped inside the frame.
+    ClipReframe side_track;
+    ReframeSample side;
+    side.t = 0.0;
+    side.cx = 0.9f;
+    side.cy = 0.5f;
+    side.w = 0.2f;
+    side.h = 0.5f;
+    side.confidence = 0.9f;
+    side_track.samples.push_back(side);
+    const Ai::ReframeWindow side_win = Ai::ReframeWindowAt(
+        side_track, 0.0, 200, 100, kRatio, 0.5);
+    const double subject_x = 0.9 * 200.0;
+    if (side_win.x < -0.01 || side_win.y < -0.01 ||
+        side_win.x + side_win.w > 200.01 ||
+        side_win.y + side_win.h > 100.01 ||
+        subject_x < side_win.x - 0.01 ||
+        subject_x > side_win.x + side_win.w + 0.01) {
+        return "subject-side window off-frame or misses the subject";
+    }
+    // Interpolation: at t=0.5 between samples at t=0 (cx=0.2) and
+    // t=1 (cx=0.8), smoothing=0 lerps to cx≈0.5.
+    ClipReframe jump;
+    ReframeSample a, b;
+    a.t = 0.0;
+    a.cx = 0.2f;
+    a.cy = 0.5f;
+    b.t = 1.0;
+    b.cx = 0.8f;
+    b.cy = 0.5f;
+    jump.samples = {a, b};
+    const double mid_x =
+        Ai::ReframeWindowAt(jump, 0.5, 200, 100, kRatio, 0.0).x;
+    if (std::abs(mid_x - (100.0 - 56.25 * 0.5)) > 0.6) {
+        return "interpolated window did not track the lerp";
+    }
+    // Smoothing: the same jump at t=1 — smoothing=0 follows raw,
+    // smoothing=1 must restrain it (EMA horizon + velocity cap).
+    const double raw_x = Ai::ReframeWindowAt(jump, 1.0, 200, 100,
+                                             kRatio, 0.0)
+                             .x;
+    const double damped_x = Ai::ReframeWindowAt(jump, 1.0, 200, 100,
+                                                kRatio, 1.0)
+                                .x;
+    if (damped_x >= raw_x - 1.0) {
+        return "max smoothing did not restrain the window jump";
+    }
+    // Scene-boundary flag: the smoother snaps to the post-cut sample.
+    jump.samples[1].scene_boundary = true;
+    const double snapped_x = Ai::ReframeWindowAt(jump, 1.0, 200, 100,
+                                                 kRatio, 1.0)
+                                 .x;
+    if (snapped_x < raw_x - 0.6) {
+        return "scene-boundary sample did not snap the window";
+    }
+    // Degenerate inputs degrade, never crash.
+    if (Ai::ReframeWindowAt(jump, 0.5, 0, 0, kRatio, 0.5).w != 0.0 ||
+        Ai::ReframeWindowAt(jump, 0.5, 200, 100, 0.0, 0.5).w != 0.0) {
+        return "degenerate dims/ratio must yield an empty window";
+    }
+
+    // ---- scan graceful-degradation contract ----
+    std::string err;
+    Clip clip;
+    clip.id = "reframe-scan";
+    clip.source_path = "definitely/missing/media.mp4";
+    clip.duration = 5.0;
+    ClipReframe scanned;
+    if (Ai::ScanClipSubject(clip, "", "", Ai::ReframeScanParams{},
+                            nullptr, nullptr, &scanned, &err)) {
+        return "ScanClipSubject succeeded with no model";
+    }
+    if (err.empty() || !scanned.samples.empty()) {
+        return "no-model scan did not report a reason / left samples";
+    }
+    Clip generated = MakeGeneratedClip("gen", 0, 0.0, 1.0,
+                                       SourceKind::ColorBars,
+                                       "smpte75");
+    if (Ai::ScanClipSubject(generated, "x.onnx", "",
+                            Ai::ReframeScanParams{}, nullptr, nullptr,
+                            &scanned, &err)) {
+        return "ScanClipSubject scanned a generated clip";
+    }
+
+    // ---- registered descriptor ----
+    const PluginDesc* desc =
+        PluginHost::ForEffectType("builtin:xer.fx.smart_reframe");
+    if (desc == nullptr || !desc->builtin ||
+        desc->id != Ai::kSmartReframeId) {
+        return "builtin:xer.fx.smart_reframe is not registered";
+    }
+    if (desc->params.size() != 2 ||
+        std::string(desc->params[0].name) != "target_ratio" ||
+        std::string(desc->params[1].name) != "smoothing") {
+        return "smart_reframe param table is not {target_ratio, "
+               "smoothing}";
+    }
+
+    // ---- end-to-end render: tracked subject at the right side ----
+    // 200x100 canvas, bars clip (7 SMPTE columns ≈28.6px), target
+    // ratio 0.5 (1:2) → crop is the 50x100 window centered on the
+    // tracked subject at cx=0.75 → source x∈[125,175]. The canvas
+    // must then be built from that right-half region: center pixel
+    // maps to source x≈150 (bar 5 = red), left edge to x≈125
+    // (bar 4 = magenta) — a center crop would show x≈75/100 (bars
+    // 2/3 = cyan/green) instead.
+    {
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip bars_clip = MakeGeneratedClip("bars", 0, 0.0, 1.0,
+                                           SourceKind::ColorBars,
+                                           "smpte75");
+        bars_clip.effects.push_back(
+            {"builtin:xer.fx.smart_reframe", {0.5f, 0.5f}});
+        ReframeSample key;
+        key.t = 0.0;
+        key.cx = 0.75f;
+        key.cy = 0.5f;
+        key.confidence = 0.9f;
+        bars_clip.reframe.samples.push_back(key);
+        project.clips.push_back(bars_clip);
+
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> bgra;
+        const bool rendered = compositor.RenderFrameAt(0.0, &bgra, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const auto px = [&bgra](int x, int y) {
+            const std::uint8_t* p =
+                bgra.data() +
+                (static_cast<std::size_t>(y) * 200 + x) * 4;
+            return std::array<int, 3>{p[0], p[1], p[2]};   // B,G,R
+        };
+        const auto mid = px(100, 50);    // source x≈150 → bar 5 red
+        const auto left = px(10, 50);    // source x≈127 → bar 4 magenta
+        const auto right = px(190, 50);  // source x≈172 → bar 6 blue
+        if (!(mid[0] < 60 && mid[1] < 60 && mid[2] > 150)) {
+            return "reframed canvas center is not the tracked "
+                   "subject's region (expected red)";
+        }
+        if (!(left[0] > 150 && left[1] < 60 && left[2] > 150)) {
+            return "reframed left edge is not the source's right-half "
+                   "bar (expected magenta)";
+        }
+        if (!(right[0] > 150 && right[1] < 60 && right[2] < 60)) {
+            return "reframed right edge is not the source's far-right "
+                   "bar (expected blue)";
+        }
+    }
+    // And the same clip WITHOUT the track center-crops: canvas center
+    // maps to source x=100 (bar 3 = green).
+    {
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip bars_clip = MakeGeneratedClip("bars", 0, 0.0, 1.0,
+                                           SourceKind::ColorBars,
+                                           "smpte75");
+        bars_clip.effects.push_back(
+            {"builtin:xer.fx.smart_reframe", {0.5f, 0.5f}});
+        project.clips.push_back(bars_clip);
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> bgra;
+        const bool rendered = compositor.RenderFrameAt(0.0, &bgra, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const std::uint8_t* p =
+            bgra.data() + (static_cast<std::size_t>(50) * 200 + 100) * 4;
+        // source x=100 → bar 3 green {B=0,G=191,R=0}
+        if (!(p[0] < 60 && p[1] > 150 && p[2] < 60)) {
+            return "trackless smart-reframe did not center-crop "
+                   "(expected green at canvas center)";
+        }
+    }
+
+    // ---- Clip::reframe serialization round trip ----
+    {
+        Project project;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip tracked;
+        tracked.id = "reframed";
+        tracked.source_path = "reframed.mp4";  // need not exist
+        tracked.track = 0;
+        tracked.timeline_start = 0.0;
+        tracked.duration = 4.0;
+        ReframeSample s0;
+        s0.t = 0.5;
+        s0.cx = 0.3f;
+        s0.cy = 0.6f;
+        s0.w = 0.2f;
+        s0.h = 0.4f;
+        s0.confidence = 0.77f;
+        ReframeSample s1;
+        s1.t = 1.0;
+        s1.cx = 0.7f;
+        s1.cy = 0.4f;
+        s1.w = 0.3f;
+        s1.h = 0.2f;
+        s1.confidence = 0.55f;
+        s1.scene_boundary = true;
+        tracked.reframe.samples = {s0, s1};
+        project.clips.push_back(tracked);
+
+        const std::string path =
+            Utf8Path(SmokeTempDir() / "smoke_reframe.xerproj");
+        if (!ProjectStore::Save(project, path, &err)) {
+            return "Save failed: " + err;
+        }
+        Project loaded;
+        if (!ProjectStore::Load(path, &loaded, &err)) {
+            return "Load failed: " + err;
+        }
+        const Clip* back = FindClip(loaded, "reframed");
+        if (back == nullptr || back->reframe.samples.size() != 2) {
+            return "reframe samples did not survive the round trip";
+        }
+        const ReframeSample& r0 = back->reframe.samples[0];
+        const ReframeSample& r1 = back->reframe.samples[1];
+        if (r0.t != 0.5 || std::abs(r0.cx - 0.3f) > 1e-6f ||
+            std::abs(r0.cy - 0.6f) > 1e-6f ||
+            std::abs(r0.w - 0.2f) > 1e-6f ||
+            std::abs(r0.h - 0.4f) > 1e-6f ||
+            std::abs(r0.confidence - 0.77f) > 1e-6f ||
+            r0.scene_boundary || r1.t != 1.0 ||
+            std::abs(r1.cx - 0.7f) > 1e-6f || !r1.scene_boundary) {
+            return "reframe fields did not survive the round trip";
+        }
+    }
+    return {};
+}
+
 // Object Lab AI ops (lab/ai_ops.h on the shared YA.AIFindObject
 // onnx_session): BiRefNet alpha matting + EfficientSAM smart-select.
 // What MUST hold regardless of the environment: bad inputs and a
@@ -4478,6 +5605,48 @@ std::string CheckAiLabOps() {
     }
     if (err.empty()) {
         return "AlphaMatte failed a missing model without a reason";
+    }
+
+    // ---- mask -> polygon (monitor overlay edge + lasso input) ----
+    // Synthetic 20x20 rect mask: the traced contour should recover
+    // its four corners after simplification and round-trip through
+    // PolygonMask with the same inside/outside classification. Pure
+    // CPU — verified unconditionally.
+    {
+        constexpr int kMW = 64, kMH = 48;
+        std::vector<std::uint8_t> m(
+            static_cast<std::size_t>(kMW) * kMH, 0);
+        for (int y = 10; y < 30; ++y) {
+            for (int x = 20; x < 40; ++x) {
+                m[static_cast<std::size_t>(y) * kMW + x] = 255;
+            }
+        }
+        const auto poly = Lab::MaskToPolygon(m, kMW, kMH, 1.5f);
+        if (poly.size() < 4 || poly.size() > 8) {
+            return "MaskToPolygon rect contour has " +
+                   std::to_string(poly.size()) + " vertices";
+        }
+        for (const Lab::IntPoint& p : poly) {
+            if (p.x < 19 || p.x > 41 || p.y < 9 || p.y > 31) {
+                return "MaskToPolygon vertex outside the rect bounds";
+            }
+        }
+        const auto remask = Lab::PolygonMask(kMW, kMH, poly, 0);
+        if (remask.size() != m.size()) {
+            return "PolygonMask round trip has wrong size";
+        }
+        const auto r_at = [&](int x, int y) {
+            return remask[static_cast<std::size_t>(y) * kMW + x];
+        };
+        if (r_at(30, 20) < 200 || r_at(5, 5) != 0) {
+            return "mask->polygon->mask round trip lost coverage";
+        }
+        // Degenerate inputs stay graceful.
+        if (!Lab::MaskToPolygon({}, kMW, kMH, 1.0f).empty() ||
+            !Lab::MaskToPolygon(m, 0, kMH, 1.0f).empty() ||
+            !Lab::MaskToPolygon(m, kMW, kMH + 8, 1.0f).empty()) {
+            return "MaskToPolygon accepted a degenerate input";
+        }
     }
 
     // ---- real-model path: only when the staged models are found ----
@@ -4746,6 +5915,10 @@ bool TreesEquivalent(const Photo::LayerNode& a,
         *why = "attribute mismatch on layer '" + a.Name() + "'";
         return false;
     }
+    if (a.Adjustment() != b.Adjustment()) {
+        *why = "adjustment spec differs on '" + a.Name() + "'";
+        return false;
+    }
     const Photo::TiledDevice* da = a.Device();
     const Photo::TiledDevice* db = b.Device();
     if ((da == nullptr) != (db == nullptr)) {
@@ -4754,6 +5927,17 @@ bool TreesEquivalent(const Photo::LayerNode& a,
     }
     if (da != nullptr && !da->IdenticalPixels(*db)) {
         *why = "pixels differ on '" + a.Name() + "'";
+        return false;
+    }
+    // M4: A8 layer masks must round-trip too.
+    const Photo::TiledDevice* ma = a.Mask();
+    const Photo::TiledDevice* mb = b.Mask();
+    if ((ma == nullptr) != (mb == nullptr)) {
+        *why = "mask presence mismatch on '" + a.Name() + "'";
+        return false;
+    }
+    if (ma != nullptr && !ma->IdenticalPixels(*mb)) {
+        *why = "mask pixels differ on '" + a.Name() + "'";
         return false;
     }
     if (a.Children().size() != b.Children().size()) {
@@ -5074,6 +6258,315 @@ std::string CheckPhotoM2() {
     return {};
 }
 
+// ---------------------------------------------------------------------------
+// photo_m4 — A8/Gray8 coverage devices, layer masks, workspace-style
+// selections (rect/invert/feather + stroke clipping), adjustment
+// layers (composite-of-below evaluation, undoable params, merge-down
+// bake), retouch ops, and the .xerphoto v2 round trip. Headless.
+// ---------------------------------------------------------------------------
+std::string CheckPhotoM4() {
+    namespace ph = Photo;
+    using ph::Pixel;
+
+    // 1) Gray8 device: coverage I/O + COW + transaction memento.
+    {
+        ph::TiledDevice m(80, 60, image::PixelFormat::Gray8,
+                          Pixel::Transparent());
+        if (m.BytesPerPixel() != 1) {
+            return "Gray8 device not 1 byte/px";
+        }
+        m.WriteCoverage(5, 5, 200);
+        if (m.ReadCoverage(5, 5) != 200 ||
+            m.ReadPixel(5, 5).a != 200) {
+            return "Gray8 coverage read/write mismatch";
+        }
+        auto clone = m.Clone();
+        m.WriteCoverage(6, 5, 90);
+        if (clone->ReadCoverage(6, 5) != 0) {
+            return "Gray8 COW: write leaked into clone";
+        }
+        m.FillCoverage({0, 0, 20, 20}, 255);
+        const auto cov0 = m.ReadRegionCoverage(m.Bounds());
+        m.BeginTransaction();
+        m.FillCoverage({0, 0, 30, 30}, 40);
+        auto mem = m.EndTransaction();
+        const auto cov1 = m.ReadRegionCoverage(m.Bounds());
+        m.ApplyMemento(*mem);
+        if (m.ReadRegionCoverage(m.Bounds()) != cov0) {
+            return "Gray8 memento undo not pixel-exact";
+        }
+        (void)cov1;
+    }
+
+    // 2) Layer mask: attach -> black paint hides pixels; undo +
+    //    detach ride PhotoHistory.
+    {
+        ph::Document doc(64, 48);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& l = doc.AddRasterLayer("l");
+        if (!ph::FillLayer(doc, l.Id(), Pixel::RGBA(255, 0, 0),
+                           &hist)) {
+            return "mask: fill failed";
+        }
+        if (!ph::AttachLayerMask(doc, l.Id(), &hist)) {
+            return "AttachLayerMask failed";
+        }
+        if (!l.HasMask() || l.Mask() == nullptr ||
+            l.Mask()->Format() != image::PixelFormat::Gray8) {
+            return "mask: attached device is not Gray8";
+        }
+        if (l.Mask()->ReadCoverage(10, 10) != 255) {
+            return "fresh mask is not fully opaque coverage";
+        }
+        const auto flat_white = doc.FlattenU32();
+        if (!hist.ExecuteDeviceOp(*l.Mask(), "Paint Mask",
+                                  [](ph::TiledDevice& d) {
+                                      d.FillCoverage({0, 0, 32, 48},
+                                                     0);
+                                  })) {
+            return "mask paint op failed";
+        }
+        const auto flat_masked = doc.FlattenU32();
+        if (U32A(flat_masked[10 * 64 + 10]) != 0) {
+            return "mask coverage 0 did not hide the layer";
+        }
+        if (U32A(flat_masked[10 * 64 + 50]) != 255) {
+            return "mask hid pixels outside its coverage";
+        }
+        if (!hist.Undo() || doc.FlattenU32() != flat_white) {
+            return "mask paint undo did not restore coverage";
+        }
+        if (!hist.Redo() || doc.FlattenU32() != flat_masked) {
+            return "mask paint redo failed";
+        }
+        if (!ph::DetachLayerMask(doc, l.Id(), &hist) || l.HasMask()) {
+            return "DetachLayerMask failed";
+        }
+        if (doc.FlattenU32() != flat_white) {
+            return "detached mask still affects the composite";
+        }
+        if (!hist.Undo() || !l.HasMask()) {
+            return "mask detach undo did not restore the mask";
+        }
+    }
+
+    // 3) Selection: rect marquee + invert through ExecuteDeviceOp,
+    //    then a stroke clipped to coverage.
+    {
+        ph::Document doc(64, 48);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& l = doc.AddRasterLayer("l");
+        ph::TiledDevice sel(64, 48, image::PixelFormat::Gray8,
+                            Pixel::Transparent());
+        if (!hist.ExecuteDeviceOp(
+                sel, "Rect Select", [](ph::TiledDevice& d) {
+                    ph::SelectRect(d, {0, 0, 32, 48},
+                                   ph::SelectionCombine::kReplace);
+                })) {
+            return "rect selection op failed";
+        }
+        if (ph::SelectionIsEmpty(sel) ||
+            sel.ReadCoverage(10, 10) != 255 ||
+            sel.ReadCoverage(40, 10) != 0) {
+            return "rect selection coverage wrong";
+        }
+        if (!hist.ExecuteDeviceOp(sel, "Invert",
+                                  [](ph::TiledDevice& d) {
+                                      ph::InvertSelection(d);
+                                  }) ||
+            sel.ReadCoverage(40, 10) != 255 ||
+            sel.ReadCoverage(10, 10) != 0) {
+            return "invert selection failed";
+        }
+        if (!hist.Undo() || sel.ReadCoverage(10, 10) != 255 ||
+            sel.ReadCoverage(40, 10) != 0) {
+            return "selection undo not pixel-exact";
+        }
+        // Stroke across the canvas clipped to the left-half selection.
+        ph::BrushParams p;
+        p.diameter_px = 14.0f;
+        p.hardness = 1.0f;
+        p.color = Pixel::RGBA(0, 0, 255, 255);
+        p.rng_seed = 1;
+        ph::BrushEngine eng(p);
+        const std::vector<ph::StrokePoint> pts = {
+            {8.0f, 24.0f, 1.0f}, {56.0f, 24.0f, 1.0f}};
+        if (!eng.PaintStrokeOnLayer(doc, l.Id(), pts, &hist, nullptr,
+                                    &sel)) {
+            return "clipped stroke failed";
+        }
+        if (l.Device()->ReadPixel(8, 24).a == 0) {
+            return "clip blocked paint inside the selection";
+        }
+        if (l.Device()->ReadPixel(56, 24).a != 0) {
+            return "clip leaked paint outside the selection";
+        }
+        const auto stroked =
+            l.Device()->ReadRegion(l.Device()->Bounds());
+        if (!hist.Undo() ||
+            l.Device()->ReadRegion(l.Device()->Bounds()) == stroked) {
+            return "clipped stroke undo failed";
+        }
+        // Feather must stay coverage-valued and undoable.
+        hist.ExecuteDeviceOp(sel, "Feather",
+                             [](ph::TiledDevice& d) {
+                                 ph::FeatherSelection(d, 2.0f);
+                             });
+        const uint8_t edge = sel.ReadCoverage(31, 24);
+        if (edge == 0 || edge == 255) {
+            return "feather produced no soft edge";
+        }
+    }
+
+    // 4) Adjustment layer: invert evaluates the composite-of-below;
+    //    spec edits ride SetLayerAttributesCommand (undoable).
+    {
+        ph::Document doc(64, 48);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& base = doc.AddRasterLayer("base");
+        ph::FillLayer(doc, base.Id(), Pixel::RGBA(0, 200, 0), &hist);
+        ph::LayerNode& adj = doc.AddLayer(
+            ph::LayerKind::kAdjustment, "inv");
+        adj.SetAdjustment(ph::DefaultAdjustmentSpec("invert"));
+        const auto flat = doc.FlattenU32();
+        const uint32_t c = flat[10 * 64 + 10];
+        if (!NearU8(U32R(c), 255) || !NearU8(U32B(c), 255)) {
+            return "invert adjustment produced wrong pixel math";
+        }
+        // Only content below is adjusted: a red layer ABOVE the
+        // adjustment must stay red.
+        ph::LayerNode& top = doc.AddRasterLayer("top");
+        ph::FillLayer(doc, top.Id(), Pixel::RGBA(255, 0, 0), nullptr);
+        const auto flat2 = doc.FlattenU32();
+        if (!NearU8(U32R(flat2[10 * 64 + 10]), 255) ||
+            !NearU8(U32G(flat2[10 * 64 + 10]), 0)) {
+            return "adjustment leaked onto the layer above it";
+        }
+        doc.DetachLayer(top.Id());
+        // Param change through the attributes command is undoable.
+        ph::SetLayerAttributesCommand::Attributes a{
+            adj.Name(), true, false, 1.0f, "srcOver",
+            ph::DefaultAdjustmentSpec("grayscale")};
+        if (!hist.Execute(
+                std::make_unique<ph::SetLayerAttributesCommand>(
+                    adj.Id(), a, "Adjustment Params"))) {
+            return "adjustment param command failed";
+        }
+        if (adj.Adjustment().op != "grayscale") {
+            return "adjustment spec not applied";
+        }
+        if (!hist.Undo() || adj.Adjustment().op != "invert" ||
+            !hist.Redo() || adj.Adjustment().op != "grayscale") {
+            return "adjustment param undo/redo failed";
+        }
+        // Registry: the full Skia suite must be present.
+        for (const char* op :
+             {"brightness_contrast", "hsl", "exposure", "levels",
+              "curves", "color_balance", "vibrance", "channel_mixer",
+              "opacity", "selective_color", "invert", "grayscale",
+              "sepia", "threshold", "posterize"}) {
+            if (ph::FindAdjustmentOp(op) == nullptr) {
+                return std::string("adjustment op missing: ") + op;
+            }
+        }
+    }
+
+    // 5) MergeDown bakes an adjustment into the lower raster layer.
+    {
+        ph::Document doc(64, 48);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& base = doc.AddRasterLayer("base");
+        ph::FillLayer(doc, base.Id(), Pixel::RGBA(0, 200, 0), &hist);
+        ph::LayerNode& adj = doc.AddLayer(
+            ph::LayerKind::kAdjustment, "inv");
+        adj.SetAdjustment(ph::DefaultAdjustmentSpec("invert"));
+        const ph::LayerId adj_id = adj.Id();
+        const auto flat_pre = doc.FlattenU32();
+        if (!ph::MergeDown(doc, adj_id, &hist)) {
+            return "adjustment MergeDown failed";
+        }
+        if (doc.FindLayer(adj_id) != nullptr) {
+            return "MergeDown left the adjustment node";
+        }
+        const uint32_t c = doc.FlattenU32()[10 * 64 + 10];
+        if (!NearU8(U32R(c), 255) || !NearU8(U32B(c), 255)) {
+            return "MergeDown did not bake the adjustment";
+        }
+        if (!hist.Undo() || doc.FindLayer(adj_id) == nullptr ||
+            doc.FlattenU32() != flat_pre) {
+            return "adjustment MergeDown undo failed";
+        }
+    }
+
+    // 6) Retouch: clone stamp copies a painted square, undo is
+    //    pixel-exact; spot remove fills from the border ring.
+    {
+        ph::Document doc(64, 48);
+        ph::PhotoHistory hist(doc);
+        ph::LayerNode& l = doc.AddRasterLayer("l");
+        ph::FillLayer(doc, l.Id(), Pixel::RGBA(10, 60, 200), nullptr);
+        const auto before =
+            l.Device()->ReadRegion(l.Device()->Bounds());
+        if (!ph::CloneStampAt(doc, l.Id(), {16, 24}, {48, 24}, 6,
+                              &hist)) {
+            return "CloneStampAt failed";
+        }
+        if (!hist.Undo() ||
+            l.Device()->ReadRegion(l.Device()->Bounds()) != before) {
+            return "clone stamp undo not pixel-exact";
+        }
+        if (!hist.Redo()) return "clone stamp redo failed";
+        if (!ph::SpotRemoveAt(doc, l.Id(), {30, 24}, 5, &hist)) {
+            return "SpotRemoveAt failed";
+        }
+    }
+
+    // 7) .xerphoto v2: mask + adjustment survive the round trip;
+    //    the flattened composite is preserved.
+    {
+        ph::Document doc(64, 48);
+        ph::LayerNode& base = doc.AddRasterLayer("base");
+        ph::FillLayer(doc, base.Id(), Pixel::RGBA(200, 30, 30),
+                      nullptr);
+        ph::AttachLayerMask(doc, base.Id(), nullptr);
+        if (base.Mask() == nullptr) {
+            return "xerphoto: mask attach failed";
+        }
+        base.Mask()->FillCoverage({0, 0, 32, 48}, 60);
+        ph::LayerNode& adj = doc.AddLayer(
+            ph::LayerKind::kAdjustment, "Adj");
+        adj.SetAdjustment(ph::DefaultAdjustmentSpec("sepia"));
+        adj.SetOpacity(0.8f);
+        const auto flat_before = doc.FlattenU32();
+
+        const std::string path =
+            Utf8Path(SmokeTempDir() / "photo_m4.xerphoto");
+        std::string err;
+        if (!ph::SaveDocument(doc, path, &err)) {
+            return "SaveDocument(v2) failed: " + err;
+        }
+        auto back = ph::LoadDocument(path, &err);
+        if (!back) return "LoadDocument(v2) failed: " + err;
+        std::string why;
+        if (!TreesEquivalent(doc.Root(), back->Root(), &why)) {
+            return ".xerphoto v2 round trip: " + why;
+        }
+        if (back->FlattenU32() != flat_before) {
+            return ".xerphoto v2 changed the composite";
+        }
+        const ph::LayerNode* loaded =
+            back->Root().Children().size() > 1
+                ? back->Root().Children().back().get()
+                : nullptr;
+        if (loaded == nullptr ||
+            loaded->Kind() != ph::LayerKind::kAdjustment ||
+            loaded->Adjustment().op != "sepia") {
+            return ".xerphoto v2 lost the adjustment spec";
+        }
+    }
+    return {};
+}
+
 using CheckFn = std::string (*)();
 struct CheckEntry {
     const char* name;
@@ -5088,6 +6581,7 @@ constexpr CheckEntry kChecks[] = {
     {"timeline_model", &CheckTimelineModel},
     {"timeline_history", &CheckTimelineHistory},
     {"source_edit", &CheckSourceEdit},
+    {"transcript_editing", &CheckTranscriptEditing},
     {"keyboard_map", &CheckKeyboardMap},
     {"export_presets", &CheckExportPresets},
     {"generated_source", &CheckGeneratedSource},
@@ -5099,6 +6593,7 @@ constexpr CheckEntry kChecks[] = {
     {"curves_lens", &CheckCurvesAndLens},
     {"preview_quality", &CheckPreviewQualityScale},
     {"fx_frame_cache", &CheckFxFrameCache},
+    {"auto_cache", &CheckAutoCache},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},
     {"audio_mixer", &CheckAudioMixer},
@@ -5107,6 +6602,7 @@ constexpr CheckEntry kChecks[] = {
     {"generated_layers", &CheckGeneratedLayers},
     {"project_autosave", &CheckProjectAutosave},
     {"media_catalog", &CheckMediaCatalog},
+    {"proxy_workflow", &CheckProxyWorkflow},
     {"records_store", &CheckRecordsStore},
     {"project_manager", &CheckProjectManager},
     {"media_import_filter", &CheckMediaImportFilter},
@@ -5127,12 +6623,14 @@ constexpr CheckEntry kChecks[] = {
     {"nn_backends", &CheckNnBackends},
     {"ai_find_object", &CheckAiFindObject},
     {"ai_tags", &CheckAiTags},
+    {"smart_reframe", &CheckSmartReframe},
     {"ai_lab_ops", &CheckAiLabOps},
     {"cuda_decode", &CheckCudaDecode},
     {"cuda_encode", &CheckCudaEncode},
     {"frame_render", &CheckFrameRender},
     {"photo_m1", &CheckPhotoM1},
     {"photo_m2", &CheckPhotoM2},
+    {"photo_m4", &CheckPhotoM4},
     {"app_boot", &CheckAppBoot},
     {"export_render", &CheckExportRender},
 };

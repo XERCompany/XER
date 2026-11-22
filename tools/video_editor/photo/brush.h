@@ -64,15 +64,32 @@ public:
 
     // Composite a finished scratch stroke onto `layer` inside a single
     // undoable transaction (undo label "Brush Stroke"/"Erase").
+    // `clip` is an optional A8 coverage device (a selection): each dab
+    // pixel's alpha is multiplied by the coverage at the same document
+    // position — coverage 0 blocks paint entirely (M4).
     bool CompositeStroke(Document& doc, LayerId layer,
                          const TiledDevice& scratch, const IntRect& dirty,
-                         PhotoHistory* hist) const;
+                         PhotoHistory* hist,
+                         const TiledDevice* clip = nullptr) const;
+
+    // Mask-editing composite (M4): instead of blending color onto a
+    // raster device, this lerps an A8 mask's coverage toward `value`
+    // (0=black erase coverage, 255=white restore) by each dab pixel's
+    // alpha — the Photoshop "paint gray into the mask" model.
+    // Undoable through PhotoHistory::ExecuteDeviceOp (label
+    // "Paint Mask"); `clip` clips mask painting to the selection too.
+    bool CompositeStrokeOnMask(TiledDevice& mask_dev,
+                               const TiledDevice& scratch,
+                               const IntRect& dirty, uint8_t value,
+                               PhotoHistory* hist,
+                               const TiledDevice* clip = nullptr) const;
 
     // Convenience: scratch -> paint -> composite -> record. Returns the
     // dirty rect via `dirty_out`.
     bool PaintStrokeOnLayer(Document& doc, LayerId layer,
                             const std::vector<StrokePoint>& points,
-                            PhotoHistory* hist, IntRect* dirty_out = nullptr);
+                            PhotoHistory* hist, IntRect* dirty_out = nullptr,
+                            const TiledDevice* clip = nullptr);
 
 private:
     // Rasterizes the tip for integer diameter `d` (cached per size).

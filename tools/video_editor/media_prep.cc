@@ -257,12 +257,24 @@ bool MediaPrep::RunJob(const Key& key, JobOut* out) {
     if (runner_override_) {
         return runner_override_(key, out);
     }
+    // Proxy seam: only the kPosterAt VIDEO decode goes through the
+    // optional resolver (a ready proxy decodes a poster a lot cheaper
+    // than the 4K source). kPeaks stays on the original — proxies
+    // carry no audio — and kImportPoster must too: ExtractPoster keys
+    // the poster row update on the media path itself, so feeding it a
+    // managed proxy path would write to a row that does not exist.
+    const std::string decode_path =
+        (options_.path_resolver && key.kind == Kind::kPosterAt)
+            ? options_.path_resolver(key.path)
+            : key.path;
     switch (key.kind) {
         case Kind::kPosterAt:
             // Out-of-process decode first: a decoder crash kills the
             // --media-worker subprocess, not the editor. The client
             // returns false on spawn fail/timeout/death/suspect-path —
             // the in-process decode below is the seamless fallback.
+            // The resolver only applies to the in-process fallback:
+            // the worker resolves its own path policy.
 #if defined(_WIN32)
             if (MediaWorkerClient::Shared().PosterAt(
                     key.path,
@@ -272,7 +284,7 @@ bool MediaPrep::RunJob(const Key& key, JobOut* out) {
             }
 #endif
             return MediaCatalog::GetPosterAt(
-                key.path, static_cast<double>(key.aux) / 1000.0,
+                decode_path, static_cast<double>(key.aux) / 1000.0,
                 out->frame, nullptr);
         case Kind::kPeaks:
 #if defined(_WIN32)

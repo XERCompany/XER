@@ -13,6 +13,7 @@
 #include "ve_theme.h"
 #include "widgets/button.h"
 #include "widgets/button_group.h"
+#include "widgets/checkbox.h"
 #include "widgets/field.h"
 #include "widgets/label.h"
 #include "widgets/text_input.h"
@@ -25,7 +26,7 @@ namespace Rendering = XER::UI::Rendering;
 using XER::UI::Theme::Color;
 
 constexpr float kPanelWidth = 520.0f;
-constexpr float kPanelHeight = 360.0f;
+constexpr float kPanelHeight = 474.0f;
 constexpr float kPanelPad = 22.0f;
 
 // Finds the first direct child of `parent` of type T — the dialog
@@ -175,6 +176,20 @@ void SettingsDialog::EnsureChildren() {
     wrap_field("num", fps_num_input_);
     wrap_field("den", fps_den_input_);
 
+    // Proxy section — two drawn checkboxes (the checkbox widget is a
+    // bare box; its caption is drawn text like the section headers)
+    // plus the generation fields under Field captions.
+    proxies_check_ = std::make_shared<Widgets::Checkbox>(true);
+    ingest_check_ = std::make_shared<Widgets::Checkbox>(false);
+    proxy_dim_input_ = std::make_shared<Widgets::TextInput>("960");
+    proxy_crf_input_ = std::make_shared<Widgets::TextInput>("28");
+    proxy_dim_input_->SetOnSubmit(submit);
+    proxy_crf_input_->SetOnSubmit(submit);
+    AddChild(proxies_check_);
+    AddChild(ingest_check_);
+    wrap_field("Proxy max edge (px)", proxy_dim_input_);
+    wrap_field("Proxy CRF (h264)", proxy_crf_input_);
+
     // Frame-rate presets as a segmented strip (the lab_panel mode
     // convention): ButtonGroup joins the buttons edge-to-edge; the
     // selected preset keeps Primary while the rest drop to Secondary.
@@ -238,6 +253,10 @@ void SettingsDialog::SetSettings(const ProjectSettings& settings) {
     if (auto* field = FieldHosting(this, fps_den_input_.get())) {
         field->SetVisible(custom);
     }
+    proxies_check_->SetChecked(settings.use_proxies);
+    ingest_check_->SetChecked(settings.proxy_ingest);
+    proxy_dim_input_->SetValue(IntToString(settings.proxy_max_dim));
+    proxy_crf_input_->SetValue(IntToString(settings.proxy_crf));
     SyncFpsButtons(this, fps_preset_);
     Invalidate();
 }
@@ -262,6 +281,18 @@ ProjectSettings SettingsDialog::GetSettings() const {
         out.fps_den = kFpsPresets[fps_preset_].den;
     }
     out.bg = bg_;
+    out.use_proxies =
+        proxies_check_ == nullptr || proxies_check_->IsChecked();
+    out.proxy_ingest =
+        ingest_check_ != nullptr && ingest_check_->IsChecked();
+    out.proxy_max_dim =
+        proxy_dim_input_
+            ? ParseInt(proxy_dim_input_->GetValue(), 960, 0, 16384)
+            : 960;
+    out.proxy_crf = proxy_crf_input_
+                        ? ParseInt(proxy_crf_input_->GetValue(), 28,
+                                   -1, 63)
+                        : 28;
     return out;
 }
 
@@ -344,6 +375,18 @@ void SettingsDialog::Render(
                       {px, panel.y + 144.0f, 200.0f, 16.0f}, caption);
     renderer.DrawText("Background",
                       {px, panel.y + 258.0f, 200.0f, 16.0f}, caption);
+    renderer.DrawText("Proxies",
+                      {px, panel.y + 314.0f, 200.0f, 16.0f}, caption);
+    // Checkbox captions — the widget is a bare box; the label is drawn
+    // text beside it (same drawn-caption convention as the headers).
+    const Rendering::TextStyle check_label{tokens.foreground,
+                                           tokens.font_small, 500};
+    renderer.DrawText("Use proxies for playback",
+                      {px + 22.0f, panel.y + 336.0f, 150.0f, 16.0f},
+                      check_label);
+    renderer.DrawText("Create on import",
+                      {px + 192.0f, panel.y + 336.0f, 130.0f, 16.0f},
+                      check_label);
 
     // Background swatch (click cycles the palette) + hex readout.
     const auto swatch = BgSwatchRect();
@@ -408,6 +451,21 @@ void SettingsDialog::Layout(const XER::UI::Layout::Rect& bounds) {
     }
     if (auto* field = FieldHosting(this, fps_den_input_.get())) {
         field->Layout({px + 120.0f, custom_y, 100.0f, field_h}, tokens);
+    }
+
+    // Proxy section: two checkboxes share one row (captions drawn in
+    // Render), the generation fields sit under the "Proxies" header.
+    proxies_check_->Layout({px, panel.y + 336.0f, 16.0f, 16.0f},
+                           tokens);
+    ingest_check_->Layout({px + 170.0f, panel.y + 336.0f, 16.0f,
+                           16.0f},
+                          tokens);
+    const float proxy_y = panel.y + 362.0f;
+    if (auto* field = FieldHosting(this, proxy_dim_input_.get())) {
+        field->Layout({px, proxy_y, 130.0f, field_h}, tokens);
+    }
+    if (auto* field = FieldHosting(this, proxy_crf_input_.get())) {
+        field->Layout({px + 150.0f, proxy_y, 110.0f, field_h}, tokens);
     }
 
     const float button_y = panel.y + panel.height - 48.0f;

@@ -4,7 +4,8 @@
 #   column level (Ui::WorkspaceLayout / WorkspaceDef):
 #     left_visible, right_visible, right_tab, timeline_fraction
 #       right_tab indexes the right-column tab strip:
-#         0 Insp · 1 FX · 2 Mkr · 3 Lab · 4 Hist · 5 Mix · 6 Q · 7 Plg · 8 Color
+#         0 Insp · 1 FX · 2 Mkr · 3 Lab · 4 Hist · 5 Mix · 6 Q · 7 Plg ·
+#         8 Color · 9 Ext · 10 Lyr · 11 Trn
 #
 #   panel level (WorkspaceSpec / LoadWorkspacesConfig):
 #     active_tab        — panel id raised in its tab group

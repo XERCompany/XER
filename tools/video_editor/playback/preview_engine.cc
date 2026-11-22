@@ -95,6 +95,11 @@ struct PreviewEngine::Impl {
     // safe — changed inputs simply miss.
     std::shared_ptr<EffectFrameCache> frame_cache_ =
         std::make_shared<EffectFrameCache>();
+    // Olive-style idle-time pre-render into frame_cache_ — owns a
+    // SECOND compositor (the only safe seam: Compositor is single-
+    // consumer-thread), fills the shared cache on its own worker so
+    // the playback ticks below hit. Null when disabled.
+    std::unique_ptr<AutoCacher> autocache_;
     AudioMixer mixer_;
     bool comp_open_ = false;
     bool mixer_open_ = false;
@@ -146,6 +151,9 @@ struct PreviewEngine::Impl {
         }
         if (mixer_open_) {
             AppendWarnings(mixer_.Warnings());
+        }
+        if (autocache_) {
+            AppendWarnings(autocache_->TakeWarnings());
         }
     }
 
@@ -206,6 +214,25 @@ struct PreviewEngine::Impl {
         playhead_.store(0.0, std::memory_order_relaxed);
         playing_.store(false, std::memory_order_relaxed);
         frames_presented_.store(0, std::memory_order_relaxed);
+        // AutoCacher: pre-renders the playhead window into
+        // frame_cache_ on its own low-priority thread + private
+        // compositor. Same snapshot + factory, same cache — playback
+        // renders then hit instead of re-decoding. Init failures are
+        // non-fatal (the feature degrades to plain playback).
+        if (options_.autocache && AutoCacher::EnabledByEnv() &&
+            frame_cache_->CapacityBytes() > 0) {
+            AutoCacher::Options aco;
+            aco.decoder_factory = factory_;
+            aco.frame_cache = frame_cache_;
+            aco.media_resolver = options_.media_resolver;
+            auto ac = std::make_unique<AutoCacher>();
+            std::string ac_err;
+            if (ac->Init(project_, aco, &ac_err)) {
+                autocache_ = std::move(ac);
+            } else {
+                WarnOnce("autocache disabled: " + ac_err);
+            }
+        }
         worker_ = std::thread(&Impl::WorkerMain, this);
         return true;
     }
@@ -220,6 +247,10 @@ struct PreviewEngine::Impl {
         if (worker_.joinable()) {
             worker_.join();
         }
+        // Safe only AFTER the playback worker is joined — it reads
+        // autocache_ per tick (OnPlayhead / TakeWarnings) without the
+        // mutex, so the reset must outlive its last tick.
+        autocache_.reset();
         if (comp_open_) {
             comp_.Shutdown();
             comp_open_ = false;
@@ -250,6 +281,11 @@ struct PreviewEngine::Impl {
             present_pending_ = true;   // show the landing frame paused
         }
         playhead_.store(clamped, std::memory_order_relaxed);
+        if (autocache_) {
+            // Discrete jump — purge the pending window and restart
+            // the settle timer (scrub storms never spawn decode).
+            autocache_->OnSeek(clamped);
+        }
         cv_.notify_all();
     }
 
@@ -294,6 +330,11 @@ struct PreviewEngine::Impl {
                            ? std::min(scale, 1.0f)
                            : 1.0f;
         present_pending_ = true;   // paused monitors refresh quality
+        if (autocache_) {
+            // Quality is cache-key material — the autocache must
+            // re-prime at the new tier or it fills unreachable keys.
+            autocache_->OnQualityChanged(quality_cmd_);
+        }
         cv_.notify_all();
     }
 
@@ -323,6 +364,7 @@ struct PreviewEngine::Impl {
         CompositorOptions opts;
         opts.decoder_factory = factory_;
         opts.frame_cache = frame_cache_;
+        opts.media_resolver = options_.media_resolver;
         std::string err;
         std::vector<std::string> w;
         if (!comp_.Init(project_, opts, &err, &w)) {
@@ -386,8 +428,19 @@ struct PreviewEngine::Impl {
         // downscaled frame inside the compositor (export/screenshot
         // compositors never set this — full quality stays bit-exact).
         comp_.SetPreviewQuality(quality);
+        // Frame-snapped render time: the cache key quantizes the
+        // request to microseconds, so a raw wall-clock t would make
+        // every tick a distinct key — nothing could ever hit, and the
+        // AutoCacher's frame-boundary pre-renders would be useless.
+        // Snapping DOWN to the containing project frame gives every
+        // request inside the frame interval one identical key (the
+        // frame an NLE would display at t anyway); the reported
+        // playhead and audio clock stay on real t.
+        const double tr = std::clamp(
+            std::floor(t / frame_dt_ + 1e-9) * frame_dt_, 0.0,
+            duration_);
         std::string err;
-        if (!comp_.RenderFrameAt(t, &bgra_, &err)) {
+        if (!comp_.RenderFrameAt(tr, &bgra_, &err)) {
             WarnOnce("preview render failed at t=" +
                      std::to_string(t) + ": " + err);
             return;
@@ -417,8 +470,10 @@ struct PreviewEngine::Impl {
             DownsampleNearestBGRA(bgra_.data(), sw, sh,
                                   out_frame_.Data(), tw, th);
         }
+        // pts reports the rendered frame's timeline position (tr —
+        // the snapped frame time), not the raw wall-clock estimate.
         out_frame_.SetPts(static_cast<std::int64_t>(
-            std::llround(t * 1000000.0)));
+            std::llround(tr * 1000000.0)));
         out_frame_.Meta().fps =
             static_cast<double>(project_.fps_num) / project_.fps_den;
         sink_->OnVideoFrame(out_frame_);
@@ -636,6 +691,11 @@ struct PreviewEngine::Impl {
             // Playhead callback AFTER the frame so the UI sees a
             // coherent (frame, t) pair each tick.
             playhead_.store(t, std::memory_order_relaxed);
+            if (autocache_) {
+                // Cheap atomic store — lets the worker re-window the
+                // pre-render runway ahead of a moving playhead.
+                autocache_->OnPlayhead(t);
+            }
             sink_->OnPlayhead(t);
             if (seek_applied) {
                 // Meters reset on scrubs — stale peaks would linger.
@@ -711,6 +771,19 @@ std::uint64_t PreviewEngine::FramesPresented() const {
 std::vector<std::string> PreviewEngine::Warnings() const {
     std::lock_guard<std::mutex> lk(impl_->mutex_);
     return impl_->warnings_;
+}
+EffectFrameCache::Stats PreviewEngine::FrameCacheStats() const {
+    return impl_->frame_cache_ ? impl_->frame_cache_->GetStats()
+                              : EffectFrameCache::Stats{};
+}
+AutoCacher::Stats PreviewEngine::AutoCacheStats() const {
+    return impl_->autocache_ ? impl_->autocache_->GetStats()
+                             : AutoCacher::Stats{};
+}
+bool PreviewEngine::WaitAutoCacheIdle(int timeout_ms) {
+    // Disabled -> trivially idle (the check is "no pending work").
+    return !impl_->autocache_ ||
+           impl_->autocache_->WaitIdle(timeout_ms);
 }
 
 }  // namespace XER::VideoEditor

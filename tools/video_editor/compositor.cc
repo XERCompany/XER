@@ -18,6 +18,7 @@
 #include <mutex>
 #include <set>
 
+#include "ai/smart_reframe.h"
 #include "app_runtime/app_runtime.h"
 #include "color/ocio_transform.h"
 #include "generated_source.h"
@@ -675,6 +676,11 @@ struct FrameSlot {
 struct ClipSession {
     const Clip* clip = nullptr;
     int track_index = -1;
+    // Resolved decode source — clip->source_path after
+    // CompositorOptions::media_resolver (empty = source verbatim,
+    // resolved lazily on first open so a resolver never runs for
+    // clips that contribute no frames).
+    std::string decode_path;
     MediaDecoderPtr decoder;
     bool open_attempted = false;
     bool open_ok = false;
@@ -825,10 +831,16 @@ bool ChainCacheable(const std::vector<ClipEffect>& effects) {
     return true;
 }
 
+// `decode_path` is the resolver output (empty when no resolver ran)
+// — hashed alongside source_path so a proxy toggle or a fresh proxy
+// landing invalidates memoized/cached layers instead of serving
+// pixels decoded at the other resolution.
 std::uint64_t ClipStateHash(const Clip& clip, double preview_quality,
-                            int canvas_w, int canvas_h) {
+                            int canvas_w, int canvas_h,
+                            const std::string& decode_path) {
     std::uint64_t h = kFnvOffset;
     h = HashStr(h, clip.source_path);
+    h = HashStr(h, decode_path);
     h = HashU64(h, static_cast<std::uint64_t>(clip.source.kind));
     h = HashStr(h, clip.source.param);
     h = HashU64(h, static_cast<std::uint64_t>(clip.effects.size()));
@@ -839,6 +851,18 @@ std::uint64_t ClipStateHash(const Clip& clip, double preview_quality,
             h = HashRaw(h, e.params.data(),
                         e.params.size() * sizeof(float));
         }
+    }
+    // Smart-reframe track — the warp reads it, so a re-analysis must
+    // bust both the frame cache and the layer memo.
+    h = HashU64(h, static_cast<std::uint64_t>(clip.reframe.samples.size()));
+    for (const ReframeSample& s : clip.reframe.samples) {
+        h = HashF64(h, s.t);
+        h = HashF32(h, s.cx);
+        h = HashF32(h, s.cy);
+        h = HashF32(h, s.w);
+        h = HashF32(h, s.h);
+        h = HashF32(h, s.confidence);
+        h = HashU64(h, s.scene_boundary ? 1ull : 0ull);
     }
     h = HashU64(h, static_cast<std::uint64_t>(clip.masks.size()));
     for (const ClipMask& m : clip.masks) {
@@ -891,6 +915,10 @@ struct Compositor::Impl {
     int canvas_h = 0;
     double duration = 0.0;
     MediaDecoderFactory decoder_factory;
+    // CompositorOptions::media_resolver — clip.source_path -> decode
+    // path (proxy seam). Empty means "open the source verbatim" —
+    // the export configuration, always.
+    std::function<std::string(const std::string&)> media_resolver;
     bool skia_available = false;
     bool initialized = false;
     std::atomic<bool> cancelled{false};
@@ -974,6 +1002,7 @@ struct Compositor::Impl {
             decoder_factory = DefaultDecoderFactory();
         }
         frame_cache = options.frame_cache;
+        media_resolver = options.media_resolver;
         skia_available = XER::Bridge::Skia::IsAvailable();
         cancelled.store(false, std::memory_order_relaxed);
 
@@ -1056,6 +1085,13 @@ struct Compositor::Impl {
             ClipSession session;
             session.clip = &clip;
             session.track_index = clip.track;
+            // Resolve the decode path once per session — generated
+            // clips own no media file and never reach the decoder.
+            if (media_resolver && !IsGeneratedSource(clip.source) &&
+                !clip.source_path.empty()) {
+                session.decode_path =
+                    media_resolver(clip.source_path);
+            }
             const auto handles = ClipTransitionHandles(project_, clip.id);
             session.ext_start = clip.timeline_start - handles.first;
             session.ext_end = ClipEndSeconds(clip) + handles.second;
@@ -1090,6 +1126,7 @@ struct Compositor::Impl {
         warned_ambiguous = false;
         project_ = Project{};
         decoder_factory = nullptr;
+        media_resolver = nullptr;
         frame_cache.reset();
         skia_available = false;
         initialized = false;
@@ -1207,9 +1244,18 @@ struct Compositor::Impl {
                 return EnsureResult::kError;
             }
             std::string open_error;
-            if (!s.decoder->Open(s.clip->source_path, &open_error)) {
+            // decode_path was resolved at session Init (proxy seam);
+            // empty means "the source path verbatim" — always the
+            // export configuration.
+            const std::string& open_path =
+                s.decode_path.empty() ? s.clip->source_path
+                                      : s.decode_path;
+            if (!s.decoder->Open(open_path, &open_error)) {
                 Fail(error_out,
                      "cannot open '" + s.clip->source_path + "'" +
+                         (open_path != s.clip->source_path
+                              ? " (via '" + open_path + "')"
+                              : "") +
                          (open_error.empty() ? "" : ": " + open_error));
                 return EnsureResult::kError;
             }
@@ -1327,6 +1373,14 @@ struct Compositor::Impl {
                 // host-side builtin — applied in place to the BGRA8
                 // frame through the same ABI.
                 const PluginDesc* desc = PluginHost::ForEffectType(type);
+                // Smart Reframe is geometric, not a pixel kernel: it
+                // needs the clip's subject track and the current
+                // source time, so RenderClipLayer applies it at the
+                // warp stage. Skip it here (its ABI fn is identity
+                // anyway).
+                if (desc != nullptr && desc->id == Ai::kSmartReframeId) {
+                    continue;
+                }
                 if (desc != nullptr &&
                     frame.Format() == video::PixelFormat::BGRA8) {
                     PluginHost::ApplyVideo(*desc, frame.Data(),
@@ -1622,6 +1676,62 @@ struct Compositor::Impl {
         }
     }
 
+    // First clip effect resolving to the Smart Reframe builtin — the
+    // only geometry effect; RenderClipLayer applies it at the warp.
+    static const ClipEffect* FindSmartReframe(
+        const std::vector<ClipEffect>& effects) {
+        for (const ClipEffect& e : effects) {
+            if (const PluginDesc* d = PluginHost::ForEffectType(e.type);
+                d != nullptr && d->id == Ai::kSmartReframeId) {
+                return &e;
+            }
+        }
+        return nullptr;
+    }
+
+    // Warps s.frame into s.layer, folding Smart Reframe in: when the
+    // clip carries the effect, the tracked aspect-locked crop window
+    // (clip.reframe @ track_t, SOURCE seconds) becomes the warp's
+    // source region and the effective transform is composed over a
+    // cover-fit mapping — crop scaled to fill the canvas at user
+    // scale 1, with clip scale multiplying it and clip offsets panning
+    // on top. Without the effect the full frame and the effective
+    // transform pass through unchanged.
+    bool WarpSessionFrame(ClipSession& s, const Clip& clip,
+                          const Transform& effective, double track_t,
+                          std::string* error_out) {
+        Ai::ReframeWindow region{
+            0.0, 0.0, static_cast<double>(s.frame.Width()),
+            static_cast<double>(s.frame.Height())};
+        Transform warp = effective;
+        if (const ClipEffect* fx = FindSmartReframe(clip.effects);
+            fx != nullptr && s.frame.IsValid()) {
+            const double ratio =
+                EffectParamDouble(*fx, 0, 9.0 / 16.0);
+            const double smooth = EffectParamDouble(*fx, 1, 0.5);
+            region = Ai::ReframeWindowAt(
+                clip.reframe, track_t, s.frame.Width(),
+                s.frame.Height(), ratio, smooth);
+            if (region.w > 0.0 && region.h > 0.0) {
+                const double cover =
+                    std::max(canvas_w / region.w, canvas_h / region.h);
+                warp.scale = static_cast<float>(effective.scale * cover);
+                warp.offset_x = static_cast<float>(
+                    effective.offset_x +
+                    (canvas_w - region.w * cover) / (2.0 * canvas_w));
+                warp.offset_y = static_cast<float>(
+                    effective.offset_y +
+                    (canvas_h - region.h * cover) / (2.0 * canvas_h));
+            }
+        }
+        if (!WarpClipFrameRegion(s.frame, region.x, region.y, region.w,
+                                 region.h, warp, canvas_w, canvas_h,
+                                 &s.layer)) {
+            return Fail(error_out, "clip warp failed");
+        }
+        return true;
+    }
+
     // ---- per-clip layer ---------------------------------------------
 
     // Renders one clip's canvas-sized layer at timeline time t.
@@ -1701,7 +1811,8 @@ struct Compositor::Impl {
         }
         const bool pure_chain = s.chain_cacheable == 1;
         const std::uint64_t state_hash =
-            ClipStateHash(clip, preview_quality_, canvas_w, canvas_h);
+            ClipStateHash(clip, preview_quality_, canvas_w, canvas_h,
+                          s.decode_path);
         const std::uint64_t memo_hash =
             MemoHash(state_hash, time_us, u, effective);
         if (pure_chain && s.memo_valid && s.memo_hash == memo_hash) {
@@ -1720,9 +1831,10 @@ struct Compositor::Impl {
             ckey.source_time_us = time_us;
             ckey.state_hash = state_hash;
             if (frame_cache->Lookup(ckey, &s.frame)) {
-                if (!WarpClipFrame(s.frame, effective, canvas_w,
-                                   canvas_h, &s.layer)) {
-                    return Fail(error_out, "clip warp failed");
+                if (!WarpSessionFrame(s, clip, effective,
+                                      generated ? u : src_t,
+                                      error_out)) {
+                    return false;
                 }
                 s.memo_hash = memo_hash;
                 s.memo_valid = true;
@@ -1792,9 +1904,11 @@ struct Compositor::Impl {
         if (cacheable && serve_honest) {
             frame_cache->Store(ckey, s.frame);
         }
-        if (!WarpClipFrame(s.frame, effective, canvas_w, canvas_h,
-                           &s.layer)) {
-            return Fail(error_out, "clip warp failed");
+        // Smart Reframe applies here: the tracked crop window becomes
+        // the warp's source region (see WarpSessionFrame).
+        if (!WarpSessionFrame(s, clip, effective, generated ? u : src_t,
+                              error_out)) {
+            return false;
         }
         if (pure_chain) {
             s.memo_hash = memo_hash;
@@ -2340,13 +2454,35 @@ bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
 
 bool WarpClipFrame(const video::Frame& src, const Transform& tr,
                    int canvas_w, int canvas_h, video::Frame* out_layer) {
+    return WarpClipFrameRegion(
+        src, 0.0, 0.0,
+        src.IsValid() ? static_cast<double>(src.Width()) : 0.0,
+        src.IsValid() ? static_cast<double>(src.Height()) : 0.0, tr,
+        canvas_w, canvas_h, out_layer);
+}
+
+bool WarpClipFrameRegion(const video::Frame& src, double region_x,
+                         double region_y, double region_w,
+                         double region_h, const Transform& tr,
+                         int canvas_w, int canvas_h,
+                         video::Frame* out_layer) {
     if (out_layer == nullptr || !src.IsValid() ||
         src.Format() != video::PixelFormat::BGRA8) {
         return false;
     }
     const int src_w = src.Width();
     const int src_h = src.Height();
-    if (src_w <= 0 || src_h <= 0 || canvas_w <= 0 || canvas_h <= 0) {
+    // The sampled window, clamped into the frame.
+    const double rx = std::clamp(region_x, 0.0,
+                                 static_cast<double>(src_w));
+    const double ry = std::clamp(region_y, 0.0,
+                                 static_cast<double>(src_h));
+    const double rw = std::clamp(
+        region_w, 0.0, static_cast<double>(src_w) - rx);
+    const double rh = std::clamp(
+        region_h, 0.0, static_cast<double>(src_h) - ry);
+    if (src_w <= 0 || src_h <= 0 || rw <= 0.0 || rh <= 0.0 ||
+        canvas_w <= 0 || canvas_h <= 0) {
         return false;
     }
     if (!out_layer->IsValid() || out_layer->Width() != canvas_w ||
@@ -2365,8 +2501,8 @@ bool WarpClipFrame(const video::Frame& src, const Transform& tr,
         return true;   // degenerate — transparent layer
     }
     const double inv_scale = 1.0 / static_cast<double>(scale);
-    const double dw = src_w * static_cast<double>(scale);
-    const double dh = src_h * static_cast<double>(scale);
+    const double dw = rw * static_cast<double>(scale);
+    const double dh = rh * static_cast<double>(scale);
     const double ox = tr.offset_x * canvas_w;
     const double oy = tr.offset_y * canvas_h;
     const double cx = ox + dw * 0.5;
@@ -2421,8 +2557,9 @@ bool WarpClipFrame(const video::Frame& src, const Transform& tr,
             if (std::fabs(ux) > half_dw || std::fabs(uy) > half_dh) {
                 continue;   // outside the scaled rect -> transparent
             }
-            const double sx = ux * inv_scale + src_w * 0.5;
-            const double sy = uy * inv_scale + src_h * 0.5;
+            // Region-local source coords + the window's frame offset.
+            const double sx = ux * inv_scale + rw * 0.5 + rx;
+            const double sy = uy * inv_scale + rh * 0.5 + ry;
             std::uint8_t spx[4] = {0, 0, 0, 0};
             SampleBilinearBGRA(src_px, src_w, src_h, sx, sy, true, spx);
             std::uint8_t* op =

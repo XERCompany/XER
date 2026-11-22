@@ -44,11 +44,13 @@
 
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
 
 #include "audio_mixer.h"
+#include "auto_cacher.h"     // AutoCacher::Stats (PUBLIC dep)
 #include "compositor.h"
 #include "frame.h"            // video::Frame — XER_Video (PUBLIC dep)
 #include "frame_clock.h"
@@ -73,6 +75,18 @@ struct PreviewOptions {
     int sample_rate = 48000;          // mixer output rate (s16 stereo)
     int audio_chunk_samples = 1024;   // mixer/provider chunk size
     bool audio_enabled = true;        // false -> video-only pump
+    // Olive-style idle-time pre-render around the playhead into the
+    // shared EffectFrameCache (playback/auto_cacher.h). Also gated by
+    // the XER_VE_AUTOCACHE env var (=0 disables); effective enable is
+    // this flag AND the env. Default ON — pre-rendering is the only
+    // way wall-clock playback frames become cache hits.
+    bool autocache = true;
+    // Optional media-path resolver forwarded to the compositor (and
+    // the autocache's private compositor) — the proxy seam: maps
+    // clip.source_path to its ready proxy for VIDEO decode. The audio
+    // mixer never sees it: proxies carry no audio, so sound always
+    // comes off the original media. Empty -> original paths.
+    std::function<std::string(const std::string&)> media_resolver;
 };
 
 class PreviewEngine {
@@ -136,6 +150,20 @@ public:
     std::uint64_t FramesPresented() const;
     // Accumulated non-fatal notes (compositor + mixer, dedup'd).
     std::vector<std::string> Warnings() const;
+
+    // Effect-chain cache counters for the engine's shared
+    // EffectFrameCache (hits/misses/stores/evictions) — the same
+    // object the AutoCacher fills. Lightweight; for perf HUDs and
+    // smoke logs.
+    EffectFrameCache::Stats FrameCacheStats() const;
+    // AutoCacher counters (windows/queued/done/skipped/cancelled/
+    // failed) — all zeros when the feature is disabled.
+    AutoCacher::Stats AutoCacheStats() const;
+    // Waits until the AutoCacher queue is drained and no window is
+    // pending (up to timeout_ms) — tests/smoke only; returns false on
+    // timeout or when disabled-but-idle (idle is always true then:
+    // the wait trivially succeeds).
+    bool WaitAutoCacheIdle(int timeout_ms);
 
     // Forward jumps larger than this re-open decode sessions instead
     // of sequential-decoding through the gap (visible for tuning).

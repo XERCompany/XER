@@ -14,6 +14,8 @@ whisper ggml model lives in `<exe>/models/` (see below).
 - **Replaces:** the AGPL-risk Ultralytics YOLOv8n reference
 - **Consumer:** `src/content/ai/find_object` via
   `tools/video_editor/ai_tags.cc` ("AI: Find Objects" clip tagging)
+  and `tools/video_editor/ai/smart_reframe.cc` ("Smart Reframe →"
+  auto-reframe — subject tracking + crop windows)
 - **Contract (verified by protobuf inspection):**
   - input `pixel_values` f32 `[B,3,H,W]` RGB /255, letterboxed —
     **dynamic H/W**; fed at 384 (trained resolution; preprocessor_config
@@ -59,6 +61,33 @@ whisper ggml model lives in `<exe>/models/` (see below).
   - outputs: `output_masks` f32 `[1,1,3,1024,1024]` logits (>=0 = mask),
     `iou_predictions` f32 `[1,1,3]` — pick best-IoU mask, resize to
     source
+
+## gtcrn_simple.onnx — voice isolation / noise reduction (WIRED: Voice Isolate)
+
+- **Source:** https://github.com/k2-fsa/sherpa-onnx/releases/download/
+  speech-enhancement-models/gtcrn_simple.onnx (0.5 MB, fp32) — the
+  streaming export from upstream
+  https://github.com/Xiaobin-Rong/gtcrn (`stream/onnx_models/`,
+  DNS3-trained) with sherpa-onnx metadata
+- **License:** MIT (upstream repo LICENSE — code + weights)
+- **Consumer:** `tools/video_editor/voice_isolate.cc` via the
+  `builtin:xer.af.voice_isolate` audio effect (Media Bin
+  "Audio FX →" bounce workflow)
+- **Contract (verified by protobuf inspection):**
+  - streaming, 16 kHz mono; **one STFT frame per Run**
+  - input `mix` f32 `[1,257,1,2]` — complex STFT frame, interleaved
+    re/im; STFT: n_fft=512, hop=256, win=512, **sqrt** symmetric Hann,
+    centered/reflect-padded (knf conventions)
+  - inputs `conv_cache` `[2,1,16,16,33]`, `tra_cache` `[2,3,1,1,16]`,
+    `inter_cache` `[2,1,33,16]` — zero-init, then previous frame's
+    `*_out` verbatim
+  - outputs `enh` `[1,257,1,2]` + `conv_cache_out` / `tra_cache_out` /
+    `inter_cache_out`
+  - ISTFT: same sqrt-Hann at synthesis, OLA normalized by sum(w²),
+    strip center pad; voice_isolate.cc resamples src_rate↔16 kHz and
+    blends `amount` with the dry signal
+  - model metadata (readable in Netron/onnx): model_type=gtcrn,
+    sample_rate=16000, n_fft=512, hop=256, win=512, window=hann_sqrt
 
 ## ggml-base.en.bin — whisper transcription (WIRED, different dir)
 

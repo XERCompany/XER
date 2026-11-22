@@ -854,6 +854,59 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                 }
             }
 
+            // reframe: optional AI smart-reframe subject track —
+            // {samples: [{t, cx, cy, w, h, conf, cut}]} in SOURCE
+            // seconds / frame fractions (ReframeSample contract).
+            // Same policy as tags: wrong types are hard errors,
+            // non-finite numbers drop the entry.
+            if (cj.isMember("reframe")) {
+                const Json::Value& rj = cj["reframe"];
+                if (!rj.isObject()) {
+                    return Fail(error_out,
+                                where + ".reframe: expected object");
+                }
+                if (rj.isMember("samples")) {
+                    const Json::Value& sj = rj["samples"];
+                    if (!sj.isArray()) {
+                        return Fail(
+                            error_out,
+                            where + ".reframe.samples: expected array");
+                    }
+                    for (Json::ArrayIndex j = 0; j < sj.size(); ++j) {
+                        const Json::Value& ss = sj[j];
+                        const std::string swhere =
+                            where + ".reframe.samples[" +
+                            std::to_string(j) + "]";
+                        if (!ss.isObject()) {
+                            return Fail(error_out,
+                                        swhere + ": expected object");
+                        }
+                        Reader sr{ss, swhere, error_out};
+                        ReframeSample sample;
+                        if (!sr.GetF64("t", sample.t, &sample.t) ||
+                            !sr.GetF32("cx", sample.cx, &sample.cx) ||
+                            !sr.GetF32("cy", sample.cy, &sample.cy) ||
+                            !sr.GetF32("w", sample.w, &sample.w) ||
+                            !sr.GetF32("h", sample.h, &sample.h) ||
+                            !sr.GetF32("conf", sample.confidence,
+                                       &sample.confidence) ||
+                            !sr.GetBool("cut", sample.scene_boundary,
+                                        &sample.scene_boundary)) {
+                            return false;
+                        }
+                        if (!std::isfinite(sample.t) ||
+                            !std::isfinite(sample.cx) ||
+                            !std::isfinite(sample.cy) ||
+                            !std::isfinite(sample.w) ||
+                            !std::isfinite(sample.h) ||
+                            !std::isfinite(sample.confidence)) {
+                            continue;   // corrupt entry — drop it
+                        }
+                        clip.reframe.samples.push_back(sample);
+                    }
+                }
+            }
+
             project.clips.push_back(clip);
         }
     }
@@ -994,12 +1047,26 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
 
     {
         Reader r{root, "project", error_out};
+        std::int64_t proxy_max_dim = project.proxy_max_dim;
+        std::int64_t proxy_crf = project.proxy_crf;
         if (!r.GetF64("work_in", project.work_in, &project.work_in) ||
             !r.GetF64("work_out", project.work_out, &project.work_out) ||
             !r.GetF32("master_gain_db", project.master_gain_db,
-                      &project.master_gain_db)) {
+                      &project.master_gain_db) ||
+            !r.GetBool("use_proxies", project.use_proxies,
+                       &project.use_proxies) ||
+            !r.GetBool("proxy_ingest", project.proxy_ingest,
+                       &project.proxy_ingest) ||
+            !r.GetI64("proxy_max_dim", project.proxy_max_dim,
+                      &proxy_max_dim) ||
+            !r.GetI64("proxy_crf", project.proxy_crf, &proxy_crf)) {
             return false;
         }
+        project.proxy_max_dim =
+            static_cast<int>(std::clamp<std::int64_t>(
+                proxy_max_dim, 0, 16384));
+        project.proxy_crf = static_cast<int>(
+            std::clamp<std::int64_t>(proxy_crf, -1, 63));
         if (!std::isfinite(project.master_gain_db) ||
             project.master_gain_db < -96.0f ||
             project.master_gain_db > 24.0f) {
@@ -1103,6 +1170,24 @@ Json::Value ClipToJson(const Clip& clip) {
             tags.append(tj);
         }
         out["tags"] = tags;
+    }
+
+    if (!clip.reframe.samples.empty()) {
+        Json::Value reframe(Json::objectValue);
+        Json::Value samples(Json::arrayValue);
+        for (const ReframeSample& sample : clip.reframe.samples) {
+            Json::Value sj(Json::objectValue);
+            sj["t"] = sample.t;
+            sj["cx"] = static_cast<double>(sample.cx);
+            sj["cy"] = static_cast<double>(sample.cy);
+            sj["w"] = static_cast<double>(sample.w);
+            sj["h"] = static_cast<double>(sample.h);
+            sj["conf"] = static_cast<double>(sample.confidence);
+            sj["cut"] = sample.scene_boundary;
+            samples.append(sj);
+        }
+        reframe["samples"] = samples;
+        out["reframe"] = reframe;
     }
 
     if (!clip.masks.empty()) {
@@ -1233,6 +1318,12 @@ Json::Value ProjectToJson(const Project& project) {
     if (project.master_gain_db != 0.0f) {
         root["master_gain_db"] = static_cast<double>(project.master_gain_db);
     }
+    // Proxy workflow — always written so the project's decode-mode
+    // round-trips even at non-defaults.
+    root["use_proxies"] = project.use_proxies;
+    root["proxy_ingest"] = project.proxy_ingest;
+    root["proxy_max_dim"] = project.proxy_max_dim;
+    root["proxy_crf"] = project.proxy_crf;
     return root;
 }
 

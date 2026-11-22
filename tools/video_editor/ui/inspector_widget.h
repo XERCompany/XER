@@ -71,6 +71,14 @@ public:
         std::function<void(const std::string& clip_id)>
             on_ai_find_objects;
         std::function<void(const std::string& clip_id)> on_ai_clear_tags;
+        // SMART REFRAME section: the target combo applies an aspect to
+        // the clip's smart-reframe effect (the shell updates the param
+        // — or starts the scan when no track exists); "Analyze"
+        // always re-runs the subject scan. Args: (clip_id, w/h ratio).
+        std::function<void(const std::string& clip_id, double ratio)>
+            on_smart_reframe;
+        std::function<void(const std::string& clip_id, double ratio)>
+            on_smart_reframe_analyze;
     };
 
     explicit InspectorWidget(Hooks hooks = {});
@@ -221,6 +229,8 @@ private:
     std::shared_ptr<XER::UI::Widgets::Button> apply_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> ai_find_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> ai_clear_btn_;
+    std::shared_ptr<XER::UI::Widgets::Combobox> reframe_combo_;
+    std::shared_ptr<XER::UI::Widgets::Button> reframe_btn_;
     std::shared_ptr<XER::UI::Widgets::Combobox> transition_combo_;
     std::shared_ptr<XER::UI::Widgets::TextInput>
         transition_duration_input_;

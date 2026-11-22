@@ -6,6 +6,7 @@
 
 #include "photo/document.h"
 #include "photo/photo_history.h"
+#include "photo/selection.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
 namespace XER::VideoEditor::Photo {
@@ -162,12 +163,19 @@ IntRect BrushEngine::PaintStroke(
 bool BrushEngine::CompositeStroke(Document& doc, LayerId layer,
                                   const TiledDevice& scratch,
                                   const IntRect& dirty,
-                                  PhotoHistory* hist) const {
+                                  PhotoHistory* hist,
+                                  const TiledDevice* clip) const {
     LayerNode* node = doc.FindLayer(layer);
     if (node == nullptr || node->Locked()) return false;
     TiledDevice* dev = node->Device();
     if (dev == nullptr || dirty.IsEmpty()) return false;
-    const std::vector<uint32_t> src = scratch.ReadRegionU32(dirty);
+    std::vector<uint32_t> src = scratch.ReadRegionU32(dirty);
+    if (clip != nullptr) {
+        // Selection clip: dab alpha scaled by coverage — coverage 0
+        // makes the dab pixel invisible to the composite.
+        ScaleAlphaByCoverage(&src, dirty.w, dirty.h, dirty.x, dirty.y,
+                             *clip);
+    }
     const std::string blend =
         params_.eraser ? "dstOut" : params_.blend_mode;
     const float opacity = params_.opacity;
@@ -183,15 +191,55 @@ bool BrushEngine::CompositeStroke(Document& doc, LayerId layer,
     return true;
 }
 
+bool BrushEngine::CompositeStrokeOnMask(
+    TiledDevice& mask_dev, const TiledDevice& scratch,
+    const IntRect& dirty, uint8_t value, PhotoHistory* hist,
+    const TiledDevice* clip) const {
+    if (dirty.IsEmpty()) return false;
+    std::vector<uint32_t> src = scratch.ReadRegionU32(dirty);
+    if (clip != nullptr) {
+        ScaleAlphaByCoverage(&src, dirty.w, dirty.h, dirty.x, dirty.y,
+                             *clip);
+    }
+    const float opacity = params_.opacity;
+    const auto op = [&](TiledDevice& d) {
+        for (int y = 0; y < dirty.h; ++y) {
+            for (int x = 0; x < dirty.w; ++x) {
+                const uint32_t v =
+                    src[static_cast<size_t>(y) * dirty.w + x];
+                // Dab alpha x stroke opacity = how hard coverage is
+                // pushed toward `value`.
+                const int sa = static_cast<int>(
+                    (v & 0xFFu) * opacity + 0.5f);
+                if (sa <= 0) continue;
+                const uint8_t cov =
+                    d.ReadCoverage(dirty.x + x, dirty.y + y);
+                const int out =
+                    (cov * (255 - sa) + value * sa + 127) / 255;
+                if (out != cov) {
+                    d.WriteCoverage(dirty.x + x, dirty.y + y,
+                                    static_cast<uint8_t>(out));
+                }
+            }
+        }
+    };
+    if (hist != nullptr) {
+        return hist->ExecuteDeviceOp(mask_dev, "Paint Mask", op);
+    }
+    op(mask_dev);
+    return true;
+}
+
 bool BrushEngine::PaintStrokeOnLayer(
     Document& doc, LayerId layer, const std::vector<StrokePoint>& points,
-    PhotoHistory* hist, IntRect* dirty_out) {
+    PhotoHistory* hist, IntRect* dirty_out,
+    const TiledDevice* clip) {
     TiledDevice scratch(doc.CanvasWidth(), doc.CanvasHeight(),
                         image::PixelFormat::RGBA8, Pixel::Transparent());
     const IntRect dirty = PaintStroke(scratch, points);
     if (dirty_out) *dirty_out = dirty;
     if (dirty.IsEmpty()) return false;
-    return CompositeStroke(doc, layer, scratch, dirty, hist);
+    return CompositeStroke(doc, layer, scratch, dirty, hist, clip);
 }
 
 }  // namespace XER::VideoEditor::Photo

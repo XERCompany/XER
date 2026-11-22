@@ -44,7 +44,35 @@ constexpr LayerId kInvalidLayerId = 0;
 enum class LayerKind : uint8_t {
     kGroup,
     kRaster,
-    // kAdjustment / kText / kVector — M2+ per the stack doc.
+    kAdjustment,  // M4: named op + params over the composite-of-below
+    // kText / kVector — M2+ per the stack doc.
+};
+
+// One named parameter of an adjustment layer op (see
+// photo/adjust_ops.h for the registry of ops + param schemas).
+struct AdjustmentParam {
+    std::string name;
+    double value = 0.0;
+    bool operator==(const AdjustmentParam& o) const {
+        return name == o.name && value == o.value;
+    }
+    bool operator!=(const AdjustmentParam& o) const {
+        return !(*this == o);
+    }
+};
+
+// What an kAdjustment node evaluates: `op` names a registered op
+// ("hsl", "levels", "curves", ...); `params` is the ordered
+// name/value list (missing entries take the op's defaults).
+struct AdjustmentSpec {
+    std::string op;
+    std::vector<AdjustmentParam> params;
+    bool operator==(const AdjustmentSpec& o) const {
+        return op == o.op && params == o.params;
+    }
+    bool operator!=(const AdjustmentSpec& o) const {
+        return !(*this == o);
+    }
 };
 
 // One node of the layer tree. Groups nest; raster layers own a
@@ -69,9 +97,33 @@ public:
     const std::string& BlendMode() const { return blend_mode_; }
     void SetBlendMode(const std::string& m) { blend_mode_ = m; }
 
-    // Raster leaves only (nullptr for groups).
+    // Raster leaves only (nullptr for groups/adjustments).
     TiledDevice* Device() { return device_.get(); }
     const TiledDevice* Device() const { return device_.get(); }
+
+    // --- M4: A8 layer mask -------------------------------------------
+    // Optional mask attachment (raster/group/adjustment nodes): a
+    // canvas-sized Gray8 TiledDevice whose coverage scales the node's
+    // effective alpha at composite time (255 = fully visible, the
+    // default). nullptr = no mask.
+    TiledDevice* Mask() { return mask_.get(); }
+    const TiledDevice* Mask() const { return mask_.get(); }
+    bool HasMask() const { return mask_ != nullptr; }
+    // Adopts a caller-built device (canvas-sized Gray8 expected) or
+    // detaches on nullptr. Structural edits go through the mask
+    // commands in mask_ops.h so they stay undoable.
+    void SetMask(std::unique_ptr<TiledDevice> mask);
+    // Detaches the mask and returns it (undo/redo swap path — the
+    // same device object is re-attached by SetMask, so painted
+    // content survives attach->detach->attach).
+    std::unique_ptr<TiledDevice> TakeMask();
+
+    // --- M4: adjustment layer payload --------------------------------
+    // Meaningful on kAdjustment nodes only.
+    const AdjustmentSpec& Adjustment() const { return adjustment_; }
+    void SetAdjustment(const AdjustmentSpec& spec) {
+        adjustment_ = spec;
+    }
 
     LayerNode* Parent() { return parent_; }
     const LayerNode* Parent() const { return parent_; }
@@ -93,6 +145,10 @@ private:
     float opacity_ = 1.0f;
     std::string blend_mode_ = "srcOver";  // Skia blend-mode name
     std::unique_ptr<TiledDevice> device_;
+    // M4: optional A8 coverage mask (Gray8 TiledDevice, canvas-sized).
+    std::unique_ptr<TiledDevice> mask_;
+    // M4: adjustment-layer payload (kAdjustment nodes).
+    AdjustmentSpec adjustment_;
     LayerNode* parent_ = nullptr;
     std::vector<std::unique_ptr<LayerNode>> children_;
 };
@@ -205,15 +261,19 @@ std::vector<uint32_t> CompositeSubtreeU32(const LayerNode& node,
 
 // Fill a raster layer with a solid color. Undoable when `hist` is
 // given (recorded as one "Fill" step); without it the fill is applied
-// directly with no undo record.
+// directly with no undo record. `clip` is an optional A8 coverage
+// device (a selection): each covered pixel lerps toward the fill
+// color by coverage/255 — 0 leaves the pixel untouched.
 bool FillLayer(Document& doc, LayerId layer, Pixel color,
-               PhotoHistory* hist);
+               PhotoHistory* hist,
+               const TiledDevice* clip = nullptr);
 
 // Fill a raster layer with a linear gradient (Skia bridge gradient,
-// positions 0..1, bridge-packed colors). Same undo contract.
+// positions 0..1, bridge-packed colors). Same undo + clip contract.
 bool FillLinearGradient(Document& doc, LayerId layer, float x0, float y0,
                         float x1, float y1,
                         const XER::Bridge::Skia::GradientStops& stops,
-                        PhotoHistory* hist);
+                        PhotoHistory* hist,
+                        const TiledDevice* clip = nullptr);
 
 }  // namespace XER::VideoEditor::Photo

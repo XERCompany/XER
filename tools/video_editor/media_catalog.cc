@@ -128,11 +128,27 @@ constexpr const char* kSchemaStatements[] = {
     buckets INTEGER NOT NULL DEFAULT 0,
     data BLOB NOT NULL DEFAULT X''
 ))sql",
+    // Proxy workflow (proxy_manager.cc): one row per canonical media
+    // path; `state` is ProxyStatus (1 pending, 2 ready, 3 failed).
+    // src_size/src_mtime fingerprint the source at generation time so
+    // a rewritten file can never resolve to a stale proxy silently.
+    R"sql(CREATE TABLE IF NOT EXISTS proxies (
+    path TEXT PRIMARY KEY COLLATE NOCASE,
+    proxy_path TEXT NOT NULL DEFAULT '',
+    state INTEGER NOT NULL DEFAULT 0,
+    src_size INTEGER NOT NULL DEFAULT 0,
+    src_mtime INTEGER NOT NULL DEFAULT 0,
+    max_dim INTEGER NOT NULL DEFAULT 0,
+    error TEXT NOT NULL DEFAULT '',
+    updated_at INTEGER NOT NULL DEFAULT 0
+))sql",
 };
 
 constexpr const char* kSelectColumns =
     "id, path, duration, width, height, fps, video_codec, audio_codec,"
-    " has_audio, file_size, mtime, probe_json, poster_path, added_at";
+    " has_audio, file_size, mtime, probe_json, poster_path, added_at,"
+    " COALESCE((SELECT p.state FROM proxies p"
+    "          WHERE p.path = media.path), 0)";
 
 // Canonical absolute UTF-8 form of a media path: NormalizeUtf8Path
 // (legacy ANSI bytes -> UTF-8), FromUtf8 -> weakly_canonical (absolute,
@@ -223,6 +239,11 @@ CatalogEntry EntryFromRow(const Row& row) {
     e.probe_json = AsString(row.columns[11]);
     e.poster_path = AsString(row.columns[12]);
     e.added_at_unix = AsInt(row.columns[13]);
+    // The joined proxy status rides column 14 when the caller selects
+    // kSelectColumns; older hand-rolled selects may not carry it.
+    if (row.columns.size() >= 15) {
+        e.proxy_state = static_cast<int>(AsInt(row.columns[14]));
+    }
     return e;
 }
 
@@ -1039,6 +1060,8 @@ bool MediaCatalog::Remove(std::int64_t id,
                           bool remove_poster_file,
                           std::string* error_out) {
     std::string poster_path;
+    std::string canon_path;
+    std::string proxy_path;
     {
         std::lock_guard<std::mutex> lock(db_mutex_);
         if (!IsOpenLocked()) {
@@ -1047,12 +1070,30 @@ bool MediaCatalog::Remove(std::int64_t id,
         // Read poster_path first so the file can be removed after the row
         // is gone (the path is not recoverable once the row is deleted).
         std::vector<Row> rows;
-        if (!db_->Query("SELECT poster_path FROM media WHERE id = ?",
+        if (!db_->Query("SELECT poster_path, path FROM media WHERE id = ?",
                         {VInt(id)}, rows, error_out)) {
             return false;
         }
-        if (!rows.empty() && !rows.front().columns.empty()) {
-            poster_path = AsString(rows.front().columns.front());
+        if (!rows.empty()) {
+            if (rows.front().columns.size() > 0) {
+                poster_path = AsString(rows.front().columns[0]);
+            }
+            if (rows.front().columns.size() > 1) {
+                canon_path = AsString(rows.front().columns[1]);
+            }
+        }
+        // Same for the managed proxy file — the proxies row goes with
+        // the media row so a re-import starts clean.
+        if (!canon_path.empty()) {
+            std::vector<Row> prows;
+            if (db_->Query(
+                    "SELECT proxy_path FROM proxies WHERE path = ?",
+                    {VStr(canon_path)}, prows, nullptr) &&
+                !prows.empty() && !prows.front().columns.empty()) {
+                proxy_path = AsString(prows.front().columns.front());
+            }
+            db_->Execute("DELETE FROM proxies WHERE path = ?",
+                         {VStr(canon_path)}, nullptr);
         }
         if (!db_->Execute("DELETE FROM media WHERE id = ?",
                           {VInt(id)}, error_out)) {
@@ -1063,6 +1104,12 @@ bool MediaCatalog::Remove(std::int64_t id,
         // Best-effort: a missing/locked poster file is not an error.
         std::error_code ec;
         std::filesystem::remove(Path::FromUtf8(poster_path), ec);
+    }
+    if (!proxy_path.empty()) {
+        // Best-effort like the poster — a proxy still open in a decoder
+        // fails the unlink on Windows and simply stays on disk.
+        std::error_code ec;
+        std::filesystem::remove(Path::FromUtf8(proxy_path), ec);
     }
     return true;
 }
@@ -1225,6 +1272,88 @@ bool MediaCatalog::GetPosterAt(const std::string& utf8_path,
         return false;
     }
     return ClipPoster::GetPosterAt(canon, seconds, frame_out, error_out);
+}
+
+// ---- proxy records ----------------------------------------------------
+
+std::string MediaCatalog::ProxyDir() const {
+    return Path::ToUtf8(
+        Path::FromUtf8(db_path_).parent_path() / "proxies");
+}
+
+bool MediaCatalog::SetProxyRecord(const ProxyRecord& record,
+                                  std::string* error_out) {
+    std::string canon;
+    if (!CanonicalizeMediaPath(record.path, &canon, error_out)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!IsOpenLocked()) {
+        return Fail(error_out, "catalog is not open");
+    }
+    const std::int64_t updated = record.updated_at_unix > 0
+                                     ? record.updated_at_unix
+                                     : NowUnixSeconds();
+    return db_->Execute(
+        "INSERT OR REPLACE INTO proxies(path, proxy_path, state,"
+        " src_size, src_mtime, max_dim, error, updated_at)"
+        " VALUES(?, ?, ?, ?, ?, ?, ?, ?)",
+        {VStr(canon), VStr(record.proxy_path),
+         VInt(static_cast<int>(record.status)), VInt(record.src_size),
+         VInt(record.src_mtime), VInt(record.max_dim),
+         VStr(record.error), VInt(updated)},
+        error_out);
+}
+
+bool MediaCatalog::GetProxy(const std::string& utf8_path,
+                            ProxyRecord* out,
+                            std::string* error_out) const {
+    if (out == nullptr) {
+        return Fail(error_out, "null proxy out-param");
+    }
+    std::string canon;
+    if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!IsOpenLocked()) {
+        return Fail(error_out, "catalog is not open");
+    }
+    std::vector<Row> rows;
+    if (!db_->Query(
+            "SELECT path, proxy_path, state, src_size, src_mtime,"
+            " max_dim, error, updated_at FROM proxies WHERE path = ?",
+            {VStr(canon)}, rows, error_out)) {
+        return false;
+    }
+    if (rows.empty() || rows.front().columns.size() < 8) {
+        out->status = ProxyStatus::kNone;
+        return false;   // no row — not an error
+    }
+    const auto& cols = rows.front().columns;
+    out->path = AsString(cols[0]);
+    out->proxy_path = AsString(cols[1]);
+    out->status = static_cast<ProxyStatus>(AsInt(cols[2]));
+    out->src_size = AsInt(cols[3]);
+    out->src_mtime = AsInt(cols[4]);
+    out->max_dim = static_cast<int>(AsInt(cols[5]));
+    out->error = AsString(cols[6]);
+    out->updated_at_unix = AsInt(cols[7]);
+    return true;
+}
+
+bool MediaCatalog::RemoveProxy(const std::string& utf8_path,
+                               std::string* error_out) {
+    std::string canon;
+    if (!CanonicalizeMediaPath(utf8_path, &canon, error_out)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(db_mutex_);
+    if (!IsOpenLocked()) {
+        return Fail(error_out, "catalog is not open");
+    }
+    return db_->Execute("DELETE FROM proxies WHERE path = ?",
+                        {VStr(canon)}, error_out);
 }
 
 }  // namespace XER::VideoEditor

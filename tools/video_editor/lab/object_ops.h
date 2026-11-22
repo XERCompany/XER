@@ -50,6 +50,23 @@ std::vector<std::uint8_t> PolygonMask(int frame_w, int frame_h,
                                       const std::vector<IntPoint>& polygon,
                                       int feather_px);
 
+// Inverse of PolygonMask: converts a stored mask (w*h 0..255 coverage
+// bytes, e.g. the SmartSelect AI mask) back into an editable lasso
+// polygon in frame pixels — the stored selection can then feed the
+// polygon-based ops (CutOutLasso / InpaintMask via PolygonMask) or be
+// edited as lasso points.
+//
+// The mask is thresholded at >= 128 and traced with Moore-neighbor
+// contour following; the returned polygon is the OUTER contour of the
+// connected component containing the first boundary pixel in scan
+// order (holes and any disconnected blobs are not represented — a
+// lasso is a single polygon). The raw pixel boundary is simplified
+// with Douglas-Peucker at `tolerance_px` (<= 0 keeps every boundary
+// pixel). Empty vector on a bad size or an empty mask.
+std::vector<IntPoint> MaskToPolygon(
+    const std::vector<std::uint8_t>& mask, int frame_w, int frame_h,
+    float tolerance_px);
+
 // ------------------------------------------------------------------
 // Cut / copy
 // ------------------------------------------------------------------

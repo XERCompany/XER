@@ -128,6 +128,17 @@ std::string FormatInfo(const CatalogEntry& entry) {
     return buffer;
 }
 
+// List-mode proxy column: entry.proxy_state mirrors ProxyStatus
+// (0 none, 1 pending, 2 ready, 3 failed — media_catalog.h).
+std::string ProxyCell(const CatalogEntry& entry) {
+    switch (entry.proxy_state) {
+        case 1: return "..";   // building
+        case 2: return "PX";   // ready
+        case 3: return "!";    // failed
+        default: return "";
+    }
+}
+
 // Still-image decode results memoized by UTF-8 path — DrawGrid
 // repaints on every hover/scroll, and decoding EXR/RAW per paint would
 // thrash disk + CPU. Failures are cached too (a corrupt still must not
@@ -204,7 +215,10 @@ void MediaBinWidget::EnsureChildren() {
                         {"Kind", 56.0f, false},
                         {"Dur", 52.0f, false},
                         {"Size", 64.0f, false},
-                        {"Info", 88.0f, false}});
+                        {"Info", 88.0f, false},
+                        // Proxy status — "PX" ready, "…" building,
+                        // "!" failed (proxy_manager.cc states).
+                        {"Px", 30.0f, false}});
     table_->SetRowHeight(28.0f);
     table_->SetOnRowClick([this](int row) {
         if (row >= 0 && row < static_cast<int>(visible_.size())) {
@@ -415,7 +429,7 @@ void MediaBinWidget::RefreshRows() {
         rows.push_back({Basename(entry.path), FormatKind(entry),
                         FormatDuration(entry.duration_seconds),
                         FormatSize(entry.file_size_bytes),
-                        FormatInfo(entry)});
+                        FormatInfo(entry), ProxyCell(entry)});
     }
     table_->SetRows(std::move(rows));
     // Table selection is a *row* index — translate the entry index.
@@ -722,6 +736,32 @@ void MediaBinWidget::DrawGrid(
                           tokens.radius_small);
         VeIcons::DrawIcon(renderer, KindIcon(entry), 12,
                           tokens.foreground, kind_chip);
+
+        // Proxy badge next to the kind chip — states mirror
+        // ProxyStatus (media_catalog.h): pending = amber "PX..",
+        // ready = accent "PX", failed = danger "PX!".
+        if (entry.proxy_state != 0) {
+            const XER::UI::Theme::Color chip_color =
+                entry.proxy_state == 2   ? tokens.accent
+                : entry.proxy_state == 3 ? tokens.danger
+                                         : tokens.warning_chip;
+            const char* px_text =
+                entry.proxy_state == 1 ? "PX.."
+                : entry.proxy_state == 3 ? "PX!" : "PX";
+            const XER::UI::Rendering::TextStyle px_style{
+                tokens.foreground, tokens.font_small, 600};
+            const auto px_size =
+                renderer.MeasureText(px_text, px_style);
+            const XER::UI::Layout::Rect px_chip{
+                kind_chip.x + kind_chip.width + 4.0f, kind_chip.y,
+                px_size.width + 8.0f, kind_chip.height};
+            renderer.FillRect(px_chip, chip_color, tokens.radius_small);
+            renderer.DrawText(px_text,
+                              {px_chip.x + 4.0f, px_chip.y + 1.0f,
+                               px_chip.width - 8.0f,
+                               px_chip.height - 2.0f},
+                              px_style);
+        }
         if (hovered && !selected) {
             renderer.FillRect(
                 thumb, VeTheme::WithAlpha(tokens.hover, 0.25f),
@@ -953,6 +993,37 @@ bool MediaBinWidget::ShowContextMenu(
     };
     items.push_back(std::move(remove));
 
+    // Proxy workflow — the entry's proxy_state (ProxyStatus mirror)
+    // decides which item applies: none/failed offer a build, pending
+    // offers a cancel, ready is a disabled status line.
+    const int proxy_state =
+        (row >= 0 && row < static_cast<int>(entries_.size()))
+            ? entries_[static_cast<std::size_t>(row)].proxy_state
+            : 0;
+    const bool video_media =
+        row >= 0 && row < static_cast<int>(entries_.size()) &&
+        entries_[static_cast<std::size_t>(row)].HasVideo();
+    Widgets::ContextMenu::Item proxy;
+    proxy.separator_before = true;
+    if (proxy_state == 1) {
+        proxy.label = "Cancel proxy build";
+        proxy.enabled = video_media && hooks_.on_cancel_proxy != nullptr;
+        proxy.action = [this, path] {
+            if (hooks_.on_cancel_proxy) hooks_.on_cancel_proxy(path);
+        };
+    } else if (proxy_state == 2) {
+        proxy.label = "Proxy ready";
+        proxy.enabled = false;   // status line, not an action
+    } else {
+        proxy.label = proxy_state == 3 ? "Retry proxy build"
+                                       : "Create proxy";
+        proxy.enabled = video_media && hooks_.on_create_proxy != nullptr;
+        proxy.action = [this, path] {
+            if (hooks_.on_create_proxy) hooks_.on_create_proxy(path);
+        };
+    }
+    items.push_back(std::move(proxy));
+
     Widgets::ContextMenu::Item import;
     import.label = "Import Media…";
     import.separator_before = true;
@@ -987,6 +1058,17 @@ bool MediaBinWidget::ShowContextMenu(
         if (hooks_.on_transcribe) hooks_.on_transcribe(path);
     };
     items.push_back(std::move(transcribe));
+
+    Widgets::ContextMenu::Item edit_transcript;
+    edit_transcript.label = "Edit by Transcript";
+    edit_transcript.enabled =
+        !path.empty() && hooks_.on_edit_transcript != nullptr;
+    edit_transcript.action = [this, path] {
+        if (hooks_.on_edit_transcript) {
+            hooks_.on_edit_transcript(path);
+        }
+    };
+    items.push_back(std::move(edit_transcript));
 
     // Loaded audio-plugin DLLs — one bounce item per plugin effect.
     if (hooks_.audio_fx_list != nullptr) {

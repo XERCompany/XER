@@ -133,6 +133,18 @@ bool PhotoHistory::ExecutePaintOp(
         layer, label, std::move(memento)));
 }
 
+bool PhotoHistory::ExecuteDeviceOp(
+    TiledDevice& dev, const std::string& label,
+    const std::function<void(TiledDevice&)>& fn) {
+    if (!fn) return false;
+    dev.BeginTransaction();
+    fn(dev);
+    std::unique_ptr<TileMemento> memento = dev.EndTransaction();
+    if (!memento || memento->Empty()) return true;
+    return PushApplied(std::make_unique<DeviceMementoCommand>(
+        &dev, label, std::move(memento)));
+}
+
 // --- TileMementoCommand ---------------------------------------------------
 
 TileMementoCommand::TileMementoCommand(
@@ -154,6 +166,28 @@ bool TileMementoCommand::Revert(Document& doc) {
     TiledDevice* dev = doc.LayerDevice(layer_);
     if (dev == nullptr || !back_) return false;
     fwd_ = dev->ApplyMemento(*back_);
+    return true;
+}
+
+// --- DeviceMementoCommand -------------------------------------------------
+
+DeviceMementoCommand::DeviceMementoCommand(
+    TiledDevice* dev, std::string label,
+    std::unique_ptr<TileMemento> back_memento)
+    : dev_(dev), label_(std::move(label)),
+      back_(std::move(back_memento)) {}
+
+bool DeviceMementoCommand::Apply(Document&) {
+    // Redo path (the op itself was already applied via PushApplied).
+    if (dev_ == nullptr) return false;
+    if (!fwd_) return true;  // nothing recorded yet — already applied
+    back_ = dev_->ApplyMemento(*fwd_);
+    return true;
+}
+
+bool DeviceMementoCommand::Revert(Document&) {
+    if (dev_ == nullptr || !back_) return false;
+    fwd_ = dev_->ApplyMemento(*back_);
     return true;
 }
 
@@ -189,7 +223,7 @@ bool SetLayerAttributesCommand::Apply(Document& doc) {
     if (n == nullptr) return false;
     if (!have_prev_) {
         prev_ = {n->Name(), n->Visible(), n->Locked(), n->Opacity(),
-                 n->BlendMode()};
+                 n->BlendMode(), n->Adjustment()};
         have_prev_ = true;
     }
     n->SetName(next_.name);
@@ -197,6 +231,7 @@ bool SetLayerAttributesCommand::Apply(Document& doc) {
     n->SetLocked(next_.locked);
     n->SetOpacity(next_.opacity);
     n->SetBlendMode(next_.blend_mode);
+    n->SetAdjustment(next_.adjustment);
     return true;
 }
 
@@ -208,6 +243,7 @@ bool SetLayerAttributesCommand::Revert(Document& doc) {
     n->SetLocked(prev_.locked);
     n->SetOpacity(prev_.opacity);
     n->SetBlendMode(prev_.blend_mode);
+    n->SetAdjustment(prev_.adjustment);
     return true;
 }
 

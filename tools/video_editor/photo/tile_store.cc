@@ -10,6 +10,23 @@
 
 namespace XER::VideoEditor::Photo {
 
+namespace {
+
+// Writes one pixel in device format: RGBA8 stores the quad, Gray8/A8
+// stores the coverage byte (p.a — the "A" in A8).
+inline void StorePixelBytes(uint8_t* dst, int bpp, Pixel p) {
+    if (bpp >= 4) {
+        dst[0] = p.r;
+        dst[1] = p.g;
+        dst[2] = p.b;
+        dst[3] = p.a;
+    } else {
+        dst[0] = p.a;
+    }
+}
+
+}  // namespace
+
 TiledDevice::TiledDevice(int width, int height, image::PixelFormat format,
                          Pixel default_pixel)
     : width_(width < 0 ? 0 : width),
@@ -40,11 +57,11 @@ void TiledDevice::SetDefaultPixel(Pixel p) {
 const std::shared_ptr<Tile>& TiledDevice::DefaultTile() {
     if (!default_tile_) {
         auto t = std::make_shared<Tile>();
+        const int bpp = BytesPerPixel();
         t->data.assign(TileBytes(), 0);
-        const uint8_t px[4] = {default_pixel_.r, default_pixel_.g,
-                               default_pixel_.b, default_pixel_.a};
-        for (size_t i = 0; i < TileBytes(); i += 4) {
-            std::memcpy(t->data.data() + i, px, 4);
+        for (size_t i = 0; i < TileBytes();
+             i += static_cast<size_t>(bpp)) {
+            StorePixelBytes(t->data.data() + i, bpp, default_pixel_);
         }
         default_tile_ = std::move(t);
     }
@@ -93,23 +110,28 @@ Pixel TiledDevice::ReadPixel(int x, int y) const {
     }
     const Tile* t = TileAt(x / kTileSize, y / kTileSize);
     if (t == nullptr) return default_pixel_;
+    const int bpp = BytesPerPixel();
     const size_t off =
         (static_cast<size_t>(y % kTileSize) * kTileSize +
-         static_cast<size_t>(x % kTileSize)) * 4;
-    return Pixel{t->data[off], t->data[off + 1], t->data[off + 2],
-                 t->data[off + 3]};
+         static_cast<size_t>(x % kTileSize)) *
+        static_cast<size_t>(bpp);
+    if (bpp >= 4) {
+        return Pixel{t->data[off], t->data[off + 1], t->data[off + 2],
+                     t->data[off + 3]};
+    }
+    // A8: the stored byte is the coverage — expose it as alpha.
+    return Pixel{0, 0, 0, t->data[off]};
 }
 
 void TiledDevice::WritePixel(int x, int y, Pixel p) {
     if (x < 0 || y < 0 || x >= width_ || y >= height_) return;
     Tile* t = TileForWrite(x / kTileSize, y / kTileSize);
+    const int bpp = BytesPerPixel();
     const size_t off =
         (static_cast<size_t>(y % kTileSize) * kTileSize +
-         static_cast<size_t>(x % kTileSize)) * 4;
-    t->data[off] = p.r;
-    t->data[off + 1] = p.g;
-    t->data[off + 2] = p.b;
-    t->data[off + 3] = p.a;
+         static_cast<size_t>(x % kTileSize)) *
+        static_cast<size_t>(bpp);
+    StorePixelBytes(t->data.data() + off, bpp, p);
 }
 
 void TiledDevice::Fill(const IntRect& rect, Pixel p) {
@@ -144,9 +166,10 @@ void TiledDevice::Fill(const IntRect& rect, Pixel p) {
             if (sub == tile_rect) {
                 // Whole-tile uniform fill — fast path.
                 Tile* t = TileForWrite(col, row);
-                const uint8_t px[4] = {p.r, p.g, p.b, p.a};
-                for (size_t i = 0; i < TileBytes(); i += 4) {
-                    std::memcpy(t->data.data() + i, px, 4);
+                const int bpp = BytesPerPixel();
+                for (size_t i = 0; i < TileBytes();
+                     i += static_cast<size_t>(bpp)) {
+                    StorePixelBytes(t->data.data() + i, bpp, p);
                 }
                 continue;
             }
@@ -182,6 +205,7 @@ std::vector<uint8_t> TiledDevice::ReadRegion(const IntRect& rect) const {
     const IntRect r = IntRect::Intersect(rect, Bounds());
     if (r.IsEmpty()) return {};
     std::vector<uint8_t> out(static_cast<size_t>(r.w) * r.h * 4);
+    const int bpp = BytesPerPixel();
     const uint8_t def[4] = {default_pixel_.r, default_pixel_.g,
                             default_pixel_.b, default_pixel_.a};
     for (int y = 0; y < r.h; ++y) {
@@ -197,8 +221,15 @@ std::vector<uint8_t> TiledDevice::ReadRegion(const IntRect& rect) const {
             } else {
                 const size_t off =
                     (static_cast<size_t>(in_y) * kTileSize +
-                     static_cast<size_t>(dx % kTileSize)) * 4;
-                std::memcpy(dst, t->data.data() + off, 4);
+                     static_cast<size_t>(dx % kTileSize)) *
+                    static_cast<size_t>(bpp);
+                if (bpp >= 4) {
+                    std::memcpy(dst, t->data.data() + off, 4);
+                } else {
+                    // A8 -> normalized {0,0,0,coverage}.
+                    dst[0] = dst[1] = dst[2] = 0;
+                    dst[3] = t->data[off];
+                }
             }
             dst += 4;
         }
@@ -343,6 +374,148 @@ bool TiledDevice::IdenticalPixels(const TiledDevice& other) const {
         }
     }
     return true;
+}
+
+// --- coverage access (A8/Gray8) ---------------------------------------
+
+uint8_t TiledDevice::ReadCoverage(int x, int y) const {
+    if (x < 0 || y < 0 || x >= width_ || y >= height_) {
+        return default_pixel_.a;
+    }
+    const Tile* t = TileAt(x / kTileSize, y / kTileSize);
+    if (t == nullptr) return default_pixel_.a;
+    const int bpp = BytesPerPixel();
+    const size_t off =
+        (static_cast<size_t>(y % kTileSize) * kTileSize +
+         static_cast<size_t>(x % kTileSize)) *
+        static_cast<size_t>(bpp);
+    return bpp >= 4 ? t->data[off + 3] : t->data[off];
+}
+
+void TiledDevice::WriteCoverage(int x, int y, uint8_t v) {
+    if (x < 0 || y < 0 || x >= width_ || y >= height_) return;
+    Tile* t = TileForWrite(x / kTileSize, y / kTileSize);
+    const int bpp = BytesPerPixel();
+    const size_t off =
+        (static_cast<size_t>(y % kTileSize) * kTileSize +
+         static_cast<size_t>(x % kTileSize)) *
+        static_cast<size_t>(bpp);
+    if (bpp >= 4) {
+        t->data[off + 3] = v;  // RGBA8: coverage = alpha, RGB kept
+    } else {
+        t->data[off] = v;
+    }
+}
+
+void TiledDevice::FillCoverage(const IntRect& rect, uint8_t v) {
+    const IntRect r = IntRect::Intersect(rect, Bounds());
+    if (r.IsEmpty()) return;
+    const int bpp = BytesPerPixel();
+    const int col0 = r.x / kTileSize;
+    const int col1 = (r.Right() - 1) / kTileSize;
+    const int row0 = r.y / kTileSize;
+    const int row1 = (r.Bottom() - 1) / kTileSize;
+    for (int row = row0; row <= row1; ++row) {
+        for (int col = col0; col <= col1; ++col) {
+            const IntRect tile_rect{col * kTileSize, row * kTileSize,
+                                    kTileSize, kTileSize};
+            const IntRect sub = IntRect::Intersect(r, tile_rect);
+            if (bpp == 1 && sub == tile_rect &&
+                v == default_pixel_.a) {
+                // Whole A8 tile returns to default coverage: re-share
+                // the canonical default tile (same trick as Fill()).
+                const int64_t key = KeyOf(col, row);
+                auto it = tiles_.find(key);
+                if (it != tiles_.end()) {
+                    if (active_memento_ &&
+                        active_memento_->old_tiles_.find(key) ==
+                            active_memento_->old_tiles_.end()) {
+                        active_memento_->old_tiles_[key] = it->second;
+                    }
+                    it->second = DefaultTile();
+                }
+                continue;
+            }
+            Tile* t = TileForWrite(col, row);
+            for (int y = sub.y; y < sub.Bottom(); ++y) {
+                const int in_y = y % kTileSize;
+                for (int x = sub.x; x < sub.Right(); ++x) {
+                    const size_t off =
+                        (static_cast<size_t>(in_y) * kTileSize +
+                         static_cast<size_t>(x % kTileSize)) *
+                        static_cast<size_t>(bpp);
+                    if (bpp >= 4) {
+                        t->data[off + 3] = v;
+                    } else {
+                        t->data[off] = v;
+                    }
+                }
+            }
+        }
+    }
+}
+
+std::vector<uint8_t> TiledDevice::ReadRegionCoverage(
+    const IntRect& rect) const {
+    const IntRect r = IntRect::Intersect(rect, Bounds());
+    if (r.IsEmpty()) return {};
+    std::vector<uint8_t> out(static_cast<size_t>(r.w) * r.h);
+    const int bpp = BytesPerPixel();
+    for (int y = 0; y < r.h; ++y) {
+        uint8_t* dst = out.data() + static_cast<size_t>(y) * r.w;
+        const int dy = r.y + y;
+        const int row_ = dy / kTileSize;
+        const int in_y = dy % kTileSize;
+        for (int x = 0; x < r.w; ++x) {
+            const int dx = r.x + x;
+            const Tile* t = TileAt(dx / kTileSize, row_);
+            if (t == nullptr) {
+                dst[x] = default_pixel_.a;
+            } else {
+                const size_t off =
+                    (static_cast<size_t>(in_y) * kTileSize +
+                     static_cast<size_t>(dx % kTileSize)) *
+                    static_cast<size_t>(bpp);
+                dst[x] = bpp >= 4 ? t->data[off + 3] : t->data[off];
+            }
+        }
+    }
+    return out;
+}
+
+void TiledDevice::WriteRegionCoverage(const IntRect& rect,
+                                      const uint8_t* src,
+                                      size_t src_stride_bytes) {
+    if (src == nullptr) return;
+    const IntRect r = IntRect::Intersect(rect, Bounds());
+    if (r.IsEmpty()) return;
+    const size_t stride =
+        src_stride_bytes ? src_stride_bytes
+                         : static_cast<size_t>(rect.w);
+    const int src_x0 = r.x - rect.x;
+    const int src_y0 = r.y - rect.y;
+    const int bpp = BytesPerPixel();
+    for (int y = 0; y < r.h; ++y) {
+        const uint8_t* s = src +
+            (static_cast<size_t>(src_y0 + y) * stride) +
+            static_cast<size_t>(src_x0);
+        const int dy = r.y + y;
+        const int row_ = dy / kTileSize;
+        const int in_y = dy % kTileSize;
+        for (int x = 0; x < r.w; ++x) {
+            const int dx = r.x + x;
+            Tile* t = TileForWrite(dx / kTileSize, row_);
+            const size_t off =
+                (static_cast<size_t>(in_y) * kTileSize +
+                 static_cast<size_t>(dx % kTileSize)) *
+                static_cast<size_t>(bpp);
+            if (bpp >= 4) {
+                t->data[off + 3] = s[x];
+            } else {
+                t->data[off] = s[x];
+            }
+        }
+    }
 }
 
 }  // namespace XER::VideoEditor::Photo

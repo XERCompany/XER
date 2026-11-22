@@ -123,6 +123,31 @@ struct ClipTag {
     float confidence = 0.0f; // max confidence observed across the range
 };
 
+// Smart-reframe subject sample (ai/smart_reframe.cc — "Smart Reframe").
+// One analyzed frame's PRIMARY subject box. Stored in SOURCE seconds
+// (same convention as ClipTag) with box fields as fractions of the
+// decoded frame so resolution changes never invalidate the track.
+struct ReframeSample {
+    double t = 0.0;        // source seconds
+    float cx = 0.5f;       // subject center x, frame fraction 0..1
+    float cy = 0.5f;       // subject center y, frame fraction 0..1
+    float w = 0.0f;        // subject box width, frame fraction
+    float h = 0.0f;        // subject box height, frame fraction
+    float confidence = 0.0f;
+    bool scene_boundary = false;  // a cut immediately precedes this
+                                  // sample — the smoother may snap
+                                  // instead of gliding across it
+};
+
+// Analyzed Smart Reframe track on a clip. The samples carry subject
+// boxes only — the target aspect lives on the xer.fx.smart_reframe
+// effect's target_ratio param, so re-shaping the output never needs
+// re-analysis. Empty samples => the renderer falls back to a centered
+// aspect-locked crop.
+struct ClipReframe {
+    std::vector<ReframeSample> samples;  // sorted by t, source seconds
+};
+
 struct Clip {
     std::string id;             // uuid (NewClipId)
     std::string source_path;    // UTF-8
@@ -153,6 +178,7 @@ struct Clip {
     bool is_adjustment = false;
     std::string link_group;     // non-empty: clips in a group move together
     std::vector<ClipTag> tags;  // AI find-objects result (source seconds)
+    ClipReframe reframe;        // AI smart-reframe subject track
 };
 struct Transition {
     std::string from_clip, to_clip;     // adjacent on same VIDEO track
@@ -190,6 +216,21 @@ struct Project {
                                            // work_out <= work_in = whole
     float master_gain_db = 0.0f;       // post-mix master fader (dB),
                                        // preview + export
+    // ---- proxy workflow (proxy_manager.cc) --------------------------
+    // Decode through ready proxies for VIDEO decode in preview (the
+    // compositor's media_resolver seam). Audio always comes off the
+    // original; export never resolves. Default ON like Premiere —
+    // it is a no-op until a proxy actually exists for a source.
+    bool use_proxies = true;
+    // Build proxies automatically when video media is imported
+    // (Premiere ingest "create proxies"). OFF by default — on-demand
+    // via the media-bin "Create proxy" item is the zero-surprise
+    // mode.
+    bool proxy_ingest = false;
+    // Generation settings for newly built proxies (existing proxies
+    // are unaffected — their own params ride the catalog row).
+    int proxy_max_dim = 960;        // long-edge cap, px
+    int proxy_crf = 28;             // h264 constant-quality target
     double duration() const;   // max(timeline_start + duration), 0 if empty
 };
 
@@ -334,6 +375,32 @@ bool AddTransition(Project&, const std::string& from_clip,
                    const std::string& script = "");
 bool RemoveTransition(Project&, const std::string& from_clip,
                       const std::string& to_clip);
+// Retargets an existing transition's duration (junction-handle drag).
+// Same contract as AddTransition minus the duplicate-endpoint checks:
+// the transition must exist, its track must be unlocked, duration must
+// be finite and positive. Media-handle bounds are NOT model state —
+// callers clamp through TransitionDurationLimit beforehand.
+bool SetTransitionDuration(Project&, const std::string& from_clip,
+                           const std::string& to_clip, double duration,
+                           std::string* error_out);
+// Upper bound (timeline seconds) for a transition's centered duration:
+//   * the window may not exceed either endpoint clip's own span — a
+//     wider half would overlap a third clip's contribution window, so
+//     duration <= 2 * min(from.duration, to.duration);
+//   * `from`'s tail handle — media source seconds past its out point,
+//     converted to timeline seconds by playback_rate — bounds the
+//     right half: duration <= 2 * tail_src / from.rate (only when
+//     from_bounds.duration_seconds > 0; an unknown media length and
+//     generated sources leave that side unbounded);
+//   * `to`'s head handle — source seconds before its in point —
+//     bounds the left half: duration <= 2 * in_point / to.rate (media
+//     clips only; generated sources are time-invariant and unbounded).
+// Returns the smallest bound; +infinity when nothing limits the
+// duration (e.g. both endpoints are generated sources). Returns 0 when
+// the endpoints can't be resolved.
+double TransitionDurationLimit(const Project&, const Transition&,
+                               const MediaBounds& from_bounds,
+                               const MediaBounds& to_bounds);
 // All supported transition types in stable menu order — UI pickers
 // (junction context menu, inspector combo) iterate this. Keep in sync
 // with the serialization name table in project_store.cc.

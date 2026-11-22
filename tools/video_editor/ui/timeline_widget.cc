@@ -390,6 +390,7 @@ void TimelineWidget::SetZoom(double px_per_second) {
 
 void TimelineWidget::SetTool(ToolId tool) {
     if (tool == active_tool_) return;
+    transition_drag_ = false;   // junction-handle drags die with the tool
     if (EditTool* current = ActiveToolImpl()) {
         current->Cancel(*this);
     }
@@ -614,6 +615,80 @@ int TimelineWidget::TopZoneAt(Point p) const {
     if (std::fabs(p.x - xo) <= 6.0f) return 2;
     if (p.x > xi && p.x < xo) return 3;
     return 0;
+}
+
+double TimelineWidget::EffectiveTransitionDuration(
+    const Transition& transition) const {
+    if (transition_drag_ &&
+        transition.from_clip == transition_drag_from_ &&
+        transition.to_clip == transition_drag_to_) {
+        return transition_drag_preview_;
+    }
+    return transition.duration;
+}
+
+double TimelineWidget::TransitionDragLimit(
+    const Transition& transition) const {
+    const Clip* from = FindClip(*project_, transition.from_clip);
+    const Clip* to = FindClip(*project_, transition.to_clip);
+    if (from == nullptr || to == nullptr) return 0.0;
+    auto bounds_for = [this](const Clip* clip) {
+        MediaBounds bounds;   // duration_seconds 0 = unknown/unbounded
+        if (clip->source.kind == SourceKind::Media &&
+            !clip->source_path.empty() && hooks_.get_media_bounds) {
+            hooks_.get_media_bounds(clip->source_path, &bounds);
+        }
+        return bounds;
+    };
+    return TransitionDurationLimit(*project_, transition,
+                                   bounds_for(from), bounds_for(to));
+}
+
+TimelineWidget::TransitionHandleHit TimelineWidget::HitTransitionHandle(
+    Point p) const {
+    TransitionHandleHit hit;
+    if (project_ == nullptr ||
+        p.x < timeline_area_.x + kHeaderWidth) {
+        return hit;
+    }
+    constexpr float kEdgeZone = 4.0f;   // ~4px grab each side of a bar
+    for (std::size_t i = 0; i < project_->transitions.size(); ++i) {
+        const Transition& transition = project_->transitions[i];
+        const Clip* from = FindClip(*project_, transition.from_clip);
+        const Clip* to = FindClip(*project_, transition.to_clip);
+        if (from == nullptr || to == nullptr) continue;
+        if (from->track < 0 ||
+            from->track >= static_cast<int>(project_->tracks.size())) {
+            continue;
+        }
+        // Same region math the junction overlay renders.
+        const double cut = ClipEndSeconds(*from);
+        const double half =
+            std::max(0.05, EffectiveTransitionDuration(transition)) *
+            0.5;
+        const float xc = XAtTime(cut);
+        float x0 = XAtTime(cut - half);
+        float x1 = XAtTime(cut + half);
+        const Rect row = TrackRect(from->track);
+        const float top = row.y + kClipInset + 1.0f;
+        const float bottom = row.y + row.height - kClipInset - 1.0f;
+        if (bottom <= top || p.y < top || p.y >= bottom) continue;
+        if (x1 - x0 < 12.0f) {
+            x0 = xc - 6.0f;
+            x1 = xc + 6.0f;
+        }
+        const float dl = std::fabs(p.x - x0);
+        const float dr = std::fabs(p.x - x1);
+        if (dl <= kEdgeZone && dl <= dr) {
+            hit.index = static_cast<int>(i);
+            hit.edge = TrimEdge::In;
+        } else if (dr <= kEdgeZone) {
+            hit.index = static_cast<int>(i);
+            hit.edge = TrimEdge::Out;
+        }
+        if (hit.index >= 0) return hit;
+    }
+    return hit;
 }
 
 ToolContext TimelineWidget::MakeContext(
@@ -1381,7 +1456,8 @@ void TimelineWidget::Render(
     // the whole transition window (the model centers `duration` on
     // the junction) with bright edge bars that read as duration
     // handles and a centered glyph chip: CapCut's junction indicator.
-    for (const Transition& transition : project_->transitions) {
+    for (std::size_t ti = 0; ti < project_->transitions.size(); ++ti) {
+        const Transition& transition = project_->transitions[ti];
         const Clip* from = FindClip(*project_, transition.from_clip);
         const Clip* to = FindClip(*project_, transition.to_clip);
         if (from == nullptr || to == nullptr) continue;
@@ -1389,8 +1465,13 @@ void TimelineWidget::Render(
             from->track >= static_cast<int>(project_->tracks.size())) {
             continue;
         }
+        // A handle drag previews its duration live — the band and the
+        // duration text resize while the model is untouched until the
+        // mouse-up commit.
+        const double duration =
+            EffectiveTransitionDuration(transition);
         const double cut = ClipEndSeconds(*from);
-        const double half = std::max(0.05, transition.duration) * 0.5;
+        const double half = std::max(0.05, duration) * 0.5;
         const float xc = XAtTime(cut);
         float x0 = XAtTime(cut - half);
         float x1 = XAtTime(cut + half);
@@ -1416,17 +1497,36 @@ void TimelineWidget::Render(
                               WithAlpha(tint, 0.14f), 1.0f);
         }
         renderer.PopClip();
-        // Duration handles — bright bars at both region edges.
-        renderer.FillRect(Rect{x0 - 1.5f, top, 3.0f, bottom - top},
-                          WithAlpha(tint, 0.85f), 1.5f);
-        renderer.FillRect(Rect{x1 - 1.5f, top, 3.0f, bottom - top},
-                          WithAlpha(tint, 0.85f), 1.5f);
+        // Duration handles — bright bars at both region edges, and the
+        // actual drag zones (HitTransitionHandle). Hover widens/fills
+        // the edge under the pointer (the resize-cursor affordance);
+        // an active drag hots both edges since the centered window
+        // moves them together.
+        const bool dragging_this =
+            transition_drag_ &&
+            transition.from_clip == transition_drag_from_ &&
+            transition.to_clip == transition_drag_to_;
+        const bool hot_l =
+            dragging_this ||
+            (hover_transition_ == static_cast<int>(ti) &&
+             hover_transition_edge_ == TrimEdge::In);
+        const bool hot_r =
+            dragging_this ||
+            (hover_transition_ == static_cast<int>(ti) &&
+             hover_transition_edge_ == TrimEdge::Out);
+        renderer.FillRect(
+            Rect{x0 - (hot_l ? 2.0f : 1.5f), top, hot_l ? 4.0f : 3.0f,
+                 bottom - top},
+            WithAlpha(tint, hot_l ? 1.0f : 0.85f), 1.5f);
+        renderer.FillRect(
+            Rect{x1 - (hot_r ? 2.0f : 1.5f), top, hot_r ? 4.0f : 3.0f,
+                 bottom - top},
+            WithAlpha(tint, hot_r ? 1.0f : 0.85f), 1.5f);
         // Centered indicator chip: dark pill with two inward
         // triangles (dissolve glyph); the duration text joins when
         // the region is wide enough to carry it.
         char dur[16];
-        std::snprintf(dur, sizeof(dur), "%.1fs",
-                      transition.duration);
+        std::snprintf(dur, sizeof(dur), "%.1fs", duration);
         const auto dur_size = renderer.MeasureText(
             dur, {tint, tokens.font_small, 600});
         const bool show_dur =
@@ -1980,6 +2080,40 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
             return true;
         }
 
+        // Junction-handle grab: the transition overlay's edge bars
+        // resize the centered duration (live preview, commit on
+        // mouse-up). Selection tool only — every other tool owns its
+        // own edge semantics at the same pixels (razor cut, roll).
+        if (active_tool_ == ToolId::Selection) {
+            if (const TransitionHandleHit th = HitTransitionHandle(p);
+                th.index >= 0) {
+                const Transition& tr = project_->transitions[
+                    static_cast<std::size_t>(th.index)];
+                const Clip* from = FindClip(*project_, tr.from_clip);
+                const bool locked =
+                    from != nullptr && from->track >= 0 &&
+                    from->track < static_cast<int>(
+                        project_->tracks.size()) &&
+                    project_->tracks[static_cast<std::size_t>(
+                        from->track)].locked;
+                if (locked) {
+                    SetStatus("track is locked", true);
+                } else {
+                    transition_drag_ = true;
+                    transition_drag_from_ = tr.from_clip;
+                    transition_drag_to_ = tr.to_clip;
+                    transition_drag_edge_ = th.edge;
+                    transition_drag_orig_ = tr.duration;
+                    transition_drag_preview_ = tr.duration;
+                    transition_drag_max_ = TransitionDragLimit(tr);
+                    SetStatus("Drag transition handle — " +
+                              FormatTime(tr.duration));
+                }
+                Invalidate();
+                return true;
+            }
+        }
+
         // Pointer events inside the track area belong to the active
         // tool — it resolves hit/drag/commit via ToolCommit.
         const ToolContext ctx = MakeContext(event);
@@ -1998,18 +2132,78 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
                 hover.clip != nullptr ? hover.clip->id : "";
             const HeaderHit hover_header = HitHeaderButton(p);
             const int hover_tool = ToolbarButtonAt(p);
+            const int prev_th = hover_transition_;
+            const TransitionHandleHit thover =
+                transition_drag_ ? TransitionHandleHit{}
+                                 : HitTransitionHandle(p);
+            const bool thover_changed =
+                thover.index != hover_transition_ ||
+                (thover.index >= 0 &&
+                 thover.edge != hover_transition_edge_);
             if (hover_id != hover_clip_id_ ||
                 hover_header.track != hover_header_.track ||
                 hover_header.button != hover_header_.button ||
-                hover_tool != hover_toolbar_) {
+                hover_tool != hover_toolbar_ || thover_changed) {
                 hover_clip_id_ = hover_id;
                 hover_header_ = hover_header;
                 hover_toolbar_ = hover_tool;
+                hover_transition_ = thover.index;
+                hover_transition_edge_ = thover.edge;
                 Invalidate();
+            }
+            // Resize-cursor affordance on entering a junction edge —
+            // the framework has no OS cursor switch, so the widened
+            // hot bar plus a status hint stand in for it.
+            if (prev_th < 0 && thover.index >= 0 &&
+                !transition_drag_) {
+                SetStatus("Drag transition edge to resize duration");
             }
         }
         if (ruler_scrub_) {
             if (hooks_.on_seek) hooks_.on_seek(TimeAtX(p.x));
+            return true;
+        }
+        if (transition_drag_) {
+            // Centered-duration model: the dragged edge tracks the
+            // pointer, the far edge mirrors it around the cut. The
+            // handle ceiling was clamped at grab from the endpoint
+            // clips' available source handles (TransitionDragLimit).
+            const Transition* tr = nullptr;
+            for (const Transition& t : project_->transitions) {
+                if (t.from_clip == transition_drag_from_ &&
+                    t.to_clip == transition_drag_to_) {
+                    tr = &t;
+                    break;
+                }
+            }
+            const Clip* from =
+                tr != nullptr ? FindClip(*project_, tr->from_clip)
+                              : nullptr;
+            if (tr == nullptr || from == nullptr) {
+                transition_drag_ = false;
+                Invalidate();
+                return true;
+            }
+            const double cut = ClipEndSeconds(*from);
+            const double t =
+                SnapCandidate(TimeAtX(p.x), from->track);
+            const double half =
+                transition_drag_edge_ == TrimEdge::In ? cut - t
+                                                      : t - cut;
+            const double frame =
+                project_->fps_num > 0
+                    ? static_cast<double>(project_->fps_den) /
+                          project_->fps_num
+                    : 1.0 / 30.0;
+            const double floor_d = std::max(0.02, frame);
+            transition_drag_preview_ =
+                std::clamp(2.0 * half, floor_d,
+                           std::max(floor_d, transition_drag_max_));
+            char buf[64];
+            std::snprintf(buf, sizeof(buf), "Transition %.2f s",
+                          transition_drag_preview_);
+            SetStatus(buf);
+            Invalidate();
             return true;
         }
         if (work_drag_ != WorkDrag::None) {
@@ -2053,6 +2247,21 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
             ruler_scrub_ = false;
             return true;
         }
+        if (transition_drag_) {
+            transition_drag_ = false;
+            const double committed = transition_drag_preview_;
+            const double original = transition_drag_orig_;
+            const std::string from = std::move(transition_drag_from_);
+            const std::string to = std::move(transition_drag_to_);
+            transition_drag_from_.clear();
+            transition_drag_to_.clear();
+            if (std::fabs(committed - original) > 1e-9 &&
+                hooks_.on_set_transition_duration) {
+                hooks_.on_set_transition_duration(from, to, committed);
+            }
+            Invalidate();
+            return true;
+        }
         if (work_drag_ != WorkDrag::None) {
             work_drag_ = WorkDrag::None;
             const double in =
@@ -2075,6 +2284,11 @@ bool TimelineWidget::HandleEvent(const XER::UI::Widgets::Event& event) {
 
     if (event.type == Event::Type::KeyDown) {
         if (event.key == KeyCode::Escape) {
+            if (transition_drag_) {
+                transition_drag_ = false;
+                Invalidate();
+                return true;
+            }
             if (work_drag_ != WorkDrag::None) {
                 work_drag_ = WorkDrag::None;
                 Invalidate();
@@ -2453,6 +2667,31 @@ bool TimelineWidget::ShowContextMenu(
                 }
             }
 
+            // Smart Reframe — one async subject scan per target aspect
+            // (the track itself is aspect-free; the ratio lands on the
+            // effect's target_ratio param, so re-picking an aspect
+            // later does not need re-analysis). Media clips only.
+            if (hooks_.on_smart_reframe != nullptr) {
+                const bool scannable =
+                    clip.source.kind == SourceKind::Media &&
+                    !clip.source_path.empty() && !clip.is_adjustment;
+                for (const auto& [label, ratio] :
+                     {std::pair{"9:16", 0.5625},
+                      std::pair{"1:1", 1.0},
+                      std::pair{"4:5", 0.8}}) {
+                    Widgets::ContextMenu::Item sr;
+                    sr.label = "Smart Reframe \xe2\x86\x92 " +
+                               std::string(label);
+                    sr.enabled = scannable;
+                    sr.action = [this, id, ratio] {
+                        if (hooks_.on_smart_reframe) {
+                            hooks_.on_smart_reframe(id, ratio);
+                        }
+                    };
+                    items.push_back(std::move(sr));
+                }
+            }
+
             // AI object scan — media clips only (generated sources and
             // adjustment layers have no source file to decode). The
             // shell runs it on its background AI job and reports the
@@ -2484,6 +2723,25 @@ bool TimelineWidget::ShowContextMenu(
                     };
                     items.push_back(std::move(clear));
                 }
+            }
+
+            // Text-based editing entry: the Transcript dock binds to
+            // this clip and (on a cache miss) starts whisper. Media
+            // clips only — generated sources have nothing to decode.
+            {
+                Widgets::ContextMenu::Item et;
+                et.label = "Edit by Transcript";
+                et.separator_before = true;
+                et.enabled =
+                    hooks_.on_edit_transcript != nullptr &&
+                    clip.source.kind == SourceKind::Media &&
+                    !clip.source_path.empty() && !clip.is_adjustment;
+                et.action = [this, id] {
+                    if (hooks_.on_edit_transcript) {
+                        hooks_.on_edit_transcript(id);
+                    }
+                };
+                items.push_back(std::move(et));
             }
 
             Widgets::ContextMenu::Item del;

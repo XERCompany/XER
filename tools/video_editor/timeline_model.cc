@@ -332,6 +332,15 @@ bool ValidateClipPlacement(const Project& project, const Clip& clip,
             return Fail(error_out, "clip mask geometry is invalid");
         }
     }
+    for (const ReframeSample& sample : clip.reframe.samples) {
+        if (!std::isfinite(sample.t) || !std::isfinite(sample.cx) ||
+            !std::isfinite(sample.cy) || !std::isfinite(sample.w) ||
+            !std::isfinite(sample.h) ||
+            !std::isfinite(sample.confidence)) {
+            return Fail(error_out,
+                        "clip smart-reframe samples must be finite");
+        }
+    }
     for (const auto& entry : clip.keyframes) {
         double prev_time = -std::numeric_limits<double>::infinity();
         for (const Keyframe& key : entry.second) {
@@ -1046,6 +1055,65 @@ bool RemoveTransition(Project& project, const std::string& from_clip,
     }
     project.transitions.erase(it);
     return true;
+}
+
+bool SetTransitionDuration(Project& project, const std::string& from_clip,
+                           const std::string& to_clip, double duration,
+                           std::string* error_out) {
+    for (auto& transition : project.transitions) {
+        if (transition.from_clip != from_clip ||
+            transition.to_clip != to_clip) {
+            continue;
+        }
+        const Clip* from = FindClip(project, from_clip);
+        if (from != nullptr && IsTrackLocked(project, from->track)) {
+            return Fail(error_out, "track is locked");
+        }
+        if (!std::isfinite(duration)) {
+            return Fail(error_out, "transition duration must be finite");
+        }
+        if (duration <= 0.0) {
+            return Fail(error_out,
+                        "transition duration must be positive");
+        }
+        transition.duration = duration;
+        return true;
+    }
+    return Fail(error_out, "transition not found");
+}
+
+double TransitionDurationLimit(const Project& project,
+                               const Transition& transition,
+                               const MediaBounds& from_bounds,
+                               const MediaBounds& to_bounds) {
+    const Clip* from = FindClip(project, transition.from_clip);
+    const Clip* to = FindClip(project, transition.to_clip);
+    if (from == nullptr || to == nullptr) {
+        return 0.0;
+    }
+    double limit = std::numeric_limits<double>::infinity();
+    // The centered window may not reach past either endpoint's own
+    // span — a wider half would overlap a third clip's contribution
+    // window on the track.
+    limit = std::min(limit, 2.0 * std::min(from->duration, to->duration));
+    // Media-source handles: the window reads (duration/2) timeline
+    // seconds of source beyond each clip's consumed span — scaled by
+    // playback_rate on the source side. Generated sources never read
+    // source (time-invariant), so their side is unbounded.
+    if (from->source.kind == SourceKind::Media &&
+        from_bounds.duration_seconds > 0.0 &&
+        from->playback_rate > 0.0) {
+        const double tail = from_bounds.duration_seconds -
+            (from->in_point + from->duration * from->playback_rate);
+        limit = std::min(
+            limit, std::max(0.0, 2.0 * tail / from->playback_rate));
+    }
+    if (to->source.kind == SourceKind::Media &&
+        to->playback_rate > 0.0) {
+        limit = std::min(
+            limit, std::max(0.0, 2.0 * to->in_point / to->playback_rate));
+    }
+    return limit;
 }
 
 void DropInvalidTransitions(Project& project) {

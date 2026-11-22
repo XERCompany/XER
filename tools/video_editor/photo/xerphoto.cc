@@ -18,18 +18,41 @@ namespace XER::VideoEditor::Photo {
 namespace {
 
 constexpr char kMagic[] = "XERPHOTO";  // 8 bytes, no NUL written
-constexpr uint32_t kFormatVersion = 1;
+constexpr uint32_t kFormatVersion = 2;    // v1 read compat below
+constexpr uint32_t kMinReadVersion = 1;
 
 std::string KindName(LayerKind kind) {
     switch (kind) {
         case LayerKind::kGroup: return "group";
         case LayerKind::kRaster: return "raster";
+        case LayerKind::kAdjustment: return "adjustment";
     }
     return "raster";
 }
 
+// Serializes a coverage device (A8 mask) into `blob` as w*h*1-byte
+// rows over its extent; writes the locator record into `px`.
+void SerializeDeviceCoverage(const TiledDevice& dev, Json::Value* px,
+                             std::string* blob) {
+    const IntRect ext = dev.Extent();
+    (*px)["x"] = ext.x;
+    (*px)["y"] = ext.y;
+    (*px)["w"] = ext.w;
+    (*px)["h"] = ext.h;
+    (*px)["offset"] = static_cast<Json::UInt64>(blob->size());
+    if (!ext.IsEmpty()) {
+        const std::vector<uint8_t> region =
+            dev.ReadRegionCoverage(ext);
+        blob->append(reinterpret_cast<const char*>(region.data()),
+                     region.size());
+    }
+    (*px)["size"] = static_cast<Json::UInt64>(
+        blob->size() - static_cast<size_t>((*px)["offset"].asUInt64()));
+}
+
 // Appends one node's JSON record; raster extents are packed into
-// `blob` (RGBA8, rect.w*4-byte rows) and located by offset/size.
+// `blob` (RGBA8, rect.w*4-byte rows) and mask extents as A8
+// (rect.w*1-byte rows), both located by offset/size.
 void SerializeNode(const LayerNode& node, Json::Value* out,
                    std::string* blob) {
     Json::Value j(Json::objectValue);
@@ -57,6 +80,24 @@ void SerializeNode(const LayerNode& node, Json::Value* out,
         px["size"] = static_cast<Json::UInt64>(
             blob->size() - static_cast<size_t>(px["offset"].asUInt64()));
         j["pixels"] = px;
+    }
+    if (node.Kind() == LayerKind::kAdjustment) {
+        Json::Value adj(Json::objectValue);
+        adj["op"] = node.Adjustment().op;
+        Json::Value params(Json::arrayValue);
+        for (const AdjustmentParam& p : node.Adjustment().params) {
+            Json::Value pj(Json::objectValue);
+            pj["name"] = p.name;
+            pj["value"] = p.value;
+            params.append(pj);
+        }
+        adj["params"] = params;
+        j["adjustment"] = adj;
+    }
+    if (node.Mask() != nullptr) {
+        Json::Value mk(Json::objectValue);
+        SerializeDeviceCoverage(*node.Mask(), &mk, blob);
+        j["mask"] = mk;
     }
     if (!node.Children().empty()) {
         Json::Value kids(Json::arrayValue);
@@ -101,15 +142,59 @@ bool BuildNode(Document& doc, LayerNode* parent, const Json::Value& j,
         if (err) *err = "layer record missing kind";
         return false;
     }
-    LayerNode& node = (kind == "group")
-                          ? doc.AddGroup("", parent)
-                          : doc.AddLayer(LayerKind::kRaster, "", parent);
+    LayerKind lk = LayerKind::kRaster;
+    if (kind == "group") lk = LayerKind::kGroup;
+    if (kind == "adjustment") lk = LayerKind::kAdjustment;
+    LayerNode& node = doc.AddLayer(lk, "", parent);
     node.SetName(j.get("name", "").asString());
     node.SetVisible(j.get("visible", true).asBool());
     node.SetLocked(j.get("locked", false).asBool());
     node.SetOpacity(
         static_cast<float>(j.get("opacity", 1.0).asDouble()));
     node.SetBlendMode(j.get("blend", "srcOver").asString());
+
+    // v2: adjustment op + params.
+    if (lk == LayerKind::kAdjustment && j["adjustment"].isObject()) {
+        const Json::Value& adj = j["adjustment"];
+        AdjustmentSpec spec;
+        spec.op = adj.get("op", "").asString();
+        const Json::Value& params = adj["params"];
+        if (params.isArray()) {
+            for (Json::ArrayIndex i = 0; i < params.size(); ++i) {
+                spec.params.push_back(
+                    {params[i].get("name", "").asString(),
+                     params[i].get("value", 0.0).asDouble()});
+            }
+        }
+        node.SetAdjustment(spec);
+    }
+
+    // v2: A8 mask extent (coverage bytes in the shared blob).
+    if (j["mask"].isObject()) {
+        const Json::Value& mk = j["mask"];
+        const int mx = mk.get("x", 0).asInt();
+        const int my = mk.get("y", 0).asInt();
+        const int mw = mk.get("w", 0).asInt();
+        const int mh = mk.get("h", 0).asInt();
+        const uint64_t moff = mk.get("offset", 0).asUInt64();
+        const uint64_t msize = mk.get("size", 0).asUInt64();
+        if (mw < 0 || mh < 0 ||
+            msize !=
+                static_cast<uint64_t>(mw) * static_cast<uint64_t>(mh) ||
+            moff + msize > blob.size()) {
+            if (err) *err = "mask record out of range";
+            return false;
+        }
+        auto mask = std::make_unique<TiledDevice>(
+            doc.CanvasWidth(), doc.CanvasHeight(),
+            image::PixelFormat::Gray8, Pixel{0, 0, 0, 255});
+        if (mw > 0 && mh > 0) {
+            mask->WriteRegionCoverage(
+                IntRect{mx, my, mw, mh},
+                reinterpret_cast<const uint8_t*>(blob.data() + moff));
+        }
+        node.SetMask(std::move(mask));
+    }
 
     if (kind == "group") {
         const Json::Value& kids = j["children"];
@@ -124,6 +209,7 @@ bool BuildNode(Document& doc, LayerNode* parent, const Json::Value& j,
         }
         return true;
     }
+    if (kind == "adjustment") return true;
     if (kind != "raster") {
         if (err) *err = "unknown layer kind: " + kind;
         return false;
@@ -241,8 +327,11 @@ std::unique_ptr<Document> LoadDocument(const std::string& utf8_path,
         }
     }
     if (!root.isObject() ||
-        root.get("format", "").asString() != "xerphoto" ||
-        root.get("version", 0).asUInt() != kFormatVersion) {
+        root.get("format", "").asString() != "xerphoto") {
+        return fail("unsupported .xerphoto version");
+    }
+    const uint32_t version = root.get("version", 0).asUInt();
+    if (version < kMinReadVersion || version > kFormatVersion) {
         return fail("unsupported .xerphoto version");
     }
     const Json::Value& canvas = root["canvas"];

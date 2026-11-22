@@ -127,6 +127,10 @@ struct EncodeVideoParams {
     int fps_num = 25;
     int fps_den = 1;
     int bit_rate = 0;
+    // Optional constant-quality target forwarded to the encoder's
+    // private "crf" option (libx264/libx265 style). -1 keeps the
+    // bit_rate path; encoders without a crf option ignore it silently.
+    int crf = -1;
 };
 
 struct EncodeAudioParams {

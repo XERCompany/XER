@@ -532,6 +532,66 @@ void MonitorWidget::SetMarkPoints(
     Invalidate();
 }
 
+void MonitorWidget::SetMaskOverlay(
+    std::shared_ptr<const std::vector<std::uint8_t>> mask,
+    int width, int height) {
+    mask_overlay_ = std::move(mask);
+    mask_overlay_w_ = width;
+    mask_overlay_h_ = height;
+    // Cached tint/contour are rebuilt lazily on the next Render.
+    Invalidate();
+}
+
+void MonitorWidget::EnsureMaskOverlayBuilt(Color accent) {
+    const void* key = mask_overlay_.get();
+    if (key == mask_built_for_ && built_accent_[0] == accent.r &&
+        built_accent_[1] == accent.g && built_accent_[2] == accent.b &&
+        built_accent_[3] == accent.a) {
+        return;
+    }
+    mask_built_for_ = key;
+    built_accent_[0] = accent.r;
+    built_accent_[1] = accent.g;
+    built_accent_[2] = accent.b;
+    built_accent_[3] = accent.a;
+    mask_bgra_.clear();
+    mask_contour_.clear();
+    if (mask_overlay_ == nullptr || mask_overlay_w_ <= 0 ||
+        mask_overlay_h_ <= 0) {
+        return;
+    }
+    const std::size_t count =
+        static_cast<std::size_t>(mask_overlay_w_) * mask_overlay_h_;
+    if (mask_overlay_->size() < count) return;
+    // ~40% coverage tint in premultiplied BGRA for the D2D bitmap path
+    // (ALPHA_MODE_PREMULTIPLIED). The software renderer backend reads
+    // it as straight alpha — the mask just sits slightly dimmer there.
+    mask_bgra_.resize(count * 4);
+    constexpr float kFillAlpha = 0.40f;
+    for (std::size_t i = 0; i < count; ++i) {
+        const int a = static_cast<int>(
+            static_cast<float>(mask_overlay_->at(i)) * kFillAlpha +
+            0.5f);
+        std::uint8_t* px = mask_bgra_.data() + i * 4;
+        px[0] = static_cast<std::uint8_t>(
+            accent.b * 255.0f * a / 255.0f);
+        px[1] = static_cast<std::uint8_t>(
+            accent.g * 255.0f * a / 255.0f);
+        px[2] = static_cast<std::uint8_t>(
+            accent.r * 255.0f * a / 255.0f);
+        px[3] = static_cast<std::uint8_t>(a);
+    }
+    // Traced boundary for a crisp edge line at any zoom. Re-simplify
+    // coarser when the raw contour would drown the frame in DrawLine
+    // calls (a noisy model mask can produce thousands of vertices).
+    for (const float tol : {1.5f, 4.0f, 10.0f}) {
+        mask_contour_ =
+            Lab::MaskToPolygon(*mask_overlay_, mask_overlay_w_,
+                               mask_overlay_h_, tol);
+        if (mask_contour_.size() <= 512) break;
+    }
+}
+
 void MonitorWidget::SetFrameRenderSlot(std::uint32_t slot) {
     // Slot applies at the lazy Init on first Render — after that the
     // service keeps the id it was configured with.
@@ -871,6 +931,41 @@ void MonitorWidget::DrawOverlays(Rendering::Renderer& renderer,
                           1.0f);
         renderer.DrawLine({cx, cy - arm}, {cx, cy + arm}, title_color,
                           1.0f);
+    }
+
+    // Stored AI selection mask (Object Lab SmartSelect result): a
+    // semi-transparent accent tint fitted to the frame rect, plus the
+    // traced boundary edge so the shape stays legible at any zoom.
+    // Skipped when the stored dims don't match the shown frame — a
+    // stale mask from an older canvas is never misapplied.
+    if (mask_overlay_ != nullptr && frame_width_ > 0 &&
+        frame_height_ > 0 && mask_overlay_w_ == frame_width_ &&
+        mask_overlay_h_ == frame_height_ &&
+        mask_overlay_->size() >=
+            static_cast<std::size_t>(frame_width_) * frame_height_) {
+        EnsureMaskOverlayBuilt(tokens.accent);
+        if (!mask_bgra_.empty()) {
+            renderer.DrawFrameBgra(mask_bgra_.data(), mask_overlay_w_,
+                                   mask_overlay_h_, dest, 1.0f);
+        }
+        if (mask_contour_.size() >= 2) {
+            const Color edge = WithAlpha(tokens.accent, 0.9f);
+            const float sx =
+                dest.width / static_cast<float>(frame_width_);
+            const float sy =
+                dest.height / static_cast<float>(frame_height_);
+            for (std::size_t i = 0; i < mask_contour_.size(); ++i) {
+                const Lab::IntPoint& a = mask_contour_[i];
+                const Lab::IntPoint& b =
+                    mask_contour_[(i + 1) % mask_contour_.size()];
+                renderer.DrawLine(
+                    {dest.x + static_cast<float>(a.x) * sx,
+                     dest.y + static_cast<float>(a.y) * sy},
+                    {dest.x + static_cast<float>(b.x) * sx,
+                     dest.y + static_cast<float>(b.y) * sy},
+                    edge, 1.0f);
+            }
+        }
     }
 
     // Lab smart-select points: frame-px markers mapped into the fitted

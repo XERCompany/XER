@@ -17,6 +17,7 @@
 
 namespace XER::UI::Widgets {
 class Button;
+class Checkbox;
 class Label;
 class TextInput;
 }
@@ -30,6 +31,12 @@ struct ProjectSettings {
     int fps_num = 30;                   // frame rate numerator
     int fps_den = 1;                    // frame rate denominator
     std::array<std::uint8_t, 4> bg{0, 0, 0, 255};  // RGBA canvas clear
+    // Proxy workflow (Project::use_proxies / proxy_ingest /
+    // proxy_max_dim / proxy_crf — see timeline_model.h).
+    bool use_proxies = true;            // decode video via ready proxies
+    bool proxy_ingest = false;          // auto-build proxies on import
+    int proxy_max_dim = 960;            // long-edge cap for new proxies
+    int proxy_crf = 28;                 // h264 constant-quality target
 };
 
 class SettingsDialog final : public XER::UI::Widgets::Widget {
@@ -95,6 +102,10 @@ private:
     std::shared_ptr<XER::UI::Widgets::TextInput> height_input_;
     std::shared_ptr<XER::UI::Widgets::TextInput> fps_num_input_;
     std::shared_ptr<XER::UI::Widgets::TextInput> fps_den_input_;
+    std::shared_ptr<XER::UI::Widgets::Checkbox> proxies_check_;
+    std::shared_ptr<XER::UI::Widgets::Checkbox> ingest_check_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> proxy_dim_input_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> proxy_crf_input_;
     std::shared_ptr<XER::UI::Widgets::Button> ok_button_;
     std::shared_ptr<XER::UI::Widgets::Button> cancel_button_;
 };

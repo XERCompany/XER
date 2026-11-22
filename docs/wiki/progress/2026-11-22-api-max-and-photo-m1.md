@@ -170,6 +170,70 @@ incl. new checks `blend_modes` and `photo_m1`.
   features.md` — top-10 ranked; captions/text-edit/silence/ducking/
   reframe all hang off already-vendored whisper+ONNX.
 
+## Fifth batch — text-editing + AutoCacher + polish (2026-11-22, `SMOKE RESULT OK` 56)
+
+- **Text-based editing** (`bb580c95`): "Trn" right-dock tab —
+  `transcript_edit.{h,cc}` (word splitting/proportional timing,
+  source→timeline mapping via in_point/rate, path+size FNV-1a cache
+  with JSON mirror under user-data/transcripts) +
+  `ui/transcript_panel.{h,cc}` (word flow, playhead highlight,
+  click→seek, drag-select → Ripple delete/+Marker/Captions action
+  bar). Context-menu "Edit by Transcript" on clips + media bin.
+  Whisper spans only (word times distributed); no diarization.
+- **AutoCacher** (`5384fcee`): `playback/auto_cacher.{h,cc}` —
+  below-normal-priority thread + PRIVATE second Compositor (the only
+  safe seam) sharing the engine's EffectFrameCache. Key enabler:
+  engine render time now snaps to project frame boundaries
+  (`floor(t/frame_dt)`) — µs-keyed cache + wall-clock t could never
+  collide otherwise. Window [playhead−0.5s,+3s], forward-first
+  budget min(360, ½cap), settle 400ms, cooperative cancel.
+  `XER_VE_AUTOCACHE=0` toggle. Smoke: playback hits 1→4.
+- **Transition drag handles** (`78e73283`): edge grab zones on the
+  junction overlay, centered-resize preview, commit via
+  `TimelineHistory::SetTransitionDuration` (MergeWith coalescing);
+  clamp = 2·min(from,to) + media handles via get_media_bounds.
+- **AI mask overlay** (`78e73283`): `MonitorWidget::SetMaskOverlay`
+  — 40% accent tint + boundary polyline in letterboxed frame rect;
+  `Lab::MaskToPolygon` (crack-following trace + Douglas–Peucker)
+  feeds edge + lasso reuse. Dims-mismatch masks skipped.
+- Owner committed batches 3+4+5 himself (874feaa, a9d68b1, 2b77d00
+  + later); stale stash@{0} on dev-1.0.0-1 flagged.
+
+## Sixth batch — M4 + smart reframe + voice isolate + proxies (2026-11-22, `SMOKE RESULT OK` 59)
+
+- **Photo M4** (`4cd1b107`): `.xerphoto` → v2 (mask+adjustment fields,
+  v1 read-back compat). New `photo/adjust_ops` (15 ops: levels/curves/
+  HSL/vibrance/selective_color/...), `selection` (rect/ellipse/lasso/
+  poly/magic-wand + invert/feather, clips paint), `mask_ops` (A8
+  TiledDevice masks per layer, attach/detach undoable), `retouch`
+  (Clone/Heal/Spot/Inpaint via RetouchTool). 14 workspace tools with
+  shortcuts; MergeDown bakes adjustments. `photo_m4` smoke pixel-exact.
+  Deferred: refine-edge dialog UI, F16 raster.
+- **Smart reframe** (`c4059896`): `ai/smart_reframe` — ScanClipSubject
+  (RF-DETR, person-pref, scene boundaries) → ClipReframe samples on
+  Clip (.xerproj-serialized) → ReframeWindowAt (aspect-locked clamp +
+  causal EMA + velocity cap + scene snap). Applied geometrically at
+  warp in compositor; `xer.fx.smart_reframe` builtin (inert ABI,
+  params target_ratio/smoothing). Ctx-menu + inspector + effects
+  catalog. Reframe samples in ClipStateHash → cache invalidates.
+- **Voice isolation** (`325edb7b`): GTCRN ONNX (0.5MB, MIT,
+  sherpa-onnx contract) in `voice_isolate.{h,cc}` — 16kHz STFT/iSTFT
+  streaming, own radix-2 FFT, Onnx::Session lazy cache. Effect
+  `xer.af.voice_isolate` (amount) via media-bin bounce →
+  `.xer.af.voice_isolate.wav` (non-destructive). NOT in realtime mixer
+  (10-15ms/frame CPU). Smoke: noise −40dB, harmonics preserved.
+- **Proxy workflow** (`04071364`): `proxy_manager.{h,cc}` — worker
+  transcode (x264 MP4, long-edge cap, atomic temp-commit, dedup,
+  cooperative cancel); proxies/ dir + SQL table w/ size+mtime
+  fingerprint; ResolveDecodePath → compositor/autocacher/session-hash;
+  export_engine has no resolver = original-only (asserted). Settings:
+  use_proxies/ingest/max_dim=960/crf=28 (undoable, .xerproj). PX
+  badges + adaptive ctx menu in media bin. Deferred: proxy LRU cap,
+  generated-source proxies.
+- Build friction resolved en route: truncated YA_*.def regen
+  (interrupted ninja), stale smoke shells locking DLLs, probe-list
+  pseudo-group bug already fixed earlier.
+
 ## Decisions resolved 2026-11-22 / still open
 
 - ORT route → **resolved**: vendored official binaries (user choice).

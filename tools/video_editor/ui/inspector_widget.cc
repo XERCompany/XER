@@ -232,6 +232,45 @@ std::string FormatEffectBrief(const ClipEffect& effect) {
     return text;
 }
 
+// Smart Reframe target aspects (label -> w/h) — the same set the
+// timeline context menu offers.
+const std::vector<std::pair<const char*, double>>& ReframeTargets() {
+    static const std::vector<std::pair<const char*, double>> kTargets = {
+        {"9:16", 0.5625}, {"1:1", 1.0}, {"4:5", 0.8},
+        {"16:9", 16.0 / 9.0},
+    };
+    return kTargets;
+}
+
+double ReframeRatioForLabel(const std::string& label) {
+    for (const auto& [name, r] : ReframeTargets()) {
+        if (label == name) return r;
+    }
+    return 0.5625;   // 9:16 — the portrait default
+}
+
+std::string ReframeLabelForRatio(double ratio) {
+    for (const auto& [name, r] : ReframeTargets()) {
+        if (std::fabs(ratio - r) < 1e-3) return name;
+    }
+    return "9:16";
+}
+
+// The clip's smart-reframe effect, if any — accepts every registered
+// type spelling (canonical "builtin:", "plugin:" or bare id).
+const ClipEffect* FindSmartReframeEffect(const Clip& clip) {
+    for (const ClipEffect& e : clip.effects) {
+        std::string id = e.type;
+        if (id.rfind("builtin:", 0) == 0) {
+            id = id.substr(8);
+        } else if (id.rfind("plugin:", 0) == 0) {
+            id = id.substr(7);
+        }
+        if (id == "xer.fx.smart_reframe") return &e;
+    }
+    return nullptr;
+}
+
 constexpr double kKeyTimeEpsilon = 1e-3;
 
 }  // namespace
@@ -305,6 +344,43 @@ void InspectorWidget::EnsureChildren() {
     ai_clear_btn_->SetOnClick([this] {
         if (has_clip_ && hooks_.on_ai_clear_tags) {
             hooks_.on_ai_clear_tags(clip_.id);
+        }
+    });
+    // Smart Reframe: target-aspect combo + Analyze button. The combo
+    // applies the picked aspect to the clip's effect (the shell
+    // updates the param — or kicks the scan when no track exists);
+    // Analyze always re-runs the subject scan.
+    reframe_combo_ = Widgets::Combobox::Create();
+    std::vector<Widgets::Combobox::Option> reframe_options;
+    for (const auto& [name, ratio] : ReframeTargets()) {
+        reframe_options.push_back({name, name});
+    }
+    reframe_combo_->SetOptions(std::move(reframe_options));
+    reframe_combo_->SetPlaceholder("Target");
+    reframe_combo_->SetValue("9:16");
+    reframe_combo_->SetOnSelect(
+        [this](const Widgets::Combobox::Option& option) {
+            if (syncing_ || !has_clip_) return;
+            const std::string label =
+                option.value.empty() ? option.label : option.value;
+            if (hooks_.on_smart_reframe) {
+                hooks_.on_smart_reframe(clip_.id,
+                                        ReframeRatioForLabel(label));
+            }
+        });
+    reframe_btn_ = std::make_shared<Widgets::Button>(
+        "Analyze", Widgets::ButtonStyle::Secondary);
+    reframe_btn_->SetTooltip(
+        "Track the primary subject and build the reframe crop "
+        "(needs a model in assets/models/)");
+    reframe_btn_->SetOnClick([this] {
+        if (has_clip_ && hooks_.on_smart_reframe_analyze) {
+            const std::string label =
+                reframe_combo_->GetValue().empty()
+                    ? reframe_combo_->GetText()
+                    : reframe_combo_->GetValue();
+            hooks_.on_smart_reframe_analyze(
+                clip_.id, ReframeRatioForLabel(label));
         }
     });
     delete_btn_ = std::make_shared<Widgets::Button>(
@@ -461,6 +537,8 @@ void InspectorWidget::EnsureChildren() {
     AddChild(transition_btn_);
     AddChild(ai_find_btn_);
     AddChild(ai_clear_btn_);
+    AddChild(reframe_combo_);
+    AddChild(reframe_btn_);
     AddChild(delete_btn_);
     AddChild(status_);
     SetClip(has_clip_ ? &clip_ : nullptr);
@@ -777,6 +855,16 @@ void InspectorWidget::SetClip(const Clip* clip) {
         transition_btn_->SetEnabled(has_clip_);
         ai_find_btn_->SetEnabled(has_clip_);
         ai_clear_btn_->SetEnabled(has_clip_);
+        // Smart Reframe: reflect the effect's target aspect when the
+        // clip carries one, else keep the portrait default.
+        const ClipEffect* sr_fx =
+            has_clip_ ? FindSmartReframeEffect(clip_) : nullptr;
+        reframe_combo_->SetValue(ReframeLabelForRatio(
+            sr_fx != nullptr && !sr_fx->params.empty()
+                ? static_cast<double>(sr_fx->params[0])
+                : 0.5625));
+        reframe_combo_->SetEnabled(has_clip_);
+        reframe_btn_->SetEnabled(has_clip_);
         delete_btn_->SetEnabled(has_clip_);
         for (Row& row : rows_) row.input->SetEnabled(has_clip_);
         muted_->SetEnabled(has_clip_);
@@ -937,13 +1025,15 @@ bool InspectorWidget::ParseEffects(std::vector<ClipEffect>* effects,
     for (const std::string& raw_item : Split(text, ';')) {
         const std::string item = Trim(raw_item);
         if (item.empty()) continue;
-        // "plugin:<id>" / "ocio:<name>" carry a ':' inside the type
-        // itself — for those, the params boundary is the ':' AFTER the
-        // prefix (FormatEffects writes "type:p1,p2", so an id with a
-        // trailing ":p1,p2" still splits cleanly).
+        // "plugin:<id>" / "builtin:<id>" / "ocio:<name>" carry a ':'
+        // inside the type itself — for those, the params boundary is
+        // the ':' AFTER the prefix (FormatEffects writes "type:p1,p2",
+        // so an id with a trailing ":p1,p2" still splits cleanly).
         std::size_t colon = item.find(':');
         if (item.rfind("plugin:", 0) == 0) {
             colon = item.find(':', 7);
+        } else if (item.rfind("builtin:", 0) == 0) {
+            colon = item.find(':', 8);
         } else if (item.rfind("ocio:", 0) == 0) {
             colon = item.find(':', 5);
         }
@@ -951,6 +1041,7 @@ bool InspectorWidget::ParseEffects(std::vector<ClipEffect>* effects,
         effect.type = Trim(item.substr(0, colon));
         const bool prefixed =
             effect.type.rfind("plugin:", 0) == 0 ||
+            effect.type.rfind("builtin:", 0) == 0 ||
             effect.type.rfind("ocio:", 0) == 0;
         if (effect.type.empty() ||
             (!prefixed && KnownEffects().count(effect.type) == 0)) {
@@ -1502,6 +1593,55 @@ void InspectorWidget::Layout(const XER::UI::Layout::Rect& bounds) {
             }
         }
         gap(10.0f);
+    }
+
+    // ---- Smart Reframe (subject track + target select) ----
+    if (has_clip_ &&
+        (hooks_.on_smart_reframe != nullptr ||
+         hooks_.on_smart_reframe_analyze != nullptr)) {
+        section("SMART REFRAME");
+        const bool scannable =
+            clip_.source.kind == SourceKind::Media &&
+            !clip_.source_path.empty() && !clip_.is_adjustment;
+        reframe_combo_->SetVisible(true);
+        reframe_btn_->SetVisible(true);
+        drawn_.push_back({{inner_x, y, 52.0f, 26.0f}, "Target", false});
+        reframe_combo_->Layout(
+            {inner_x + 54.0f, y,
+             std::max(40.0f, inner_w - 54.0f - 96.0f), 26.0f},
+            tokens);
+        reframe_combo_->SetEnabled(has_clip_);
+        reframe_btn_->Layout(
+            {inner_x + inner_w - 90.0f, y, 90.0f, 26.0f}, tokens);
+        reframe_btn_->SetText(clip_.reframe.samples.empty()
+                                  ? "Analyze"
+                                  : "Re-analyze");
+        reframe_btn_->SetEnabled(
+            scannable && hooks_.on_smart_reframe_analyze != nullptr);
+        y += 32.0f;
+        if (clip_.reframe.samples.empty()) {
+            label(scannable
+                      ? "no track — run Analyze (needs a model in "
+                        "assets/models/)"
+                      : "no track — generated clips have nothing to "
+                        "scan",
+                  18.0f);
+        } else {
+            char line[96];
+            std::snprintf(
+                line, sizeof(line), "track: %d samples%s",
+                static_cast<int>(clip_.reframe.samples.size()),
+                FindSmartReframeEffect(clip_) != nullptr
+                    ? ""
+                    : " · not applied");
+            label(line, 18.0f);
+        }
+        gap(10.0f);
+    } else {
+        // Section skipped — keep the children from painting at stale
+        // rects (Layout is never called for them this pass).
+        reframe_combo_->SetVisible(false);
+        reframe_btn_->SetVisible(false);
     }
 
     // ---- transition picker ----

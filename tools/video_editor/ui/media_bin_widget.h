@@ -51,6 +51,16 @@ public:
         // AI actions on the media under the cursor (context menu).
         std::function<void(const std::string&)> on_detect_beats;
         std::function<void(const std::string&)> on_transcribe;
+        // Context-menu "Edit by Transcript": bind the Transcript dock
+        // to this media (the app prefers a timeline clip on the same
+        // source when one exists).
+        std::function<void(const std::string&)> on_edit_transcript;
+        // Proxy workflow (proxy_manager.cc): "Create proxy" queues a
+        // background transcode for the media path; "Cancel proxy"
+        // drops a queued/running build. Unset -> the menu items stay
+        // disabled; the PX badge still renders from proxy_state.
+        std::function<void(const std::string&)> on_create_proxy;
+        std::function<void(const std::string&)> on_cancel_proxy;
         // Cheap availability probe for the transcribe menu item —
         // false greys the item out instead of failing later.
         std::function<bool()> transcribe_available;

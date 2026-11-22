@@ -105,6 +105,13 @@ public:
         // Poster quantization — must match the timeline widget's
         // kPosterQuantize so a widget bucket maps 1:1 onto a decode.
         double poster_bucket_seconds = 0.25;
+        // Optional media-path resolver applied to kPosterAt decodes
+        // only — the proxy seam: maps a media path to its ready proxy
+        // so poster extraction never touches the heavy original.
+        // kPeaks never resolves (proxies carry no audio) and
+        // kImportPoster cannot: ExtractPoster keys its row update on
+        // the media path. Empty -> every path decodes verbatim.
+        std::function<std::string(const std::string&)> path_resolver;
     };
 
     // `catalog` is borrowed, never owned — may be nullptr (poster/peaks

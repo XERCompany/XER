@@ -955,6 +955,65 @@ private:
     std::string last_error_;
 };
 
+// Duration retarget — same dedicated shape as the add/remove pair:
+// the before-duration is captured on first Apply and restored by
+// (from,to) lookup on Revert (LIFO guarantees the junction is still
+// there). Consecutive sets on the same junction coalesce — a live
+// commit stream folds into one undo step like a fader drag.
+class SetTransitionDurationCommand : public Command {
+public:
+    SetTransitionDurationCommand(std::string from, std::string to,
+                                 double duration)
+        : from_(std::move(from)), to_(std::move(to)),
+          duration_(duration) {}
+    bool Apply(Project& project) override {
+        last_error_.clear();
+        for (const auto& t : project.transitions) {
+            if (t.from_clip == from_ && t.to_clip == to_) {
+                before_ = t.duration;
+                found_ = true;
+                break;
+            }
+        }
+        if (!found_) {
+            last_error_ = "transition not found";
+            return false;
+        }
+        return SetTransitionDuration(project, from_, to_, duration_,
+                                     &last_error_);
+    }
+    bool Revert(Project& project) override {
+        for (auto& t : project.transitions) {
+            if (t.from_clip == from_ && t.to_clip == to_) {
+                t.duration = before_;
+                return true;
+            }
+        }
+        return false;
+    }
+    std::string Label() const override {
+        return "Set transition duration";
+    }
+    bool MergeWith(const Command& other) override {
+        const auto* o =
+            dynamic_cast<const SetTransitionDurationCommand*>(&other);
+        if (o == nullptr || o->from_ != from_ || o->to_ != to_) {
+            return false;
+        }
+        duration_ = o->duration_;   // keep our before_, take the newest
+        return true;
+    }
+    const std::string& last_error() const { return last_error_; }
+
+private:
+    std::string from_;
+    std::string to_;
+    double duration_;
+    double before_ = 0.0;
+    bool found_ = false;
+    std::string last_error_;
+};
+
 class RemoveTransitionCommand : public Command {
 public:
     RemoveTransitionCommand(std::string from, std::string to)
@@ -1268,6 +1327,22 @@ bool TimelineHistory::RemoveTransition(const std::string& from_clip,
                                        const std::string& to_clip) {
     return Execute(
         std::make_unique<RemoveTransitionCommand>(from_clip, to_clip));
+}
+
+bool TimelineHistory::SetTransitionDuration(
+    const std::string& from_clip, const std::string& to_clip,
+    double duration, std::string* error_out) {
+    auto cmd = std::make_unique<SetTransitionDurationCommand>(
+        from_clip, to_clip, duration);
+    auto* raw = cmd.get();
+    if (!cmd->Apply(project_)) {
+        if (error_out) {
+            *error_out = raw->last_error();
+        }
+        return false;
+    }
+    PushBack(std::move(cmd));
+    return true;
 }
 
 int TimelineHistory::AddTrack(TrackKind kind, const std::string& name) {

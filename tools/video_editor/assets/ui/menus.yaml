@@ -15,6 +15,7 @@ Menus:
       - {separator: true}
       - {action: bin.detect_beats, label: "Detect Beats → Markers"}
       - {action: bin.transcribe, label: "Transcribe → Markers (Whisper)"}
+      - {action: bin.edit_transcript, label: "Edit by Transcript"}
       - {action: bin.audio_fx_group}   # expands into per-plugin bounce items
 
   - id: monitor
@@ -52,6 +53,8 @@ Menus:
       - {action: clip.split, label: "Split at Cursor", shortcut: "C"}
       - {separator: true}
       - {action: clip.speed_group}      # expands into Speed 50/100/200%
+      - {separator: true}
+      - {action: clip.edit_transcript, label: "Edit by Transcript"}
       - {separator: true}
       - {action: clip.delete, label: "Delete", shortcut: "Del", danger: true}
       - {action: clip.ripple_delete, label: "Ripple Delete", danger: true}

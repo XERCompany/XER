@@ -1,9 +1,9 @@
-// Photo workspace — the M3 UI face of the photo editor core
+// Photo workspace — the M3+M4 UI face of the photo editor core
 // (tools/video_editor/photo/: Document/LayerNode tree, TiledDevice,
-// BrushEngine, PhotoHistory, .xerphoto). A single self-contained
-// widget the app swaps in for the whole content band when the "Photo"
-// workspace preset is applied (workspace_layout.cc /
-// VideoEditorAppWidget::ApplyWorkspace):
+// BrushEngine, PhotoHistory, selections, masks, adjustments,
+// .xerphoto). A single self-contained widget the app swaps in for the
+// whole content band when the "Photo" workspace preset is applied
+// (workspace_layout.cc / VideoEditorAppWidget::ApplyWorkspace):
 //
 //   [ top bar: file ops | tool options | colors ]          ~40px
 //   [ tool strip ] [ canvas viewport ] [ layers panel ]
@@ -17,10 +17,28 @@
 //   * The layers panel drives Document tree ops + SetLayerAttributes
 //     through PhotoHistory — every edit (stroke, fill, gradient,
 //     visibility, opacity, blend, rename, add/remove/move/merge/
-//     flatten/duplicate) is undoable with Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
+//     flatten/duplicate, mask attach/detach, adjustment params) is
+//     undoable with Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y.
 //   * File: New (w×h dialog), Open (.xerphoto + png/jpg/... through
 //     Document::OpenPng's magic-detect ImageLoader chain),
 //     Save .xerphoto, Export PNG.
+//
+// M4:
+//   * Selection tools (rect/ellipse/lasso/poly lasso/magic wand)
+//     write an A8 TiledDevice the workspace owns; a marching-ants
+//     outline is drawn on the canvas and every paint op clips to the
+//     coverage. Shift = add, Alt = subtract on marquee drags;
+//     Ctrl+A select all, Ctrl+D deselect, "Inv" button inverts.
+//   * The "Mask" layers button attaches a Gray8 mask device; while
+//     mask-editing is on, brush strokes paint coverage toward the
+//     fg luminance (eraser -> 0) and a quick-mask red tint shows the
+//     hidden area.
+//   * "+Adj" adds an adjustment layer (named op over the
+//     composite-of-below); the op Select + params TextInput edit it
+//     through SetLayerAttributesCommand.
+//   * Clone stamp (Alt+click = source pick), healing brush, spot
+//     remove, and inpaint-over-selection ride image::RetouchTool
+//     through undoable patch transactions.
 //
 // The widget never touches the timeline/project model — it owns its
 // own Document + PhotoHistory and reports text through on_status.
@@ -35,6 +53,7 @@
 #include "photo/brush.h"
 #include "photo/document.h"
 #include "photo/photo_history.h"
+#include "photo/selection.h"
 #include "photo/tile_store.h"
 #include "widgets/widget.h"
 
@@ -95,6 +114,29 @@ public:
     void MergeActiveLayer();
     void FlattenImage();
 
+    // ---- M4: selection (Select menu parity) -------------------------
+    // The workspace owns an A8 TiledDevice selection (not a document
+    // layer); all ops below are undoable via PhotoHistory mementos.
+    bool HasSelection() const;
+    void SelectAll();
+    void Deselect();
+    void InvertSelection();
+    void FeatherSelectionPx(float radius_px);
+
+    // ---- M4: masks + adjustment layers ------------------------------
+    // Attaches a fresh A8 mask to the active layer, or detaches it
+    // (undoable either way). While mask-editing is on, brush strokes
+    // paint coverage instead of pixels.
+    void ToggleActiveLayerMask();
+    bool MaskEditing() const { return mask_editing_; }
+    void SetMaskEditing(bool on);
+    // Adds an adjustment layer with the op's default params
+    // (undoable); `op` is an adjust_ops registry name.
+    void AddAdjustmentLayer(const std::string& op);
+    // Rewrites the active adjustment layer's spec through
+    // SetLayerAttributesCommand (undoable "Adjustment Params").
+    bool SetActiveAdjustment(const Photo::AdjustmentSpec& spec);
+
     // Replaces the document (ownership) + resets history/selection;
     // `display_name` is the tab/file label shown in the header.
     void SetDocument(std::unique_ptr<Photo::Document> doc,
@@ -120,7 +162,11 @@ public:
     }
 
 private:
-    enum class Tool { Brush, Eraser, Fill, Gradient, Pan };
+    enum class Tool {
+        Brush, Eraser, Fill, Gradient, Pan,
+        SelectRect, SelectEllipse, Lasso, PolyLasso, MagicWand,
+        CloneStamp, Healing, Spot, Inpaint,
+    };
 
     // Display-list row for the layers panel: the tree's DFS flattened
     // top-to-bottom (children vectors are bottom-to-top, so rows are
@@ -130,6 +176,8 @@ private:
         int depth = 0;
         std::string name;
         bool group = false;
+        bool adjustment = false;
+        bool has_mask = false;
         bool visible = true;
         bool locked = false;
         // Hit boxes are computed on demand via LayerRowRect() —
@@ -165,6 +213,44 @@ private:
     Photo::BrushParams CurrentBrushParams() const;
     void SetFgColor(Photo::Pixel color);
     bool SetFgColorFromHex(const std::string& text);
+
+    // ---- M4: selection internals --------------------------------------
+    void EnsureSelectionDevice();
+    // The active selection device for paint-op clipping (nullptr when
+    // the selection is empty).
+    const Photo::TiledDevice* ClipMask() const;
+    // Runs `fn` on the selection device inside one undoable
+    // ExecuteDeviceOp, then refreshes outline/state.
+    void RunSelectionOp(
+        const std::string& label,
+        const std::function<void(Photo::TiledDevice&)>& fn);
+    // Recomputes has-selection + the marching-ants outline.
+    void RefreshSelectionState();
+    Photo::SelectionCombine PendingCombine() const;
+    // Commits the in-progress marquee drag (rect/ellipse/lasso).
+    void CommitMarquee();
+    // The doc-space polygon to draw as the ants outline for the
+    // in-progress marquee (empty = use sel_outline_).
+    std::vector<Photo::IntPoint> LiveMarqueePolygon() const;
+    void CommitPolyLasso();
+    void CancelSelectionGesture();
+
+    // ---- M4: retouch --------------------------------------------------
+    int RetouchRadius() const;
+    void RetouchDab(const XER::UI::Layout::Point& doc);
+    void ApplyInpaintOverSelection();
+
+    // ---- M4: mask internals --------------------------------------------
+    // Quick-mask overlay (red tint where coverage < 255), rebuilt
+    // after every reflatten while mask-editing is on.
+    void RebuildMaskOverlay();
+    // Coverage value a mask stroke paints: fg-luma for the brush,
+    // 0 (black erase) for the eraser — the PS "paint gray" model.
+    uint8_t MaskPaintValue() const;
+
+    // ---- M4: adjustment controls ---------------------------------------
+    void SyncAdjustmentControls();
+    bool adj_controls_visible_ = false;
 
     // ---- view transform (zoom-at-cursor + pan, photo_viewer pattern)
     float FitScale() const;
@@ -230,9 +316,41 @@ private:
     std::unique_ptr<Photo::TiledDevice> scratch_;   // dab target
     std::unique_ptr<Photo::BrushEngine> engine_;    // per-stroke
     bool stroking_ = false;
+    bool stroking_mask_ = false;   // stroke targets the layer's A8 mask
     bool gradient_drag_ = false;
     XER::UI::Layout::Point grad_start_{};   // client coords
     XER::UI::Layout::Point grad_cur_{};
+
+    // ---- selection (workspace-owned A8 device) --------------------------
+    std::unique_ptr<Photo::TiledDevice> selection_;
+    bool selection_nonempty_ = false;             // cached coverage>0
+    std::vector<Photo::IntPoint> sel_outline_;    // doc-px ants poly
+    double ant_phase_ = 0.0;                      // marching-ants phase
+    // In-progress marquee (client coords for rect/ellipse; doc points
+    // for lasso/poly).
+    bool marquee_drag_ = false;
+    Photo::SelectionCombine marq_combine_ =
+        Photo::SelectionCombine::kReplace;
+    XER::UI::Layout::Point marq_anchor_{};
+    XER::UI::Layout::Point marq_cur_{};
+    std::vector<Photo::IntPoint> lasso_pts_;
+    bool poly_active_ = false;
+    std::vector<Photo::IntPoint> poly_pts_;
+    float wand_tol_ = 32.0f;      // magic-wand tolerance (0..255)
+    float sel_feather_ = 0.0f;    // marquee feather option (px)
+
+    // ---- retouch ---------------------------------------------------------
+    bool retouch_drag_ = false;
+    bool clone_src_set_ = false;
+    Photo::IntPoint clone_src_;       // doc px, Alt+click pick
+    Photo::IntPoint retouch_origin_;  // doc px where the drag began
+
+    // ---- mask editing -----------------------------------------------------
+    bool mask_editing_ = false;
+    // Quick-mask tint overlay (canvas-sized BGRA; regenerated on
+    // reflatten while mask-editing).
+    std::vector<std::uint8_t> mask_overlay_bgra_;
+    int mask_ovl_w_ = 0, mask_ovl_h_ = 0;
 
     // ---- colors ---------------------------------------------------------
     // Foreground color = brush_params_.color. `swatch_rects_` is
@@ -260,6 +378,15 @@ private:
     std::shared_ptr<XER::UI::Widgets::Button> fill_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> gradient_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> pan_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> sel_rect_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> sel_ellipse_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> lasso_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> poly_lasso_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> wand_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> clone_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> heal_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> spot_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> inpaint_btn_;
     // Tool options (top bar, right side).
     std::shared_ptr<XER::UI::Widgets::Label> size_label_;
     std::shared_ptr<XER::UI::Widgets::Slider> size_slider_;
@@ -267,20 +394,30 @@ private:
     std::shared_ptr<XER::UI::Widgets::Slider> hardness_slider_;
     std::shared_ptr<XER::UI::Widgets::Label> opacity_label_;
     std::shared_ptr<XER::UI::Widgets::Slider> opacity_slider_;
+    std::shared_ptr<XER::UI::Widgets::Label> tol_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> tol_slider_;
+    std::shared_ptr<XER::UI::Widgets::Label> feather_label_;
+    std::shared_ptr<XER::UI::Widgets::Slider> feather_slider_;
+    std::shared_ptr<XER::UI::Widgets::Button> invert_sel_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> deselect_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> color_input_;
     std::shared_ptr<XER::UI::Widgets::Label> zoom_label_;
     // Layers panel controls (right column).
     std::shared_ptr<XER::UI::Widgets::Button> add_layer_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> add_group_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> add_adj_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> dup_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> del_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> up_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> down_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> merge_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> flatten_btn_;
+    std::shared_ptr<XER::UI::Widgets::Button> mask_btn_;
     std::shared_ptr<XER::UI::Widgets::TextInput> name_input_;
     std::shared_ptr<XER::UI::Widgets::Slider> layer_opacity_slider_;
     std::shared_ptr<XER::UI::Widgets::Select> blend_select_;
+    std::shared_ptr<XER::UI::Widgets::Select> adj_op_select_;
+    std::shared_ptr<XER::UI::Widgets::TextInput> adj_params_input_;
     std::shared_ptr<XER::UI::Widgets::Label> hint_label_;
 };
 

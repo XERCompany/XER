@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "photo/document.h"  // AdjustmentSpec (Attributes member)
 #include "photo/tile_store.h"
 
 namespace XER::VideoEditor::Photo {
@@ -61,6 +62,18 @@ public:
     bool ExecutePaintOp(LayerId layer, const std::string& label,
                         const std::function<void(TiledDevice&)>& fn);
 
+    // Same transaction->memento contract targeting an arbitrary
+    // device rather than a layer's raster device — layer masks
+    // (LayerNode::Mask()) and the workspace selection use this.
+    // The undo command stores the DEVICE POINTER, so the caller
+    // guarantees the device object outlives the recorded command —
+    // which holds by construction: mask devices die only with their
+    // owning node/command (older commands always reference live
+    // devices), and the selection device dies only when the
+    // document+history are swapped together.
+    bool ExecuteDeviceOp(TiledDevice& dev, const std::string& label,
+                         const std::function<void(TiledDevice&)>& fn);
+
 private:
     class MacroCommand;
     void PushUndo(std::unique_ptr<PhotoCommand> command);
@@ -92,6 +105,24 @@ private:
     std::unique_ptr<TileMemento> fwd_;   // post-op state (for redo)
 };
 
+// Same memento ping-pong bound to an explicit TiledDevice* instead of
+// a layer lookup — for mask devices and the workspace selection (see
+// PhotoHistory::ExecuteDeviceOp for the lifetime contract).
+class DeviceMementoCommand : public PhotoCommand {
+public:
+    DeviceMementoCommand(TiledDevice* dev, std::string label,
+                         std::unique_ptr<TileMemento> back_memento);
+    bool Apply(Document& doc) override;
+    bool Revert(Document& doc) override;
+    std::string Label() const override { return label_; }
+
+private:
+    TiledDevice* dev_;
+    std::string label_;
+    std::unique_ptr<TileMemento> back_;
+    std::unique_ptr<TileMemento> fwd_;
+};
+
 // Structural: inserts an already-built layer subtree under a parent.
 class AddLayerCommand : public PhotoCommand {
 public:
@@ -108,7 +139,9 @@ private:
     std::string label_;
 };
 
-// Structural: rename / visibility / lock / opacity / blend-mode edit.
+// Structural: rename / visibility / lock / opacity / blend-mode edit,
+// plus the adjustment-layer spec (op + params) on kAdjustment nodes —
+// param edits ride this same undo path (M4).
 class SetLayerAttributesCommand : public PhotoCommand {
 public:
     struct Attributes {
@@ -117,6 +150,9 @@ public:
         bool locked = false;
         float opacity = 1.0f;
         std::string blend_mode = "srcOver";
+        // Ignored on non-adjustment layers; carried so param edits
+        // round-trip through the same command (M4).
+        AdjustmentSpec adjustment;
     };
     SetLayerAttributesCommand(LayerId layer, Attributes next,
                               std::string label = "Layer Attributes");

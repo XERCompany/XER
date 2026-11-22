@@ -90,6 +90,13 @@ public:
                        const std::string& script = "");
     bool RemoveTransition(const std::string& from_clip,
                           const std::string& to_clip);
+    // Junction-handle drag commit: retargets an existing transition's
+    // centered duration (the widget clamps via TransitionDurationLimit
+    // before calling). Consecutive sets on the same junction coalesce.
+    bool SetTransitionDuration(const std::string& from_clip,
+                               const std::string& to_clip,
+                               double duration,
+                               std::string* error_out = nullptr);
     int  AddTrack(TrackKind kind, const std::string& name);
     bool RemoveTrack(int track_index, std::string* error_out = nullptr);
 

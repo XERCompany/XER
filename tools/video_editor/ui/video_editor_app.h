@@ -20,6 +20,7 @@
 #include "export_engine.h"
 #include "media_catalog.h"
 #include "media_prep.h"
+#include "proxy_manager.h"
 #include "project_autosave.h"
 #include "source_edit.h"
 #include "timeline_history.h"
@@ -53,6 +54,8 @@
 #include "status_toast.h"
 #include "timeline_widget.h"
 #include "title_editor.h"
+#include "transcript_edit.h"
+#include "transcript_panel.h"
 #include "url_import_dialog.h"
 #include "waveform_panel.h"
 #include "workspace_layout.h"
@@ -255,6 +258,47 @@ private:
     // background job, results land as markers via Tick().
     void DetectBeatsForMedia(const std::string& path);
     void TranscribeMedia(const std::string& path);
+    // Shared whisper job behind both TranscribeMedia (markers -> the
+    // bin menu) and TranscribeForPanel (spans -> the Transcript dock):
+    // `markers` picks the ai_result_ payload shape; every finished
+    // run also fills the per-media transcript cache either way.
+    void StartTranscription(const std::string& path, bool markers);
+    void TranscribeForPanel(const std::string& path);
+    // ---- transcript dock (text-based editing) ---------------------
+    // Clip context-menu "Edit by Transcript": selects the clip, opens
+    // the right dock on the Trn tab, serves the cached transcript or
+    // kicks the whisper job.
+    void EditClipByTranscript(const std::string& clip_id);
+    // Media-bin variant — binds the panel to the media itself (no
+    // clip mapping; transcript still renders and captions/markers
+    // stay disabled until the media is on the timeline).
+    void EditMediaByTranscript(const std::string& path);
+    // Rebinds the panel's subject after selection/project changes and
+    // re-pushes the cached transcript. Follows the selected media
+    // clip when there is one; otherwise keeps the last binding (or
+    // falls back to the bin selection).
+    void RefreshTranscriptPanel();
+    // Cache directory: "<user-data>/XER/VideoEditor/transcripts" — a
+    // sibling of records.db/catalog.db; per-media JSON files keyed by
+    // TranscriptCacheKey (path+size).
+    std::string TranscriptCacheDir() const;
+    // Memory-map + disk store for a finished transcription.
+    void StoreTranscriptResult(
+        const std::string& path,
+        const std::vector<Ai::TranscriptSegment>& spans);
+    // Serves `path`'s transcript: memory cache first, then the on-disk
+    // JSON (which re-primes the map). False = never transcribed (or a
+    // stale size-keyed miss).
+    bool TryLoadTranscript(
+        const std::string& path, std::vector<TranscriptWord>* words,
+        std::vector<Ai::TranscriptSegment>* spans);
+    // Panel "Ripple delete": extract [t0,t1) on all unlocked tracks
+    // (history_.LiftRange close_gap=true) — undoable.
+    void RippleDeleteTimelineRange(double t0, double t1);
+    // Panel "Captions": styled Text clips (captionist's param format)
+    // on a new "Captions" track for the transcript spans overlapping
+    // the SOURCE range — one undo macro.
+    void MakeCaptionsForSourceRange(double src_t0, double src_t1);
     // Audio-plugin bounce: decode PCM -> apply plugin effect -> write
     // a sibling WAV -> catalog import lands via the AI result poll.
     void BounceAudioFx(const std::string& path,
@@ -266,6 +310,18 @@ private:
     // hint instead of failing silently.
     void FindObjectsForClip(const std::string& clip_id);
     void ClearClipTags(const std::string& clip_id);
+    // AI "Smart Reframe" (ai/smart_reframe.h): async subject scan on
+    // the shared AI job; the ClipReframe track + the
+    // builtin:xer.fx.smart_reframe effect (target_ratio = `ratio`)
+    // land on the clip via ReplaceClip in Tick(). Re-run anytime —
+    // re-analysis replaces the track.
+    void SmartReframeForClip(const std::string& clip_id,
+                             double target_ratio);
+    // Inspector target select: when the clip already has a track the
+    // ratio update is just an effect-param write (no re-analysis);
+    // otherwise it kicks SmartReframeForClip.
+    void SetSmartReframeTarget(const std::string& clip_id,
+                               double target_ratio);
     void MoveClip(const std::string& clip_id, double start);
     // One-click waveform sync (audio_sync.h): correlate every
     // audio-bearing clip's envelope against the selected/first clip
@@ -293,6 +349,12 @@ private:
                            const std::string& to_id,
                            Transition::Type type, double duration,
                            const std::string& script = "");
+    // Junction-handle drag commit: the timeline widget already
+    // clamped `duration` to the endpoint clips' available handles —
+    // this runs the undoable model set (one history entry per drag).
+    void SetTransitionDurationBy(const std::string& from_id,
+                                 const std::string& to_id,
+                                 double duration);
     // Ctrl+D: the stored default transition lands on the junction
     // nearest the playhead (falls back to the selected clip's
     // out-edge junction when the playhead sits nowhere near a cut).
@@ -326,7 +388,7 @@ private:
     void RenameMarkerAt(double t, const std::string& name);
     void SetWorkAreaRange(double in_s, double out_s);
     void SetTrackFlag(int track, char which, bool on);  // 'm','h','l'
-    void SetRightTab(int tab);                          // 0..10
+    void SetRightTab(int tab);                          // 0..11
     void ApplyProjectSettings(const ProjectSettings& settings);
     // "New Item" placements: a generated clip on the target video
     // track at the playhead (menu) or an explicit lane+time (timeline
@@ -450,6 +512,20 @@ private:
                          const Json::Value& event);
     MediaBounds BoundsForPath(const std::string& path) const;
     const CatalogEntry* FindCatalogEntry(const std::string& path) const;
+    // Proxy workflow (proxy_manager.h): the shared decode-path seam —
+    // returns the ready proxy for `path` when the project has proxies
+    // enabled, `path` unchanged otherwise. Installed as the media
+    // resolver on the program + source engines and as MediaPrep's
+    // poster-decode resolver. Export never consults it.
+    std::string DecodePathFor(const std::string& path) const;
+    // Queue a proxy build using the project's current generation
+    // settings (proxy_max_dim/proxy_crf) — the media-bin "Create
+    // proxy" action and the import-time ingest share it.
+    void RequestProxyBuild(const std::string& path);
+    // MediaPrep options for the member initializer — path_resolver
+    // delegates to DecodePathFor (worker-thread safe: it reads the
+    // proxies_enabled_ atomic + the internally-locked manager).
+    MediaPrep::Options BuildPrepOptions();
 
     void* parent_hwnd_ = nullptr;
     std::string project_path_;
@@ -460,11 +536,28 @@ private:
     // thread. Opened next to the catalog in the ctor; an open failure
     // degrades the start screen to "no recents" instead of blocking.
     Records::RecentProjectsStore records_;
+    // Proxy worker (proxy_manager.h): single background transcode
+    // thread writing managed h264 proxies into <db_dir>/proxies/ with
+    // catalog-tracked state. Declared BEFORE media_prep_: prep workers
+    // resolve poster paths through DecodePathFor -> proxy_manager_ +
+    // proxies_enabled_ while they are being joined, so both must
+    // still be alive at that point (destruction is reverse-declared —
+    // these die AFTER the prep pool joins).
+    ProxyManager proxy_manager_{&catalog_};
+    // Mirrors project_.use_proxies for the decode-path resolver —
+    // resolvers run on compositor/prep worker threads where project_
+    // is off-limits (UI-owned, non-atomic); Tick() re-syncs this flag
+    // every frame. Default true matches Project::use_proxies.
+    std::atomic<bool> proxies_enabled_{true};
     // Media-prep worker pool (media_prep.h): poster/peaks decodes +
     // import-poster extraction off the UI thread. Declared right after
     // the catalog it borrows so the dtor joins its workers before the
     // catalog dies. Timeline hooks are non-blocking lookups into it.
-    MediaPrep media_prep_{&catalog_};
+    // The path_resolver option routes kPosterAt decodes through the
+    // proxy seam — the lambda only ever INVOKES proxy_manager_, so
+    // capturing `this` before the manager constructs is safe.
+    MediaPrep media_prep_{&catalog_, BuildPrepOptions(), {}};
+    std::string proxy_activity_;   // last shown DescribeActivity line
     std::vector<CatalogEntry> catalog_entries_;
     std::string selected_media_path_;
     std::string selected_clip_id_;
@@ -527,10 +620,19 @@ private:
         std::vector<Span> spans;
         std::string detail;
         std::string bounce_path;   // audio-plugin bounce output (WAV)
+        // Media the job ran on — the transcript cache is keyed by
+        // TranscriptCacheKey(media_path); set by the whisper jobs.
+        std::string media_path;
         // AI find-objects payload: the target clip + its new tag set.
         // tags_clip_id non-empty selects this path in Tick().
         std::string tags_clip_id;
         std::vector<ClipTag> tags;
+        // AI smart-reframe payload: the target clip + analyzed subject
+        // track + the picked target aspect. reframe_clip_id non-empty
+        // selects this path in Tick().
+        std::string reframe_clip_id;
+        ClipReframe reframe;
+        double reframe_ratio = 0.5625;
     };
     std::mutex ai_result_mutex_;
     AiResult ai_result_;
@@ -628,6 +730,20 @@ private:
     std::shared_ptr<FontManager> font_manager_;
     std::shared_ptr<NewLayerDialog> new_layer_dialog_;
     std::shared_ptr<LayersPanelWidget> layers_panel_;
+    // Transcript dock (text-based editing, right tab 11) — bound to
+    // transcript_clip_id_/transcript_media_path_ by
+    // RefreshTranscriptPanel; words come from transcript_cache_.
+    std::shared_ptr<TranscriptPanelWidget> transcript_panel_;
+    std::string transcript_clip_id_;     // bound timeline clip ("")
+    std::string transcript_media_path_;  // bound media ("" = none)
+    struct TranscriptDoc {
+        std::vector<TranscriptWord> words;
+        std::vector<Ai::TranscriptSegment> spans;  // caption source
+    };
+    // Per-media transcript store keyed by TranscriptCacheKey
+    // (path+size); mirrored to TranscriptCacheDir()/*.json so it
+    // survives restarts.
+    std::unordered_map<std::string, TranscriptDoc> transcript_cache_;
     // Context-menu insert point the matte dialog applies to —
     // track < 0 / time < 0 means the default (TargetVideoTrack /
     // playhead) was in effect when the dialog opened.
@@ -649,7 +765,7 @@ private:
     std::shared_ptr<XER::UI::Widgets::Tabs> right_tabs_;
     std::shared_ptr<TabStripScroll> tab_strip_;
     // 0 Insp, 1 FX, 2 Mkr, 3 Lab, 4 Hist, 5 Mix, 6 Queue, 7 Plugins,
-    // 8 Color, 9 Ext, 10 Lyr
+    // 8 Color, 9 Ext, 10 Lyr, 11 Trn
     int right_tab_ = 0;
     double timeline_fraction_ = 0.32;  // workspace layout knob
     std::vector<ExportJobRow> export_jobs_;

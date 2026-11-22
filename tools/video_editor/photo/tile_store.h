@@ -18,6 +18,16 @@
 //  * Undo delta = TileMemento: coord -> old tile (nullptr = tile did
 //    not exist). ApplyMemento() swaps old state back in and returns
 //    the INVERSE memento, giving undo<->redo ping-pong for free.
+//
+// M4 notes (A8 coverage devices — layer masks + selections):
+//  * PixelFormat::Gray8 (1 B/px) is a first-class device format — the
+//    "A8" coverage store for masks/selections. Tiles are still
+//    kTileSize² pixels, just 1 byte each.
+//  * The Pixel/region API stays NORMALIZED to RGBA quads regardless
+//    of format: on a Gray8 device ReadPixel returns {0,0,0,v},
+//    WritePixel stores p.a, ReadRegion still yields w*h*4 bytes.
+//    The dedicated *Coverage* accessors below are the compact
+//    single-byte path used by masks, selections, and .xerphoto.
 #pragma once
 
 #include <cstdint>
@@ -29,6 +39,18 @@
 #include "image/core/pixel_format.h"
 
 namespace XER::VideoEditor::Photo {
+
+// Integer point in document pixel space (lasso vertices, clone
+// sources, wand seeds).
+struct IntPoint {
+    int x = 0;
+    int y = 0;
+
+    bool operator==(const IntPoint& o) const {
+        return x == o.x && y == o.y;
+    }
+    bool operator!=(const IntPoint& o) const { return !(*this == o); }
+};
 
 // Integer rect in document pixel space.
 struct IntRect {
@@ -100,6 +122,31 @@ struct Pixel {
     }
 };
 
+// Per-channel straight-alpha lerp a->b at coverage cov (0..255).
+// Shared by selection-clipped fills, mask blending, and adjustment
+// write-back so the rounding convention stays identical everywhere.
+inline Pixel LerpPixelCov(Pixel a, Pixel b, uint8_t cov) {
+    const int c = cov;
+    const int inv = 255 - c;
+    return {static_cast<uint8_t>((a.r * inv + b.r * c + 127) / 255),
+            static_cast<uint8_t>((a.g * inv + b.g * c + 127) / 255),
+            static_cast<uint8_t>((a.b * inv + b.b * c + 127) / 255),
+            static_cast<uint8_t>((a.a * inv + b.a * c + 127) / 255)};
+}
+
+// Same on bridge-packed u32 words.
+inline uint32_t LerpU32Cov(uint32_t a, uint32_t b, uint8_t cov) {
+    return LerpPixelCov(Pixel::FromU32(a), Pixel::FromU32(b), cov)
+        .PackedU32();
+}
+
+// Scales the alpha byte of a packed u32 by cov/255 (rounded) — the
+// straight-storage equivalent of premultiplied mask multiply.
+inline uint32_t ScaleU32Alpha(uint32_t v, uint8_t cov) {
+    const uint32_t a = v & 0xFFu;
+    return (v & ~0xFFu) | ((a * cov + 127u) / 255u);
+}
+
 // A single 64x64 tile. Kept behind shared_ptr for copy-on-write; the
 // buffer is always kTileSize*kTileSize*bpp bytes of packed pixels in
 // the device format (RGBA8 at M1).
@@ -127,8 +174,11 @@ class TiledDevice {
 public:
     static constexpr int kTileSize = 64;
 
-    // format: only image::PixelFormat::RGBA8 is writable at M1; the tag
-    // is stored so buffers/ops can promote to RGBA32F later.
+    // format: RGBA8 (4 B/px) and Gray8/A8 (1 B/px) are supported. On a
+    // Gray8 device the byte IS the pixel — the Pixel-level API maps it
+    // onto the alpha channel ({0,0,0,v} reads, p.a writes), and the
+    // *Coverage accessors below do the same without the RGBA
+    // normalization.
     TiledDevice(int width, int height,
                 image::PixelFormat format = image::PixelFormat::RGBA8,
                 Pixel default_pixel = Pixel::Transparent());
@@ -163,9 +213,12 @@ public:
     void Clear();
 
     // Region I/O on packed rows. ReadRegion returns rect.w*rect.h*4
-    // bytes of R,G,B,A; holes read back as the default pixel.
+    // bytes of R,G,B,A regardless of device format (a Gray8 device
+    // expands to {0,0,0,v}); holes read back as the default pixel.
     std::vector<uint8_t> ReadRegion(const IntRect& rect) const;
     // src_stride_bytes: bytes per source row (0 = tightly packed).
+    // Source is RGBA quads on any format — a Gray8 device stores the
+    // alpha byte only.
     void WriteRegion(const IntRect& rect, const uint8_t* src,
                      size_t src_stride_bytes = 0);
 
@@ -173,6 +226,20 @@ public:
     std::vector<uint32_t> ReadRegionU32(const IntRect& rect) const;
     void WriteRegionU32(const IntRect& rect,
                         const std::vector<uint32_t>& src);
+
+    // --- coverage access (A8/Gray8 masks + selections) --------------
+    // Single-byte coverage I/O: on a Gray8 device this is the pixel
+    // itself; on an RGBA8 device it is the alpha channel (RGB is left
+    // untouched by writes). All of these ride the same COW/transaction
+    // machinery as the RGBA paths.
+    uint8_t ReadCoverage(int x, int y) const;
+    void WriteCoverage(int x, int y, uint8_t v);
+    void FillCoverage(const IntRect& rect, uint8_t v);
+    // Compact region I/O: rect.w*rect.h coverage bytes (1 B/px), the
+    // wire format .xerphoto uses for mask extents.
+    std::vector<uint8_t> ReadRegionCoverage(const IntRect& rect) const;
+    void WriteRegionCoverage(const IntRect& rect, const uint8_t* src,
+                             size_t src_stride_bytes = 0);
 
     // Composite `src` (w x h, bridge-packed) onto the device so that
     // src(0,0) lands at (dx,dy); only pixels inside `clip` (and bounds)

@@ -92,6 +92,19 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
 bool WarpClipFrame(const video::Frame& src, const Transform& tr,
                    int canvas_w, int canvas_h, video::Frame* out_layer);
 
+// Same warp, but the sampled source is a pixel-space sub-rect
+// (region_x, region_y, region_w, region_h) of `src` — the smart-
+// reframe crop window. The region is treated as the source rect: the
+// scaled dest rect is region_w*scale x region_h*scale and the
+// transform's offset/rotation apply to it exactly as WarpClipFrame
+// does for the full frame. Sampling can bleed a few pixels past the
+// region edge on rotation (it clamps at the FRAME edge).
+bool WarpClipFrameRegion(const video::Frame& src, double region_x,
+                         double region_y, double region_w,
+                         double region_h, const Transform& tr,
+                         int canvas_w, int canvas_h,
+                         video::Frame* out_layer);
+
 // Multiplies `frame`'s alpha by the product of all `masks` (straight
 // alpha — only the A channel is scaled; RGB passes through). Masks are
 // defined in CLIP-FRAME fractions: shape centered at
@@ -131,6 +144,17 @@ struct CompositorOptions {
     // seek / loop wrap re-binds the compositor — PreviewEngine) and
     // scrub-back over already-rendered frames hits.
     std::shared_ptr<EffectFrameCache> frame_cache;
+    // Optional media-path resolver applied ONCE per clip session:
+    // maps clip.source_path -> the path the decoder actually opens
+    // (e.g. ProxyManager::ResolveDecodePath swaps in a ready proxy for
+    // preview decode). Empty -> the source path is used verbatim.
+    // Resolution is folded into the clip state hash so toggling the
+    // resolver's answer invalidates memoized/cached layers. Generated
+    // and adjustment clips never resolve (they own no media file).
+    // EXPORT MUST NEVER SET THIS: ExportEngine builds default options
+    // so only original media can reach the encode — a proxy leaking
+    // into export is a data-integrity bug.
+    std::function<std::string(const std::string&)> media_resolver;
 };
 
 // Frame-accurate timeline -> canvas BGRA renderer. UI-free, single

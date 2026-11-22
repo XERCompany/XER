@@ -97,6 +97,13 @@ public:
         std::function<void(const std::string&, Transition::Type,
                            double, const std::string&)>
             on_add_transition;
+        // Junction-handle drag: retarget the duration of the
+        // transition (from_clip, to_clip) — already clamped to the
+        // endpoint clips' available handles by the widget. The shell
+        // commits it through TimelineHistory so the gesture is one
+        // undoable step.
+        std::function<void(const std::string&, const std::string&,
+                           double)> on_set_transition_duration;
         // Marker lane: (time_seconds, name — "" lets the shell pick a
         // default label) / remove the marker at `time`.
         std::function<void(double, const std::string&)> on_add_marker;
@@ -145,6 +152,17 @@ public:
         // "AI: Clear Tags" empties Clip::tags again.
         std::function<void(const std::string&)> on_ai_find_objects;
         std::function<void(const std::string&)> on_ai_clear_tags;
+        // Clip context menu "Smart Reframe → <ratio>": the shell runs
+        // the async subject scan (ai/smart_reframe.h), stores the
+        // ClipReframe track on the clip and applies the
+        // xer.fx.smart_reframe effect at the chosen target aspect
+        // (w/h: 9:16 = 0.5625, 1:1 = 1.0, 4:5 = 0.8).
+        std::function<void(const std::string&, double)>
+            on_smart_reframe;
+        // Clip context menu "Edit by Transcript": the shell selects
+        // the clip, focuses the Transcript dock and (cache miss)
+        // starts the whisper job — media clips only.
+        std::function<void(const std::string&)> on_edit_transcript;
     };
 
     explicit TimelineWidget(Hooks hooks = {});
@@ -220,6 +238,13 @@ private:
         int button = -1;
     };
     enum class WorkDrag { None, In, Out, Move };
+    // Junction-overlay edge hit: index into project_->transitions and
+    // which window edge is under the pointer (In = left bar, Out =
+    // right bar). index < 0 = no hit.
+    struct TransitionHandleHit {
+        int index = -1;
+        TrimEdge edge = TrimEdge::Out;
+    };
     // Downsampled whole-media waveform for one pixel budget: 2*columns
     // floats (min,max) covering [0, span_seconds] of source time.
     struct WaveRow {
@@ -257,6 +282,21 @@ private:
     XER::UI::Layout::Rect RealClipRect(const Clip& clip) const;
     ClipHit HitClip(XER::UI::Layout::Point p) const;
     HeaderHit HitHeaderButton(XER::UI::Layout::Point p) const;
+    // Junction-overlay edge zone under p (~4px each side of the
+    // rendered window edges) — the draggable transition-duration
+    // handles. Shares the render path's region math incl. the
+    // degenerate-zoom minimum span.
+    TransitionHandleHit HitTransitionHandle(
+        XER::UI::Layout::Point p) const;
+    // Handle-clamped duration ceiling for `transition` — media bounds
+    // resolved through the get_media_bounds hook for each endpoint
+    // (non-media sources count as unbounded).
+    double TransitionDragLimit(const Transition& transition) const;
+    // The duration a transition renders/drag-targets with right now:
+    // the live preview while its handle is being dragged, else the
+    // stored duration.
+    double EffectiveTransitionDuration(
+        const Transition& transition) const;
     const Marker* MarkerAtX(float x) const;
     // Work-area zone under p inside the ruler band: 0 = seek area,
     // 1 = in-edge handle, 2 = out-edge handle, 3 = whole-bar move.
@@ -360,6 +400,11 @@ private:
     std::string hover_clip_id_;
     HeaderHit hover_header_;
     int hover_toolbar_ = -1;
+    // Junction-handle hover: the transitions index + edge under the
+    // pointer (hot edge bars brighten — the resize-cursor affordance;
+    // XER_UI_Core has no OS-cursor switching).
+    int hover_transition_ = -1;
+    TrimEdge hover_transition_edge_ = TrimEdge::Out;
 
     // Per-track expand state for the header chevrons (track index ->
     // tall lane). Widget-side only; the model has no row-height field.
@@ -384,6 +429,18 @@ private:
     double work_drag_anchor_ = 0.0;   // ctx.time at grab (Move)
     double work_drag_orig_in_ = 0.0;  // bar span at grab (Move)
     double work_drag_orig_out_ = 0.0;
+
+    // Junction-handle drag (Selection tool only): resizes the
+    // transition's centered duration through its edge bars. The
+    // preview duration drives the overlay rect live; the clamped
+    // final value commits on mouse-up via on_set_transition_duration.
+    bool transition_drag_ = false;
+    std::string transition_drag_from_;
+    std::string transition_drag_to_;
+    TrimEdge transition_drag_edge_ = TrimEdge::Out;   // grabbed side
+    double transition_drag_orig_ = 0.0;               // duration at grab
+    double transition_drag_preview_ = 0.0;            // live value
+    double transition_drag_max_ = 0.0;                // handle ceiling
 
     // Double-click detection on the ruler/marker lane (adds a marker).
     std::chrono::steady_clock::time_point last_ruler_click_{};

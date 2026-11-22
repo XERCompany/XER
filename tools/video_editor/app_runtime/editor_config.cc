@@ -90,7 +90,7 @@ bool LoadEditorConfig(const std::filesystem::path& yaml_path,
         }
         int iv = 0;
         if (ReadInt(editor, "RightTab", &iv)) {
-            out->right_tab = std::clamp(iv, 0, 9);   // 0..9 tabs
+            out->right_tab = std::clamp(iv, 0, 11);  // 0..11 tabs
         } else if (editor["RightTab"].IsDefined()) {
             out->right_tab = -1;  // present but not a valid int
         }

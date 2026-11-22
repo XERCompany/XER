@@ -950,6 +950,12 @@ bool SetupVideoEncoder(AVFormatContext* output_context,
     codec_context->framerate = AVRational{params.fps_num > 0 ? params.fps_num : 1,
                                           params.fps_den > 0 ? params.fps_den : 1};
     codec_context->bit_rate = params.bit_rate > 0 ? params.bit_rate : 4000000;
+    // Constant-quality mode (proxy/draft encodes): forward the crf to
+    // codecs exposing the private option (libx264/libx265); encoders
+    // without it keep the bit_rate path — av_opt_set_int simply fails.
+    if (params.crf >= 0 && codec_context->priv_data != nullptr) {
+        av_opt_set_int(codec_context->priv_data, "crf", params.crf, 0);
+    }
 
     AVPixelFormat encoder_pix_fmt = AV_PIX_FMT_YUV420P;
     int pixel_format_count = 0;

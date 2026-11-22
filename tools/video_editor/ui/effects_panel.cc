@@ -35,7 +35,10 @@ const char* IconForEffectType(const std::string& type) {
         return "compare_arrows";
     }
     if (type.find("blur") != std::string::npos) return "shadow";
-    if (type == "chroma_key") return "select_window";
+    if (type == "chroma_key" ||
+        type.find("reframe") != std::string::npos) {
+        return "select_window";
+    }
     if (type == "vignette" || type == "pixelate") return "tile_medium";
     return "tab.effects";   // polymer.svg — generic effects glyph
 }
@@ -318,6 +321,11 @@ EffectsPanelWidget::Catalog() {
          "edge glow · threshold, intensity 0..4"},
         {"builtin:xer.fx.tone_split", {220.0f, 40.0f},
          "tone split · shadow hue, highlight hue"},
+        // Geometric AI effect — crops via the clip's analyzed subject
+        // track (context-menu "Smart Reframe →" or the inspector
+        // Analyze button build it); without a track it center-crops.
+        {"builtin:xer.fx.smart_reframe", {0.5625f, 0.5f},
+         "smart reframe · target w/h (9:16 = 0.5625), smoothing 0..1"},
         };
         if (!JsFxRuntime::FxDir().empty() ||
             JsFxRuntime::LoadCatalog(
