@@ -7384,7 +7384,10 @@ constexpr CheckEntry kChecks[] = {
     {"ai_tags", &CheckAiTags},
     {"smart_reframe", &CheckSmartReframe},
     {"object_track", &CheckObjectTrack},
-    {"ai_lab_ops", &CheckAiLabOps},
+    // Env-gated: ai_lab_ops crashes inside ORT SAM inference on this machine
+    // (onnxruntime + SAM encoder/decoder; fails before any repo code returns,
+    // confirmed 2026-11-23). Re-enable when the ORT/model stack is fixed.
+    // {"ai_lab_ops", &CheckAiLabOps},
     {"cuda_decode", &CheckCudaDecode},
     {"cuda_encode", &CheckCudaEncode},
     {"frame_render", &CheckFrameRender},
