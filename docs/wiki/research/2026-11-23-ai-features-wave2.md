@@ -240,3 +240,59 @@ on `feat/ui-kit-ve-shell`:
   synthetic head tensors.
 - §11.3 resolved as designed: single-track `Clip::object_track` keeps
   the primary (largest) face per probe; multi-face storage stays open.
+
+## 13. Wave-2 adoption note (implemented 2026-11-23)
+
+The §W2 scope shipped on `feat/ui-kit-ve-shell` — the generic tiled
+runner + both models, productized through the **bounce seam** (the
+cheaper honest option from §11.4: offline decode -> model -> encode to
+a new media file, no compositor contract change):
+
+- **Generic runner** — `tools/video_editor/ai/img2img_runner.{h,cc}`:
+  model-agnostic tiled image->image over BGRA frames. Grid covers the
+  frame on `tile - overlap` steps with the last tile per axis shifted
+  to end exactly at the frame edge; each tile's output blends in with
+  a complementary smoothstep weight ramp over its shared zones and an
+  exact-integer (u16 fixed-point) weight-sum accumulator normalizes —
+  a constant field reassembles bit-exact at every seam. Progress +
+  cancellation between tiles. Reusable by any later image->image
+  model (depth, relight).
+- **Real-ESRGAN x4v3** — `ai/upscale_x4v3.{h,cc}` wraps the staged
+  `realesr-general-x4v3.onnx` (Samo629/real-esrgan-onnx fp32, 4.9 MB,
+  BSD-3-Clause): `input` f32 `[B,3,H,W]` RGB 0..1 dynamic H/W ->
+  `output` `[B,3,4H,4W]`. Productized as Media Bin ctx-menu
+  **"AI Upscale 4x"**: `ai/ai_bounce.cc` decodes the entry, runs the
+  tiled 4x, encodes `<stem>.xer.upscaled.mp4` (audio carried on
+  whole-file bounces), imports the file back into the catalog —
+  chosen over an export_engine upscale pass because a bounced file is
+  reusable media (bin preview, re-trim, normal export) while an
+  export flag would re-run the model on every render.
+- **RIFE 4.25-lite** — `ai/rife_interp.{h,cc}` wraps
+  `rife_v425lite.onnx` (t9749/rife-4.25-lite-onnx fp32, 22.7 MB,
+  MIT): `(img0, img1, timestep[1,1,1,1]) -> frame`, RGB 0..1, H/W
+  must be multiples of 64 (wrapper edge-replicates + crops).
+  `InterpolateBetween` does arbitrary factors — pow2 recurse at
+  t=0.5, others subdivide the timestep. Productized as clip ctx-menu
+  **"Smooth slow-mo (AI)"** on `playback_rate < 1` media clips:
+  bounce the consumed source span at N frames per source frame ->
+  `<stem>.xer.slowmo<N>x.mp4` (video-only — no stretcher for
+  rate-changed audio this wave), then the clip repoints at the file
+  through history (rate -> rate*N).
+- **ai/ai_bounce.{h,cc}** — the shared bounce pipeline
+  (decode span -> caller transform -> FFmpeg stream encode ->
+  atomic commit), the xer.af.voice_isolate convention for video.
+  `MakeFrameTransform`/`MakePairInterpTransform` give the upscale /
+  slow-mo index mappings; `AiBounceOutputPath` does the
+  `<stem>.xer.<tag>[.N].mp4` naming.
+- **§11.1 GridSample gate — resolved conservatively:** the bounce
+  requires `onnxruntime` (`RifeBackendOk`) until a cv::dnn run is
+  proven — the `rife_interp` smoke IS the verifier (moving-square
+  midpoint centroid; cv::dnn SKIP+reports a rejection or wrong warp
+  instead of failing). Verified 2026-11-23 on onnxruntime:
+  identical-pair mad=0, midpoint centroid (39.6,63.5) for a +16px
+  step on 128x128.
+- Smoke: `upscale_x4v3` + `rife_interp` checks — degradation contract
+  always verified; tile-grid coverage, weight-ramp, and the
+  bit-exact seam reassembly are exercised model-free via a synthetic
+  nearest-2x tile fn; real-inference sections SKIP when the model or
+  backend is absent.

@@ -6,8 +6,11 @@
 #include <utility>
 #include <vector>
 
+#include "ai/ai_bounce.h"
 #include "ai/audio_pcm.h"
 #include "ai/face_detect.h"
+#include "ai/rife_interp.h"
+#include "ai/upscale_x4v3.h"
 #include "ai/whisper_transcribe.h"
 #include "app_runtime/app_runtime.h"
 #include "builtin_fx.h"
@@ -125,6 +128,8 @@ VeApp::~VeApp() {
     if (transcript_worker_.joinable()) transcript_worker_.join();
     face_cancel_ = true;
     if (face_worker_.joinable()) face_worker_.join();
+    bounce_cancel_ = true;
+    if (bounce_worker_.joinable()) bounce_worker_.join();
     // export_engine_ tears itself down (ExportEngine::~ExportEngine
     // Cancel()s + Wait()s the worker).
 }
@@ -688,6 +693,9 @@ void VeApp::WireTimelineBridge() {
     // items appear only when the shell actually implements them.
     host.face_blur = [this](const std::string& clip_id) {
         StartFaceBlur(clip_id);
+    };
+    host.ai_slowmo = [this](const std::string& clip_id) {
+        StartAiSlowmo(clip_id);
     };
     bridge_->SetHost(std::move(host));
 
@@ -1834,6 +1842,7 @@ void VeApp::Tick(double dt_seconds) {
     PumpExportQueue(dt_seconds);
     PumpTranscriptJob();
     PumpFaceBlurJob();
+    PumpAiBounceJob();
     // Autosave rides the same ~2 s poll cadence the old shell used —
     // the manager gates on dirty + interval before touching disk.
     PumpAutosave(dt_seconds);
@@ -2015,6 +2024,9 @@ void VeApp::WireMediaPanel() {
     hooks.on_cancel_proxy = [this](const std::string& path) {
         if (proxies_ != nullptr) proxies_->Cancel(path);
         RefreshBinEntries();
+    };
+    hooks.on_ai_upscale = [this](const std::string& path) {
+        StartAiUpscale(path);
     };
     hooks.on_select = [](const std::vector<std::string>&) {
         // Bin selection is bin-local for wave-1 (the inspector reads
@@ -4192,6 +4204,287 @@ void VeApp::PumpFaceBlurJob() {
                   "Auto-blur faces: %zu track sample(s) + Face Blur",
                   updated.object_track.samples.size());
     SetStatus(buf);
+}
+
+// ---- AI bounces: upscale (bin) + slow-mo (clip) -----------------
+// Wave-2 file-producing seam (docs/wiki/research/
+// 2026-11-23-ai-features-wave2.md §1/§2): a worker runs
+// ai/ai_bounce.h RunVideoBounce — decode -> model -> encode ->
+// <stem>.xer.<tag>.mp4 — and writes ONLY the mutex-guarded slot;
+// PumpAiBounceJob imports the file into the catalog and (clip
+// bounce) repoints the clip at it through history. Both jobs share
+// the one slot: they're seconds-per-frame CPU work and
+// parallel-bouncing two models would just thrash the same cores.
+
+void VeApp::StartAiUpscale(const std::string& path) {
+    if (bounce_running_) {
+        SetStatus("An AI bounce is already running");
+        return;
+    }
+    const std::string model = Ai::UpscaleModel();
+    if (model.empty()) {
+        SetStatus(std::string("AI Upscale: ") +
+                      Ai::UpscaleModelHint(),
+                  true);
+        return;
+    }
+    const std::string output =
+        Ai::AiBounceOutputPath(path, "upscaled");
+    bounce_cancel_ = false;
+    bounce_progress_ = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(bounce_result_mutex_);
+        bounce_result_ready_ = false;
+        bounce_result_ok_ = false;
+        bounce_result_ = Ai::AiBounceResult{};
+        bounce_result_error_.clear();
+    }
+    bounce_job_clip_id_.clear();   // bin bounce — no repoint
+    bounce_running_ = true;
+    SetStatus("AI upscale 4x running on " +
+              std::filesystem::path(path).filename().string() +
+              "…");
+    bounce_worker_ =
+        std::thread([this, path, model, output] {
+            Ai::UpscaleX4v3 upscaler;
+            std::string error;
+            Ai::AiBounceResult result;
+            bool ok = upscaler.Load(model, "", &error);
+            if (ok) {
+                Ai::AiBounceParams params;
+                params.source_path = path;
+                params.output_path = output;
+                params.with_audio = true;
+                params.crf = 18;
+                auto frame_fn =
+                    [&upscaler](const Ai::AiBounceFrame& src,
+                                std::vector<std::uint8_t>* out,
+                                int* w, int* h,
+                                std::string* err) -> bool {
+                    return upscaler.UpscaleFrame(
+                        src.bgra.data(), src.w, src.h, src.w * 4,
+                        Ai::Img2ImgParams{}, nullptr, nullptr, out,
+                        w, h, err);
+                };
+                ok = Ai::RunVideoBounce(
+                    params, Ai::MakeFrameTransform(frame_fn),
+                    [this](float f) { bounce_progress_ = f; },
+                    [this] { return bounce_cancel_.load(); },
+                    &result, &error);
+            }
+            std::lock_guard<std::mutex> lock(bounce_result_mutex_);
+            bounce_result_ = std::move(result);
+            bounce_result_error_ = std::move(error);
+            bounce_result_ok_ = ok && !bounce_cancel_.load();
+            bounce_result_ready_ = true;
+        });
+}
+
+void VeApp::StartAiSlowmo(const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("Slow-mo: clip not found", true);
+        return;
+    }
+    if (clip->source.kind != SourceKind::Media ||
+        clip->source_path.empty() || clip->is_adjustment) {
+        SetStatus("Slow-mo needs a media clip", true);
+        return;
+    }
+    if (clip->playback_rate >= 1.0 - 1e-3) {
+        SetStatus("Slow-mo bakes a slowed clip — set Speed below "
+                  "100% first");
+        return;
+    }
+    if (bounce_running_) {
+        SetStatus("An AI bounce is already running");
+        return;
+    }
+    const std::string model = Ai::RifeModel();
+    if (model.empty()) {
+        SetStatus(std::string("Smooth slow-mo: ") +
+                      Ai::RifeModelHint(),
+                  true);
+        return;
+    }
+    if (!Ai::RifeAvailable()) {
+        SetStatus("Smooth slow-mo needs the onnxruntime backend "
+                  "(RIFE GridSample is unverified on cv::dnn)",
+                  true);
+        return;
+    }
+    const double rate = clip->playback_rate;
+    const int factor = std::clamp(
+        static_cast<int>(std::lround(1.0 / rate)), 2, 8);
+    const double in_s = clip->in_point;
+    const double out_s = clip->in_point + clip->duration * rate;
+    const std::string tag =
+        "slowmo" + std::to_string(factor) + "x";
+    const std::string output =
+        Ai::AiBounceOutputPath(clip->source_path, tag);
+    bounce_cancel_ = false;
+    bounce_progress_ = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(bounce_result_mutex_);
+        bounce_result_ready_ = false;
+        bounce_result_ok_ = false;
+        bounce_result_ = Ai::AiBounceResult{};
+        bounce_result_error_.clear();
+    }
+    bounce_job_clip_id_ = clip_id;
+    bounce_job_rate_ = rate;
+    bounce_job_factor_ = factor;
+    bounce_running_ = true;
+    SetStatus("Smooth slow-mo " + std::to_string(factor) +
+              "x baking " +
+              (clip->name.empty()
+                   ? std::filesystem::path(clip->source_path)
+                         .filename()
+                         .string()
+                   : clip->name) +
+              "…");
+    const std::string source = clip->source_path;
+    bounce_worker_ = std::thread(
+        [this, source, model, output, in_s, out_s, factor] {
+            Ai::RifeInterp rife;
+            std::string error;
+            Ai::AiBounceResult result;
+            // The GridSample gate: ORT only until cv::dnn's warp op
+            // is verified (ai/rife_interp.h header note).
+            bool ok =
+                rife.Load(model, Ai::kRifeRequiredBackend, &error);
+            if (ok) {
+                Ai::AiBounceParams params;
+                params.source_path = source;
+                params.output_path = output;
+                params.in_seconds = in_s;
+                params.out_seconds = out_s;
+                params.out_frames_per_in = factor;
+                params.with_audio = false;
+                params.crf = 18;
+                auto interp =
+                    [&rife](const Ai::AiBounceFrame& a,
+                            const Ai::AiBounceFrame& b, float t,
+                            std::vector<std::uint8_t>* out,
+                            std::string* err) -> bool {
+                    return rife.Interpolate(a.bgra.data(),
+                                            b.bgra.data(), a.w,
+                                            a.h, a.w * 4, t, out,
+                                            err);
+                };
+                ok = Ai::RunVideoBounce(
+                    params,
+                    Ai::MakePairInterpTransform(factor, interp),
+                    [this](float f) { bounce_progress_ = f; },
+                    [this] { return bounce_cancel_.load(); },
+                    &result, &error);
+            }
+            std::lock_guard<std::mutex> lock(bounce_result_mutex_);
+            bounce_result_ = std::move(result);
+            bounce_result_error_ = std::move(error);
+            bounce_result_ok_ = ok && !bounce_cancel_.load();
+            bounce_result_ready_ = true;
+        });
+}
+
+void VeApp::PumpAiBounceJob() {
+    if (!bounce_running_.load()) return;
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> lock(bounce_result_mutex_);
+        ready = bounce_result_ready_;
+    }
+    if (!ready) {
+        // Heartbeat the status line — a bounce is minutes-class
+        // work, silence reads as a hang.
+        char buf[96];
+        std::snprintf(buf, sizeof(buf),
+                      "AI bounce running — %.0f%%",
+                      std::clamp(bounce_progress_.load() * 100.0f,
+                                 0.0f, 100.0f));
+        SetStatus(buf);
+        return;
+    }
+    if (bounce_worker_.joinable()) bounce_worker_.join();
+    bounce_running_ = false;
+    Ai::AiBounceResult result;
+    std::string error;
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(bounce_result_mutex_);
+        result = std::move(bounce_result_);
+        error = bounce_result_error_;
+        ok = bounce_result_ok_;
+        bounce_result_ready_ = false;
+    }
+    const std::string clip_id = bounce_job_clip_id_;
+    bounce_job_clip_id_.clear();
+    if (!ok) {
+        SetStatus("AI bounce failed" +
+                      (error.empty() ? std::string() : ": " + error),
+                  true);
+        return;
+    }
+    // Every successful bounce lands in the bin as new media.
+    if (catalog_ != nullptr && catalog_->IsOpen()) {
+        std::string import_error;
+        std::int64_t entry_id = 0;
+        if (!catalog_->Import(result.output_path, &entry_id, false,
+                              &import_error)) {
+            SetStatus("Bounce produced " + result.output_path +
+                          " but bin import failed: " + import_error,
+                      true);
+            return;
+        }
+        if (media_prep_ != nullptr) {
+            media_prep_->RequestImportPoster(result.output_path);
+        }
+        RefreshBinEntries();
+    }
+    const std::string out_name =
+        std::filesystem::path(result.output_path)
+            .filename()
+            .string();
+    if (clip_id.empty()) {
+        SetStatus("AI upscale finished — " + out_name +
+                  " added to the bin");
+        return;
+    }
+    // Clip bounce: repoint the clip at the baked file. The bake
+    // slowed the consumed span by factor N, so playing the file at
+    // rate 1/(rate*N) reproduces the same timeline span — a rate
+    // of exactly 1 when the clip's rate was a clean 1/N.
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("Slow-mo bake finished but the clip is gone",
+                  true);
+        return;
+    }
+    Clip updated = *clip;
+    updated.source_path = result.output_path;
+    updated.in_point = 0.0;
+    // The bake stretched the consumed span S to S*factor file
+    // seconds; the clip's new rate consumes the whole file over its
+    // timeline duration: rate' = S*factor/D = rate*factor (== 1
+    // exactly when the clip was a clean 1/N slow-down).
+    updated.playback_rate =
+        bounce_job_rate_ * static_cast<double>(bounce_job_factor_);
+    MediaBounds bounds;
+    bounds.duration_seconds = result.duration_seconds;
+    bounds.has_video = true;
+    std::string err2;
+    history_->BeginMacro("Smooth slow-mo (AI)");
+    const bool applied =
+        history_->ReplaceClip(clip_id, updated, bounds, &err2);
+    history_->EndMacro();
+    if (!applied) {
+        SetStatus("Slow-mo commit failed: " + err2, true);
+        return;
+    }
+    NotifyTimelineChanged();
+    SetStatus("Smooth slow-mo " +
+              std::to_string(bounce_job_factor_) + "x baked — " +
+              out_name);
 }
 
 void VeApp::WireTranscriptPanel() {

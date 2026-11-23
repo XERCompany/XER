@@ -43,6 +43,7 @@
 #include <vector>
 
 #include "theme/color.h"          // Theme::Color — pick seam
+#include "ai/ai_bounce.h"         // Ai::AiBounceResult — bounce jobs
 #include "ai/whisper_transcribe.h"  // Ai::TranscriptSegment — transcript cache
 #include "drag_session.h"         // BinDragSession — value member
 #include "preview_binding.h"      // value members — complete type
@@ -503,6 +504,18 @@ private:
     // history_->ReplaceClip in one undoable macro.
     void StartFaceBlur(const std::string& clip_id);
     void PumpFaceBlurJob();
+    // "AI Upscale 4x" (bin ctx) + "Smooth slow-mo (AI)" (clip ctx):
+    // one shared async bounce slot (both are seconds-per-frame CPU
+    // work — serializing is honest). The worker runs
+    // ai/ai_bounce.h RunVideoBounce and writes ONLY the
+    // mutex-guarded slot; PumpAiBounceJob drains it in Tick — a bin
+    // bounce imports the produced file into the catalog, a clip
+    // bounce additionally repoints the clip's source at the baked
+    // file through history_->ReplaceClip (rate -> rate*N, which is 1
+    // exactly for a clean 1/N slow-down).
+    void StartAiUpscale(const std::string& path);
+    void StartAiSlowmo(const std::string& clip_id);
+    void PumpAiBounceJob();
     // ColorPanel::on_color_changed — upserts the color-fx param
     // snapshot onto the clip (temperature/tint/lift_gamma_gain/
     // channel_mixer — see color_panel.h for the param→fx mapping)
@@ -711,6 +724,25 @@ private:
     ClipTrack face_result_;
     std::string face_result_error_;
     std::string face_job_clip_id_;
+
+    // AI bounce jobs (upscale + slow-mo share ONE slot — both are
+    // seconds-per-frame CPU work, so serializing them is the honest
+    // behavior). Same marshalling contract as the face/whisper
+    // workers.
+    std::thread bounce_worker_;
+    std::atomic<bool> bounce_cancel_{false};
+    std::atomic<float> bounce_progress_{0.0f};
+    std::atomic<bool> bounce_running_{false};
+    std::mutex bounce_result_mutex_;
+    bool bounce_result_ready_ = false;
+    bool bounce_result_ok_ = false;
+    XER::VideoEditor::Ai::AiBounceResult bounce_result_;
+    std::string bounce_result_error_;
+    // Clip-bounce bookkeeping — an empty clip id marks a bin bounce
+    // (upscale); a set one is the slow-mo repoint target.
+    std::string bounce_job_clip_id_;
+    double bounce_job_rate_ = 1.0;
+    int bounce_job_factor_ = 1;
 
     // ── layout state (mirrors prefs_) ────────────────────────
     std::string workspace_name_ = "Editing";

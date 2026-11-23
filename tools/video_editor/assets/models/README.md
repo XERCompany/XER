@@ -131,6 +131,54 @@ whisper ggml model lives in `<exe>/models/` (see below).
     center = (anchor+bbox)·s, size = exp(bbox)·s — implemented in
     face_detect.cc DecodeYunet + greedy IoU NMS
 
+## realesr-general-x4v3.onnx — 4x media upscale (WIRED: AI Upscale 4x)
+
+- **Source:** https://huggingface.co/Samo629/real-esrgan-onnx
+  (`realesr-general-x4v3.onnx`, fp32, 4,866,429 bytes / ~4.9 MB),
+  ONNX export of xinntao/Real-ESRGAN realesr-general-x4v3 (SRVGG
+  compact net — plain convs + pixelshuffle)
+- **SHA-256:** `a526e5038461585b29231de194a0cc9883181a491360082f3df4c114f4d4c6ec`
+- **License:** BSD-3-Clause (upstream repo LICENSE — code + weights)
+- **Consumer:** `tools/video_editor/ai/upscale_x4v3.cc` through the
+  generic tiled runner `ai/img2img_runner.cc` (256px tiles, 16px
+  overlap, smoothstep seam blend); UI: Media Bin ctx-menu
+  "AI Upscale 4x" -> `ai/ai_bounce.cc` worker ->
+  `<stem>.xer.upscaled.mp4` re-imported into the catalog.
+  Smoke: `upscale_x4v3` (verified on onnxruntime 2026-11-23,
+  64x64 -> 256x256 non-degenerate).
+- **Contract (verified by protobuf inspection):**
+  - input `input` f32 `[B,3,H,W]` RGB 0..1 — **dynamic H/W**; tiles
+    feed at their native rect, no normalization beyond /255
+  - output `output` f32 `[B,3,4H,4W]` RGB 0..1 — exactly 4x
+
+## rife_v425lite.onnx — frame interpolation (WIRED: Smooth slow-mo)
+
+- **Source:** https://huggingface.co/t9749/rife-4.25-lite-onnx
+  (`rife_v425lite.onnx`, fp32, 22,677,513 bytes / ~22.7 MB, opset
+  17), ONNX export of hzwer's Practical-RIFE 4.25 lite
+  (ECCV 2022) — converter repo only re-packages the MIT weights
+- **SHA-256:** `702802d0862ab78f2d72133c6bc3768e89b81756f7cd51d1055a2fe3d06577`
+- **License:** MIT (upstream Practical-RIFE LICENSE — code + weights)
+- **Consumer:** `tools/video_editor/ai/rife_interp.cc` (edge-replicate
+  pad to the multiple-of-64 grid, crop back; pow2 factors recurse at
+  t=0.5, others subdivide); UI: clip ctx-menu "Smooth slow-mo (AI)"
+  on a `playback_rate < 1` media clip -> `ai/ai_bounce.cc` worker ->
+  `<stem>.xer.slowmo<N>x.mp4`, then the clip repoints at the baked
+  file (rate -> rate*N). Video-only output — speed-changed audio
+  needs a stretcher this wave doesn't have.
+  Smoke: `rife_interp` (verified on onnxruntime 2026-11-23:
+  identical-pair mad=0, moving-square midpoint centroid (39.6,63.5)
+  vs expected ~(40,64)).
+- **Backend gate:** RIFE is GridSample-heavy; cv::dnn's GridSample is
+  unverified, so `RifeBackendOk()`/`RifeAvailable()` admit
+  **onnxruntime only** until a cv::dnn run is proven (the smoke's
+  moving-square check is the verifier — widen when it passes there).
+- **Contract (verified by protobuf inspection + model card):**
+  - input `img0`/`img1` f32 `[1,3,H,W]` RGB 0..1 — dynamic H/W but
+    **both must be multiples of 64** (wrapper pads + crops)
+  - input `timestep` f32 `[1,1,1,1]` — interpolation position, 0..1
+  - output `frame` f32 `[1,3,H,W]` RGB 0..1, clamped
+
 ## ggml-base.en.bin — whisper transcription (WIRED, different dir)
 
 - **Location:** `<exe>/models/ggml-base.en.bin` — the whisper consumer

@@ -30,11 +30,15 @@
 
 #include <json/json.h>
 
+#include "ai/ai_bounce.h"
 #include "ai/face_detect.h"
+#include "ai/img2img_runner.h"
 #include "ai/object_track.h"
+#include "ai/rife_interp.h"
 #include "ai/silence_detect.h"
 #include "ai/silero_vad.h"
 #include "ai/smart_reframe.h"
+#include "ai/upscale_x4v3.h"
 #include "ai/whisper_transcribe.h"
 #include "ai_tags.h"
 #include "app_runtime/app_runtime.h"
@@ -6746,7 +6750,555 @@ std::string CheckFaceDetect() {
     return {};
 }
 
-// Object Lab AI ops (lab/ai_ops.h on the shared YA.AIFindObject
+// Real-ESRGAN x4v3 upscale (ai/img2img_runner.h + ai/upscale_x4v3.h)
+// — the wave-2 "AI Upscale 4x" bin bounce. What MUST hold
+// regardless of the environment: Load on a missing file fails with
+// a reason, RunTile/UpscaleFrame on an unloaded session fail
+// cleanly, bad runner params are rejected, and cancellation is
+// honored. The tile math is exercised WITHOUT a model: the grid
+// covers every frame edge exactly once, the weight ramp reaches
+// 0 at a shared edge and 1 at its end, and a synthetic 2x nearest
+// tile fn over a luma ramp reassembles the ideal upsample
+// bit-exactly (any weight-sum bug doubles or darkens seam pixels).
+// When realesr-general-x4v3.onnx + a backend are staged the check
+// runs real inference: 64x64 -> 256x256 non-degenerate, and a
+// 96x80 frame through the tiled path -> 384x320.
+std::string CheckUpscaleX4v3() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::UpscaleX4v3 upscaler;
+    if (upscaler.IsLoaded()) {
+        return "fresh UpscaleX4v3 reports loaded";
+    }
+    if (upscaler.Load("definitely/missing/x4v3.onnx", "", &err)) {
+        return "UpscaleX4v3::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "UpscaleX4v3::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<std::uint8_t> out;
+    if (upscaler.RunTile(nullptr, 64, 64, 64 * 4, &out, &err)) {
+        return "RunTile ran on an unloaded session";
+    }
+    err.clear();
+    int ow = 0, oh = 0;
+    if (upscaler.UpscaleFrame(nullptr, 64, 64, 64 * 4,
+                              Ai::Img2ImgParams{}, nullptr, nullptr,
+                              &out, &ow, &oh, &err)) {
+        return "UpscaleFrame ran on an unloaded session";
+    }
+    err.clear();
+
+    // ---- tile grid + blend math (model-free) --------------------
+    // Bad params are rejected outright.
+    if (!Ai::ComputeImg2ImgTiles(64, 64, Ai::Img2ImgParams{0, 0, 0})
+             .empty() ||
+        !Ai::ComputeImg2ImgTiles(
+            64, 64, Ai::Img2ImgParams{64, 40, 1}).empty()) {
+        return "tile grid accepted degenerate params";
+    }
+    {
+        // 300x200, tile 128, overlap 16 -> x starts {0,112,172}
+        // (last shifted to end at 300), y starts {0,72} -> 6 tiles
+        // covering the frame exactly.
+        Ai::Img2ImgParams gp;
+        gp.tile = 128;
+        gp.overlap = 16;
+        gp.scale = 2;
+        const auto tiles = Ai::ComputeImg2ImgTiles(300, 200, gp);
+        if (tiles.size() != 6) {
+            return "tile grid produced " +
+                   std::to_string(tiles.size()) +
+                   " tiles (expected 6)";
+        }
+        for (const Ai::Img2ImgTile& t : tiles) {
+            if (t.w != 128 || t.h != 128) {
+                return "tile grid produced a non-128 tile";
+            }
+        }
+        std::vector<int> cover(300 * 200, 0);
+        for (const Ai::Img2ImgTile& t : tiles) {
+            for (int y = t.y; y < t.y + t.h; ++y) {
+                for (int x = t.x; x < t.x + t.w; ++x) {
+                    ++cover[y * 300 + x];
+                }
+            }
+        }
+        for (const int c : cover) {
+            if (c < 1) return "tile grid leaves a frame px uncovered";
+        }
+    }
+    // Weight ramp: at a shared edge -> 0, at its far side -> 1.
+    {
+        const float at_edge =
+            Ai::Img2ImgTileWeight(0, 0, 0, 0, 512, 512, 64, 64, 0, 0);
+        const float mid_fade =
+            Ai::Img2ImgTileWeight(32, 0, 0, 0, 512, 512, 64, 0, 0, 0);
+        const float in_clear =
+            Ai::Img2ImgTileWeight(64, 0, 0, 0, 512, 512, 64, 0, 0, 0);
+        if (at_edge != 0.0f || mid_fade <= 0.0f ||
+            mid_fade >= 1.0f || in_clear != 1.0f) {
+            return "tile weight ramp is off the smoothstep contract";
+        }
+    }
+    // Blend reassembly: synthetic 2x nearest upscale of a luma ramp
+    // must equal the ideal nearest upsample at EVERY output px —
+    // shared-zone contributions are position-identical, so any
+    // weight-sum error shows as a seam brightness step.
+    {
+        constexpr int W = 200, H = 150, S = 2;
+        std::vector<std::uint8_t> frame(W * H * 4, 0);
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                const std::uint8_t v = static_cast<std::uint8_t>(
+                    x * 255 / (W - 1));
+                std::uint8_t* px = frame.data() + (y * W + x) * 4;
+                px[0] = px[1] = px[2] = v;
+                px[3] = 0xFF;
+            }
+        }
+        Ai::Img2ImgParams p;
+        p.tile = 64;
+        p.overlap = 8;
+        p.scale = S;
+        Ai::Img2ImgTileFn nearest =
+            [S](const std::uint8_t* tile, int tw, int th, int ts,
+                std::uint8_t* dst, int dw, int dh, int ds,
+                std::string*) -> bool {
+            if (dw != tw * S || dh != th * S) return false;
+            for (int y = 0; y < dh; ++y) {
+                const std::uint8_t* srow =
+                    tile + (y / S) * ts;
+                std::uint8_t* drow = dst + y * ds;
+                for (int x = 0; x < dw; ++x) {
+                    std::memcpy(drow + x * 4, srow + (x / S) * 4, 4);
+                }
+            }
+            return true;
+        };
+        std::vector<std::uint8_t> up;
+        std::vector<float> prog_pts;
+        if (!Ai::RunImageToImage(frame.data(), W, H, W * 4, p,
+                                 nearest,
+                                 [&prog_pts](float f) {
+                                     prog_pts.push_back(f);
+                                 },
+                                 nullptr, &up, &ow, &oh, &err)) {
+            return "tiled run failed on a synthetic frame: " + err;
+        }
+        if (ow != W * S || oh != H * S ||
+            up.size() != static_cast<std::size_t>(W * S * H * S * 4)) {
+            return "tiled run produced wrong output dims";
+        }
+        if (prog_pts.empty() ||
+            std::fabs(prog_pts.back() - 1.0f) > 1e-6f) {
+            return "tiled run progress never reached 1.0";
+        }
+        for (int y = 0; y < H * S; ++y) {
+            for (int x = 0; x < W * S; ++x) {
+                const int sx = x / S;
+                const std::uint8_t ideal = static_cast<std::uint8_t>(
+                    sx * 255 / (W - 1));
+                const std::uint8_t got =
+                    up[(static_cast<std::size_t>(y) * W * S + x) * 4];
+                if (std::abs(static_cast<int>(got) -
+                             static_cast<int>(ideal)) > 1) {
+                    return "seam blend deviated from the ideal "
+                           "upsample (weight-sum bug)";
+                }
+            }
+        }
+        // Cancellation is honored between tiles.
+        if (Ai::RunImageToImage(
+                frame.data(), W, H, W * 4, p, nearest, nullptr,
+                [] { return true; }, &up, &ow, &oh, &err)) {
+            return "cancelled tiled run reported success";
+        }
+        err.clear();
+    }
+
+    // ---- real-model path: only when staged + loadable -----------
+    const std::string model = Ai::UpscaleModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  upscale_x4v3: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!upscaler.Load(model, "", &err)) {
+        std::fprintf(stdout,
+                     "  upscale_x4v3: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    {
+        // 64x64 diagonal luma ramp -> 256x256; SR models keep mean
+        // level and add detail, so a degenerate (flat/NaN) result
+        // is the failure being watched for.
+        constexpr int FW = 64, FH = 64;
+        std::vector<std::uint8_t> frame(FW * FH * 4, 0);
+        for (int y = 0; y < FH; ++y) {
+            for (int x = 0; x < FW; ++x) {
+                const std::uint8_t v = static_cast<std::uint8_t>(
+                    std::clamp((x + y) * 2, 0, 255));
+                std::uint8_t* px =
+                    frame.data() + (y * FW + x) * 4;
+                px[0] = px[1] = px[2] = v;
+                px[3] = 0xFF;
+            }
+        }
+        std::vector<std::uint8_t> up;
+        if (!upscaler.RunTile(frame.data(), FW, FH, FW * 4, &up,
+                              &err)) {
+            return "x4v3 inference failed on a 64x64 frame: " + err;
+        }
+        if (up.size() !=
+            static_cast<std::size_t>(FW * 4 * FH * 4 * 4)) {
+            return "x4v3 output is not 4x the input";
+        }
+        double mean = 0.0, var = 0.0;
+        int nonalpha = 0;
+        for (std::size_t p = 0; p < up.size(); p += 4) {
+            if (up[p + 3] != 0xFF) nonalpha = 1;
+            mean += up[p];
+        }
+        mean /= static_cast<double>(up.size() / 4);
+        for (std::size_t p = 0; p < up.size(); p += 4) {
+            var += (up[p] - mean) * (up[p] - mean);
+        }
+        var /= static_cast<double>(up.size() / 4);
+        if (nonalpha || !(var > 1.0) || !std::isfinite(mean)) {
+            return "x4v3 produced a degenerate 4x frame";
+        }
+        // The tiled runner path end-to-end: 96x80 -> 384x320 with
+        // 64px tiles + 8px overlap.
+        Ai::Img2ImgParams p;
+        p.tile = 64;
+        p.overlap = 8;
+        up.clear();
+        if (!upscaler.UpscaleFrame(frame.data(), 64, 64, 64 * 4, p,
+                                   nullptr, nullptr, &up, &ow, &oh,
+                                   &err)) {
+            return "tiled x4v3 upscale failed: " + err;
+        }
+        if (ow != 256 || oh != 256) {
+            return "tiled x4v3 produced wrong output dims";
+        }
+        std::fprintf(stdout,
+                     "  upscale_x4v3: inference ran on '%s' -> "
+                     "%dx%d\n",
+                     upscaler.BackendId().c_str(), ow, oh);
+        std::fflush(stdout);
+    }
+    return {};
+}
+
+// RIFE 4.25-lite frame interpolation (ai/rife_interp.h +
+// ai/ai_bounce.h) — the wave-2 "Smooth slow-mo (AI)" clip bounce.
+// Always verified: degradation contract, the alignment pad +
+// interpolation-plan math, and the bounce transform's index
+// mapping (synthetic frames through MakePairInterpTransform). When
+// rife_v425lite.onnx is staged a moving-square pair checks the
+// middle frame interpolates the square to the halfway position —
+// that IS the cv::dnn GridSample verification the research doc
+// gates on (a backend that loads but warps wrong fails the
+// centroid assert; cv::dnn specifically SKIPs+reports it as the
+// documented gate instead of erroring).
+std::string CheckRifeInterp() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::RifeInterp rife;
+    if (rife.IsLoaded()) return "fresh RifeInterp reports loaded";
+    if (rife.Load("definitely/missing/rife.onnx", "", &err)) {
+        return "RifeInterp::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "RifeInterp::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<std::uint8_t> out;
+    std::vector<std::uint8_t> frame(64 * 64 * 4, 0x40);
+    for (std::size_t p = 3; p < frame.size(); p += 4) {
+        frame[p] = 0xFF;
+    }
+    if (rife.Interpolate(frame.data(), frame.data(), 64, 64, 64 * 4,
+                         0.5f, &out, &err)) {
+        return "Interpolate ran on an unloaded session";
+    }
+    err.clear();
+
+    // ---- pad + plan math (model-free) ---------------------------
+    if (Ai::RifePadDim(128) != 128 || Ai::RifePadDim(100) != 128 ||
+        Ai::RifePadDim(65) != 128 || Ai::RifePadDim(1) != 64 ||
+        Ai::RifePadDim(200) != 256) {
+        return "RifePadDim alignment math is wrong";
+    }
+    {
+        const auto p2 = Ai::RifeInterpPlan(2);
+        const auto p4 = Ai::RifeInterpPlan(4);
+        const auto p3 = Ai::RifeInterpPlan(3);
+        if (p2.size() != 1 || std::fabs(p2[0] - 0.5f) > 1e-6f ||
+            p4.size() != 3 || std::fabs(p4[0] - 0.25f) > 1e-6f ||
+            std::fabs(p4[2] - 0.75f) > 1e-6f || p3.size() != 2 ||
+            std::fabs(p3[0] - 1.0f / 3.0f) > 1e-6f ||
+            !Ai::RifeInterpPlan(1).empty()) {
+            return "RifeInterpPlan produced a wrong timestep set";
+        }
+    }
+
+    // ---- bounce transforms (model-free) --------------------------
+    {
+        // MakePairInterpTransform index mapping: 4 synthetic source
+        // frames (tagged by a marker byte), factor 2 -> 7 outputs in
+        // [f0, i01, f1, i12, f2, i23, f3] order. The fake ctx feeds
+        // source pulls from a counter — the transform must pull
+        // exactly the frames each pair needs, in order.
+        const auto make_src = [](int tag) {
+            Ai::AiBounceFrame f;
+            f.bgra.assign(4 * 4 * 4, 0);
+            std::memset(f.bgra.data(), tag, 4 * 4);
+            for (std::size_t p = 3; p < f.bgra.size(); p += 4) {
+                f.bgra[p] = 0xFF;
+            }
+            f.w = 4;
+            f.h = 4;
+            f.t = tag;
+            return f;
+        };
+        Ai::AiBounceContext ctx;
+        int pull_count = 0;
+        ctx.next_source = [&](Ai::AiBounceFrame* f,
+                              std::string*) -> bool {
+            if (pull_count >= 4) return false;
+            *f = make_src(10 + pull_count);
+            ++pull_count;
+            return true;
+        };
+        std::vector<float> seen_t;
+        auto interp =
+            [&seen_t](const Ai::AiBounceFrame& a,
+                      const Ai::AiBounceFrame& b, float t,
+                      std::vector<std::uint8_t>* o,
+                      std::string*) -> bool {
+            seen_t.push_back(t);
+            o->assign(4 * 4 * 4, 0);
+            (*o)[0] = static_cast<std::uint8_t>(
+                (a.bgra[0] + b.bgra[0]) / 2);
+            for (std::size_t p = 3; p < o->size(); p += 4) {
+                (*o)[p] = 0xFF;
+            }
+            return true;
+        };
+        auto xform = Ai::MakePairInterpTransform(2, interp);
+        std::vector<int> tags;
+        for (std::size_t i = 0; i < 7; ++i) {
+            std::vector<std::uint8_t> o;
+            int w = 0, h = 0;
+            if (!xform(i, ctx, &o, &w, &h, &err)) {
+                return "pair transform failed at output " +
+                       std::to_string(i) + ": " + err;
+            }
+            if (o.empty()) return "pair transform gave an empty frame";
+            tags.push_back(o[0]);
+        }
+        const std::vector<int> expected = {10, 10, 11, 11, 12, 12, 13};
+        // interp outputs carry the mean of the pair's marker tags:
+        // i01 -> (10+11)/2 = 10 (integer), i12 -> 11, i23 -> 12.
+        if (tags != expected) {
+            return "pair transform produced a wrong frame order";
+        }
+        if (seen_t != std::vector<float>{0.5f, 0.5f, 0.5f}) {
+            return "pair transform fed wrong timesteps";
+        }
+        // MakeFrameTransform: one pull per output index.
+        pull_count = 0;
+        auto one2one = Ai::MakeFrameTransform(
+            [](const Ai::AiBounceFrame& s,
+               std::vector<std::uint8_t>* o, int* w, int* h,
+               std::string*) -> bool {
+                if (w != nullptr) *w = s.w * 4;
+                if (h != nullptr) *h = s.h * 4;
+                o->assign(static_cast<std::size_t>(s.w * 4) *
+                              (s.h * 4) * 4,
+                          0x80);
+                return true;
+            });
+        for (std::size_t i = 0; i < 3; ++i) {
+            std::vector<std::uint8_t> o;
+            int w = 0, h = 0;
+            if (!one2one(i, ctx, &o, &w, &h, &err)) {
+                return "frame transform failed: " + err;
+            }
+            if (w != 16 || h != 16 ||
+                o.size() != static_cast<std::size_t>(16 * 16 * 4)) {
+                return "frame transform produced wrong dims";
+            }
+        }
+        if (pull_count != 3) {
+            return "frame transform did not pull one source per "
+                   "output";
+        }
+        // Output naming: <stem>.xer.<tag>.mp4 with uniquify.
+        const auto dir = SmokeTempDir() / "ai_bounce";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const auto src_path =
+            dir / "clip name.mp4";
+        {
+            std::ofstream create(src_path);
+        }
+        const auto first_out = dir / "clip name.xer.upscaled.mp4";
+        {
+            std::ofstream create(first_out);
+        }
+        const std::string named = Ai::AiBounceOutputPath(
+            Utf8Path(src_path), "upscaled");
+        if (named.find("clip name.xer.upscaled.2.mp4") ==
+            std::string::npos) {
+            return "AiBounceOutputPath did not uniquify: " + named;
+        }
+    }
+
+    // ---- real-model path: only when staged + loadable -----------
+    const std::string model = Ai::RifeModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  rife_interp: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!rife.Load(model, "", &err)) {
+        std::fprintf(stdout,
+                     "  rife_interp: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    {
+        // Sanity first (catches a broken pipeline regardless of
+        // motion): interpolating an identical pair must return the
+        // pair — no warp can explain losing a whole frame's content.
+        constexpr int FW = 128, FH = 128;
+        auto draw = [](int x0) {
+            std::vector<std::uint8_t> f(FW * FH * 4, 0);
+            for (int y = 48; y < 80; ++y) {
+                for (int x = x0; x < x0 + 32; ++x) {
+                    std::uint8_t* px = f.data() + (y * FW + x) * 4;
+                    px[0] = px[1] = px[2] = 0xFF;
+                    px[3] = 0xFF;
+                }
+            }
+            return f;
+        };
+        const auto a = draw(16);
+        const auto b = draw(32);
+        {
+            std::vector<std::uint8_t> same;
+            if (!rife.Interpolate(a.data(), a.data(), FW, FH,
+                                  FW * 4, 0.5f, &same, &err)) {
+                return "rife failed the identical-pair sanity: " +
+                       err;
+            }
+            double mad = 0.0;
+            for (std::size_t p = 0; p < a.size(); p += 4) {
+                mad += std::abs(static_cast<int>(same[p]) -
+                                static_cast<int>(a[p]));
+            }
+            mad /= static_cast<double>(a.size() / 4);
+            if (mad > 32.0) {
+                return "rife mangled an identical-pair midpoint "
+                       "(pipeline broken, not a motion problem)";
+            }
+        }
+        // Moving square: 32x32 white block steps +16 px in x —
+        // well inside RIFE's real-motion range. t=0.5 must put the
+        // bright centroid halfway (center 32 -> 48, midpoint ~40).
+        std::vector<std::uint8_t> mid;
+        const bool ran =
+            rife.Interpolate(a.data(), b.data(), FW, FH, FW * 4,
+                             0.5f, &mid, &err);
+        const bool cv_dnn =
+            rife.BackendId() == "opencv_dnn";
+        if (!ran) {
+            if (cv_dnn) {
+                std::fprintf(stdout,
+                             "  rife_interp: SKIP (cv::dnn rejected "
+                             "the run — the documented GridSample "
+                             "gate: %s)\n",
+                             err.c_str());
+                std::fflush(stdout);
+                return {};
+            }
+            return "rife inference failed on the moving square: " +
+                   err;
+        }
+        if (mid.size() != static_cast<std::size_t>(FW * FH * 4)) {
+            return "rife output is not the input size";
+        }
+        double cx = 0.0, cy = 0.0, count = 0.0;
+        for (int y = 0; y < FH; ++y) {
+            for (int x = 0; x < FW; ++x) {
+                const std::uint8_t* px =
+                    mid.data() + (y * FW + x) * 4;
+                if (px[0] > 128 || px[1] > 128 || px[2] > 128) {
+                    cx += x;
+                    cy += y;
+                    count += 1.0;
+                }
+            }
+        }
+        if (count < 64.0) {
+            if (cv_dnn) {
+                std::fprintf(stdout,
+                             "  rife_interp: SKIP (cv::dnn produced "
+                             "no interpolated object — GridSample "
+                             "gate confirmed)\n");
+                std::fflush(stdout);
+                return {};
+            }
+            return "rife dropped the moving square entirely";
+        }
+        cx /= count;
+        cy /= count;
+        std::fprintf(stdout,
+                     "  rife_interp: '%s' midpoint centroid (%.1f, "
+                     "%.1f) over %.0f px\n",
+                     rife.BackendId().c_str(), cx, cy, count);
+        std::fflush(stdout);
+        // The square's center moves 32 -> 48; halfway = ~40.
+        if (cx < 30.0 || cx > 50.0 || cy < 52.0 || cy > 76.0) {
+            if (cv_dnn) {
+                std::fprintf(stdout,
+                             "  rife_interp: SKIP (cv::dnn warped "
+                             "the centroid to %.1f,%.1f — "
+                             "GridSample gate confirmed)\n",
+                             cx, cy);
+                std::fflush(stdout);
+                return {};
+            }
+            return "rife midpoint did not interpolate the square "
+                   "halfway";
+        }
+        // Endpoint contract: t=0/1 return the verbatim inputs.
+        std::vector<std::uint8_t> ends;
+        if (!rife.Interpolate(a.data(), b.data(), FW, FH, FW * 4,
+                              0.0f, &ends, &err) ||
+            ends != a) {
+            return "rife t=0 did not return frame A verbatim";
+        }
+    }
+    return {};
+}
 // onnx_session): BiRefNet alpha matting + EfficientSAM smart-select.
 // What MUST hold regardless of the environment: bad inputs and a
 // missing model produce reasons, never crashes. When the staged
@@ -7876,6 +8428,8 @@ constexpr CheckEntry kChecks[] = {
     {"object_track", &CheckObjectTrack},
     {"silero_vad", &CheckSileroVad},
     {"face_detect", &CheckFaceDetect},
+    {"upscale_x4v3", &CheckUpscaleX4v3},
+    {"rife_interp", &CheckRifeInterp},
     // Env-gated: ai_lab_ops crashes inside ORT SAM inference on this machine
     // (onnxruntime + SAM encoder/decoder; fails before any repo code returns,
     // confirmed 2026-11-23). Re-enable when the ORT/model stack is fixed.

@@ -2852,6 +2852,29 @@ bool TimelineSurface::ShowContextMenu(
                 items.push_back(std::move(fb));
             }
 
+            // Smooth slow-mo (AI): RIFE bounce of the consumed span,
+            // then the clip repoints at the baked file. Enabled only
+            // for media clips already slowed (playback_rate < 1) —
+            // the bake semantics are "make THIS slow-mo smooth", not
+            // a speed-change tool (that's the rate stretcher's job).
+            if (hooks_.on_ai_slowmo != nullptr) {
+                const bool slowed_media =
+                    clip.source.kind == SourceKind::Media &&
+                    !clip.source_path.empty() && !clip.is_adjustment &&
+                    clip.playback_rate < 1.0 - 1e-3;
+                Widgets::ContextMenu::Item sm;
+                sm.label = "Smooth slow-mo (AI)";
+                // No separator — it sits inside the face-blur
+                // item's AI group.
+                sm.enabled = slowed_media;
+                sm.action = [this, id] {
+                    if (hooks_.on_ai_slowmo) {
+                        hooks_.on_ai_slowmo(id);
+                    }
+                };
+                items.push_back(std::move(sm));
+            }
+
             if (hooks_.on_ai_find_objects != nullptr ||
                 hooks_.on_ai_clear_tags != nullptr) {
                 Widgets::ContextMenu::Item find;

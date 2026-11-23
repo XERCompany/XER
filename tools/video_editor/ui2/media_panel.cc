@@ -659,6 +659,17 @@ void MediaPanel::ShowCardMenu(int visible_index, Layout::Point point) {
             items.push_back(std::move(px));
         }
 
+        if (entry->HasVideo() && hooks_.on_ai_upscale) {
+            // Groups with the proxy row (both are derived-media
+            // ops); Remove carries the next separator.
+            W::ContextMenu::Item ai;
+            ai.label = "AI Upscale 4x";
+            ai.action = [this, path] {
+                hooks_.on_ai_upscale(path);
+            };
+            items.push_back(std::move(ai));
+        }
+
         W::ContextMenu::Item remove;
         remove.label = selected_paths_.size() > 1
                            ? "Remove Selected from Bin"

@@ -70,6 +70,11 @@ public:
         // Context "Create Proxy" / "Cancel Proxy".
         std::function<void(const std::string& path)> on_create_proxy;
         std::function<void(const std::string& path)> on_cancel_proxy;
+        // Context "AI Upscale 4x" (video entries) — the shell runs
+        // the async x4v3 bounce (ai/upscale_x4v3.h + ai/ai_bounce.h)
+        // and imports the produced <stem>.xer.upscaled.mp4 back into
+        // the catalog. Unset -> the item hides.
+        std::function<void(const std::string& path)> on_ai_upscale;
         // Selection fan-out (grid + list both feed this).
         std::function<void(const std::vector<std::string>& paths)>
             on_select;

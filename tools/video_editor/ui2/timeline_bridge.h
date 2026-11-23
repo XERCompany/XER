@@ -98,6 +98,10 @@ public:
         // "Auto-blur faces" — YuNet scan -> face ClipTrack ->
         // xer.fx.face_blur effect, all shell-side.
         std::function<void(const std::string&)> face_blur;
+        // "Smooth slow-mo (AI)" — RIFE bounce of the consumed span
+        // -> baked media + clip repoint (ai/rife_interp.h), all
+        // shell-side.
+        std::function<void(const std::string&)> ai_slowmo;
         std::function<void(const std::string&)> edit_transcript;
     };
 

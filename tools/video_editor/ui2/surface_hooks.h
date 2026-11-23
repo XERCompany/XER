@@ -162,6 +162,14 @@ struct TimelineHooks {
     // ClipTrack labeled "face" on Clip::object_track and applies the
     // builtin:xer.fx.face_blur effect — the auto-censor preset.
     std::function<void(const std::string&)> on_face_blur;
+    // Clip context menu "Smooth slow-mo (AI)": the shell runs the
+    // async RIFE bounce (ai/rife_interp.h + ai/ai_bounce.h) over the
+    // clip's consumed source span, writes
+    // <stem>.xer.slowmo<N>x.mp4 next to the media, and repoints the
+    // clip at the baked file (rate becomes rate*N, == 1 for a clean 1/N slow) through
+    // history. The surface enables it for slowed media clips only
+    // (playback_rate < 1).
+    std::function<void(const std::string&)> on_ai_slowmo;
     // Clip context menu "Edit by Transcript": the shell selects
     // the clip, focuses the Transcript dock and (cache miss)
     // starts the whisper job — media clips only.
