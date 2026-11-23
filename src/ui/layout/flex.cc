@@ -6,6 +6,29 @@
 
 namespace XER::UI::Layout {
 
+Rect AlignedRect(const Rect& cell, const Size& size,
+                 AlignMode horizontal, AlignMode vertical) noexcept {
+    const float w = horizontal == AlignMode::Fill
+        ? std::max(0.0f, cell.width)
+        : std::min(std::max(0.0f, size.width), std::max(0.0f, cell.width));
+    const float h = vertical == AlignMode::Fill
+        ? std::max(0.0f, cell.height)
+        : std::min(std::max(0.0f, size.height), std::max(0.0f, cell.height));
+    float x = cell.x;
+    if (horizontal == AlignMode::Center) {
+        x += (cell.width - w) * 0.5f;
+    } else if (horizontal == AlignMode::Trailing) {
+        x += cell.width - w;
+    }
+    float y = cell.y;
+    if (vertical == AlignMode::Center) {
+        y += (cell.height - h) * 0.5f;
+    } else if (vertical == AlignMode::Trailing) {
+        y += cell.height - h;
+    }
+    return Rect{x, y, std::max(0.0f, w), std::max(0.0f, h)};
+}
+
 float Snap(float value, float scale) noexcept {
     if (!(scale > 0.0f) || !std::isfinite(value)) {
         return value;

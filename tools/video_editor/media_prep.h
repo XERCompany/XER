@@ -26,6 +26,7 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -54,6 +55,8 @@ public:
         kPosterAt,      // ClipPoster::GetPosterAt at a bucketed source time
         kPeaks,         // MediaCatalog::GetAudioPeaks (whole-file min/max)
         kImportPoster,  // MediaCatalog::ExtractPoster (bin poster PNG)
+        kProbe,         // MediaCatalog::Import — duration/fps/resolution
+                        // for a path with no catalog row yet
     };
 
     // Tri-state answer of the Lookup* calls — the timeline widget maps
@@ -105,6 +108,13 @@ public:
         // Poster quantization — must match the timeline widget's
         // kPosterQuantize so a widget bucket maps 1:1 onto a decode.
         double poster_bucket_seconds = 0.25;
+        // Negative-cache TTL: a failed request re-enqueues once this
+        // many seconds have passed and a lookup re-asks (transient
+        // misses — a file that was briefly locked, a network path that
+        // came back — recover without a session restart). <= 0 makes
+        // failures permanent for the session. Either way the cache
+        // prevents a per-paint retry storm on dead media.
+        double failed_ttl_seconds = 60.0;
         // Optional media-path resolver applied to kPosterAt decodes
         // only — the proxy seam: maps a media path to its ready proxy
         // so poster extraction never touches the heavy original.
@@ -136,6 +146,17 @@ public:
     // the bin so the new poster_path column shows up.
     void RequestImportPoster(const std::string& path);
 
+    // Enqueue-only probe for a path with no catalog row: the worker
+    // runs MediaCatalog::Import (probe + upsert, no poster) then
+    // chains a kImportPoster so the bin card art materializes on the
+    // same pool. Success sets BOTH the catalog-dirty flag (bin
+    // refresh picks up the row) and the render-dirty flag (the
+    // timeline's NotifyMediaChanged evicts zero-duration misses, so
+    // bounds/poster lookups re-ask and land the fresh probe). Unlike
+    // RequestImportPoster a recorded failure is NOT cleared here —
+    // re-asks are gated by Options::failed_ttl_seconds.
+    void RequestProbe(const std::string& path);
+
     // Drops queued (not yet running) requests for `path` / all paths.
     // A same-path lookup afterwards re-enqueues, so cancel is safe to
     // issue unconditionally when a clip is deleted — still-needed
@@ -160,6 +181,10 @@ public:
     // automatically, so surface this (once, coalesced) instead of
     // letting posters silently never arrive.
     std::uint64_t ConsumeDroppedPosterRequests();
+    // Same drain for RequestProbe drops — a dropped probe is re-asked
+    // lazily on the next bounds miss, but surfacing the count lets the
+    // UI warn once instead of repeatedly re-queueing into a full pool.
+    std::uint64_t ConsumeDroppedProbeRequests();
 
     // Introspection — primarily for tests.
     std::size_t PendingCount() const;   // queued + running requests
@@ -197,8 +222,13 @@ private:
     std::deque<Key> queue_;
     // Queued + running requests — the dedup domain.
     std::unordered_set<Key, KeyHash> pending_;
-    // Permanent misses — lookups answer kFailed without re-decoding.
-    std::unordered_set<Key, KeyHash> failed_;
+    // Recorded failures with their timestamps — lookups answer
+    // kFailed without re-decoding until the entry is older than
+    // Options::failed_ttl_seconds (<= 0 = permanent), then the next
+    // ask re-enqueues.
+    std::unordered_map<Key, std::chrono::steady_clock::time_point,
+                       KeyHash>
+        failed_;
     std::unordered_map<std::string, std::shared_ptr<const AudioPeaks>>
         peaks_;
     std::deque<std::string> peaks_lru_;   // FIFO eviction, bounded
@@ -216,6 +246,7 @@ private:
     // RequestImportPoster drops on a full queue — counted so the UI can
     // warn coalesced instead of one status ping per dropped request.
     std::atomic<std::uint64_t> dropped_poster_requests_{0};
+    std::atomic<std::uint64_t> dropped_probe_requests_{0};
 };
 
 }  // namespace XER::VideoEditor

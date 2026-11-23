@@ -219,24 +219,36 @@ bool ExtractMonoPcm(const std::string& utf8_path, int target_rate,
     // ConsumeAudioBlock): silently concatenating a different rate
     // would produce wrong PCM/duration for downstream consumers.
     // Returns false once a conversion error is latched.
+    //
+    // ReadAudioFrames APPENDS decoded blocks to `frames` — callers
+    // clear first — and returns false only when no decode codec was
+    // opened or a decode error latched (the former still reaches
+    // AudioDrained(), documented OK; the latter spins to the pump
+    // guard). Exactly one read per pump pass — the same pattern the
+    // mixer (audio_mixer.cc) and peaks builder (media_catalog.cc)
+    // use. Looping the read here was wrong twice over: `frames` was
+    // never cleared so every pass re-appended all accumulated blocks
+    // into `mono` (quadratic growth -> bad_alloc on multi-second
+    // audio), and a true return on an empty drain spun the while
+    // forever.
     AudioBitDepthConverter bit_depth;
     const auto drain = [&]() -> bool {
-        while (decoder->ReadAudioFrames(&frames, 64)) {
-            for (const auto& f : frames) {
-                if (f.sample_rate <= 0) continue;
-                if (src_rate == 0) {
-                    src_rate = f.sample_rate;
-                    src_channels = f.channels;
-                } else if (f.sample_rate != src_rate ||
-                           f.channels != src_channels) {
-                    conv_error =
-                        "audio sample rate/channels changed "
-                        "mid-stream";
-                    return false;
-                }
-                if (!AppendMono(f, &bit_depth, &mono, &conv_error)) {
-                    return false;
-                }
+        frames.clear();
+        decoder->ReadAudioFrames(&frames, 64);
+        for (const auto& f : frames) {
+            if (f.sample_rate <= 0) continue;
+            if (src_rate == 0) {
+                src_rate = f.sample_rate;
+                src_channels = f.channels;
+            } else if (f.sample_rate != src_rate ||
+                       f.channels != src_channels) {
+                conv_error =
+                    "audio sample rate/channels changed "
+                    "mid-stream";
+                return false;
+            }
+            if (!AppendMono(f, &bit_depth, &mono, &conv_error)) {
+                return false;
             }
         }
         return true;

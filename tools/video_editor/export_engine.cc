@@ -286,6 +286,11 @@ void ExportEngine::RunImpl() {
     }
     AudioMixerOptions mixer_options;
     mixer_options.master_gain_db = options_.master_gain_db;
+    if (options_.audio_sample_rate > 0) {
+        // Settings-dialog "audio sample rate" override — 0 keeps the
+        // 48 kHz export contract default.
+        mixer_options.sample_rate = options_.audio_sample_rate;
+    }
     if (has_audio_ &&
         !mixer_.Init(project_, mixer_options, &error)) {
         FinishError(error.empty() ? "audio mixer init failed" : error);
@@ -526,6 +531,7 @@ void ExportEngine::RunImpl() {
     video_params.fps_num = project_.fps_num;
     video_params.fps_den = project_.fps_den;
     video_params.bit_rate = options_.video_bit_rate;
+    video_params.crf = options_.video_crf;
 
     FFmpeg::EncodeAudioParams audio_params;
     audio_params.output_path = temp_utf8;

@@ -19,6 +19,22 @@ enum class FlexAlign {
     SpaceEvenly
 };
 
+// Per-axis placement mode used by AlignedRect — the pure-geometry mirror
+// of the Widgets::Alignment flags so layout helpers stay widget-agnostic.
+enum class AlignMode {
+    Fill,      // stretch to the cell extent (default/legacy behavior)
+    Leading,   // pack at the cell start (left edge / top edge)
+    Center,    // center inside the cell
+    Trailing   // pack at the cell end (right edge / bottom edge)
+};
+
+// Positions `size` inside `cell` per axis. Fill adopts the cell extent;
+// the other modes clamp to min(size, cell) and position accordingly.
+// Used by Widget::SetBounds box-model resolution; tools laying out
+// children by hand can call it to honor the same contract.
+Rect AlignedRect(const Rect& cell, const Size& size,
+                 AlignMode horizontal, AlignMode vertical) noexcept;
+
 // Snaps a coordinate to the nearest physical pixel boundary for the given
 // DPI scale (1.0 = 96 DPI). Prevents 1px borders and hairlines from blurring.
 float Snap(float value, float scale = 1.0f) noexcept;

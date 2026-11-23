@@ -276,6 +276,73 @@ public:
 - обработку сообщений
 - управление деревом виджетов
 
+### Widget
+
+Универсальный контракт геометрии раскладки для каждого виджета
+(модель Qt `QWidget`/`QLayoutItem` + Chromium `ui/views`). Свойства
+одинаковы для всех — хранятся в `Widget` и разрешаются централизованно
+внутри `SetBounds` — единой точки, через которую проходят все
+реализации `Layout()` и прямое размещение хостами, поэтому каждый
+контейнер учитывает их для каждого размещаемого дочернего виджета
+без собственного кода. Все значения по умолчанию — без изменений.
+
+```cpp
+class Widget {
+public:
+    virtual void Render(Renderer&, const Theme::Tokens&) = 0;
+    virtual void Layout(const Layout::Rect& bounds) = 0;
+    virtual bool HandleEvent(const Event&) = 0;
+    virtual Layout::Size GetMinSize() const = 0;
+    virtual Layout::Size GetPreferredSize() const = 0;
+    virtual Layout::Size GetMaxSize() const = 0;
+    Layout::Rect GetBounds() const;
+    void SetBounds(const Layout::Rect& slot);  // принимает вычисленный rect
+
+    // Выравнивание в слоте большего размера — флаги в стиле
+    // Qt::Alignment, по одному биту на ось (Alignment::HCenter | Top).
+    // Default заполняет слот целиком (прежнее поведение).
+    void SetAlignment(Alignment alignment);
+    Alignment alignment() const;
+
+    // Внешний отступ (margin) + ведущий отступ с учётом направления
+    // текста (отступ дерева/абзаца).
+    void SetMargin(Layout::Insets margin);
+    void SetIndent(int pixels);
+
+    // Растяжение содержимого в стиле QLabel; учитывается
+    // VideoPreviewWidget, Surface и любыми виджетами с собственным
+    // содержимым.
+    void SetScaledContents(bool scaled);
+    bool hasScaledContents() const;
+
+    // Алиасы Qt: sizeHint→GetPreferredSize, minimumSizeHint→GetMinSize.
+    Layout::Size sizeHint() const;
+    Layout::Size minimumSizeHint() const;
+
+    // Алиасы геометрии в стиле Qt поверх GetBounds() (координаты
+    // родителя).
+    Layout::Rect rect() const;  Layout::Point pos() const;
+    Layout::Size size() const;  float x(), y(), width(), height();
+    void Move(const Layout::Rect&);  void Move(int x, int y);
+    void Resize(int w, int h);       void Resize(const Layout::Size&);
+
+    // Фиксированный размер в стиле Qt: переопределяет предпочтительную
+    // величину по оси — даже при Fill виджет прижимается к началу
+    // ячейки вместо растяжения. <= 0 или ClearFixedSize() — сброс.
+    void SetFixedSize(const Layout::Size&);
+    void SetFixedWidth(float);  void SetFixedHeight(float);
+    void ClearFixedSize();
+};
+```
+
+`widgets/surface.h` добавляет `Surface` — универсальный виджет
+произвольной отрисовки:
+`SetPaintCallback(std::function<void(Renderer&, Rect, const Tokens&)>)`
++ `SetEventCallback`, letterboxing по `ContentSize` с учётом
+`hasScaledContents()`, настраиваемые size hints. Размещает произвольный
+рендеринг приложения (видеомониторы, таймлайны, индикаторы) внутри
+дерева виджетов.
+
 ### ColorSpace
 
 Перечисление цветовых пространств и утилиты:

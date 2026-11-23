@@ -358,7 +358,7 @@ struct OrtSessionImpl final : SessionImpl {
                 }
                 count *= static_cast<std::size_t>(d);
             }
-            if (in.data == nullptr) {
+            if (in.data == nullptr && in.data_i64 == nullptr) {
                 if (error_out) {
                     *error_out =
                         "input '" + resolved[i] + "' has null data";
@@ -367,10 +367,21 @@ struct OrtSessionImpl final : SessionImpl {
                 return false;
             }
             in_name_ptrs[i] = resolved[i].c_str();
+            // INT64 inputs (silero's scalar `sr`, tokenized ids)
+            // take the integer binding; everything else is f32.
+            const bool i64 = in.data_i64 != nullptr;
+            void* const tensor_data =
+                i64 ? static_cast<void*>(
+                          const_cast<std::int64_t*>(in.data_i64))
+                    : static_cast<void*>(
+                          const_cast<float*>(in.data));
             OrtStatus* st = api->CreateTensorWithDataAsOrtValue(
-                meminfo, const_cast<float*>(in.data),
-                sizeof(float) * count, in.dims.data(), in.dims.size(),
-                ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &in_vals[i]);
+                meminfo, tensor_data,
+                (i64 ? sizeof(std::int64_t) : sizeof(float)) * count,
+                in.dims.data(), in.dims.size(),
+                i64 ? ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+                    : ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+                &in_vals[i]);
             if (!Check(st, "CreateTensorWithDataAsOrtValue", error_out)
                      .empty() ||
                 in_vals[i] == nullptr) {
@@ -579,7 +590,8 @@ struct CvSession final : SessionImpl {
             }
             for (std::size_t i = 0; i < inputs.size(); ++i) {
                 const Input& in = inputs[i];
-                if (in.data == nullptr || in.dims.empty()) {
+                if ((in.data == nullptr && in.data_i64 == nullptr) ||
+                    in.dims.empty()) {
                     if (error_out) *error_out = "bad input tensor";
                     return false;
                 }
@@ -587,8 +599,20 @@ struct CvSession final : SessionImpl {
                 for (std::size_t d = 0; d < in.dims.size(); ++d) {
                     sz[d] = static_cast<int>(in.dims[d]);
                 }
-                cv::Mat blob(static_cast<int>(sz.size()), sz.data(),
-                             CV_32F, const_cast<float*>(in.data));
+                cv::Mat blob;
+                if (in.data_i64 != nullptr) {
+                    // Integer graph inputs (silero `sr` and friends)
+                    // feed as CV_64S; cv::dnn layers that cannot take
+                    // integers report a normal forward() error.
+                    blob = cv::Mat(static_cast<int>(sz.size()),
+                                   sz.data(), CV_64S,
+                                   const_cast<std::int64_t*>(
+                                       in.data_i64));
+                } else {
+                    blob = cv::Mat(static_cast<int>(sz.size()),
+                                   sz.data(), CV_32F,
+                                   const_cast<float*>(in.data));
+                }
                 if (inputs.size() == 1) {
                     net.setInput(blob);
                 } else {

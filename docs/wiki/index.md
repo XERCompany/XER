@@ -51,10 +51,46 @@ Goal started: 2026-11-15. Design doc:
   FCP 11): top-10 ranked list — captions/text-edit/silence/ducking/
   reframe all hang off already-vendored whisper+ONNX models
   (2026-11-22).
+- [2026-11-22-registry-color-ux-widgets.md](research/2026-11-22-registry-color-ux-widgets.md)
+  — shadcn-registry survey (Colorshot, Amplo, photocn, SureUI, Tour,
+  Delta, CalendarCN, MagicUI, Animate UI, ElevenLabs UI) for the
+  color/photo/UX-polish widget wave: OKLCH picker + eyedropper,
+  risk-matched confirm UX, transcript viewer, motion presets;
+  15-row priority table (2026-11-22).
+- [2026-11-22-registry-media-widgets.md](research/2026-11-22-registry-media-widgets.md)
+  — 10-site shadcn-registry survey for the C++ widget kit: audio-ui.dev +
+  audiocn knob/fader/meter-ballistics/peak-waveform APIs, videocn +
+  videojs transport chrome, tactile hardware-feel controls, piemenu
+  radial menus, zriz cropper; gap list + prioritized widget table
+  (2026-11-22).
 - [2026-11-21-nle-architectures.md](research/2026-11-21-nle-architectures.md)
   — NLE engine survey: MLT/Kdenlive/Shotcut, Olive node+render cache,
   Blender VSE proxies, OFX/Frei0r/libplacebo/VapourSynth matrix,
   render-cache + proxy blueprints, top-3 calls (2026-11-21).
+- [2026-11-22-registry-data-widgets.md](research/2026-11-22-registry-data-widgets.md)
+  — 12-site shadcn-registry survey for the widget kit: full API blueprints
+  for tree view (G3), scrub number field (G5), virtualized table (G4),
+  tags input, stepper, filter bar, inspector; prioritized 17-item port
+  table with file names and effort estimates (2026-11-22).
+- [2026-11-23-ai-features-wave2.md](research/2026-11-23-ai-features-wave2.md)
+  — next AI wave: verified-contract candidates (RIFE 4.25-lite MIT,
+  realesr-general-x4v3 BSD-3, YuNet MIT, Depth-Anything-V2-S Apache,
+  Silero VAD MIT, BeatThis MIT) + license blocklist additions (demucs
+  weights research-only, SCRFD provenance, musdb stems NC); adopt/defer
+  table + 3-wave plan (2026-11-23).
+- [2026-11-23-hf-org-scan.md](research/2026-11-23-hf-org-scan.md)
+  — targeted HF org sweep for the gap areas: verified-license candidates
+  (SAM2.1 tracker Apache-2.0 + ONNX, Kokoro TTS Apache, Florence-2 MIT,
+  MODNet Apache, Depth-V3 relicense Apache) + verdicts on LTX-Video
+  ($10M-cap community license, real ONNX export exists), sam3/sam-audio
+  SAM License, Music3/MusicGen (no legal+runnable path); top-5 for next
+  wave (2026-11-23).
+- [2026-11-23-nle-workflow-anatomy.md](research/2026-11-23-nle-workflow-anatomy.md)
+  — official-doc anatomy of Source/Program monitors, transport (JKL,
+  play-around, K-held combos), Media Pool vs bin vs filesystem browsers,
+  patching/track-targeting and panel chrome across Premiere/Resolve/FCP/
+  CapCut/Descript; per-topic ui2 comparison tables + 20-item prioritized
+  gap list (S/M/L, owning file per item) (2026-11-23).
 - [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
   pass-2 review of session's own changes: seqlock ordering bug in
   RenderStore, channel/worker leak in UiRenderHost, nested-transform
@@ -98,6 +134,23 @@ Goal started: 2026-11-15. Design doc:
 - [video-editor-lens-sync-curves.md](architecture/video-editor-lens-sync-curves.md) —
   glass/lens refraction effects + bokeh DOF, one-click waveform
   audio sync, keyframe curve editor easings/stagger
+- [ve-ui-rebuild-spec.md](architecture/ve-ui-rebuild-spec.md) — VE UI
+  rebuild blueprint: NLE 2025-26 layout survey (Resolve 20/Premiere
+  25/FCP 11/CapCut/Clipchamp/Descript/Kdenlive), region→widget
+  coverage matrix, surface list + paint contract, M1–M4 phases
+  (rebuild decision 2026-11-22; legacy `ui/` deleted and `ui2/` made
+  the sole shell 2026-11-22).
+- [ui-widget-api.md](architecture/ui-widget-api.md) — universal widget
+  layout-geometry contract on `src/ui` (Alignment flags, margin,
+  indent, scaledContents, fixed size, Move/Resize hints), the
+  SetBounds honoring funnel, `Surface` custom-paint widget, and the
+  Qt/views mapping table (2026-11-22).
+- [chromium-views-port-plan.md](architecture/chromium-views-port-plan.md)
+  — Chromium `ui/views`↔`src/ui` mapping (View↔Widget, FlexLayout↔
+  our flex helpers, Widget/NativeWidget↔Window, FocusManager↔tree
+  focus), adopt/keep lists, and ranked port tickets T1–T16 with
+  effort estimates + "don't port the compositor" verdict
+  (2026-11-23).
 - [builder-check-2026-11-15.md](reviews/builder-check-2026-11-15.md) —
   independent design-doc review findings and how each was resolved.
 

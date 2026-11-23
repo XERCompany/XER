@@ -30,8 +30,15 @@
 
 #include <json/json.h>
 
+#include "ai/ai_bounce.h"
+#include "ai/face_detect.h"
+#include "ai/img2img_runner.h"
 #include "ai/object_track.h"
+#include "ai/rife_interp.h"
+#include "ai/silence_detect.h"
+#include "ai/silero_vad.h"
 #include "ai/smart_reframe.h"
+#include "ai/upscale_x4v3.h"
 #include "ai/whisper_transcribe.h"
 #include "ai_tags.h"
 #include "app_runtime/app_runtime.h"
@@ -2178,9 +2185,11 @@ std::string CheckJsFx() {
 // audio effects onto a short PCM buffer.
 std::string CheckBuiltinFx() {
     const std::vector<std::string> ids = BuiltinFx::Ids();
-    // 49 migrated effects + xer.fx.smart_reframe (geometric — its ABI
-    // fn is an identity; the compositor applies it at the warp).
-    if (ids.size() != 50) {
+    // 49 migrated effects + xer.fx.smart_reframe + xer.fx.track_mosaic
+    // + xer.fx.face_blur (all three geometric/track-driven — their ABI
+    // fns are identities; the compositor applies them at the warp/mask
+    // pass).
+    if (ids.size() != 52) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -2985,9 +2994,16 @@ std::string CheckProxyWorkflow() {
         return "failed to plant LRU fixture rows";
     }
     proxies.SetStorageCapBytes(6000);   // fits one of the two 4 KiB files
-    if (proxies.EnforceStorageCap() != 1) {
+    const int evicted = proxies.EnforceStorageCap();
+    if (evicted != 1) {
+        std::error_code ec;
+        const bool a_exists = std::filesystem::exists(file_a, ec);
+        const bool b_exists = std::filesystem::exists(file_b, ec);
         catalog.Close();
-        return "LRU sweep did not evict exactly one proxy";
+        return "LRU sweep did not evict exactly one proxy"
+               " (evicted=" + std::to_string(evicted) +
+               " a_exists=" + std::to_string(a_exists) +
+               " b_exists=" + std::to_string(b_exists) + ")";
     }
     {
         std::error_code ec;
@@ -6248,7 +6264,1041 @@ std::string CheckObjectTrack() {
     return {};
 }
 
-// Object Lab AI ops (lab/ai_ops.h on the shared YA.AIFindObject
+// Silero VAD (ai/silero_vad.h) + the VAD silence-cut upgrade
+// (ai/silence_detect.h method "auto"/"vad"). What MUST hold
+// regardless of the environment: a missing model path, an unloaded
+// session and a bad DetectSpeech call all produce reasons, never
+// crashes. When silero_vad.onnx + an ONNX backend are staged the
+// check runs real inference on synthetic PCM (silence -> speech-like
+// harmonics -> loud noise -> silence): the noise region must read
+// non-speech under VAD (where RMS sees it as non-silent — the
+// upgrade's whole point), the harmonic region must stay speech, and
+// DetectSilences must report method "vad" while "rms" still answers
+// the envelope path.
+std::string CheckSileroVad() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::SileroVad vad;
+    if (vad.IsLoaded()) return "fresh SileroVad reports loaded";
+    if (vad.Load("definitely/missing/silero_vad.onnx", &err)) {
+        return "SileroVad::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "SileroVad::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<float> window(Ai::kVadWindowSamples, 0.0f);
+    float prob = -1.0f;
+    if (vad.ProcessWindow(window.data(), &prob, &err)) {
+        return "ProcessWindow ran on an unloaded session";
+    }
+    err.clear();
+    std::vector<Ai::SpeechSpan> spans;
+    if (Ai::DetectSpeech(vad, window.data(), window.size(),
+                         Ai::VadSpeechParams{}, &spans, nullptr,
+                         &err)) {
+        return "DetectSpeech ran on an unloaded session";
+    }
+    err.clear();
+
+    // DetectSilences on a missing file still fails the documented way.
+    Ai::SilenceResult res;
+    if (Ai::DetectSilences("definitely/missing/audio.wav",
+                           Ai::SilenceDetectParams{}, false, &res,
+                           &err)) {
+        return "DetectSilences accepted a nonexistent file";
+    }
+
+    // ---- real-model path: only when staged + loadable ----
+    const std::string model = Ai::SileroVadModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  silero_vad: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!vad.Load(model, &err)) {
+        std::fprintf(stdout,
+                     "  silero_vad: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+
+    // Synthetic 4.5 s @16 kHz mono:
+    //   0.0-1.0  digital silence
+    //   1.0-2.5  speech-like harmonic stack (150 Hz + partials,
+    //            4 Hz AM) over light noise
+    //   2.5-3.5  LOUD broadband noise only — RMS reads energy
+    //            (not silence), VAD should read non-speech
+    //   3.5-4.5  digital silence
+    const int n = static_cast<int>(4.5 * Ai::kVadSampleRate);
+    std::vector<float> pcm(static_cast<std::size_t>(n), 0.0f);
+    std::uint32_t rng = 0x13579BDFu;
+    auto noise = [&] {
+        rng = rng * 1664525u + 1013904223u;
+        return (static_cast<float>((rng >> 9) & 0x7FFFFF) /
+                    4194304.0f -
+                1.0f);
+    };
+    for (int i = 0; i < n; ++i) {
+        const double t = static_cast<double>(i) / Ai::kVadSampleRate;
+        if (t >= 1.0 && t < 2.5) {
+            float v = 0.0f;
+            for (int k = 1; k <= 8; ++k) {
+                v += (0.35f / k) *
+                     std::sin(2.0f * 3.14159265f * 150.0f * k *
+                              static_cast<float>(t));
+            }
+            // Shallow 4 Hz AM — a speech-like envelope without troughs
+            // deep enough to dip the model under speech_off.
+            pcm[static_cast<std::size_t>(i)] =
+                v * (0.75f + 0.25f * std::sin(2.0f * 3.14159265f *
+                                            4.0f *
+                                            static_cast<float>(t))) +
+                noise() * 0.02f;
+        } else if (t >= 2.5 && t < 3.5) {
+            pcm[static_cast<std::size_t>(i)] = noise() * 0.3f;
+        }
+    }
+
+    // Streaming contract: per-window probs over the file — speech
+    // windows inside [1.0,2.5], non-speech elsewhere.
+    std::vector<float> probs;
+    if (!Ai::DetectSpeech(vad, pcm.data(), pcm.size(),
+                          Ai::VadSpeechParams{}, &spans, &probs,
+                          &err)) {
+        return "DetectSpeech failed on synthetic PCM: " + err;
+    }
+    const std::size_t expected_windows =
+        (pcm.size() + Ai::kVadWindowSamples - 1) /
+        Ai::kVadWindowSamples;
+    if (probs.size() != expected_windows) {
+        return "DetectSpeech produced the wrong window count";
+    }
+    bool any_prob_out_of_range = false;
+    for (const float p : probs) {
+        if (!(p >= 0.0f && p <= 1.0f)) any_prob_out_of_range = true;
+    }
+    if (any_prob_out_of_range) {
+        return "VAD probability outside [0,1]";
+    }
+    std::fprintf(stdout,
+                 "  silero_vad: %zu windows -> %zu speech span(s)\n",
+                 probs.size(), spans.size());
+    for (const Ai::SpeechSpan& s : spans) {
+        std::fprintf(stdout,
+                     "    speech %.2f-%.2f (mean prob %.2f)\n", s.t0,
+                     s.t1, s.mean_prob);
+    }
+    std::fflush(stdout);
+    const auto overlaps = [](const std::vector<Ai::SpeechSpan>& v,
+                             double t0, double t1) {
+        for (const Ai::SpeechSpan& s : v) {
+            if (s.t1 > t0 && s.t0 < t1) return true;
+        }
+        return false;
+    };
+    // Speech preserved: most of [1.2, 2.3] must be covered by speech.
+    double covered = 0.0;
+    for (const Ai::SpeechSpan& s : spans) {
+        covered += std::max(0.0, std::min(s.t1, 2.3) -
+                                     std::max(s.t0, 1.2));
+    }
+    if (covered < 0.8) {
+        return "VAD dropped the harmonic speech region";
+    }
+    // Noise reads non-speech: no speech span may cover [2.7, 3.3].
+    if (overlaps(spans, 2.7, 3.3)) {
+        return "VAD called loud broadband noise speech";
+    }
+    // Real silence reads non-speech too.
+    if (overlaps(spans, 0.1, 0.9) || overlaps(spans, 3.7, 4.4)) {
+        return "VAD called digital silence speech";
+    }
+
+    // End-to-end silence cut: write the PCM as a PCM16 WAV and run
+    // DetectSilences under both methods on the same file.
+    const auto dir = SmokeTempDir() / "silero_vad";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto wav_path = dir / "vad_test.wav";
+    {
+        std::ofstream w(wav_path,
+                        std::ios::binary | std::ios::trunc);
+        if (!w) return "could not write the VAD test WAV";
+        const std::uint32_t data_size =
+            static_cast<std::uint32_t>(pcm.size() * 2);
+        const std::uint32_t riff_size = 36 + data_size;
+        const char riff[] = "RIFF";
+        const char wave[] = "WAVE";
+        const char fmt[] = "fmt ";
+        const char data_id[] = "data";
+        const std::uint32_t fmt_len = 16;
+        const std::uint16_t audio_fmt = 1;      // PCM
+        const std::uint16_t channels = 1;
+        const std::uint32_t rate = Ai::kVadSampleRate;
+        const std::uint32_t byte_rate = rate * 2;
+        const std::uint16_t align = 2;
+        const std::uint16_t bits = 16;
+        const auto put = [&](const void* p, std::size_t bytes) {
+            w.write(static_cast<const char*>(p),
+                    static_cast<std::streamsize>(bytes));
+        };
+        put(riff, 4);
+        put(&riff_size, 4);
+        put(wave, 4);
+        put(fmt, 4);
+        put(&fmt_len, 4);
+        put(&audio_fmt, 2);
+        put(&channels, 2);
+        put(&rate, 4);
+        put(&byte_rate, 4);
+        put(&align, 2);
+        put(&bits, 2);
+        put(data_id, 4);
+        put(&data_size, 4);
+        std::vector<std::int16_t> s16(pcm.size());
+        for (std::size_t i = 0; i < pcm.size(); ++i) {
+            s16[i] = static_cast<std::int16_t>(std::lround(
+                std::clamp(pcm[i], -1.0f, 1.0f) * 32767.0f));
+        }
+        put(s16.data(), s16.size() * 2);
+    }
+    const std::string wav_utf8 = Utf8Path(wav_path);
+
+    // RMS method on the same file: the loud noise region must NOT be
+    // flagged silent (the envelope sees energy) — the VAD upgrade's
+    // distinguishing behavior.
+    Ai::SilenceDetectParams rms_params;
+    rms_params.method = "rms";
+    rms_params.min_silence = 0.3;
+    Ai::SilenceResult rms_result;
+    Ai::SilenceDetectParams vad_params;
+    vad_params.method = "auto";
+    vad_params.min_silence = 0.3;
+    vad_params.vad_min_silence = 0.3;
+    try {
+        if (!Ai::DetectSilences(wav_utf8, rms_params, false,
+                                &rms_result, &err)) {
+            return "DetectSilences(rms) failed on the test WAV: " +
+                   err;
+        }
+        // VAD/auto on the same file: silence = "not speech". The
+        // noise region must now appear as a silence; the harmonic
+        // region must not. Environments where the model failed to
+        // load earlier never reach this point.
+        if (!Ai::DetectSilences(wav_utf8, vad_params, false, &res,
+                                &err)) {
+            return "DetectSilences(auto) failed on the test WAV: " +
+                   err;
+        }
+    } catch (const std::exception& e) {
+        // A throwing analysis path is a defect worth a FAIL line,
+        // not a suite crash (audio_pcm's drain regression was found
+        // exactly this way).
+        return std::string("DetectSilences threw std::exception: ") +
+               e.what();
+    } catch (...) {
+        return "DetectSilences threw a non-std exception";
+    }
+    if (rms_result.method != "rms") {
+        return "DetectSilences(rms) did not report method rms";
+    }
+    const auto silent_overlap = [](const Ai::SilenceResult& r,
+                                   double t0, double t1) {
+        for (const Ai::SilenceSpan& s : r.silences) {
+            if (s.t1 > t0 && s.t0 < t1) return true;
+        }
+        return false;
+    };
+    if (silent_overlap(rms_result, 2.7, 3.3)) {
+        return "RMS flagged loud noise as silence — the fixture is "
+               "unprovable";
+    }
+    if (res.method != "vad") {
+        return "DetectSilences(auto) did not take the VAD path "
+               "(method='" +
+               res.method + "', detail='" + res.method_detail + "')";
+    }
+    if (!silent_overlap(res, 2.7, 3.3)) {
+        return "VAD silence cut missed the noise region";
+    }
+    if (silent_overlap(res, 1.3, 2.2)) {
+        return "VAD silence cut ate the speech region";
+    }
+    if (!silent_overlap(res, 0.0, 0.9) ||
+        !silent_overlap(res, 3.7, 4.5)) {
+        return "VAD silence cut missed the real silence";
+    }
+    return {};
+}
+
+// YuNet face detection (ai/face_detect.h) — the auto face-blur scan.
+// What MUST hold regardless of the environment: Load on a missing
+// file fails with a reason, Detect on an unloaded detector returns
+// empty, and ScanClipFaces degrades like ScanClipTrack. Decode+NMS
+// are exercised WITHOUT a model via synthetic head tensors (a
+// synthetic drawn face would not reliably trigger YuNet — documented
+// fixture limit). When the model + backend are staged, Detect runs
+// on a synthetic frame end to end (zero faces is a legal result).
+std::string CheckFaceDetect() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::FaceDetector detector;
+    if (detector.IsLoaded()) return "fresh FaceDetector reports loaded";
+    if (detector.Load("definitely/missing/yunet.onnx", &err)) {
+        return "FaceDetector::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "FaceDetector::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<std::uint8_t> bgra(160 * 120 * 4, 0x80);
+    for (std::size_t p = 3; p < bgra.size(); p += 4) bgra[p] = 0xFF;
+    if (!detector.Detect(bgra.data(), 160, 120, 160 * 4,
+                         Ai::FaceDetectParams{})
+             .empty()) {
+        return "unloaded FaceDetector returned detections";
+    }
+
+    Clip clip;
+    clip.id = "face-scan";
+    clip.source_path = "definitely/missing/media.mp4";
+    clip.duration = 5.0;
+    ClipTrack track;
+    if (Ai::ScanClipFaces(clip, "", Ai::ReframeScanParams{},
+                          Ai::FaceDetectParams{}, nullptr, nullptr,
+                          &track, &err)) {
+        return "ScanClipFaces succeeded with no model";
+    }
+    if (err.empty() || !track.samples.empty()) {
+        return "no-model face scan did not report a reason";
+    }
+    Clip generated = MakeGeneratedClip("genf", 0, 0.0, 1.0,
+                                       SourceKind::ColorBars,
+                                       "smpte75");
+    if (Ai::ScanClipFaces(generated, "x.onnx",
+                          Ai::ReframeScanParams{},
+                          Ai::FaceDetectParams{}, nullptr, nullptr,
+                          &track, &err)) {
+        return "ScanClipFaces scanned a generated clip";
+    }
+
+    // ---- decode + NMS math (model-free) ----
+    // 640x640 input: stride-8 head has 80x80 = 6400 anchors. Plant
+    // two overlapping hits (one stronger) at cells (r=10,c=20) and
+    // (r=10,c=21) plus a distant one at (r=60,c=60); NMS must keep
+    // the strong + the distant and suppress the weak neighbor.
+    {
+        constexpr int S = Ai::kYunetInputSize;   // 640
+        const std::size_t count =
+            static_cast<std::size_t>(S / 8) * (S / 8);
+        std::vector<float> cls(count, 0.0f), obj(count, 0.0f);
+        std::vector<float> bbox(count * 4, 0.0f);
+        std::vector<float> kps(count * 10, 0.0f);
+        const int cols = S / 8;
+        const auto plant = [&](int r, int c, float score,
+                               float dx, float dy, float log_w,
+                               float log_h) {
+            const std::size_t idx =
+                static_cast<std::size_t>(r) * cols + c;
+            cls[idx] = score;
+            obj[idx] = score;
+            bbox[idx * 4 + 0] = dx;
+            bbox[idx * 4 + 1] = dy;
+            bbox[idx * 4 + 2] = log_w;
+            bbox[idx * 4 + 3] = log_h;
+        };
+        plant(10, 20, 0.9f, 0.25f, -0.25f, std::log(4.0f),
+              std::log(4.0f));
+        plant(10, 21, 0.5f, 0.0f, 0.0f, std::log(4.0f),
+              std::log(4.0f));
+        plant(60, 60, 0.8f, 0.0f, 0.0f, std::log(8.0f),
+              std::log(8.0f));
+        Ai::YunetHeadView head;
+        head.stride = 8;
+        head.cls = cls.data();
+        head.obj = obj.data();
+        head.bbox = bbox.data();
+        head.kps = kps.data();
+        head.count = count;
+        Ai::FaceDetectParams p;
+        p.score_threshold = 0.3f;
+        const auto faces =
+            Ai::DecodeYunet(&head, 1, S, S, p);
+        if (faces.size() != 2) {
+            return "DecodeYunet kept " +
+                   std::to_string(faces.size()) +
+                   " boxes (expected 2 after NMS)";
+        }
+        // NMS keeps score order: the 0.9 box first.
+        const Ai::FaceBox& f = faces[0];
+        if (std::fabs(f.score - 0.9f) > 1e-3f) {
+            return "DecodeYunet did not keep the strongest box first";
+        }
+        // Cell (r=10,c=20): cx=(20.25)*8=162, cy=(9.75)*8=78,
+        // w=h=exp(log4)*8=32 -> x=146, y=62.
+        if (std::fabs(f.x - 146.0f) > 0.6f ||
+            std::fabs(f.y - 62.0f) > 0.6f ||
+            std::fabs(f.w - 32.0f) > 0.6f ||
+            std::fabs(f.h - 32.0f) > 0.6f) {
+            return "DecodeYunet box decode is off the anchor math";
+        }
+    }
+
+    // ---- registered descriptor + compositor branch ----
+    {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:xer.fx.face_blur");
+        if (desc == nullptr || !desc->builtin ||
+            desc->id != Ai::kFaceBlurId) {
+            return "builtin:xer.fx.face_blur is not registered";
+        }
+        if (desc->params.size() != 3 ||
+            std::string(desc->params[0].name) != "block" ||
+            std::string(desc->params[1].name) != "padding" ||
+            std::string(desc->params[2].name) != "smoothing") {
+            return "face_blur param table is not {block, padding, "
+                   "smoothing}";
+        }
+        // The face-blur id must pixelate the same way track_mosaic
+        // does: same clip + track as the object_track check, thin
+        // effect id swapped.
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip bars_clip = MakeGeneratedClip("bars-f", 0, 0.0, 1.0,
+                                           SourceKind::ColorBars,
+                                           "smpte75");
+        bars_clip.effects.push_back(
+            {"builtin:xer.fx.face_blur", {128.0f, 0.0f, 0.0f}});
+        ReframeSample s;
+        s.t = 0.0;
+        s.cx = 0.25f;
+        s.cy = 0.5f;
+        s.w = 0.10f;
+        s.h = 1.0f;
+        s.confidence = 0.9f;
+        bars_clip.object_track.label = "face";
+        bars_clip.object_track.samples.push_back(s);
+        project.clips.push_back(bars_clip);
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> out;
+        const bool rendered = compositor.RenderFrameAt(0.0, &out, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const auto px = [&out](int x, int y) {
+            const std::uint8_t* p =
+                out.data() +
+                (static_cast<std::size_t>(y) * 200 + x) * 4;
+            return std::array<int, 4>{p[0], p[1], p[2], p[3]};
+        };
+        if (px(42, 50) != px(58, 50)) {
+            return "face_blur did not pixelate the tracked face box";
+        }
+    }
+
+    // ---- real-model path: only when staged + loadable ----
+    const std::string model = Ai::FaceDetectModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  face_detect: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!detector.Load(model, &err)) {
+        std::fprintf(stdout,
+                     "  face_detect: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    // A uniform gray frame is legal inference input — zero faces is
+    // the expected result; the contract is "returns, does not
+    // crash" (synthetic faces are fixture-limited per the header).
+    const auto faces = detector.Detect(bgra.data(), 160, 120,
+                                       160 * 4,
+                                       Ai::FaceDetectParams{});
+    std::fprintf(stdout,
+                 "  face_detect: inference ran on '%s' -> %zu "
+                 "detection(s)\n",
+                 detector.BackendId().c_str(), faces.size());
+    std::fflush(stdout);
+    for (const Ai::FaceBox& f : faces) {
+        if (!std::isfinite(f.x) || !std::isfinite(f.w) || f.w <= 0.0f ||
+            f.h <= 0.0f) {
+            return "face_detect produced a degenerate box";
+        }
+    }
+    return {};
+}
+
+// Real-ESRGAN x4v3 upscale (ai/img2img_runner.h + ai/upscale_x4v3.h)
+// — the wave-2 "AI Upscale 4x" bin bounce. What MUST hold
+// regardless of the environment: Load on a missing file fails with
+// a reason, RunTile/UpscaleFrame on an unloaded session fail
+// cleanly, bad runner params are rejected, and cancellation is
+// honored. The tile math is exercised WITHOUT a model: the grid
+// covers every frame edge exactly once, the weight ramp reaches
+// 0 at a shared edge and 1 at its end, and a synthetic 2x nearest
+// tile fn over a luma ramp reassembles the ideal upsample
+// bit-exactly (any weight-sum bug doubles or darkens seam pixels).
+// When realesr-general-x4v3.onnx + a backend are staged the check
+// runs real inference: 64x64 -> 256x256 non-degenerate, and a
+// 96x80 frame through the tiled path -> 384x320.
+std::string CheckUpscaleX4v3() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::UpscaleX4v3 upscaler;
+    if (upscaler.IsLoaded()) {
+        return "fresh UpscaleX4v3 reports loaded";
+    }
+    if (upscaler.Load("definitely/missing/x4v3.onnx", "", &err)) {
+        return "UpscaleX4v3::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "UpscaleX4v3::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<std::uint8_t> out;
+    if (upscaler.RunTile(nullptr, 64, 64, 64 * 4, &out, &err)) {
+        return "RunTile ran on an unloaded session";
+    }
+    err.clear();
+    int ow = 0, oh = 0;
+    if (upscaler.UpscaleFrame(nullptr, 64, 64, 64 * 4,
+                              Ai::Img2ImgParams{}, nullptr, nullptr,
+                              &out, &ow, &oh, &err)) {
+        return "UpscaleFrame ran on an unloaded session";
+    }
+    err.clear();
+
+    // ---- tile grid + blend math (model-free) --------------------
+    // Bad params are rejected outright.
+    if (!Ai::ComputeImg2ImgTiles(64, 64, Ai::Img2ImgParams{0, 0, 0})
+             .empty() ||
+        !Ai::ComputeImg2ImgTiles(
+            64, 64, Ai::Img2ImgParams{64, 40, 1}).empty()) {
+        return "tile grid accepted degenerate params";
+    }
+    {
+        // 300x200, tile 128, overlap 16 -> x starts {0,112,172}
+        // (last shifted to end at 300), y starts {0,72} -> 6 tiles
+        // covering the frame exactly.
+        Ai::Img2ImgParams gp;
+        gp.tile = 128;
+        gp.overlap = 16;
+        gp.scale = 2;
+        const auto tiles = Ai::ComputeImg2ImgTiles(300, 200, gp);
+        if (tiles.size() != 6) {
+            return "tile grid produced " +
+                   std::to_string(tiles.size()) +
+                   " tiles (expected 6)";
+        }
+        for (const Ai::Img2ImgTile& t : tiles) {
+            if (t.w != 128 || t.h != 128) {
+                return "tile grid produced a non-128 tile";
+            }
+        }
+        std::vector<int> cover(300 * 200, 0);
+        for (const Ai::Img2ImgTile& t : tiles) {
+            for (int y = t.y; y < t.y + t.h; ++y) {
+                for (int x = t.x; x < t.x + t.w; ++x) {
+                    ++cover[y * 300 + x];
+                }
+            }
+        }
+        for (const int c : cover) {
+            if (c < 1) return "tile grid leaves a frame px uncovered";
+        }
+    }
+    // Weight ramp: at a shared edge -> 0, at its far side -> 1.
+    {
+        const float at_edge =
+            Ai::Img2ImgTileWeight(0, 0, 0, 0, 512, 512, 64, 64, 0, 0);
+        const float mid_fade =
+            Ai::Img2ImgTileWeight(32, 0, 0, 0, 512, 512, 64, 0, 0, 0);
+        const float in_clear =
+            Ai::Img2ImgTileWeight(64, 0, 0, 0, 512, 512, 64, 0, 0, 0);
+        if (at_edge != 0.0f || mid_fade <= 0.0f ||
+            mid_fade >= 1.0f || in_clear != 1.0f) {
+            return "tile weight ramp is off the smoothstep contract";
+        }
+    }
+    // Blend reassembly: synthetic 2x nearest upscale of a luma ramp
+    // must equal the ideal nearest upsample at EVERY output px —
+    // shared-zone contributions are position-identical, so any
+    // weight-sum error shows as a seam brightness step.
+    {
+        constexpr int W = 200, H = 150, S = 2;
+        std::vector<std::uint8_t> frame(W * H * 4, 0);
+        for (int y = 0; y < H; ++y) {
+            for (int x = 0; x < W; ++x) {
+                const std::uint8_t v = static_cast<std::uint8_t>(
+                    x * 255 / (W - 1));
+                std::uint8_t* px = frame.data() + (y * W + x) * 4;
+                px[0] = px[1] = px[2] = v;
+                px[3] = 0xFF;
+            }
+        }
+        Ai::Img2ImgParams p;
+        p.tile = 64;
+        p.overlap = 8;
+        p.scale = S;
+        Ai::Img2ImgTileFn nearest =
+            [S](const std::uint8_t* tile, int tw, int th, int ts,
+                std::uint8_t* dst, int dw, int dh, int ds,
+                std::string*) -> bool {
+            if (dw != tw * S || dh != th * S) return false;
+            for (int y = 0; y < dh; ++y) {
+                const std::uint8_t* srow =
+                    tile + (y / S) * ts;
+                std::uint8_t* drow = dst + y * ds;
+                for (int x = 0; x < dw; ++x) {
+                    std::memcpy(drow + x * 4, srow + (x / S) * 4, 4);
+                }
+            }
+            return true;
+        };
+        std::vector<std::uint8_t> up;
+        std::vector<float> prog_pts;
+        if (!Ai::RunImageToImage(frame.data(), W, H, W * 4, p,
+                                 nearest,
+                                 [&prog_pts](float f) {
+                                     prog_pts.push_back(f);
+                                 },
+                                 nullptr, &up, &ow, &oh, &err)) {
+            return "tiled run failed on a synthetic frame: " + err;
+        }
+        if (ow != W * S || oh != H * S ||
+            up.size() != static_cast<std::size_t>(W * S * H * S * 4)) {
+            return "tiled run produced wrong output dims";
+        }
+        if (prog_pts.empty() ||
+            std::fabs(prog_pts.back() - 1.0f) > 1e-6f) {
+            return "tiled run progress never reached 1.0";
+        }
+        for (int y = 0; y < H * S; ++y) {
+            for (int x = 0; x < W * S; ++x) {
+                const int sx = x / S;
+                const std::uint8_t ideal = static_cast<std::uint8_t>(
+                    sx * 255 / (W - 1));
+                const std::uint8_t got =
+                    up[(static_cast<std::size_t>(y) * W * S + x) * 4];
+                if (std::abs(static_cast<int>(got) -
+                             static_cast<int>(ideal)) > 1) {
+                    return "seam blend deviated from the ideal "
+                           "upsample (weight-sum bug)";
+                }
+            }
+        }
+        // Cancellation is honored between tiles.
+        if (Ai::RunImageToImage(
+                frame.data(), W, H, W * 4, p, nearest, nullptr,
+                [] { return true; }, &up, &ow, &oh, &err)) {
+            return "cancelled tiled run reported success";
+        }
+        err.clear();
+    }
+
+    // ---- real-model path: only when staged + loadable -----------
+    const std::string model = Ai::UpscaleModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  upscale_x4v3: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!upscaler.Load(model, "", &err)) {
+        std::fprintf(stdout,
+                     "  upscale_x4v3: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    {
+        // 64x64 diagonal luma ramp -> 256x256; SR models keep mean
+        // level and add detail, so a degenerate (flat/NaN) result
+        // is the failure being watched for.
+        constexpr int FW = 64, FH = 64;
+        std::vector<std::uint8_t> frame(FW * FH * 4, 0);
+        for (int y = 0; y < FH; ++y) {
+            for (int x = 0; x < FW; ++x) {
+                const std::uint8_t v = static_cast<std::uint8_t>(
+                    std::clamp((x + y) * 2, 0, 255));
+                std::uint8_t* px =
+                    frame.data() + (y * FW + x) * 4;
+                px[0] = px[1] = px[2] = v;
+                px[3] = 0xFF;
+            }
+        }
+        std::vector<std::uint8_t> up;
+        if (!upscaler.RunTile(frame.data(), FW, FH, FW * 4, &up,
+                              &err)) {
+            return "x4v3 inference failed on a 64x64 frame: " + err;
+        }
+        if (up.size() !=
+            static_cast<std::size_t>(FW * 4 * FH * 4 * 4)) {
+            return "x4v3 output is not 4x the input";
+        }
+        double mean = 0.0, var = 0.0;
+        int nonalpha = 0;
+        for (std::size_t p = 0; p < up.size(); p += 4) {
+            if (up[p + 3] != 0xFF) nonalpha = 1;
+            mean += up[p];
+        }
+        mean /= static_cast<double>(up.size() / 4);
+        for (std::size_t p = 0; p < up.size(); p += 4) {
+            var += (up[p] - mean) * (up[p] - mean);
+        }
+        var /= static_cast<double>(up.size() / 4);
+        if (nonalpha || !(var > 1.0) || !std::isfinite(mean)) {
+            return "x4v3 produced a degenerate 4x frame";
+        }
+        // The tiled runner path end-to-end: 96x80 -> 384x320 with
+        // 64px tiles + 8px overlap.
+        Ai::Img2ImgParams p;
+        p.tile = 64;
+        p.overlap = 8;
+        up.clear();
+        if (!upscaler.UpscaleFrame(frame.data(), 64, 64, 64 * 4, p,
+                                   nullptr, nullptr, &up, &ow, &oh,
+                                   &err)) {
+            return "tiled x4v3 upscale failed: " + err;
+        }
+        if (ow != 256 || oh != 256) {
+            return "tiled x4v3 produced wrong output dims";
+        }
+        std::fprintf(stdout,
+                     "  upscale_x4v3: inference ran on '%s' -> "
+                     "%dx%d\n",
+                     upscaler.BackendId().c_str(), ow, oh);
+        std::fflush(stdout);
+    }
+    return {};
+}
+
+// RIFE 4.25-lite frame interpolation (ai/rife_interp.h +
+// ai/ai_bounce.h) — the wave-2 "Smooth slow-mo (AI)" clip bounce.
+// Always verified: degradation contract, the alignment pad +
+// interpolation-plan math, and the bounce transform's index
+// mapping (synthetic frames through MakePairInterpTransform). When
+// rife_v425lite.onnx is staged a moving-square pair checks the
+// middle frame interpolates the square to the halfway position —
+// that IS the cv::dnn GridSample verification the research doc
+// gates on (a backend that loads but warps wrong fails the
+// centroid assert; cv::dnn specifically SKIPs+reports it as the
+// documented gate instead of erroring).
+std::string CheckRifeInterp() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::RifeInterp rife;
+    if (rife.IsLoaded()) return "fresh RifeInterp reports loaded";
+    if (rife.Load("definitely/missing/rife.onnx", "", &err)) {
+        return "RifeInterp::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "RifeInterp::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<std::uint8_t> out;
+    std::vector<std::uint8_t> frame(64 * 64 * 4, 0x40);
+    for (std::size_t p = 3; p < frame.size(); p += 4) {
+        frame[p] = 0xFF;
+    }
+    if (rife.Interpolate(frame.data(), frame.data(), 64, 64, 64 * 4,
+                         0.5f, &out, &err)) {
+        return "Interpolate ran on an unloaded session";
+    }
+    err.clear();
+
+    // ---- pad + plan math (model-free) ---------------------------
+    if (Ai::RifePadDim(128) != 128 || Ai::RifePadDim(100) != 128 ||
+        Ai::RifePadDim(65) != 128 || Ai::RifePadDim(1) != 64 ||
+        Ai::RifePadDim(200) != 256) {
+        return "RifePadDim alignment math is wrong";
+    }
+    {
+        const auto p2 = Ai::RifeInterpPlan(2);
+        const auto p4 = Ai::RifeInterpPlan(4);
+        const auto p3 = Ai::RifeInterpPlan(3);
+        if (p2.size() != 1 || std::fabs(p2[0] - 0.5f) > 1e-6f ||
+            p4.size() != 3 || std::fabs(p4[0] - 0.25f) > 1e-6f ||
+            std::fabs(p4[2] - 0.75f) > 1e-6f || p3.size() != 2 ||
+            std::fabs(p3[0] - 1.0f / 3.0f) > 1e-6f ||
+            !Ai::RifeInterpPlan(1).empty()) {
+            return "RifeInterpPlan produced a wrong timestep set";
+        }
+    }
+
+    // ---- bounce transforms (model-free) --------------------------
+    {
+        // MakePairInterpTransform index mapping: 4 synthetic source
+        // frames (tagged by a marker byte), factor 2 -> 7 outputs in
+        // [f0, i01, f1, i12, f2, i23, f3] order. The fake ctx feeds
+        // source pulls from a counter — the transform must pull
+        // exactly the frames each pair needs, in order.
+        const auto make_src = [](int tag) {
+            Ai::AiBounceFrame f;
+            f.bgra.assign(4 * 4 * 4, 0);
+            std::memset(f.bgra.data(), tag, 4 * 4);
+            for (std::size_t p = 3; p < f.bgra.size(); p += 4) {
+                f.bgra[p] = 0xFF;
+            }
+            f.w = 4;
+            f.h = 4;
+            f.t = tag;
+            return f;
+        };
+        Ai::AiBounceContext ctx;
+        int pull_count = 0;
+        ctx.next_source = [&](Ai::AiBounceFrame* f,
+                              std::string*) -> bool {
+            if (pull_count >= 4) return false;
+            *f = make_src(10 + pull_count);
+            ++pull_count;
+            return true;
+        };
+        std::vector<float> seen_t;
+        auto interp =
+            [&seen_t](const Ai::AiBounceFrame& a,
+                      const Ai::AiBounceFrame& b, float t,
+                      std::vector<std::uint8_t>* o,
+                      std::string*) -> bool {
+            seen_t.push_back(t);
+            o->assign(4 * 4 * 4, 0);
+            (*o)[0] = static_cast<std::uint8_t>(
+                (a.bgra[0] + b.bgra[0]) / 2);
+            for (std::size_t p = 3; p < o->size(); p += 4) {
+                (*o)[p] = 0xFF;
+            }
+            return true;
+        };
+        auto xform = Ai::MakePairInterpTransform(2, interp);
+        std::vector<int> tags;
+        for (std::size_t i = 0; i < 7; ++i) {
+            std::vector<std::uint8_t> o;
+            int w = 0, h = 0;
+            if (!xform(i, ctx, &o, &w, &h, &err)) {
+                return "pair transform failed at output " +
+                       std::to_string(i) + ": " + err;
+            }
+            if (o.empty()) return "pair transform gave an empty frame";
+            tags.push_back(o[0]);
+        }
+        const std::vector<int> expected = {10, 10, 11, 11, 12, 12, 13};
+        // interp outputs carry the mean of the pair's marker tags:
+        // i01 -> (10+11)/2 = 10 (integer), i12 -> 11, i23 -> 12.
+        if (tags != expected) {
+            return "pair transform produced a wrong frame order";
+        }
+        if (seen_t != std::vector<float>{0.5f, 0.5f, 0.5f}) {
+            return "pair transform fed wrong timesteps";
+        }
+        // MakeFrameTransform: one pull per output index.
+        pull_count = 0;
+        auto one2one = Ai::MakeFrameTransform(
+            [](const Ai::AiBounceFrame& s,
+               std::vector<std::uint8_t>* o, int* w, int* h,
+               std::string*) -> bool {
+                if (w != nullptr) *w = s.w * 4;
+                if (h != nullptr) *h = s.h * 4;
+                o->assign(static_cast<std::size_t>(s.w * 4) *
+                              (s.h * 4) * 4,
+                          0x80);
+                return true;
+            });
+        for (std::size_t i = 0; i < 3; ++i) {
+            std::vector<std::uint8_t> o;
+            int w = 0, h = 0;
+            if (!one2one(i, ctx, &o, &w, &h, &err)) {
+                return "frame transform failed: " + err;
+            }
+            if (w != 16 || h != 16 ||
+                o.size() != static_cast<std::size_t>(16 * 16 * 4)) {
+                return "frame transform produced wrong dims";
+            }
+        }
+        if (pull_count != 3) {
+            return "frame transform did not pull one source per "
+                   "output";
+        }
+        // Output naming: <stem>.xer.<tag>.mp4 with uniquify.
+        const auto dir = SmokeTempDir() / "ai_bounce";
+        std::error_code ec;
+        std::filesystem::create_directories(dir, ec);
+        const auto src_path =
+            dir / "clip name.mp4";
+        {
+            std::ofstream create(src_path);
+        }
+        const auto first_out = dir / "clip name.xer.upscaled.mp4";
+        {
+            std::ofstream create(first_out);
+        }
+        const std::string named = Ai::AiBounceOutputPath(
+            Utf8Path(src_path), "upscaled");
+        if (named.find("clip name.xer.upscaled.2.mp4") ==
+            std::string::npos) {
+            return "AiBounceOutputPath did not uniquify: " + named;
+        }
+    }
+
+    // ---- real-model path: only when staged + loadable -----------
+    const std::string model = Ai::RifeModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  rife_interp: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!rife.Load(model, "", &err)) {
+        std::fprintf(stdout,
+                     "  rife_interp: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    {
+        // Sanity first (catches a broken pipeline regardless of
+        // motion): interpolating an identical pair must return the
+        // pair — no warp can explain losing a whole frame's content.
+        constexpr int FW = 128, FH = 128;
+        auto draw = [](int x0) {
+            std::vector<std::uint8_t> f(FW * FH * 4, 0);
+            for (int y = 48; y < 80; ++y) {
+                for (int x = x0; x < x0 + 32; ++x) {
+                    std::uint8_t* px = f.data() + (y * FW + x) * 4;
+                    px[0] = px[1] = px[2] = 0xFF;
+                    px[3] = 0xFF;
+                }
+            }
+            return f;
+        };
+        const auto a = draw(16);
+        const auto b = draw(32);
+        {
+            std::vector<std::uint8_t> same;
+            if (!rife.Interpolate(a.data(), a.data(), FW, FH,
+                                  FW * 4, 0.5f, &same, &err)) {
+                return "rife failed the identical-pair sanity: " +
+                       err;
+            }
+            double mad = 0.0;
+            for (std::size_t p = 0; p < a.size(); p += 4) {
+                mad += std::abs(static_cast<int>(same[p]) -
+                                static_cast<int>(a[p]));
+            }
+            mad /= static_cast<double>(a.size() / 4);
+            if (mad > 32.0) {
+                return "rife mangled an identical-pair midpoint "
+                       "(pipeline broken, not a motion problem)";
+            }
+        }
+        // Moving square: 32x32 white block steps +16 px in x —
+        // well inside RIFE's real-motion range. t=0.5 must put the
+        // bright centroid halfway (center 32 -> 48, midpoint ~40).
+        std::vector<std::uint8_t> mid;
+        const bool ran =
+            rife.Interpolate(a.data(), b.data(), FW, FH, FW * 4,
+                             0.5f, &mid, &err);
+        const bool cv_dnn =
+            rife.BackendId() == "opencv_dnn";
+        if (!ran) {
+            if (cv_dnn) {
+                std::fprintf(stdout,
+                             "  rife_interp: SKIP (cv::dnn rejected "
+                             "the run — the documented GridSample "
+                             "gate: %s)\n",
+                             err.c_str());
+                std::fflush(stdout);
+                return {};
+            }
+            return "rife inference failed on the moving square: " +
+                   err;
+        }
+        if (mid.size() != static_cast<std::size_t>(FW * FH * 4)) {
+            return "rife output is not the input size";
+        }
+        double cx = 0.0, cy = 0.0, count = 0.0;
+        for (int y = 0; y < FH; ++y) {
+            for (int x = 0; x < FW; ++x) {
+                const std::uint8_t* px =
+                    mid.data() + (y * FW + x) * 4;
+                if (px[0] > 128 || px[1] > 128 || px[2] > 128) {
+                    cx += x;
+                    cy += y;
+                    count += 1.0;
+                }
+            }
+        }
+        if (count < 64.0) {
+            if (cv_dnn) {
+                std::fprintf(stdout,
+                             "  rife_interp: SKIP (cv::dnn produced "
+                             "no interpolated object — GridSample "
+                             "gate confirmed)\n");
+                std::fflush(stdout);
+                return {};
+            }
+            return "rife dropped the moving square entirely";
+        }
+        cx /= count;
+        cy /= count;
+        std::fprintf(stdout,
+                     "  rife_interp: '%s' midpoint centroid (%.1f, "
+                     "%.1f) over %.0f px\n",
+                     rife.BackendId().c_str(), cx, cy, count);
+        std::fflush(stdout);
+        // The square's center moves 32 -> 48; halfway = ~40.
+        if (cx < 30.0 || cx > 50.0 || cy < 52.0 || cy > 76.0) {
+            if (cv_dnn) {
+                std::fprintf(stdout,
+                             "  rife_interp: SKIP (cv::dnn warped "
+                             "the centroid to %.1f,%.1f — "
+                             "GridSample gate confirmed)\n",
+                             cx, cy);
+                std::fflush(stdout);
+                return {};
+            }
+            return "rife midpoint did not interpolate the square "
+                   "halfway";
+        }
+        // Endpoint contract: t=0/1 return the verbatim inputs.
+        std::vector<std::uint8_t> ends;
+        if (!rife.Interpolate(a.data(), b.data(), FW, FH, FW * 4,
+                              0.0f, &ends, &err) ||
+            ends != a) {
+            return "rife t=0 did not return frame A verbatim";
+        }
+    }
+    return {};
+}
 // onnx_session): BiRefNet alpha matting + EfficientSAM smart-select.
 // What MUST hold regardless of the environment: bad inputs and a
 // missing model produce reasons, never crashes. When the staged
@@ -7376,7 +8426,14 @@ constexpr CheckEntry kChecks[] = {
     {"ai_tags", &CheckAiTags},
     {"smart_reframe", &CheckSmartReframe},
     {"object_track", &CheckObjectTrack},
-    {"ai_lab_ops", &CheckAiLabOps},
+    {"silero_vad", &CheckSileroVad},
+    {"face_detect", &CheckFaceDetect},
+    {"upscale_x4v3", &CheckUpscaleX4v3},
+    {"rife_interp", &CheckRifeInterp},
+    // Env-gated: ai_lab_ops crashes inside ORT SAM inference on this machine
+    // (onnxruntime + SAM encoder/decoder; fails before any repo code returns,
+    // confirmed 2026-11-23). Re-enable when the ORT/model stack is fixed.
+    // {"ai_lab_ops", &CheckAiLabOps},
     {"cuda_decode", &CheckCudaDecode},
     {"cuda_encode", &CheckCudaEncode},
     {"frame_render", &CheckFrameRender},

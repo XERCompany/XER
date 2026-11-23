@@ -3,9 +3,11 @@
 #include "ai/silence_detect.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 
 #include "ai/audio_pcm.h"
+#include "ai/silero_vad.h"
 #include "audio/analysis_ai/anal_loudness_meter_lufs.h"
 
 namespace XER::VideoEditor::Ai {
@@ -108,6 +110,88 @@ bool DetectSilences(const std::string& utf8_path,
         }
     }
     flush(count);
+
+    // VAD upgrade (method "auto"/"vad"): stream the same 16 kHz PCM
+    // through Silero and invert its speech spans — silences become
+    // "not speech" instead of "below threshold". Any failure in the
+    // model path (unstaged file, unloadable backend, rejected
+    // contract, inference error) keeps the RMS result above —
+    // graceful degradation, never a hard dependency.
+    std::string method_lower = params.method;
+    std::transform(method_lower.begin(), method_lower.end(),
+                   method_lower.begin(), [](unsigned char c) {
+                       return static_cast<char>(std::tolower(c));
+                   });
+    if (method_lower == "vad" || method_lower == "auto") {
+        std::string vad_error;
+        const std::string model = SileroVadModel();
+        if (model.empty()) {
+            vad_error = "silero_vad.onnx not staged";
+        } else {
+            SileroVad vad;
+            std::vector<SpeechSpan> speech;
+            if (!vad.Load(model, &vad_error)) {
+                // vad_error carries the load reason.
+            } else if (!DetectSpeech(vad, pcm.samples.data(),
+                                     pcm.samples.size(),
+                                     VadSpeechParams{
+                                         params.vad_speech_on,
+                                         params.vad_speech_off,
+                                         params.vad_min_speech,
+                                         params.vad_min_silence},
+                                     &speech, nullptr, &vad_error)) {
+                // vad_error carries the inference reason.
+            } else {
+                // Silence = the complement of speech over the
+                // decoded span; each gap carries the mean envelope
+                // RMS across it so the UI's level readout stays
+                // meaningful under the VAD method.
+                std::vector<SilenceSpan> vad_silences;
+                const auto gap_rms = [&](double t0, double t1) {
+                    double acc = 0.0;
+                    int n = 0;
+                    for (const auto& w : out->envelope) {
+                        if (w.t + step > t0 && w.t < t1) {
+                            acc += std::pow(10.0, w.rms_db / 20.0);
+                            ++n;
+                        }
+                    }
+                    return n > 0 ? LinearToDb(acc / n) : kDbFloor;
+                };
+                double cursor = 0.0;
+                for (const SpeechSpan& s : speech) {
+                    if (s.t0 - cursor >= params.min_silence) {
+                        SilenceSpan span;
+                        span.t0 = cursor;
+                        span.t1 = s.t0;
+                        span.rms_db = gap_rms(cursor, s.t0);
+                        vad_silences.push_back(span);
+                    }
+                    cursor = std::max(cursor, s.t1);
+                }
+                if (out->duration_seconds - cursor >=
+                    params.min_silence) {
+                    SilenceSpan span;
+                    span.t0 = cursor;
+                    span.t1 = out->duration_seconds;
+                    span.rms_db = gap_rms(cursor, span.t1);
+                    vad_silences.push_back(span);
+                }
+                out->silences = std::move(vad_silences);
+                out->method = "vad";
+                out->method_detail.clear();
+                if (!with_envelope) out->envelope.clear();
+                return true;
+            }
+        }
+        // Fallback: the RMS spans already computed stay in place.
+        out->method = "rms";
+        out->method_detail =
+            "VAD unavailable, RMS fallback (" + vad_error + ")";
+    } else {
+        out->method = "rms";
+        out->method_detail.clear();
+    }
 
     if (!with_envelope) out->envelope.clear();
     return true;

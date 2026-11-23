@@ -47,12 +47,32 @@
 #include "ui/core/application.h"
 #include "ui/core/window.h"
 #include "ui/theme/theme.h"
-#include "ui/ve_theme.h"
-#include "ui/photo_workspace.h"       // PhotoWorkspaceSmoke hook
-#include "ui/video_editor_app.h"
 #include "ui/widgets/app_title_bar.h"
+// ui2/ is THE shell (spec docs/wiki/architecture/ve-ui-rebuild-spec.md)
+// — the legacy ui/ directory was deleted at the swap-over; there is no
+// fallback path. The widget-kit smokes moved here with the shell; the
+// photo_workspace check was dropped (superseded — returns with the
+// ui2 photo workspace at M4).
+#include "ui2/color_widgets_smoke.h"   // ColorWidgetsSmoke hook
+#include "ui2/data_widgets_smoke.h"    // DataWidgetsSmoke hook
+#include "ui2/media_widgets_smoke.h"   // MediaWidgetsSmoke hook
+#include "ui2/widget_kit_smoke.h"      // WidgetKitSmoke hook
+#include "ui2/monitor_panel.h"         // --screenshot --ui frame pump
+#include "ui2/monitor_surface.h"       // MonitorSurface::HasFrame
+#include "ui2/ui2_shell_smoke.h"       // Ui2ShellSmoke hook
+#include "ui2/ui2_monitor_smoke.h"     // Ui2MonitorSmoke hook
+#include "ui2/ui2_timeline_smoke.h"    // Ui2TimelineSmoke hook
+#include "ui2/ui2_panels_smoke.h"      // Ui2PanelsSmoke hook
+#include "ui2/ui2_panels2_smoke.h"     // Ui2Panels2Smoke hook
+#include "ui2/ui2_media_prep_smoke.h"  // Ui2MediaPrepSmoke hook
+#include "ui2/ui2_color_mixer_smoke.h" // Ui2ColorMixerSmoke hook
+#include "ui2/ui2_lifecycle_smoke.h"   // Ui2LifecycleSmoke hook
+#include "ui2/photo_workspace.h"      // Ui2PhotoWorkspaceSmoke hook
+#include "ui2/ve_app.h"
+#include "ui2/ve_theme.h"
 
 #include "rendering/windows/software_renderer.h"  // --screenshot --ui
+#include "debug/debug_map_ui.h"                  // XER_VE_UI_DUMP tree dump
 #include "theme/tokens.h"
 #include "widgets/widget_tree.h"
 
@@ -140,99 +160,6 @@ void PrintUsage() {
 }
 
 #if defined(_WIN32)
-int RunGui(const std::string& project_path) {
-    // Declarative assets layer: assets/app.yaml → runtime.js (real V8)
-    // → window/window.yaml. Missing assets boot with compiled defaults.
-    std::string boot_status;
-    auto boot = XER::VideoEditor::AppRuntime::Boot(&boot_status);
-    if (boot.ok) {
-        std::cerr << "assets: " << boot_status << "\n";
-    } else if (!boot_status.empty()) {
-        std::cerr << "assets: " << boot_status << "\n";
-    }
-    const auto& wcfg = boot.window;
-
-    auto& app = XER::UI::Core::Application::Instance();
-    app.SetAppName("VideoEditor - XER Creative Suite");
-    if (!app.Initialize()) {
-        std::cerr << "Error: failed to initialize XER UI\n";
-        return 1;
-    }
-
-    auto window = std::make_shared<XER::UI::Core::Window>();
-    if (!window->Create(wcfg.title, wcfg.width, wcfg.height)) {
-        app.Shutdown();
-        std::cerr << "Error: failed to create editor window\n";
-        return 1;
-    }
-    if (wcfg.maximized) {
-        window->ToggleMaximize();
-    }
-    auto editor = std::make_shared<XER::VideoEditor::Ui::VideoEditorAppWidget>(
-        window->GetHWND(), project_path);
-    window->SetContent(editor);
-    window->SetTheme(XER::UI::Theme::Variant::Dark);
-    // Editor design tokens (ui/ve_theme.h): refined dark palette on top
-    // of the builtin Dark variant; assets/editor.yaml `Accent:` wins.
-    XER::VideoEditor::Ui::VeTheme::ApplyToWindow(
-        window.get(),
-        XER::VideoEditor::AppRuntime::SharedAssetsConfig()
-            .editor.accent_argb);
-    window->SetCustomTitleBar(true, 38.0f);
-    window->SetTitleBarHitTest([editor](XER::UI::Layout::Point point) {
-        auto* title_bar = editor->TitleBar();
-        return title_bar != nullptr && title_bar->IsInteractiveAt(point);
-    });
-    auto* title_bar = editor->TitleBar();
-    if (title_bar != nullptr) {
-        using WindowCommand =
-            XER::UI::Widgets::AppTitleBar::WindowCommand;
-        title_bar->SetOnWindowCommand([window](WindowCommand command) {
-            switch (command) {
-                case WindowCommand::Minimize:
-                    window->Minimize();
-                    break;
-                case WindowCommand::ToggleMaximize:
-                    window->ToggleMaximize();
-                    break;
-                case WindowCommand::Close:
-                    window->Close();
-                    break;
-            }
-        });
-        title_bar->SetThemeToggle(true, [window](bool dark) {
-            window->SetTheme(dark ? XER::UI::Theme::Variant::Dark
-                                  : XER::UI::Theme::Variant::Light);
-            if (dark) {
-                // SetTheme() restores the stock variant — re-layer the
-                // editor palette so toggling back keeps the VE look.
-                XER::VideoEditor::Ui::VeTheme::ApplyToWindow(
-                    window.get(), XER::VideoEditor::AppRuntime::
-                                      SharedAssetsConfig()
-                                          .editor.accent_argb);
-            }
-        });
-    }
-    const auto sync_maximize = [window, title_bar] {
-        if (title_bar != nullptr) {
-            title_bar->SetMaximized(window->IsWindowMaximized());
-        }
-    };
-    window->SetOnResize([sync_maximize](int, int) { sync_maximize(); });
-    window->SetSizeLimits(960, 620, 0, 0);
-    window->SetFrameCallback([editor, sync_maximize] {
-        editor->TickTree(1.0 / 30.0);
-        sync_maximize();
-    }, 33);
-    window->Show();
-    const int result = app.Run();
-    app.Shutdown();
-    // Browsers are children of the now-destroyed window — draining CEF
-    // after the message loop lets it tear subprocesses down cleanly.
-    XER::Cef::Shutdown();
-    return result;
-}
-
 // `video_editor --cef-check` — headless verification of the whole CEF
 // path the Browser tab uses: runtime init (libcef.dll + subprocess
 // resolution) plus a real browser created on an invisible parent HWND.
@@ -671,11 +598,11 @@ int RunScreenshotProgram(const std::string& project_path, double t,
 }
 
 #if defined(_WIN32)
-// Full-UI capture: the real VideoEditorAppWidget laid out into a
-// headless SoftwareRenderer (CPU BGRA rasterizer — no window, no GPU)
-// through a standalone WidgetTree, then read back via Pixels(). The
+// Full-UI capture: the real ui2 VeApp laid out into a headless
+// SoftwareRenderer (CPU BGRA rasterizer — no window, no GPU) through a
+// standalone WidgetTree, then read back via Pixels(). The program
 // monitor shows the composited frame at `t` when the preview engine
-// delivers (PrepareUiCapture); chrome/panels/timeline always render.
+// delivers; chrome/panels/timeline always render.
 int RunScreenshotUi(const std::string& project_path, double t,
                     const std::string& out_path, int size_w,
                     int size_h) {
@@ -699,15 +626,30 @@ int RunScreenshotUi(const std::string& project_path, double t,
                   << '\n';
         return 1;
     }
+    Project project;
+    std::string load_error;
+    if (!XER::VideoEditor::ProjectStore::Load(normalized, &project,
+                                              &load_error)) {
+        std::cerr << "Error: cannot load '" << project_path << "': "
+                  << (load_error.empty() ? "load failed" : load_error)
+                  << '\n';
+        return 1;
+    }
 
     XER::UI::Widgets::WidgetTree tree;   // outlives `app` — see below
-    auto app =
-        std::make_shared<XER::VideoEditor::Ui::VideoEditorAppWidget>(
-            nullptr, normalized);  // null HWND: ctor skips subclassing
+    // Throwaway prefs path — a screenshot run must not read/write the
+    // user's shell layout (ui2_shell.json).
+    auto app = std::make_shared<XER::VideoEditor::Ui2::VeApp>(
+        normalized,
+        std::filesystem::temp_directory_path() /
+            "xer_ve_screenshot_prefs.json");
     tree.SetRoot(app);
+    // The shell owns the document — push the project so the program
+    // binding has a snapshot to decode.
+    app->SetProject(project);
 
     const XER::UI::Theme::Tokens tokens =
-        XER::VideoEditor::Ui::VeTheme::DarkTokens(
+        XER::VideoEditor::Ui2::Theme::DarkTokens(
             XER::VideoEditor::AppRuntime::SharedAssetsConfig()
                 .editor.accent_argb);
     XER::UI::Rendering::Windows::SoftwareRenderer renderer(nullptr);
@@ -718,9 +660,24 @@ int RunScreenshotUi(const std::string& project_path, double t,
         static_cast<float>(height)};
     try {
         tree.Layout(bounds, tokens);
-        // Pump the engine so the program monitor holds the frame at
-        // `t`; degrade quietly to the placeholder on headless audio.
-        app->PrepareUiCapture(t, 3000);
+        // Pump the program binding so the monitor holds the frame at
+        // `t` (old PrepareUiCapture parity): lazy Ensure + a paused
+        // Seek presents a frame; degrade quietly to the placeholder
+        // on headless audio/decode failure.
+        if (app->ProgramPlayback().Ensure()) {
+            auto& surface = app->ProgramMonitor()->VideoSurface();
+            app->ProgramPlayback().Seek(t);
+            const auto deadline =
+                std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(3000);
+            while (!surface.HasFrame() &&
+                   std::chrono::steady_clock::now() < deadline) {
+                app->TickTree(1.0 / 30.0);  // marshal worker callbacks
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds(16));
+            }
+            app->TickTree(1.0 / 30.0);
+        }
         // Two render passes: the first warms lazy per-widget state
         // (monitor frame resource, scroll metrics), the second draws
         // the settled tree into the retained buffer.
@@ -728,6 +685,18 @@ int RunScreenshotUi(const std::string& project_path, double t,
             app->TickTree(1.0 / 30.0);
             tree.Layout(bounds, tokens);
             tree.Render(renderer, tokens, nullptr);
+        }
+        // Layout forensics: XER_VE_UI_DUMP=<path> writes the settled
+        // widget tree (type + geometry per node) as XML — the fastest
+        // way to see which panel actually owns a broken rect.
+        if (const char* dump = std::getenv("XER_VE_UI_DUMP");
+            dump != nullptr && dump[0] != '\0') {
+            const std::string xml =
+                XER::UI::Debug::DebugMapUI::Dump(app.get());
+            if (std::ofstream out{Path::FromUtf8(dump),
+                                  std::ios::binary | std::ios::trunc}) {
+                out << xml;
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << "Error: UI render failed: " << e.what() << '\n';
@@ -1425,6 +1394,101 @@ int RunDiag() {
     std::cout << "\n=== end diag ===\n";
     return 0;
 }
+
+// The ui2 shell (ui2/ve_app.h) is THE desktop editor — the legacy ui/
+// shell was deleted at the swap-over and there is no fallback path.
+int RunGui(const std::string& project_path) {
+    // Declarative assets layer: assets/app.yaml → runtime.js (real V8)
+    // → window/window.yaml. Missing assets boot with compiled defaults.
+    std::string boot_status;
+    auto boot = XER::VideoEditor::AppRuntime::Boot(&boot_status);
+    if (!boot_status.empty()) {
+        std::cerr << "assets: " << boot_status << "\n";
+    }
+    const auto& wcfg = boot.window;
+
+    auto& app = XER::UI::Core::Application::Instance();
+    app.SetAppName("VideoEditor - XER Creative Suite");
+    if (!app.Initialize()) {
+        std::cerr << "Error: failed to initialize XER UI\n";
+        return 1;
+    }
+
+    auto window = std::make_shared<XER::UI::Core::Window>();
+    if (!window->Create(wcfg.title, wcfg.width, wcfg.height)) {
+        app.Shutdown();
+        std::cerr << "Error: failed to create editor window\n";
+        return 1;
+    }
+    if (wcfg.maximized) {
+        window->ToggleMaximize();
+    }
+    auto editor =
+        std::make_shared<XER::VideoEditor::Ui2::VeApp>(project_path);
+    window->SetContent(editor);
+    // Unsaved-changes close guard: WM_CLOSE asks the app first; a
+    // dirty project gets the Save/Don't-Save/Cancel prompt and the
+    // resolved choice re-posts the real close through
+    // on_close_approved (legacy ConfirmDiscardChanges parity).
+    window->SetCloseGuard([editor] { return editor->RequestClose(); });
+    editor->SetOnCloseApproved([window] { window->Close(); });
+    window->SetTheme(XER::UI::Theme::Variant::Dark);
+    XER::VideoEditor::Ui2::Theme::ApplyToWindow(
+        window.get(),
+        XER::VideoEditor::AppRuntime::SharedAssetsConfig()
+            .editor.accent_argb);
+    window->SetCustomTitleBar(true, 38.0f);
+    window->SetTitleBarHitTest([editor](XER::UI::Layout::Point point) {
+        auto* title_bar = editor->TitleBar();
+        return title_bar != nullptr && title_bar->IsInteractiveAt(point);
+    });
+    auto* title_bar = editor->TitleBar();
+    if (title_bar != nullptr) {
+        using WindowCommand =
+            XER::UI::Widgets::AppTitleBar::WindowCommand;
+        title_bar->SetOnWindowCommand([window](WindowCommand command) {
+            switch (command) {
+                case WindowCommand::Minimize:
+                    window->Minimize();
+                    break;
+                case WindowCommand::ToggleMaximize:
+                    window->ToggleMaximize();
+                    break;
+                case WindowCommand::Close:
+                    window->Close();
+                    break;
+            }
+        });
+        title_bar->SetThemeToggle(true, [window](bool dark) {
+            window->SetTheme(dark ? XER::UI::Theme::Variant::Dark
+                                  : XER::UI::Theme::Variant::Light);
+            if (dark) {
+                XER::VideoEditor::Ui2::Theme::ApplyToWindow(
+                    window.get(), XER::VideoEditor::AppRuntime::
+                                      SharedAssetsConfig()
+                                          .editor.accent_argb);
+            }
+        });
+    }
+    const auto sync_maximize = [window, title_bar] {
+        if (title_bar != nullptr) {
+            title_bar->SetMaximized(window->IsWindowMaximized());
+        }
+    };
+    window->SetOnResize([sync_maximize](int, int) { sync_maximize(); });
+    window->SetSizeLimits(960, 620, 0, 0);
+    window->SetFrameCallback([editor, sync_maximize] {
+        editor->TickTree(1.0 / 30.0);
+        sync_maximize();
+    }, 33);
+    window->Show();
+    const int result = app.Run();
+    app.Shutdown();
+    // Browsers are children of the now-destroyed window — draining CEF
+    // after the message loop lets it tear subprocesses down cleanly.
+    XER::Cef::Shutdown();
+    return result;
+}
 #endif
 
 #if defined(_WIN32)
@@ -1604,20 +1668,94 @@ int main(int argc, char** argv) {
     if (arg == "--smoke") {
         // Headless, bounded self-check — see smoke_checks.h.
 #if defined(_WIN32)
-        // Exe-side registration: the photo-workspace check exercises
-        // widget classes that live in this target, not the UI-free
-        // core where smoke_checks.cc compiles.
+        // Exe-side registration: these checks exercise widget classes
+        // that live in this target, not the UI-free core where
+        // smoke_checks.cc compiles.
+        // photo_workspace: superseded — dropped with the legacy ui/
+        // shell; returns with the ui2 photo workspace (M4).
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "color_widgets",
+            &XER::VideoEditor::Ui2::ColorWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "data_widgets",
+            &XER::VideoEditor::Ui2::DataWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "widget_kit",
+            &XER::VideoEditor::Ui2::WidgetKitSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "media_widgets",
+            &XER::VideoEditor::Ui2::MediaWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_shell",
+            &XER::VideoEditor::Ui2::Ui2ShellSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_monitor",
+            &XER::VideoEditor::Ui2::Ui2MonitorSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_timeline",
+            &XER::VideoEditor::Ui2::Ui2TimelineSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_panels",
+            &XER::VideoEditor::Ui2::Ui2PanelsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_panels2",
+            &XER::VideoEditor::Ui2::Ui2Panels2Smoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_media_prep",
+            &XER::VideoEditor::Ui2::Ui2MediaPrepSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_color_mixer",
+            &XER::VideoEditor::Ui2::Ui2ColorMixerSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_lifecycle",
+            &XER::VideoEditor::Ui2::Ui2LifecycleSmoke);
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
-            &XER::VideoEditor::Ui::PhotoWorkspaceSmoke);
+            &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);
 #endif
         return XER::VideoEditor::Smoke::RunAll();
     }
     if (arg == "--smoke-list") {
 #if defined(_WIN32)
         XER::VideoEditor::Smoke::RegisterCheck(
+            "color_widgets",
+            &XER::VideoEditor::Ui2::ColorWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "data_widgets",
+            &XER::VideoEditor::Ui2::DataWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "widget_kit",
+            &XER::VideoEditor::Ui2::WidgetKitSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "media_widgets",
+            &XER::VideoEditor::Ui2::MediaWidgetsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_shell",
+            &XER::VideoEditor::Ui2::Ui2ShellSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_monitor",
+            &XER::VideoEditor::Ui2::Ui2MonitorSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_timeline",
+            &XER::VideoEditor::Ui2::Ui2TimelineSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_panels",
+            &XER::VideoEditor::Ui2::Ui2PanelsSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_panels2",
+            &XER::VideoEditor::Ui2::Ui2Panels2Smoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_media_prep",
+            &XER::VideoEditor::Ui2::Ui2MediaPrepSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_color_mixer",
+            &XER::VideoEditor::Ui2::Ui2ColorMixerSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_lifecycle",
+            &XER::VideoEditor::Ui2::Ui2LifecycleSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
-            &XER::VideoEditor::Ui::PhotoWorkspaceSmoke);
+            &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);
 #endif
         for (const std::string& name :
              XER::VideoEditor::Smoke::CheckNames()) {

@@ -25,6 +25,13 @@ struct ExportOptions {
     std::string audio_codec = "aac";
     int video_bit_rate = 8000000;  // 0 -> bridge default (4 Mbps)
     int audio_bit_rate = 128000;   // 0 -> bridge default (192k)
+    // Optional constant-quality target forwarded to the encoder's
+    // private "crf" option (libx264/libx265 style). -1 (default) keeps
+    // the bit_rate path; encoders without a crf option ignore it.
+    int video_crf = -1;
+    // Output sample rate fed to the audio mixer + encoder
+    // (0 = AudioMixerOptions default, 48000 — the export contract).
+    int audio_sample_rate = 0;
     // Post-mix master gain in dB applied by the audio mixer before the
     // output clamp — the export-time equivalent of the preview master
     // fader. 0 = unity.

@@ -25,16 +25,33 @@ float TabWidth(const std::string& label) {
     return static_cast<float>(Utf8Length(label)) * 7.4f + 30.0f;
 }
 
+// Narrowest cell that still reads as an icon tab.
+constexpr float kIconCellW = 30.0f;
+// Icon glyph box edge inside an icon-mode cell.
+constexpr float kIconPx = 16.0f;
+
 } // namespace
+
+namespace {
+// Host-installed icon lookup (same pattern as Button's
+// g_icon_resolver). Empty => icon-only mode never engages.
+Tabs::IconResolver g_tab_icon_resolver;
+} // namespace
+
+void Tabs::SetIconResolver(IconResolver resolver) {
+    g_tab_icon_resolver = std::move(resolver);
+}
 
 Tabs::Tabs() {
     // Focusable so arrow keys can switch tabs (roving tab semantics).
     SetFocusable(true);
 }
 
-void Tabs::AddTab(std::string label, std::string tooltip) {
+void Tabs::AddTab(std::string label, std::string tooltip,
+                  std::string icon) {
     labels_.push_back(std::move(label));
     tooltips_.push_back(std::move(tooltip));
+    icons_.push_back(std::move(icon));
     if (active_index_ < 0) {
         active_index_ = 0;
     }
@@ -55,10 +72,24 @@ void Tabs::SetTabTooltip(int index, std::string tooltip) {
     }
 }
 
+void Tabs::SetTabIcon(int index, std::string icon) {
+    if (index < 0 || index >= static_cast<int>(labels_.size())) {
+        return;
+    }
+    if (icons_.size() < labels_.size()) {
+        icons_.resize(labels_.size());
+    }
+    icons_[static_cast<std::size_t>(index)] = std::move(icon);
+    RequestLayout();
+    Invalidate();
+}
+
 void Tabs::ClearTabs() {
     labels_.clear();
     tooltips_.clear();
+    icons_.clear();
     tab_rects_.clear();
+    icon_mode_ = false;
     active_index_ = -1;
     hovered_tab_ = -1;
     pressed_tab_ = -1;
@@ -90,6 +121,14 @@ void Tabs::SyncTabTooltip() {
     if (hovered_tab_ >= 0 &&
         hovered_tab_ < static_cast<int>(tooltips_.size())) {
         tip = tooltips_[static_cast<std::size_t>(hovered_tab_)];
+    }
+    // Icon-only cells hide the label — fold it into the tooltip so the
+    // tab's name is still discoverable ("Inspector — Clip inspector").
+    if (icon_mode_ && hovered_tab_ >= 0 &&
+        hovered_tab_ < static_cast<int>(labels_.size())) {
+        const std::string& label =
+            labels_[static_cast<std::size_t>(hovered_tab_)];
+        tip = tip.empty() ? label : label + " — " + tip;
     }
     // Clear first so the tree drops a tooltip still showing the
     // previous tab's text; Tick() re-arms with the new text before
@@ -185,7 +224,8 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
         renderer.FillRect(area, dim, tokens.radius_medium);
     }
 
-    // Labels on top — each centered inside its own tab cell.
+    // Labels on top — each centered inside its own tab cell, or the
+    // icon glyph when the strip fell back to icon-only mode.
     // (CenteredTextRect spans the whole widget bounds; using it per tab
     // would stack every label on top of the others.)
     for (std::size_t i = 0; i < labels_.size(); ++i) {
@@ -203,15 +243,47 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
         if (!IsEnabled()) {
             text_color = tokens.muted;
         }
+        if (icon_mode_ && i < icons_.size() && !icons_[i].empty()) {
+            // Active underline-style tabs tint the glyph with the
+            // accent so the row reads like the NLE icon rails.
+            Theme::Color tint = text_color;
+            if (active && !pill) tint = tokens.accent;
+            const Layout::Rect box{
+                rect.x + (rect.width - kIconPx) * 0.5f,
+                rect.y + (rect.height - kIconPx) * 0.5f, kIconPx,
+                kIconPx};
+            if (g_tab_icon_resolver(renderer, icons_[i].c_str(),
+                                    static_cast<int>(kIconPx), tint,
+                                    box)) {
+                continue;
+            }
+            // Resolver declined — fall through to the text label.
+        }
         const Rendering::TextStyle style{text_color, tokens.font_body,
                                          active ? 500 : 400};
         const auto ts = renderer.MeasureText(labels_[i], style);
+        // Compressed cells (Layout shrank them to fit the strip)
+        // ellipsize the label instead of bleeding into the next cell.
+        std::string shrunk;
+        std::string_view shown = labels_[i];
+        float draw_w = ts.width;
+        if (ts.width > rect.width) {
+            shrunk = EllipsizeText(renderer, labels_[i], style,
+                                   rect.width);
+            shown = shrunk;
+            draw_w = shown.empty()
+                         ? 0.0f
+                         : renderer.MeasureText(shown, style).width;
+        }
         const float tx =
-            rect.x + std::max(0.0f, (rect.width - ts.width) * 0.5f);
+            rect.x + std::max(0.0f, (rect.width - draw_w) * 0.5f);
         const float ty =
             rect.y + std::max(0.0f, (rect.height - ts.height) * 0.5f);
-        renderer.DrawText(labels_[i],
-                          Layout::Rect{tx, ty, ts.width, ts.height}, style);
+        renderer.DrawText(shown,
+                          Layout::Rect{tx, ty,
+                                       std::min(draw_w, rect.width),
+                                       ts.height},
+                          style);
     }
 
     // Hairline under the whole bar separates chrome from content.
@@ -242,12 +314,55 @@ void Tabs::Tick(double dt_seconds) {
 void Tabs::Layout(const Layout::Rect& bounds) {
     SetBounds(bounds);
     tab_rects_.clear();
+    float total = 0.0f;
+    for (const auto& label : labels_) {
+        total += TabWidth(label);
+    }
+    // Chrome-style compression: when the strip overflows, every cell
+    // shrinks proportionally (labels ellipsize in Render) instead of
+    // the tail tabs sliding out of reach past the right edge.
+    const float scale =
+        total > bounds.width && total > 0.0f
+            ? std::max(0.0f, bounds.width) / total
+            : 1.0f;
+    // Icon-only fallback: when labels can't fit at full width, every
+    // tab has an icon, an icon resolver is installed, and the icon
+    // cells themselves fit, the strip drops to a Resolve-style icon
+    // row rather than a row of clipped fragments. Cells share the
+    // strip evenly so the row still spans the dock's full width.
+    icon_mode_ = false;
+    const std::size_t count = labels_.size();
+    if (scale < 1.0f && count > 0 && g_tab_icon_resolver) {
+        bool all_icons = icons_.size() == labels_.size();
+        if (all_icons) {
+            for (const auto& icon : icons_) {
+                if (icon.empty()) {
+                    all_icons = false;
+                    break;
+                }
+            }
+        }
+        const float cell = bounds.width / static_cast<float>(count);
+        if (all_icons && cell >= kIconCellW) {
+            icon_mode_ = true;
+        }
+    }
     float x = bounds.x;
     const float height = bounds.height;
-    for (const auto& label : labels_) {
-        const float width = TabWidth(label);
-        tab_rects_.push_back(Layout::Rect{x, bounds.y, width, height});
-        x += width;
+    if (icon_mode_) {
+        const float cell = bounds.width / static_cast<float>(count);
+        for (std::size_t i = 0; i < count; ++i) {
+            tab_rects_.push_back(Layout::Rect{x, bounds.y, cell, height});
+            x += cell;
+        }
+    } else {
+        for (const auto& label : labels_) {
+            const float width =
+                std::max(18.0f, TabWidth(label) * scale);
+            tab_rects_.push_back(
+                Layout::Rect{x, bounds.y, width, height});
+            x += width;
+        }
     }
     RetargetIndicator();
 }

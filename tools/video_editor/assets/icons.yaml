@@ -83,3 +83,24 @@ Icons:
   tool.wrench: build.svg
   tool.color_wheel: palette.svg
   audio.waveform: equalizer.svg
+  # --- Photo workspace tool icons ---
+  # pan_tool/auto_fix/ink_eraser/format_color_fill/stamp/healing/
+  # spot_heal are locally-authored 24px Material-style glyphs; crop,
+  # colorize and open_with carry standard material-icons path data.
+  photo.move: open_with.svg
+  photo.pan: pan_tool.svg
+  photo.select_rect: select_window.svg
+  photo.select_ellipse: fiber_manual_record.svg
+  photo.lasso: gesture.svg
+  photo.poly_lasso: polymer.svg
+  photo.wand: auto_fix.svg
+  photo.brush: brush.svg
+  photo.eraser: ink_eraser.svg
+  photo.fill: format_color_fill.svg
+  photo.gradient: gradient.svg
+  photo.clone: stamp.svg
+  photo.heal: healing.svg
+  photo.spot: spot_heal.svg
+  photo.inpaint: autorenew.svg
+  photo.crop: crop.svg
+  photo.eyedropper: colorize.svg

@@ -140,7 +140,18 @@ struct EdgeInsets {
             rect.height - top - bottom
         );
     }
+
+    float Horizontal() const { return left + right; }
+    float Vertical() const { return top + bottom; }
+    bool IsEmpty() const {
+        return left == 0 && top == 0 && right == 0 && bottom == 0;
+    }
 };
+
+// Insets is the widget box-model spelling of EdgeInsets (matching Qt's
+// QMargins role): Widget::SetMargin takes it, and both names refer to
+// the same POD so either spelling works at call sites.
+using Insets = EdgeInsets;
 
 } // namespace XER::UI::Layout
 

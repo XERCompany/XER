@@ -33,10 +33,14 @@ namespace XER::AI::Onnx {
 // an EMPTY name binds by position (i-th provided input -> i-th
 // declared input), which is what single-image models want. `dims`
 // are the tensor shape fed this run; `data` is `dims`-sized f32.
+// `data_i64` is the optional INT64 variant for models that declare
+// integer graph inputs (e.g. silero-vad's scalar `sr`) — set it
+// INSTEAD of `data`; when both are non-null the int64 buffer wins.
 struct Input {
     std::string name;
     std::vector<std::int64_t> dims;
     const float* data = nullptr;
+    const std::int64_t* data_i64 = nullptr;
 };
 
 // One f32 output tensor, borrowed from the session (valid until the
