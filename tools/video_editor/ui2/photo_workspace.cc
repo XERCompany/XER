@@ -563,7 +563,10 @@ public:
     void Layout(const Layout::Rect& bounds,
                 const XER::UI::Theme::Tokens& tokens) override {
         SetBounds(bounds);
-        const float toolbar_h = 30.0f;
+        // The toolbar row count is content-driven — ask it instead of
+        // hardcoding one row's height.
+        const float toolbar_h = std::max(
+            24.0f, toolbar_->GetPreferredSize().height);
         const float strip_h = 66.0f;
         toolbar_->Layout({bounds.x, bounds.y, bounds.width, toolbar_h},
                          tokens);
@@ -609,41 +612,41 @@ struct ToolInfo {
 };
 
 constexpr ToolInfo kToolInfos[] = {
-    {PhotoWorkspace::Tool::Move, "Move", "transform",
+    {PhotoWorkspace::Tool::Move, "Move", "photo.move",
      "Move layer pixels (V) — drag, release commits", 'v'},
-    {PhotoWorkspace::Tool::Pan, "Pan", "fullscreen",
+    {PhotoWorkspace::Tool::Pan, "Pan", "photo.pan",
      "Hand — drag pans the canvas (H); middle-drag always pans", 'h'},
-    {PhotoWorkspace::Tool::SelectRect, "Rect", "select_window",
+    {PhotoWorkspace::Tool::SelectRect, "Rect", "photo.select_rect",
      "Rect marquee (M) — Shift adds, Alt subtracts", 'm'},
     {PhotoWorkspace::Tool::SelectEllipse, "Oval",
-     "fiber_manual_record",
+     "photo.select_ellipse",
      "Ellipse marquee (O) — Shift adds, Alt subtracts", 'o'},
-    {PhotoWorkspace::Tool::Lasso, "Lasso", "gesture",
+    {PhotoWorkspace::Tool::Lasso, "Lasso", "photo.lasso",
      "Freehand lasso (L) — drag a loop", 'l'},
-    {PhotoWorkspace::Tool::PolyLasso, "Poly", "polymer",
+    {PhotoWorkspace::Tool::PolyLasso, "Poly", "photo.poly_lasso",
      "Polygon lasso (P) — click vertices, Enter closes", 'p'},
-    {PhotoWorkspace::Tool::MagicWand, "Wand", "instant_mix",
+    {PhotoWorkspace::Tool::MagicWand, "Wand", "photo.wand",
      "Magic wand (W) — click a color, tolerance in the bar", 'w'},
-    {PhotoWorkspace::Tool::Brush, "Brush", "brush",
+    {PhotoWorkspace::Tool::Brush, "Brush", "photo.brush",
      "Brush (B) — size/hardness/opacity in the bar", 'b'},
-    {PhotoWorkspace::Tool::Eraser, "Erase", "",
+    {PhotoWorkspace::Tool::Eraser, "Erase", "photo.eraser",
      "Eraser (E) — dstOut strokes; on masks paints coverage 0", 'e'},
-    {PhotoWorkspace::Tool::Fill, "Fill", "",
+    {PhotoWorkspace::Tool::Fill, "Fill", "photo.fill",
      "Fill (F) — click fills the active layer with fg", 'f'},
-    {PhotoWorkspace::Tool::Gradient, "Grad", "",
+    {PhotoWorkspace::Tool::Gradient, "Grad", "photo.gradient",
      "Gradient (G) — drag a line; fg fades to transparent", 'g'},
-    {PhotoWorkspace::Tool::CloneStamp, "Clone", "",
+    {PhotoWorkspace::Tool::CloneStamp, "Clone", "photo.clone",
      "Clone stamp (S) — Alt+click picks the source", 's'},
-    {PhotoWorkspace::Tool::Healing, "Heal", "science",
+    {PhotoWorkspace::Tool::Healing, "Heal", "photo.heal",
      "Healing brush (J) — Alt+click picks the source", 'j'},
-    {PhotoWorkspace::Tool::Spot, "Spot", "",
+    {PhotoWorkspace::Tool::Spot, "Spot", "photo.spot",
      "Spot remove (K) — paint over blemishes", 'k'},
-    {PhotoWorkspace::Tool::Inpaint, "Fill~", "autorenew",
+    {PhotoWorkspace::Tool::Inpaint, "Fill~", "photo.inpaint",
      "Inpaint (N) — fills the active selection", 'n'},
-    {PhotoWorkspace::Tool::Crop, "Crop", "margin",
+    {PhotoWorkspace::Tool::Crop, "Crop", "photo.crop",
      "Crop (C) — drag a rect, Enter commits (rebuilds document)",
      'c'},
-    {PhotoWorkspace::Tool::Eyedropper, "Pick", "palette",
+    {PhotoWorkspace::Tool::Eyedropper, "Pick", "photo.eyedropper",
      "Eyedropper (I) — click samples the composite into fg", 'i'},
 };
 constexpr int kToolCount =
@@ -1280,12 +1283,25 @@ void PhotoWorkspace::BuildChildren() {
         b->SetOnClick(std::move(fn));
         return b;
     };
-    new_btn_ = small("New", [this] { NewDocumentDialog(); },
-                     "New document (Ctrl+N)");
-    open_btn_ = small("Open", [this] { OpenDialog(); },
-                      "Open .xerphoto / image (Ctrl+O)");
-    save_btn_ = small("Save", [this] { Save(false); },
-                      "Save .xerphoto (Ctrl+S)");
+    // Icon-only toolbar button: no text (the strip is dense — the
+    // tooltip carries the full name), Small ghost chrome, preferred
+    // width so the layout never squeezes the glyph.
+    auto icon_btn = [](const char* icon, std::function<void()> fn,
+                       const char* tip) {
+        auto b = std::make_shared<W::Button>();
+        b->SetIcon(icon);
+        b->SetSize(W::ButtonSize::Small);
+        b->SetStyle(W::ButtonStyle::Ghost);
+        b->SetTooltip(tip);
+        b->SetOnClick(std::move(fn));
+        return b;
+    };
+    new_btn_ = icon_btn("add", [this] { NewDocumentDialog(); },
+                        "New document (Ctrl+N)");
+    open_btn_ = icon_btn("file_open", [this] { OpenDialog(); },
+                         "Open .xerphoto / image (Ctrl+O)");
+    save_btn_ = icon_btn("save", [this] { Save(false); },
+                         "Save .xerphoto (Ctrl+S)");
     save_btn_->SetMenu({
         W::ContextMenu::Item{"Save", [this] { Save(false); }, true,
                              false, false, "Ctrl+S"},
@@ -1296,23 +1312,23 @@ void PhotoWorkspace::BuildChildren() {
                              [this] { ExportPng(); }, true, true,
                              false, ""},
     });
-    undo_btn_ = small("Undo", [this] { Undo(); }, "Undo (Ctrl+Z)");
-    undo_btn_->SetIcon("undo");
-    redo_btn_ = small("Redo", [this] { Redo(); }, "Redo (Ctrl+Y)");
-    redo_btn_->SetIcon("redo");
+    undo_btn_ = icon_btn("undo", [this] { Undo(); }, "Undo (Ctrl+Z)");
+    redo_btn_ = icon_btn("redo", [this] { Redo(); }, "Redo (Ctrl+Y)");
 
-    const LinearBox::Slot f36{36.0f, 0.0f};
-    const LinearBox::Slot f44{44.0f, 0.0f};
-    const LinearBox::Slot f48{48.0f, 0.0f};
-    top_bar_->Add(new_btn_, f36);
-    top_bar_->Add(open_btn_, f44);
-    top_bar_->Add(save_btn_, f48);
-    top_bar_->Add(undo_btn_, f44);
-    top_bar_->Add(redo_btn_, f44);
+    // Preferred-width slots: icon buttons measure ~28px (glyph +
+    // padding, +chevron for the menu button) — fixed guesses used to
+    // squeeze them under their honest minimum.
+    top_bar_->Add(new_btn_, {});
+    top_bar_->Add(open_btn_, {});
+    top_bar_->Add(save_btn_, {});
+    top_bar_->Add(undo_btn_, {});
+    top_bar_->Add(redo_btn_, {});
 
     auto field_label = [this](const char* text) {
         auto l = std::make_shared<W::Label>(text, true);
-        top_bar_->Add(l, {30.0f, 0.0f});
+        // Preferred-width slot: the label keeps its measured extent
+        // instead of wrapping mid-word inside a guessed 30px box.
+        top_bar_->Add(l, {});
         return l;
     };
     auto opt_field = [this](float value, float lo, float hi,
@@ -1325,7 +1341,7 @@ void PhotoWorkspace::BuildChildren() {
         f->SetValue(value);
         f->SetOnValueChange(on_commit);
         f->SetOnValueCommitted(on_commit);
-        top_bar_->Add(f, {74.0f, 0.0f});
+        top_bar_->Add(f, {76.0f, 0.0f});
         return f;
     };
     size_label_ = field_label("Size");
@@ -1358,8 +1374,8 @@ void PhotoWorkspace::BuildChildren() {
                             "Invert selection");
     deselect_btn_ = small("None", [this] { Deselect(); },
                           "Deselect (Ctrl+D)");
-    top_bar_->Add(invert_sel_btn_, {34.0f, 0.0f});
-    top_bar_->Add(deselect_btn_, {44.0f, 0.0f});
+    top_bar_->Add(invert_sel_btn_, {});
+    top_bar_->Add(deselect_btn_, {});
 
     // Flexible spacer, then fg chip + zoom readout.
     auto spacer = std::make_shared<W::Label>("");
@@ -1396,6 +1412,10 @@ void PhotoWorkspace::BuildChildren() {
     AddChild(top_bar_);
 
     // ---- tools column ----
+    // Icon-only checkable strip (no text labels — the tool name lives
+    // in the tooltip) inside a narrow ScrollArea so short windows
+    // scroll instead of squeezing the buttons. The checked latch gives
+    // the selected-tool highlight.
     tools_col_ = LinearBox::Create(LinearBox::Direction::Vertical);
     tools_col_->SetSpacing(2.0f);
     tools_col_->SetPadding({4.0f, 4.0f, 4.0f, 4.0f});
@@ -1403,7 +1423,6 @@ void PhotoWorkspace::BuildChildren() {
     for (int i = 0; i < kToolCount; ++i) {
         const ToolInfo& info = kToolInfos[i];
         auto b = std::make_shared<W::Button>();
-        b->SetText(info.label);
         b->SetSize(W::ButtonSize::Small);
         b->SetStyle(W::ButtonStyle::Ghost);
         b->SetCheckable(true);
@@ -1413,9 +1432,10 @@ void PhotoWorkspace::BuildChildren() {
         b->SetTooltip(info.tooltip);
         b->SetOnClick([this, t = info.tool] { SetTool(t); });
         tool_btns_.push_back(b);
-        tools_col_->Add(b, {32.0f, 0.0f});
+        tools_col_->Add(b, {30.0f, 0.0f});
     }
-    AddChild(tools_col_);
+    tools_scroll_ = std::make_shared<W::ScrollArea>(tools_col_);
+    AddChild(tools_scroll_);
 
     // ---- right dock ----
     right_dock_ = DockTabGroup::Create();
@@ -1425,10 +1445,22 @@ void PhotoWorkspace::BuildChildren() {
     auto layers = std::make_shared<LayersPanel>();
     layers_panel_ = layers;
 
-    auto toolbar = LinearBox::Create(LinearBox::Direction::Horizontal);
+    // Two rows of five — ten Small buttons can't share one 304px row
+    // at their honest 56px minimum, so the strip wraps instead of
+    // squeezing every label mid-word.
+    auto toolbar = LinearBox::Create(LinearBox::Direction::Vertical);
     toolbar->SetSpacing(2.0f);
     toolbar->SetPadding({3.0f, 3.0f, 3.0f, 3.0f});
-    auto tbtn = [&](const char* text, const char* icon,
+    auto trow = [&] {
+        auto r = LinearBox::Create(LinearBox::Direction::Horizontal);
+        r->SetSpacing(2.0f);
+        toolbar->Add(r, {0.0f, 0.0f});
+        return r;
+    };
+    auto row1 = trow();
+    auto row2 = trow();
+    auto tbtn = [&](const std::shared_ptr<LinearBox>& row,
+                    const char* text, const char* icon,
                     std::function<void()> fn, const char* tip) {
         auto b = std::make_shared<W::Button>();
         b->SetText(text);
@@ -1437,13 +1469,14 @@ void PhotoWorkspace::BuildChildren() {
         b->SetStyle(W::ButtonStyle::Ghost);
         b->SetTooltip(tip);
         b->SetOnClick(std::move(fn));
-        toolbar->Add(b, {0.0f, 1.0f});
+        row->Add(b, {0.0f, 1.0f});
         return b;
     };
-    add_layer_btn_ = tbtn("+Lyr", "add", [this] { AddLayer(false); },
+    add_layer_btn_ = tbtn(row1, "+Lyr", "add",
+                          [this] { AddLayer(false); },
                           "Add raster layer");
-    (void)tbtn("+Grp", "create_new_folder", [this] { AddLayer(true); },
-               "Add group");
+    (void)tbtn(row1, "+Grp", "create_new_folder",
+               [this] { AddLayer(true); }, "Add group");
     add_adj_btn_ = std::make_shared<W::Button>();
     add_adj_btn_->SetText("+Adj");
     add_adj_btn_->SetSize(W::ButtonSize::Small);
@@ -1459,22 +1492,22 @@ void PhotoWorkspace::BuildChildren() {
         }
         add_adj_btn_->SetMenu(std::move(items));
     }
-    toolbar->Add(add_adj_btn_, {0.0f, 1.0f});
-    dup_btn_ = tbtn("Dup", nullptr,
+    row1->Add(add_adj_btn_, {0.0f, 1.0f});
+    dup_btn_ = tbtn(row1, "Dup", nullptr,
                     [this] { DuplicateActiveLayer(); },
                     "Duplicate active layer");
-    del_btn_ = tbtn("Del", "delete_forever",
+    del_btn_ = tbtn(row1, "Del", "delete_forever",
                     [this] { DeleteActiveLayer(); },
                     "Delete active layer (Delete)");
-    up_btn_ = tbtn("Up", "edit_arrow_up",
+    up_btn_ = tbtn(row2, "Up", "edit_arrow_up",
                    [this] { MoveActiveLayer(+1); }, "Move layer up");
-    down_btn_ = tbtn("Dn", nullptr,
+    down_btn_ = tbtn(row2, "Dn", nullptr,
                      [this] { MoveActiveLayer(-1); }, "Move layer down");
-    merge_btn_ = tbtn("Mrg", nullptr,
+    merge_btn_ = tbtn(row2, "Mrg", nullptr,
                       [this] { MergeActiveLayer(); }, "Merge down");
-    flatten_btn_ = tbtn("Flt", "layers",
+    flatten_btn_ = tbtn(row2, "Flt", "layers",
                         [this] { FlattenImage(); }, "Flatten image");
-    mask_btn_ = tbtn("Mask", nullptr,
+    mask_btn_ = tbtn(row2, "Mask", nullptr,
                      [this] { ToggleActiveLayerMask(); },
                      "Attach / detach layer mask");
 
@@ -1531,8 +1564,8 @@ void PhotoWorkspace::BuildChildren() {
     auto strip = LinearBox::Create(LinearBox::Direction::Vertical);
     strip->SetSpacing(2.0f);
     strip->SetPadding({4.0f, 4.0f, 4.0f, 4.0f});
-    auto row1 = LinearBox::Create(LinearBox::Direction::Horizontal);
-    row1->SetSpacing(4.0f);
+    auto attr_row1 = LinearBox::Create(LinearBox::Direction::Horizontal);
+    attr_row1->SetSpacing(4.0f);
     eye_btn_ = std::make_shared<W::Button>();
     eye_btn_->SetIcon("visibility");
     eye_btn_->SetSize(W::ButtonSize::Small);
@@ -1573,13 +1606,13 @@ void PhotoWorkspace::BuildChildren() {
             n->BlendMode(), n->Adjustment()};
         ApplyLayerAttributes(n->Id(), a, "Rename Layer");
     });
-    row1->Add(eye_btn_, {28.0f, 0.0f});
-    row1->Add(lock_btn_, {28.0f, 0.0f});
-    row1->Add(name_input_, {0.0f, 1.0f});
-    strip->Add(row1, {28.0f, 0.0f});
+    attr_row1->Add(eye_btn_, {28.0f, 0.0f});
+    attr_row1->Add(lock_btn_, {28.0f, 0.0f});
+    attr_row1->Add(name_input_, {0.0f, 1.0f});
+    strip->Add(attr_row1, {28.0f, 0.0f});
 
-    auto row2 = LinearBox::Create(LinearBox::Direction::Horizontal);
-    row2->SetSpacing(4.0f);
+    auto attr_row2 = LinearBox::Create(LinearBox::Direction::Horizontal);
+    attr_row2->SetSpacing(4.0f);
     layer_opacity_field_ = W::ScrubNumberField::Create();
     layer_opacity_field_->SetRange(0.0f, 1.0f);
     layer_opacity_field_->SetStep(0.01f);
@@ -1623,9 +1656,9 @@ void PhotoWorkspace::BuildChildren() {
             blend_select_->GetSelectedText(), n->Adjustment()};
         ApplyLayerAttributes(n->Id(), a, "Blend Mode");
     });
-    row2->Add(layer_opacity_field_, {0.0f, 1.0f});
-    row2->Add(blend_select_, {104.0f, 0.0f});
-    strip->Add(row2, {28.0f, 0.0f});
+    attr_row2->Add(layer_opacity_field_, {0.0f, 1.0f});
+    attr_row2->Add(blend_select_, {104.0f, 0.0f});
+    strip->Add(attr_row2, {28.0f, 0.0f});
 
     layers->SetRows(toolbar, layers_tree_, chrome, strip);
 
@@ -1693,6 +1726,17 @@ void PhotoWorkspace::SyncToolButtons() {
     for (int i = 0; i < kToolCount; ++i) {
         tool_btns_[i]->SetChecked(kToolInfos[i].tool == tool_);
     }
+}
+
+int PhotoWorkspace::IconOnlyToolButtonCount() const {
+    int n = 0;
+    for (const auto& b : tool_btns_) {
+        if (b != nullptr && b->GetText().empty() &&
+            !b->GetIcon().empty() && !b->GetTooltip().empty()) {
+            ++n;
+        }
+    }
+    return n;
 }
 
 void PhotoWorkspace::SyncTopBar() {
@@ -3393,7 +3437,8 @@ void PhotoWorkspace::Layout(const Layout::Rect& bounds,
                      tokens);
     const float body_y = bounds.y + kTopBarH;
     const float body_h = std::max(0.0f, bounds.height - kTopBarH);
-    tools_col_->Layout({bounds.x, body_y, kToolColW, body_h}, tokens);
+    tools_scroll_->Layout({bounds.x, body_y, kToolColW, body_h},
+                          tokens);
     const float dock_x = bounds.x + bounds.width - kRightDockW;
     right_dock_->Layout({dock_x, body_y, kRightDockW, body_h}, tokens);
     const Layout::Rect canvas_r{
@@ -3591,6 +3636,19 @@ std::string Ui2PhotoWorkspaceSmoke() {
     tree.Layout(bounds, tokens);   // settle after the doc push
     if (!ws->HasDocument() || ws->Doc() == nullptr) {
         return "EnsureDocument made no document";
+    }
+
+    // Layout contract: the workspace min covers the icon tool strip,
+    // a usable canvas, and the right dock — the shell's split floor
+    // leans on this.
+    if (ws->GetMinSize().width <
+        kToolColW + kRightDockW + 160.0f) {
+        return "workspace min width below strip+dock+canvas";
+    }
+    // Tool-strip contract: every strip button is icon-only — a
+    // regression that re-arms text labels is the "Mo ve" wrap bug.
+    if (ws->IconOnlyToolButtonCount() != kToolCount) {
+        return "tool strip is not fully icon-only";
     }
     if (ws->Doc()->Root().Children().size() != 1) {
         return "fresh document should have one starter layer";

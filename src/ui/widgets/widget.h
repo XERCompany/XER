@@ -67,6 +67,18 @@ enum class TextDirection {
     Rtl
 };
 
+// ── Single-line text overflow ─────────────────────────────────────
+// Renderer::DrawText wraps word-broken text inside the rect instead of
+// clipping — a squeezed rect turns a label into a two-line mid-word
+// break. There is no ellipsize option on TextStyle, so callers that
+// must stay on one line fit the string first: returns `text` when it
+// measures <= max_width, else the longest UTF-8-safe prefix plus "…"
+// that does. Empty when even "…" doesn't fit.
+std::string EllipsizeText(Rendering::Renderer& renderer,
+                          std::string_view text,
+                          const Rendering::TextStyle& style,
+                          float max_width);
+
 enum class MouseButton {
     None,
     Left,

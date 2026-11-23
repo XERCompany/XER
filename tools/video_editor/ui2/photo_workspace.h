@@ -325,6 +325,9 @@ public:
     // ---- tools ----
     void SetTool(Tool tool);
     Tool CurrentTool() const { return tool_; }
+    // Strip contract (smoke-checked): icon-only buttons with a
+    // tooltip, no visible text — counts the compliant ones.
+    int IconOnlyToolButtonCount() const;
     void SetForegroundColor(Photo::Pixel color);
     Photo::Pixel ForegroundColor() const { return brush_params_.color; }
 
@@ -551,9 +554,11 @@ private:
     std::shared_ptr<XER::UI::Widgets::Widget> fg_btn_;
     std::shared_ptr<XER::UI::Widgets::Label> zoom_label_;
 
-    // Tools column (checkable Button group; index-aligned with
-    // kToolInfos in the .cc).
+    // Tools column: icon-only checkable Button group (index-aligned
+    // with kToolInfos in the .cc) inside a narrow ScrollArea so short
+    // windows scroll rather than clip the strip.
     std::shared_ptr<LinearBox> tools_col_;
+    std::shared_ptr<XER::UI::Widgets::ScrollArea> tools_scroll_;
     std::vector<std::shared_ptr<XER::UI::Widgets::Button>> tool_btns_;
 
     std::shared_ptr<PhotoCanvasSurface> canvas_;

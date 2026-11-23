@@ -494,13 +494,21 @@ void BinGridSurface::DrawCard(Rendering::Renderer& renderer,
                           {tokens.foreground, Theme::kFontCaption, 500});
     }
 
-    // Meta strip — name only; ellipsization is the renderer's job
-    // (DrawText clips to the rect).
+    // Meta strip — name only. DrawText wraps, it does not clip, so a
+    // name wider than the card must be ellipsized before the draw or
+    // it wraps mid-word over the next card.
     const Layout::Rect meta{card.x + 1.0f,
                             card.y + thumb_h + 3.0f, card.width - 2.0f,
                             kMetaHeight - 4.0f};
-    renderer.DrawText(item.name.empty() ? item.path : item.name, meta,
-                      {tokens.foreground, Theme::kFontCaption, 400});
+    const Rendering::TextStyle meta_style{tokens.foreground,
+                                          Theme::kFontCaption, 400};
+    renderer.DrawText(
+        XER::UI::Widgets::EllipsizeText(
+            renderer,
+            item.name.empty() ? std::string_view(item.path)
+                              : std::string_view(item.name),
+            meta_style, meta.width),
+        meta, meta_style);
 
     // Selection / hover chrome — drawn last so badges stay readable.
     if (hovered && !selected) {

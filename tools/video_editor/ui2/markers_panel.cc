@@ -224,8 +224,12 @@ void MarkersPanel::EnsureChildren() {
                 x, row.y + 6.0f, scope_w, row.height - 12.0f};
             renderer.FillRect(scope_r, tokens.secondary,
                               tokens.radius_small);
-            renderer.DrawText(scope, scope_r,
-                              {tokens.muted, Theme::kFontCaption, 500});
+            const XER::UI::Rendering::TextStyle scope_style{
+                tokens.muted, Theme::kFontCaption, 500};
+            renderer.DrawText(
+                W::EllipsizeText(renderer, scope, scope_style,
+                                 scope_r.width - 4.0f),
+                scope_r, scope_style);
             x += scope_w + pad;
             // Playhead proximity highlight on the name column —
             // within ~half a frame reads as "the marker under the
@@ -261,18 +265,25 @@ void MarkersPanel::EnsureChildren() {
             }
             const float comment_w =
                 comment.empty() ? 0.0f : 120.0f;
+            const float nl_w =
+                std::max(0.0f, name_w - comment_w);
+            const XER::UI::Rendering::TextStyle name_style{
+                current ? tokens.accent : tokens.foreground,
+                Theme::kFontBody, current ? 600 : 400};
             renderer.DrawText(
-                name_line,
-                {x, row.y + 4.0f, name_w - comment_w,
-                 row.height - 8.0f},
-                {current ? tokens.accent : tokens.foreground,
-                 Theme::kFontBody, current ? 600 : 400});
+                W::EllipsizeText(renderer, name_line, name_style,
+                                 nl_w),
+                {x, row.y + 4.0f, nl_w, row.height - 8.0f},
+                name_style);
             if (!comment.empty()) {
+                const XER::UI::Rendering::TextStyle comment_style{
+                    tokens.muted, Theme::kFontCaption, 400};
                 renderer.DrawText(
-                    comment,
+                    W::EllipsizeText(renderer, comment, comment_style,
+                                     comment_w),
                     {row.Right() - comment_w - pad, row.y + 4.0f,
                      comment_w, row.height - 8.0f},
-                    {tokens.muted, Theme::kFontCaption, 400});
+                    comment_style);
             }
         });
     list_->SetOnItemClick(

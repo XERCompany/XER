@@ -223,13 +223,19 @@ void TimelineStrip::Layout(const Layout::Rect& bounds) {
     // Zoom slider takes a flexible share of the remaining width;
     // the fit button and height slider keep fixed slots at the
     // right edge.
-    const float fit_w = 34.0f;
+    const float fit_w = 36.0f;
     const float height_w = 84.0f;
     const float right_pad = Theme::kSpaceXs;
     const float remaining =
         bounds.x + bounds.width - x - fit_w - height_w -
         right_pad - Theme::kSpaceXs * 3.0f;
-    place(zoom_slider_, std::clamp(remaining, 80.0f, 220.0f));
+    // Narrow strip: the zoom slider drops out entirely rather than
+    // clamping to 80 and shoving fit/height past the right edge.
+    const float zoom_w = std::clamp(remaining, 0.0f, 220.0f);
+    zoom_slider_->SetVisible(zoom_w >= 60.0f);
+    if (zoom_slider_->IsVisible()) {
+        place(zoom_slider_, zoom_w);
+    }
     place(fit_button_, fit_w);
     place(height_slider_, height_w);
 

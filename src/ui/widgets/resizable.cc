@@ -113,27 +113,54 @@ void Resizable::RecomputeSizes(const Layout::Rect& bounds) {
         auto_count > 0 ? std::max(0.0f, (1.0f - explicit_sum) / auto_count)
                        : 0.0f;
 
+    // Min floors are real guarantees, not hints: normalize only the
+    // amount each panel holds ABOVE its min so rescaling can never push
+    // a panel back under its configured floor. When the floors alone
+    // oversubscribe the span they rescale among themselves — there is
+    // no honest layout otherwise.
     std::vector<float> px(n, 0.0f);
-    float assigned = 0.0f;
+    std::vector<float> floor_px(n, 0.0f);
+    float floor_sum = 0.0f;
     for (int i = 0; i < n; ++i) {
         if (collapsed_[static_cast<std::size_t>(i)]) continue;
         const float frac = sizes_[i] > 0.0f ? sizes_[i] : auto_each;
-        const float min_frac =
+        floor_px[i] =
             panels_[i].min_size > 0.0f
-                ? panels_[i].min_size / total
+                ? std::min(1.0f, panels_[i].min_size / total)
                 : 0.0f;
-        px[i] = std::max(frac, min_frac);
-        assigned += px[i];
+        px[i] = std::max(frac, floor_px[i]);
+        floor_sum += floor_px[i];
     }
-    // Normalize to fill (or shrink proportionally if over).
-    if (assigned > 0.0001f) {
-        for (int i = 0; i < n; ++i) {
-            if (!collapsed_[static_cast<std::size_t>(i)]) px[i] /= assigned;
-        }
-    } else if (active_count > 0) {
+    if (floor_sum >= 1.0f && floor_sum > 0.0f) {
         for (int i = 0; i < n; ++i) {
             if (!collapsed_[static_cast<std::size_t>(i)]) {
-                px[i] = 1.0f / static_cast<float>(active_count);
+                px[i] = floor_px[i] / floor_sum;
+            }
+        }
+    } else {
+        float excess_sum = 0.0f;
+        for (int i = 0; i < n; ++i) {
+            if (!collapsed_[static_cast<std::size_t>(i)]) {
+                excess_sum += px[i] - floor_px[i];
+            }
+        }
+        const float pool = 1.0f - floor_sum;
+        if (excess_sum > 0.0001f) {
+            const float scale = pool / excess_sum;
+            for (int i = 0; i < n; ++i) {
+                if (!collapsed_[static_cast<std::size_t>(i)]) {
+                    px[i] = floor_px[i] +
+                            (px[i] - floor_px[i]) * scale;
+                }
+            }
+        } else if (active_count > 0) {
+            // Every panel pinned at its floor — share the leftover
+            // evenly so the strip still fills the span.
+            const float rest = pool / static_cast<float>(active_count);
+            for (int i = 0; i < n; ++i) {
+                if (!collapsed_[static_cast<std::size_t>(i)]) {
+                    px[i] = floor_px[i] + rest;
+                }
             }
         }
     }
@@ -250,16 +277,24 @@ bool Resizable::HandleEvent(const Event& event) {
                         std::accumulate(sizes_.begin(), sizes_.end(), 0.0f) -
                         sizes_[left] - sizes_[right];
                     const float avail = 1.0f - others;
+                    // The floor IS the panel's configured min_size —
+                    // the old 0.05 cap let drags crush docks down to 5%
+                    // of the strip regardless of their content.
                     const float floor_l =
-                        std::min(0.05f, panels_[left].min_size > 0.0f
-                                              ? panels_[left].min_size / usable
-                                              : 0.05f);
+                        panels_[left].min_size > 0.0f
+                            ? panels_[left].min_size / usable
+                            : 0.05f;
                     const float floor_r =
-                        std::min(0.05f, panels_[right].min_size > 0.0f
-                                               ? panels_[right].min_size / usable
-                                               : 0.05f);
+                        panels_[right].min_size > 0.0f
+                            ? panels_[right].min_size / usable
+                            : 0.05f;
                     float nl = drag_start_frac_ + dfrac;
-                    nl = std::clamp(nl, floor_l, avail - floor_r);
+                    // Conflicting floors (mins oversubscribe `avail`)
+                    // resolve to the left floor — never an inverted
+                    // clamp range.
+                    const float hi =
+                        std::max(floor_l, avail - floor_r);
+                    nl = std::clamp(nl, floor_l, hi);
                     sizes_[left] = nl;
                     sizes_[right] = avail - nl;
                     RequestLayout();

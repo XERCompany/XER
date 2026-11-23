@@ -435,7 +435,14 @@ void Button::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) 
         const float draw_w = (content_w < avail_w)
             ? std::min(max_w, text_w + 2.0f)
             : avail_w;
-        renderer.DrawText(text_, Layout::Rect{x, y, draw_w, text_h}, style);
+        // Squeezed below its measured width the label would word-wrap
+        // mid-word (DrawText wraps, it doesn't clip) — ellipsize to
+        // stay on one line instead.
+        const std::string shown = text_w > draw_w
+            ? EllipsizeText(renderer, text_, style, draw_w)
+            : text_;
+        renderer.DrawText(shown, Layout::Rect{x, y, draw_w, text_h},
+                          style);
         x += draw_w;
         if (has_icon && icon_position_ == IconPosition::Trailing) {
             draw_icon();
@@ -553,6 +560,15 @@ bool Button::HandleEvent(const Event& event) {
 }
 
 Layout::Size Button::GetMinSize() const {
+    // Icon-only affordance: a bare icon button only needs the glyph plus
+    // its padding — the text-button minimums would force icon tool
+    // strips twice as wide as they can honestly render.
+    if (text_.empty() && !icon_.empty()) {
+        const float pad = size_ == ButtonSize::Small ? 6.0f : 8.0f;
+        return {kIconSize + 2.0f * pad +
+                    (HasMenu() ? kChevronGap + kChevronWidth : 0.0f),
+                HeightForSize()};
+    }
     const float w = size_ == ButtonSize::Small ? kMinWidthSmall
                     : size_ == ButtonSize::Large ? kMinWidthLarge
                                                  : kMinWidthDefault;
@@ -566,6 +582,11 @@ Layout::Size Button::GetPreferredSize() const {
               static_cast<float>(Utf8Length(shortcut_)) *
                   kShortcutCharWidth;
     const float chevron_w = HasMenu() ? kChevronGap + kChevronWidth : 0.0f;
+    // Icon-only: glyph + padding (+ menu chevron) — no text metrics.
+    if (text_.empty() && !icon_.empty()) {
+        const float pad = size_ == ButtonSize::Small ? 6.0f : 8.0f;
+        return {kIconSize + 2.0f * pad + chevron_w, HeightForSize()};
+    }
     return {
         std::max(GetMinSize().width,
                  static_cast<float>(Utf8Length(text_)) * 7.7f +

@@ -96,12 +96,17 @@ void HistoryPanel::EnsureChildren() {
                  row.height - 8.0f},
                 {tokens.muted, Theme::kFontCaption, 500, true});
             // Label — undo rows foreground, redo rows muted.
+            const float label_w =
+                row.width - chip_w - pad * 3.0f;
+            const XER::UI::Rendering::TextStyle label_style{
+                is_redo ? tokens.muted : tokens.foreground,
+                Theme::kFontBody, 400};
             renderer.DrawText(
-                LabelAt(index),
-                {row.x + pad + 4.0f, row.y + 4.0f,
-                 row.width - chip_w - pad * 3.0f, row.height - 8.0f},
-                {is_redo ? tokens.muted : tokens.foreground,
-                 Theme::kFontBody, 400});
+                W::EllipsizeText(renderer, LabelAt(index),
+                                 label_style, label_w),
+                {row.x + pad + 4.0f, row.y + 4.0f, label_w,
+                 row.height - 8.0f},
+                label_style);
         });
     list_->SetOnItemClick(
         [this](int index, Layout::Point) -> bool {

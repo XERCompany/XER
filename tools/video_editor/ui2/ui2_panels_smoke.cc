@@ -11,9 +11,19 @@
 #include <vector>
 
 #include "bin_surface.h"
+#include "color_panel.h"
 #include "effects_panel.h"
+#include "extensions_panel.h"
+#include "history_panel.h"
 #include "inspector_panel.h"
+#include "markers_panel.h"
 #include "media_panel.h"
+#include "mixer_panel.h"
+#include "monitor_panel.h"
+#include "queue_panel.h"
+#include "scopes_panel.h"
+#include "timeline_strip.h"
+#include "transcript_panel.h"
 #include "timeline_history.h"
 #include "timeline_model.h"
 #include "widgets/widget.h"
@@ -465,6 +475,44 @@ std::string CheckInspectorHistory() {
     return "";
 }
 
+// Size-contract audit — every dockable panel must report an honest
+// min <= preferred <= max so the shell's split floors can trust them.
+std::string CheckPanelMinSizes() {
+    const std::vector<std::pair<const char*,
+                                std::shared_ptr<W::Widget>>> panels{
+        {"media", MediaPanel::Create()},
+        {"effects", EffectsPanel::Create()},
+        {"inspector", InspectorPanel::Create()},
+        {"history", HistoryPanel::Create()},
+        {"queue", QueuePanel::Create()},
+        {"markers", MarkersPanel::Create()},
+        {"extensions", ExtensionsPanel::Create()},
+        {"mixer", MixerPanel::Create()},
+        {"color", ColorPanel::Create()},
+        {"scopes", ScopesPanel::Create()},
+        {"transcript", TranscriptPanel::Create()},
+        {"monitor(src)", MonitorPanel::Create(MonitorPanel::Kind::Source)},
+        {"monitor(pgm)", MonitorPanel::Create(MonitorPanel::Kind::Program)},
+        {"timeline", TimelineStrip::Create()},
+        {"bin grid", std::make_shared<BinGridSurface>()},
+    };
+    for (const auto& [name, panel] : panels) {
+        const auto mn = panel->GetMinSize();
+        const auto pf = panel->GetPreferredSize();
+        const auto mx = panel->GetMaxSize();
+        if (mn.width < 0.0f || mn.height < 0.0f) {
+            return std::string(name) + ": negative min size";
+        }
+        if (mn.width > pf.width || mn.height > pf.height) {
+            return std::string(name) + ": min exceeds preferred";
+        }
+        if (pf.width > mx.width || pf.height > mx.height) {
+            return std::string(name) + ": preferred exceeds max";
+        }
+    }
+    return "";
+}
+
 }  // namespace
 
 std::string Ui2PanelsSmoke() {
@@ -486,6 +534,9 @@ std::string Ui2PanelsSmoke() {
     }
     if (const std::string err = CheckInspectorHistory(); !err.empty()) {
         return "inspector history: " + err;
+    }
+    if (const std::string err = CheckPanelMinSizes(); !err.empty()) {
+        return "min sizes: " + err;
     }
     return "";
 }

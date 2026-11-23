@@ -57,7 +57,14 @@ void Label::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
         tokens.font_body,
         400
     };
-    renderer.DrawText(text_, CenteredTextRect(renderer, text_, style, 0.0f), style);
+    const Layout::Rect rect =
+        CenteredTextRect(renderer, text_, style, 0.0f);
+    // DrawText wraps word-broken text — a label squeezed under its
+    // measured width would break mid-word onto a second (clipped)
+    // line. Labels are single-line by contract: ellipsize instead.
+    renderer.DrawText(
+        EllipsizeText(renderer, text_, style, rect.width), rect,
+        style);
 }
 
 void Label::Layout(const Layout::Rect& bounds) {

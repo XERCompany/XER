@@ -122,13 +122,17 @@ void QueuePanel::EnsureChildren() {
             // Line 1: name (flex) + state chip + ETA.
             const float chip_w = 64.0f;
             const float eta_w = 52.0f;
+            const float name_w =
+                row.width - chip_w - eta_w - pad * 4.0f;
+            const XER::UI::Rendering::TextStyle name_style{
+                IsTerminal(job->state) ? tokens.muted
+                                       : tokens.foreground,
+                Theme::kFontBody, 500};
             renderer.DrawText(
-                job->name,
-                {row.x + pad, row.y + 5.0f,
-                 row.width - chip_w - eta_w - pad * 4.0f, 16.0f},
-                {IsTerminal(job->state) ? tokens.muted
-                                        : tokens.foreground,
-                 Theme::kFontBody, 500});
+                W::EllipsizeText(renderer, job->name, name_style,
+                                 name_w),
+                {row.x + pad, row.y + 5.0f, name_w, 16.0f},
+                name_style);
             const Layout::Rect chip{
                 row.Right() - eta_w - chip_w - pad * 2.0f,
                 row.y + 4.0f, chip_w, 16.0f};
@@ -158,11 +162,13 @@ void QueuePanel::EnsureChildren() {
                           (job->detail.empty()
                                ? ""
                                : " · " + job->detail);
+            const float meta_w = row.width - pad * 2.0f;
+            const XER::UI::Rendering::TextStyle meta_style{
+                tokens.muted, Theme::kFontCaption, 400};
             renderer.DrawText(
-                meta,
-                {row.x + pad, row.y + 21.0f,
-                 row.width - pad * 2.0f, 12.0f},
-                {tokens.muted, Theme::kFontCaption, 400});
+                W::EllipsizeText(renderer, meta, meta_style, meta_w),
+                {row.x + pad, row.y + 21.0f, meta_w, 12.0f},
+                meta_style);
             const Layout::Rect bar{row.x + pad, row.y + 36.0f,
                                    row.width - 52.0f - pad * 2.0f,
                                    5.0f};

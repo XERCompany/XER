@@ -121,7 +121,33 @@ void LinearBox::Layout(const Layout::Rect& bounds) {
 }
 
 Layout::Size LinearBox::GetMinSize() const {
-    return {0.0f, 0.0f};
+    // Honest minimum: fixed slots contribute their px, flex slots their
+    // child's min (they can shrink to it), empty slots the child's min
+    // too — anything less and the layout clips content mid-control.
+    float main = 0.0f;
+    float cross = 0.0f;
+    int visible = 0;
+    const auto& children = GetChildren();
+    for (std::size_t i = 0; i < children.size(); ++i) {
+        if (!children[i]->IsVisible()) continue;
+        ++visible;
+        const Slot& s = i < slots_.size() ? slots_[i] : Slot{};
+        const Layout::Size m = children[i]->GetMinSize();
+        const float main_ext = s.fixed > 0.0f
+                                   ? s.fixed
+                                   : MainExtent(m, dir_);
+        main += main_ext;
+        const float cross_min =
+            dir_ == Direction::Horizontal ? m.height : m.width;
+        cross = std::max(cross, cross_min);
+    }
+    main += spacing_ * static_cast<float>(visible > 0 ? visible - 1 : 0);
+    main += dir_ == Direction::Horizontal ? padding_.Horizontal()
+                                          : padding_.Vertical();
+    cross += dir_ == Direction::Horizontal ? padding_.Vertical()
+                                           : padding_.Horizontal();
+    return dir_ == Direction::Horizontal ? Layout::Size(main, cross)
+                                         : Layout::Size(cross, main);
 }
 
 Layout::Size LinearBox::GetPreferredSize() const {
@@ -132,8 +158,11 @@ Layout::Size LinearBox::GetPreferredSize() const {
     for (std::size_t i = 0; i < children.size(); ++i) {
         if (!children[i]->IsVisible()) continue;
         ++visible;
+        const Slot& s = i < slots_.size() ? slots_[i] : Slot{};
         const Layout::Size p = children[i]->GetPreferredSize();
-        main += MainExtent(p, dir_);
+        // Fixed slots reserve exactly their px — Layout() honors the
+        // fixed extent even when the child's preferred size differs.
+        main += s.fixed > 0.0f ? s.fixed : MainExtent(p, dir_);
         cross = std::max(cross, dir_ == Direction::Horizontal
                                     ? p.height : p.width);
     }
@@ -337,8 +366,12 @@ void StatusStrip::Render(Rendering::Renderer& renderer,
                       tokens.border, 1.0f);
     const float pad = Theme::kSpaceMd;
     Layout::Rect status{b.x + pad, b.y, b.width * 0.5f, b.height};
-    renderer.DrawText(status_text_, status,
-                      {tokens.muted, Theme::kFontCaption});
+    const Rendering::TextStyle status_style{
+        tokens.muted, Theme::kFontCaption};
+    renderer.DrawText(
+        Widgets::EllipsizeText(renderer, status_text_, status_style,
+                               status.width),
+        status, status_style);
     // Right-aligned badge chips.
     float x = b.x + b.width - pad;
     for (auto it = badges_.rbegin(); it != badges_.rend(); ++it) {

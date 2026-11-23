@@ -619,4 +619,44 @@ Layout::Rect Widget::CenteredTextRect(
     return Layout::Rect{bounds.x + horizontal_padding, y, width, text_height};
 }
 
+std::string EllipsizeText(Rendering::Renderer& renderer,
+                          std::string_view text,
+                          const Rendering::TextStyle& style,
+                          float max_width) {
+    if (max_width <= 0.0f || text.empty()) {
+        return {};
+    }
+    if (renderer.MeasureText(text, style).width <= max_width) {
+        return std::string(text);
+    }
+    constexpr std::string_view kEllipsis = "\xE2\x80\xA6";   // U+2026
+    const float ell_w = renderer.MeasureText(kEllipsis, style).width;
+    if (ell_w > max_width) {
+        return {};
+    }
+    // Binary search the longest prefix that fits with the ellipsis
+    // appended; candidates are always cut on a UTF-8 boundary so a
+    // partial continuation byte never reaches the renderer.
+    std::size_t lo = 0;
+    std::size_t hi = text.size();
+    while (lo < hi) {
+        const std::size_t mid = (lo + hi + 1) / 2;
+        std::size_t cut = mid;
+        while (cut > 0 && cut < text.size() &&
+               (static_cast<unsigned char>(text[cut]) & 0xC0u) ==
+                   0x80u) {
+            --cut;
+        }
+        const std::string candidate =
+            std::string(text.substr(0, cut)) + std::string(kEllipsis);
+        if (renderer.MeasureText(candidate, style).width <=
+            max_width) {
+            lo = cut;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    return std::string(text.substr(0, lo)) + std::string(kEllipsis);
+}
+
 } // namespace XER::UI::Widgets

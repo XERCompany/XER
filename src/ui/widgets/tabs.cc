@@ -206,12 +206,28 @@ void Tabs::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
         const Rendering::TextStyle style{text_color, tokens.font_body,
                                          active ? 500 : 400};
         const auto ts = renderer.MeasureText(labels_[i], style);
+        // Compressed cells (Layout shrank them to fit the strip)
+        // ellipsize the label instead of bleeding into the next cell.
+        std::string shrunk;
+        std::string_view shown = labels_[i];
+        float draw_w = ts.width;
+        if (ts.width > rect.width) {
+            shrunk = EllipsizeText(renderer, labels_[i], style,
+                                   rect.width);
+            shown = shrunk;
+            draw_w = shown.empty()
+                         ? 0.0f
+                         : renderer.MeasureText(shown, style).width;
+        }
         const float tx =
-            rect.x + std::max(0.0f, (rect.width - ts.width) * 0.5f);
+            rect.x + std::max(0.0f, (rect.width - draw_w) * 0.5f);
         const float ty =
             rect.y + std::max(0.0f, (rect.height - ts.height) * 0.5f);
-        renderer.DrawText(labels_[i],
-                          Layout::Rect{tx, ty, ts.width, ts.height}, style);
+        renderer.DrawText(shown,
+                          Layout::Rect{tx, ty,
+                                       std::min(draw_w, rect.width),
+                                       ts.height},
+                          style);
     }
 
     // Hairline under the whole bar separates chrome from content.
@@ -242,10 +258,22 @@ void Tabs::Tick(double dt_seconds) {
 void Tabs::Layout(const Layout::Rect& bounds) {
     SetBounds(bounds);
     tab_rects_.clear();
+    float total = 0.0f;
+    for (const auto& label : labels_) {
+        total += TabWidth(label);
+    }
+    // Chrome-style compression: when the strip overflows, every cell
+    // shrinks proportionally (labels ellipsize in Render) instead of
+    // the tail tabs sliding out of reach past the right edge.
+    const float scale =
+        total > bounds.width && total > 0.0f
+            ? std::max(0.0f, bounds.width) / total
+            : 1.0f;
     float x = bounds.x;
     const float height = bounds.height;
     for (const auto& label : labels_) {
-        const float width = TabWidth(label);
+        const float width =
+            std::max(18.0f, TabWidth(label) * scale);
         tab_rects_.push_back(Layout::Rect{x, bounds.y, width, height});
         x += width;
     }
