@@ -48,6 +48,7 @@ enum class KeyCode {
     D,
     F,
     K,
+    M,
     N,
     O,
     P,

@@ -89,6 +89,21 @@ bool LoadShellPrefs(const std::filesystem::path& path, ShellPrefs* out,
     if (root["right_tab"].isInt()) {
         out->right_tab = root["right_tab"].asInt();
     }
+    // ---- app-level prefs (optional keys — defaults survive) ---------
+    get_bool("autosave_enabled", &out->autosave_enabled);
+    if (root["autosave_interval_s"].isInt()) {
+        out->autosave_interval_s = root["autosave_interval_s"].asInt();
+    }
+    if (root["scratch_dir"].isString()) {
+        out->scratch_dir = root["scratch_dir"].asString();
+    }
+    if (root["audio_sample_rate"].isInt()) {
+        out->audio_sample_rate = root["audio_sample_rate"].asInt();
+    }
+    if (root["transcript_max_minutes"].isNumeric()) {
+        out->transcript_max_minutes =
+            root["transcript_max_minutes"].asDouble();
+    }
     SizesFromJson(root["top_sizes"], &out->top_sizes);
     SizesFromJson(root["outer_sizes"], &out->outer_sizes);
     SizesFromJson(root["monitor_sizes"], &out->monitor_sizes);
@@ -112,6 +127,11 @@ bool SaveShellPrefs(const std::filesystem::path& path,
     root["monitors_tabbed"] = prefs.monitors_tabbed;
     root["left_tab"] = prefs.left_tab;
     root["right_tab"] = prefs.right_tab;
+    root["autosave_enabled"] = prefs.autosave_enabled;
+    root["autosave_interval_s"] = prefs.autosave_interval_s;
+    root["scratch_dir"] = prefs.scratch_dir;
+    root["audio_sample_rate"] = prefs.audio_sample_rate;
+    root["transcript_max_minutes"] = prefs.transcript_max_minutes;
     root["top_sizes"] = SizesToJson(prefs.top_sizes);
     root["outer_sizes"] = SizesToJson(prefs.outer_sizes);
     root["monitor_sizes"] = SizesToJson(prefs.monitor_sizes);

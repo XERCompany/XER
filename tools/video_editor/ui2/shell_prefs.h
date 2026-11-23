@@ -31,6 +31,21 @@ struct ShellPrefs {
     std::vector<float> top_sizes;      // [left | monitors | right]
     std::vector<float> outer_sizes;    // [body | timeline | status]
     std::vector<float> monitor_sizes;  // [source | program]
+
+    // ---- app-level editor prefs (project-independent) --------------
+    // Written by the project-settings dialog's app section; absent
+    // keys keep these defaults so older ui2_shell.json files load
+    // cleanly.
+    bool autosave_enabled = true;      // Tick-driven autosave writes
+    int autosave_interval_s = 120;     // seconds between autosave slots
+    // Scratch/cache root (UTF-8, "" = system default): feeds the
+    // export dialog's default output dir + queued-export temp dir.
+    std::string scratch_dir;
+    // Output audio sample rate for exports (0/invalid -> 48000).
+    int audio_sample_rate = 48000;
+    // Transcription decode cap in minutes (0 -> Ai::TranscribeMaxSeconds
+    // default/env override in whisper_transcribe.h).
+    double transcript_max_minutes = 0.0;
 };
 
 // <user-data>/XER/VideoEditor/ui2_shell.json — same env chain the

@@ -46,6 +46,8 @@
 #include "ai/whisper_transcribe.h"  // Ai::TranscriptSegment — transcript cache
 #include "drag_session.h"         // BinDragSession — value member
 #include "preview_binding.h"      // value members — complete type
+#include "export_dialog.h"        // ExportRequest — map value member
+#include "project_autosave.h"     // AutosaveManager — value member
 #include "shell_prefs.h"
 #include "shortcut_router.h"
 #include "source_edit.h"          // SourceMarks — per-path mark storage
@@ -98,6 +100,10 @@ class TranscriptPanel;
 struct ColorParams;          // color_panel.h — commit payload
 struct FxEntry;              // effects_panel.h — catalog row
 struct InspectorParamSpec;   // inspector_panel.h — param editor spec
+class ExportDialog;          // export_dialog.h — settings form
+class ProjectSettingsDialog; // project_settings_dialog.h
+struct ExportRequest;        // export_dialog.h — submit payload
+struct Ui2ProjectSettings;   // project_settings_dialog.h
 
 class VeApp final : public XER::UI::Widgets::Widget {
 public:
@@ -186,6 +192,98 @@ public:
     // contract and the program binding re-inits on the next
     // transport action (Premiere sequence semantics).
     void SetProject(const Project& project);
+
+    // ── project lifecycle (save/open/new + close guard) ─────
+    // Unsaved-changes flag — set by every document mutation that
+    // funnels through NotifyTimelineChanged, cleared by
+    // Save/New/Load (legacy project_dirty_ parity).
+    bool IsProjectDirty() const { return project_dirty_; }
+    const std::string& ProjectPath() const { return project_path_; }
+    // ProjectStore::Save to project_path_ (or a picked path when
+    // choose_path / unbound). Clears the dirty flag on success.
+    bool SaveProject(bool choose_path = false);
+    // The File-menu/Ctrl+S entry — Windows save-as picker when the
+    // project is untitled (or choose_path).
+    bool SaveProjectInteractive(bool choose_path);
+    // Headless save seam for the smoke harness — binds the path then
+    // runs the same ProjectStore::Save as the interactive path (no
+    // picker, no guard prompt).
+    bool SaveProjectAs(const std::string& utf8_path);
+    // File ▸ New: close-guarded reset to the seeded default document.
+    void NewProject();
+    // Raw .xerproj load (no guard, no picker) — the headless seam.
+    // Clears history per the ProjectStore load contract, binds
+    // autosave + checks for a newer autosave slot afterwards.
+    bool LoadProject(const std::string& utf8_path);
+    // File ▸ Open: close-guarded GetOpenFileNameW -> LoadProject.
+    void OpenProjectInteractive();
+    // Window-close seam — wire to Window::SetCloseGuard. Returns true
+    // when the close may proceed now; a dirty+unguarded close shows
+    // the save/discard/cancel prompt and returns false — the approved
+    // choice then re-triggers on_close_approved_ (the host calls
+    // Window::Close() from it) so the same WM_CLOSE veto lets it
+    // through via close_approved_.
+    bool RequestClose();
+    void SetOnCloseApproved(std::function<void()> callback);
+    // Unsaved-changes prompt state + headless button press — the
+    // smoke drives the same code path the dialog's buttons do.
+    bool CloseGuardPromptOpen() const { return close_guard_open_; }
+    enum class CloseGuardChoice { Save, Discard, Cancel };
+    void ResolveCloseGuard(CloseGuardChoice choice);
+    // Shared "save before destructive op" prompt — proceed runs on
+    // Save (after the save lands) or Discard; Cancel drops it.
+    void RequestCloseGuard(std::function<void()> proceed);
+
+    // ── application dialogs ─────────────────────────────────
+    // File ▸ Export… and the queue's "+ Enqueue" both land here.
+    void ShowExportDialog();
+    // File ▸ Project Settings… — apply commits the document fields
+    // through history (undoable) and the app fields into prefs_.
+    void ShowProjectSettingsDialog();
+    // Live form accessors — non-null only while shown (headless
+    // discovery/validation seam; both hang off dialog_ overlays).
+    ExportDialog* ExportForm() const { return export_form_.get(); }
+    ProjectSettingsDialog* SettingsForm() const {
+        return settings_form_.get();
+    }
+    // The form's Export-button path — validates, enqueues, closes.
+    // Public so the headless smoke drives the identical code the
+    // dialog's Accept result runs (no synthetic queue rows).
+    void SubmitExportForm();
+    // Composes a queue row + the ExportOptions the driver consumes
+    // (per-job store keyed by job id — see WireQueuePanel). False +
+    // error_out on validation failure; nothing enqueues then.
+    bool EnqueueExportJob(const ExportRequest& request,
+                          std::string* error_out = nullptr);
+    // The settings dialog's Apply path — document fields ride a
+    // SetProjectSettingsCommand through history (undoable), app
+    // fields commit to prefs_ + the live autosave policy. Public so
+    // the headless smoke drives the same commit the dialog runs.
+    void ApplyProjectSettings(const Ui2ProjectSettings& settings);
+
+    // ── autosave ────────────────────────────────────────────
+    // AutosaveManager bound after a successful Save/Load to
+    // <project dir>/autosave — the Tick pump is gated on
+    // prefs_.autosave_enabled + the manager's own interval.
+    void SetAutosaveIntervalMs(std::int64_t interval_ms) {
+        autosave_.SetIntervalMs(interval_ms);
+    }
+    bool AutosaveInitialized() const {
+        return autosave_.IsInitialized();
+    }
+    std::vector<std::string> AutosaveSlots() const {
+        return autosave_.ListAutosaves();
+    }
+    // Crash-recovery offer state — armed by CheckAutosaveRecovery
+    // (runs at ctor + after LoadProject when a slot is NEWER than
+    // the project file). Accept loads through AutosaveManager::
+    // LoadLatest; decline just drops the offer.
+    bool AutosaveRecoveryOffered() const { return autosave_offer_; }
+    const std::string& AutosaveOfferPath() const {
+        return autosave_offer_project_;
+    }
+    void AcceptAutosaveRecovery();
+    void DeclineAutosaveRecovery();
 
     // ── M3 panels (structure accessors — smoke/discovery) ────
     MediaPanel* MediaBin() const { return media_panel_.get(); }
@@ -378,6 +476,24 @@ private:
     // ExportEngine for the head job; Tick polls Progress()/Status().
     void StartQueuedExport(const std::string& job_id);
     void PumpExportQueue(double dt_seconds);
+    // (ApplyProjectSettings moved to the public dialogs section —
+    // it IS the dialog's commit path, and the smoke drives it.)
+    // Close-guard core: `proceed` runs when the op may continue
+    // (clean doc → immediately; dirty → only via the prompt).
+    // `for_window_close` additionally fires on_close_approved_ so
+    // the host re-posts the real close.
+    void RunCloseGuard(std::function<void()> proceed,
+                       bool for_window_close);
+    void DoNewProject();
+    // AutosaveManager binding (<project dir>/autosave) + the Tick
+    // pump — prefs_.autosave_* gate both.
+    void InitAutosave();
+    void PumpAutosave(double dt_seconds);
+    // Newer-autosave detection after ctor/LoadProject — arms the
+    // offer + the File ▸ Recover Autosave item and shows the
+    // restore prompt dialog.
+    void CheckAutosaveRecovery();
+    void SyncAutosaveBadge();
     // Transcript worker drain — Tick pushes progress/result into the
     // panel + cache.
     void PumpTranscriptJob();
@@ -508,6 +624,44 @@ private:
     std::string export_pending_id_;
     double export_elapsed_ = 0.0;
     int export_serial_ = 0;
+    // Per-job encoder settings captured at EnqueueExportJob time —
+    // StartQueuedExport reads them back (jobs enqueued by other
+    // paths, e.g. smoke rows, fall back to ExportOptions defaults).
+    std::unordered_map<std::string, ExportRequest> export_requests_;
+    // Last submitted request — seeds the dialog's next open so the
+    // user tweaks instead of retyping (session-only, like the legacy
+    // dialog's remembered fields).
+    ExportRequest last_export_request_{};
+
+    // ── lifecycle state ────────────────────────────────────
+    bool project_dirty_ = false;
+    XER::VideoEditor::AutosaveManager autosave_;
+    double autosave_poll_ = 0.0;
+    // Crash-recovery offer (CheckAutosaveRecovery arms it; the
+    // restore prompt + the File ▸ Recover item consume it).
+    bool autosave_offer_ = false;
+    std::string autosave_offer_dir_;
+    std::string autosave_offer_project_;
+    // Close guard: the pending prompt's proceed-thunk + the host's
+    // "really close now" callback (RunGui binds it to
+    // window->Close()). close_approved_ lets the second WM_CLOSE
+    // pass the same guard.
+    bool close_guard_open_ = false;
+    bool close_guard_for_window_ = false;
+    bool close_approved_ = false;
+    std::function<void()> close_guard_proceed_;
+    std::function<void()> on_close_approved_;
+    std::shared_ptr<XER::UI::Widgets::Dialog> close_guard_dialog_;
+    // Live dialog forms (null when hidden) — the shared_ptr keeps
+    // them valid for headless drivers between show and result.
+    std::shared_ptr<ExportDialog> export_form_;
+    std::shared_ptr<ProjectSettingsDialog> settings_form_;
+    std::shared_ptr<XER::UI::Widgets::Dialog> export_dialog_;
+    std::shared_ptr<XER::UI::Widgets::Dialog> settings_dialog_;
+    std::shared_ptr<XER::UI::Widgets::Dialog> autosave_dialog_;
+    // Save-as basename suggestion from the settings dialog's name
+    // field (untitled projects only — bound paths keep their name).
+    std::string project_name_;
 
     // Extension session state — ExtHost has no enable/disable
     // concept (extensions_panel.h seam doc), so the shell keeps the

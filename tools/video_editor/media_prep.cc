@@ -119,6 +119,18 @@ void MediaPrep::RequestImportPoster(const std::string& path) {
     }
 }
 
+void MediaPrep::RequestProbe(const std::string& path) {
+    if (path.empty() || catalog_ == nullptr) return;
+    const Key key{Kind::kProbe, path, 0};
+    // Unlike RequestImportPoster there is no failure erase here:
+    // probes are implicit warmers, so a recorded failure must gate
+    // re-asks through the failed_ttl_seconds TTL instead of letting
+    // every bounds miss re-queue a doomed import.
+    if (Enqueue(key) == EnqueueResult::kQueueFull) {
+        dropped_probe_requests_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void MediaPrep::CancelQueued(const std::string& path) {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto it = queue_.begin(); it != queue_.end();) {
@@ -166,7 +178,7 @@ void MediaPrep::PurgePath(const std::string& path) {
         std::remove(peaks_lru_.begin(), peaks_lru_.end(), path),
         peaks_lru_.end());
     for (auto it = failed_.begin(); it != failed_.end();) {
-        it = it->path == path ? failed_.erase(it) : std::next(it);
+        it = it->first.path == path ? failed_.erase(it) : std::next(it);
     }
 }
 
@@ -181,6 +193,11 @@ bool MediaPrep::ConsumeCatalogDirty() {
 std::uint64_t MediaPrep::ConsumeDroppedPosterRequests() {
     return dropped_poster_requests_.exchange(0,
                                              std::memory_order_acq_rel);
+}
+
+std::uint64_t MediaPrep::ConsumeDroppedProbeRequests() {
+    return dropped_probe_requests_.exchange(0,
+                                            std::memory_order_acq_rel);
 }
 
 std::size_t MediaPrep::PendingCount() const {
@@ -204,8 +221,20 @@ PosterCache::Stats MediaPrep::PosterStats() const {
 MediaPrep::EnqueueResult MediaPrep::Enqueue(const Key& key) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (failed_.count(key) != 0u) {
-            return EnqueueResult::kFailed;
+        if (const auto fit = failed_.find(key); fit != failed_.end()) {
+            // TTL-gated negative cache: inside the window the request
+            // is a permanent miss; past it the entry expires and this
+            // ask re-enqueues (one retry per TTL interval at most).
+            const double ttl = options_.failed_ttl_seconds;
+            const bool expired =
+                ttl > 0.0 &&
+                std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - fit->second)
+                        .count() >= ttl;
+            if (!expired) {
+                return EnqueueResult::kFailed;
+            }
+            failed_.erase(fit);
         }
         if (pending_.count(key) != 0u) {
             return EnqueueResult::kAlreadyPending;
@@ -300,6 +329,18 @@ bool MediaPrep::RunJob(const Key& key, JobOut* out) {
             // the worker cannot write the parent's SQLite.
             return catalog_ != nullptr &&
                    catalog_->ExtractPoster(key.path);
+        case Kind::kProbe:
+            // Stays in-process for the same reason — Import writes
+            // the probe row on the parent's connection. On success the
+            // bin poster chains onto this same pool (deduped): the
+            // path_resolver is deliberately NOT applied — the row key
+            // is the media path itself.
+            if (catalog_ == nullptr ||
+                !catalog_->Import(key.path, nullptr, false, nullptr)) {
+                return false;
+            }
+            (void)Enqueue(Key{Kind::kImportPoster, key.path, 0});
+            return true;
     }
     return false;
 }
@@ -341,6 +382,13 @@ void MediaPrep::FinishJob(const Key& key, std::uint64_t generation,
                 }
                 break;
             case Kind::kImportPoster:
+                catalog_dirty_.store(true, std::memory_order_release);
+                produced = true;
+                break;
+            case Kind::kProbe:
+                // New/updated catalog row — the bin re-lists AND the
+                // timeline re-asks its zero-duration misses (the
+                // render-dirty bump below feeds NotifyMediaChanged).
                 catalog_dirty_.store(true, std::memory_order_release);
                 produced = true;
                 break;
@@ -392,12 +440,12 @@ void MediaPrep::StorePeaksLocked(
 }
 
 void MediaPrep::MarkFailedLocked(const Key& key) {
-    // mutex_ held. Bounded negative cache: on overflow the whole set
+    // mutex_ held. Bounded negative cache: on overflow the whole map
     // is dropped — a stale failure then costs at most one re-decode.
-    failed_.insert(key);
+    failed_[key] = std::chrono::steady_clock::now();
     if (failed_.size() > options_.max_failed_keys) {
         failed_.clear();
-        failed_.insert(key);
+        failed_[key] = std::chrono::steady_clock::now();
     }
 }
 

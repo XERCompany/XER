@@ -1,6 +1,7 @@
 #include "ve_app.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <utility>
 #include <vector>
@@ -13,6 +14,7 @@
 #include "cef/cef_ext_scheme.h"
 #include "color_panel.h"
 #include "effects_panel.h"
+#include "export_dialog.h"
 #include "export_engine.h"
 #include "extensions/ext_host.h"
 #include "extensions_panel.h"
@@ -27,6 +29,8 @@
 #include "overlays/toast.h"
 #include "photo_workspace.h"
 #include "plugin_host.h"
+#include "project_settings_dialog.h"
+#include "project_store.h"
 #include "proxy_manager.h"
 #include "queue_panel.h"
 #include "rendering/renderer.h"
@@ -96,6 +100,20 @@ VeApp::VeApp(std::string project_path, std::filesystem::path prefs_path)
         ApplyWorkspace(*ws);   // preset wins over raw fields
     }
     SetStatus("ui2 shell — M2 monitors + timeline");
+    // `--open <file.xerproj>` + double-click launches: the ctor arg
+    // is the real load path now (legacy parity — the arg used to be
+    // a display-only prop). Autosave recovery is checked after the
+    // bind so a crash's newer slot offers itself immediately.
+    if (!project_path_.empty()) {
+        LoadProject(project_path_);
+    }
+    CheckAutosaveRecovery();
+    // Fresh/loaded documents match the file on disk — wiring pushes
+    // (NotifyTimelineChanged during BuildShell) must not leave the
+    // close guard armed.
+    project_dirty_ = false;
+    autosave_.ClearDirty();
+    SyncAutosaveBadge();
 }
 
 VeApp::~VeApp() {
@@ -381,16 +399,23 @@ void VeApp::RebuildMenus() {
     Menu file{"File", 0, {}};
     file.items = {
         {"New Project", "Ctrl+N",
-         [this] { Notify("New Project", "M2 — project lifecycle"); }},
+         [this] { NewProject(); }},
         {"Open Project…", "Ctrl+O",
-         [this] { Notify("Open Project", "M2 — project lifecycle"); }},
+         [this] { OpenProjectInteractive(); }},
         {"Save Project", "Ctrl+S",
-         [this] { Notify("Save Project", "M2 — project lifecycle"); }},
-        {"Import Media…", "",
-         [this] { ImportMediaInteractive(); },
+         [this] { SaveProjectInteractive(false); }},
+        {"Save Project As…", "Ctrl+Shift+S",
+         [this] { SaveProjectInteractive(true); }},
+        {"Project Settings…", "",
+         [this] { ShowProjectSettingsDialog(); },
          true, false, false, true},
+        {"Import Media…", "",
+         [this] { ImportMediaInteractive(); }},
         {"Export…", "",
-         [this] { Notify("Export", "M2 — export pipeline"); }},
+         [this] { ShowExportDialog(); }},
+        {"Recover Autosave", "",
+         [this] { AcceptAutosaveRecovery(); },
+         autosave_offer_, false, false, true},
         {"Open Photo Document…", "",
          [this] {
              ApplyWorkspaceByName("Photo");
@@ -605,10 +630,57 @@ void VeApp::WireTimelineBridge() {
     host.on_snap_toggle = [this](bool enabled) {
         timeline_->SetSnapEnabled(enabled);
     };
-    // Media seams (bounds/posters/peaks) stay unwired until the
-    // M2 media-prep catalog lands — the bridge's documented
-    // fallback is unbounded/no-cache, matching the legacy
+    // Media seams: the catalog answers bounds (duration + has-video
+    // feed every clip op's validation and the waveform's
+    // seconds->bucket span via the bridge's get_media_bounds
+    // default), the MediaPrep pool serves the tri-state peaks/poster
+    // lookups, and dropped clips cancel their queued decodes. Every
+    // lambda resolves the lazy stack at call time — a catalog that
+    // failed to open still answers the documented fallbacks
+    // (unbounded bounds / kFailed lookups), matching the legacy
     // catalog-miss path.
+    host.bounds_for_path =
+        [this](const std::string& path) -> MediaBounds {
+        EnsureMediaStack();
+        MediaBounds bounds;
+        if (const CatalogEntry* e = FindCatalogEntry(path);
+            e != nullptr) {
+            bounds.duration_seconds = e->duration_seconds;
+            bounds.has_video = e->HasVideo();
+        } else if (media_prep_ != nullptr && !path.empty()) {
+            // Catalog miss — queue the background probe so the NEXT
+            // ask sees real bounds; this call stays unbounded.
+            media_prep_->RequestProbe(path);
+        }
+        return bounds;
+    };
+    host.audio_peaks =
+        [this](const std::string& path,
+               AudioPeaks* out) -> MediaLookup {
+        EnsureMediaStack();
+        if (media_prep_ == nullptr) return MediaLookup::kFailed;
+        switch (media_prep_->LookupPeaks(path, out)) {
+            case MediaPrep::Lookup::kReady: return MediaLookup::kReady;
+            case MediaPrep::Lookup::kPending:
+                return MediaLookup::kPending;
+            default: return MediaLookup::kFailed;
+        }
+    };
+    host.posters =
+        [this](const std::string& path, double seconds,
+               video::Frame* frame) -> MediaLookup {
+        EnsureMediaStack();
+        if (media_prep_ == nullptr) return MediaLookup::kFailed;
+        switch (media_prep_->LookupPoster(path, seconds, frame)) {
+            case MediaPrep::Lookup::kReady: return MediaLookup::kReady;
+            case MediaPrep::Lookup::kPending:
+                return MediaLookup::kPending;
+            default: return MediaLookup::kFailed;
+        }
+    };
+    host.cancel_queued_media = [this](const std::string& path) {
+        if (media_prep_ != nullptr) media_prep_->CancelQueued(path);
+    };
     bridge_->SetHost(std::move(host));
 
     surface->SetHooks(bridge_->Hooks());
@@ -619,8 +691,12 @@ void VeApp::WireTimelineBridge() {
 
 void VeApp::NotifyTimelineChanged() {
     // Legacy NotifyProjectChanged: repaint surfaces bound to the
-    // document. Playhead re-clamps in case an undo trimmed the
-    // tail under the cursor.
+    // document + arm the unsaved-changes state. Save/New/Load clear
+    // the flags AFTER their own NotifyTimelineChanged — the flag
+    // order there mirrors the old shell exactly (edit→dirty,
+    // save→clean).
+    project_dirty_ = true;
+    autosave_.MarkDirty();
     playhead_ = std::clamp(playhead_, 0.0, project_.duration());
     if (timeline_ != nullptr) {
         if (const auto& s = timeline_->Surface()) {
@@ -629,6 +705,12 @@ void VeApp::NotifyTimelineChanged() {
                                    ? bridge_->SelectedClipId()
                                    : std::string{});
             s->SetPlayheadSeconds(playhead_);
+            // Warm the async media seams for the (possibly new) clip
+            // set — the lookups dedup against the prep pool and
+            // surface caches, so this costs hash probes on repeat
+            // calls and only enqueues genuinely-new decodes. Project
+            // loads flow through SetProject -> here.
+            s->PrimeMediaLookups();
         }
     }
     // Push the document fields the program monitor mirrors
@@ -1486,11 +1568,31 @@ void VeApp::BindShellShortcuts() {
                          },
                          /*ctrl=*/true);
     shortcuts_.BindChord(W::KeyCode::S,
-                         status("Save project (M2)"), /*ctrl=*/true);
+                         [this] {
+                             SaveProjectInteractive(false);
+                             return true;
+                         },
+                         /*ctrl=*/true);
+    shortcuts_.BindChord(W::KeyCode::S,
+                         [this] {
+                             SaveProjectInteractive(true);
+                             return true;
+                         },
+                         /*ctrl=*/true, /*shift=*/true);
     shortcuts_.BindChord(W::KeyCode::O,
-                         status("Open project (M2)"), /*ctrl=*/true);
+                         [this] {
+                             OpenProjectInteractive();
+                             return true;
+                         },
+                         /*ctrl=*/true);
     shortcuts_.BindChord(W::KeyCode::N,
-                         status("New project (M2)"), /*ctrl=*/true);
+                         [this] {
+                             NewProject();
+                             return true;
+                         },
+                         /*ctrl=*/true);
+    // (No export chord — KeyCode has no M; Export lives on the File
+    // menu + the queue's "+ Enqueue" button.)
     shortcuts_.BindChord(W::KeyCode::Z, [this] {
                              Undo();
                              return true;
@@ -1692,19 +1794,28 @@ void VeApp::Tick(double dt_seconds) {
     // (NotifyMediaChanged clears negative caches + invalidates), an
     // import poster writing poster_path refreshes the row data.
     if (media_prep_ != nullptr) {
-        if (media_prep_->ConsumeRenderDirty() &&
-            media_panel_ != nullptr) {
-            media_panel_->NotifyMediaChanged();
+        if (media_prep_->ConsumeRenderDirty()) {
+            // Poster/peaks results repaint BOTH async consumers: the
+            // bin grid and the timeline surface (its NotifyMediaChanged
+            // clears the failed/zero-probe caches so late-arriving
+            // lookups finally stick, then invalidates).
+            if (media_panel_ != nullptr) {
+                media_panel_->NotifyMediaChanged();
+            }
+            if (timeline_ != nullptr && timeline_->Surface() != nullptr) {
+                timeline_->Surface()->NotifyMediaChanged();
+            }
         }
         if (media_prep_->ConsumeCatalogDirty()) {
             RefreshBinEntries();
         }
         const std::uint64_t dropped =
-            media_prep_->ConsumeDroppedPosterRequests();
+            media_prep_->ConsumeDroppedPosterRequests() +
+            media_prep_->ConsumeDroppedProbeRequests();
         if (dropped > 0) {
             SetStatus("Media queue full — " +
                           std::to_string(dropped) +
-                          " poster request(s) dropped",
+                          " prep request(s) dropped",
                       true);
         }
     }
@@ -1714,6 +1825,9 @@ void VeApp::Tick(double dt_seconds) {
     // never touch widgets.
     PumpExportQueue(dt_seconds);
     PumpTranscriptJob();
+    // Autosave rides the same ~2 s poll cadence the old shell used —
+    // the manager gates on dirty + interval before touching disk.
+    PumpAutosave(dt_seconds);
     // Playhead fan-out: the transcript's live-word highlight and the
     // markers table's proximity accent read the shell-owned time.
     if (transcript_panel_ != nullptr) {
@@ -2769,38 +2883,10 @@ void VeApp::RefreshHistoryPanel() {
 void VeApp::WireQueuePanel() {
     if (queue_panel_ == nullptr) return;
     QueuePanel::Hooks hooks;
-    // "+ Enqueue" composes a job for the current sequence. Output
-    // lands under the OS temp dir (a save-as picker lands with the
-    // export-settings wave — the path is surfaced on the row).
-    hooks.on_enqueue = [this] {
-        const int serial = ++export_serial_;
-        std::string base = "sequence";
-        if (!project_path_.empty()) {
-            base = project_path_;
-            const std::size_t slash = base.find_last_of("/\\");
-            if (slash != std::string::npos) base = base.substr(slash + 1);
-            const std::size_t dot = base.find_last_of('.');
-            if (dot != std::string::npos) base = base.substr(0, dot);
-        }
-        QueueJob job;
-        job.id = "export-" + std::to_string(serial);
-        job.name = base + ".mp4";
-        job.format = "H.264 MP4 · 8 Mbps";
-        job.detail =
-            project_.work_out > project_.work_in
-                ? "work area " +
-                      FormatTimecode(project_.work_in, project_.fps_num,
-                                     project_.fps_den) +
-                      "–" +
-                      FormatTimecode(project_.work_out,
-                                     project_.fps_num, project_.fps_den)
-                : "full sequence";
-        job.output_path =
-            (std::filesystem::temp_directory_path() / "xer_exports" /
-             (job.id + ".mp4"))
-                .string();
-        queue_panel_->Enqueue(std::move(job));
-    };
+    // "+ Enqueue" opens the export-settings dialog — the job is
+    // composed on submit (EnqueueExportJob), which also captures the
+    // per-job ExportOptions the driver consumes.
+    hooks.on_enqueue = [this] { ShowExportDialog(); };
     hooks.on_submit = [this](const std::string& id) {
         StartQueuedExport(id);
     };
@@ -2853,6 +2939,43 @@ void VeApp::StartQueuedExport(const std::string& job_id) {
     if (job == nullptr) return;
     ExportOptions options;
     options.output_path = job->output_path;
+    // The export snapshot is normally the live project — dialog-
+    // submitted jobs carry an ExportRequest that may rewrite fps/
+    // resolution/range/codec fields (fps + canvas ride the snapshot,
+    // matching the engine's project-derived contract).
+    Project export_project = project_;
+    const auto req_it = export_requests_.find(job_id);
+    if (req_it != export_requests_.end()) {
+        const ExportRequest& r = req_it->second;
+        options.video_codec = r.video_codec;
+        options.video_bit_rate = r.video_bit_rate;
+        options.video_crf = r.video_crf;
+        options.audio_codec = r.audio_codec;
+        options.audio_bit_rate = r.audio_bit_rate;
+        options.audio_sample_rate = r.audio_sample_rate;
+        if (r.range == ExportRequest::Range::Custom) {
+            options.range_in = r.range_in;
+            options.range_out = r.range_out;
+        } else if (r.range == ExportRequest::Range::WholeTimeline) {
+            // A nonzero explicit range overrides the work area —
+            // {0, duration} pins "entire sequence".
+            options.range_in = 0.0;
+            options.range_out = export_project.duration();
+        }   // WorkArea: {0,0} — the engine resolves the work area
+        if (r.fps_num > 0 && r.fps_den > 0) {
+            export_project.fps_num = r.fps_num;
+            export_project.fps_den = r.fps_den;
+        }
+        if (r.width > 0 && export_project.width > 0 &&
+            r.width != export_project.width) {
+            // Explicit w/h maps onto the engine's uniform canvas
+            // scale (height follows the same factor — the form's
+            // estimate already shows the resolved pair).
+            options.resolution_scale =
+                static_cast<double>(r.width) /
+                static_cast<double>(export_project.width);
+        }
+    }
     if (options.output_path.empty()) {
         queue_panel_->SetJobState(job_id, QueueJobState::Failed,
                                   "no output path");
@@ -2868,7 +2991,7 @@ void VeApp::StartQueuedExport(const std::string& job_id) {
     std::string error;
     // No progress callback — Tick polls Progress()/Status() so the
     // worker thread never touches widgets.
-    if (!export_engine_->Start(project_, options, {}, &error)) {
+    if (!export_engine_->Start(export_project, options, {}, &error)) {
         queue_panel_->SetJobState(job_id, QueueJobState::Failed,
                                   error.empty() ? "export start failed"
                                                 : error);
@@ -2937,6 +3060,665 @@ void VeApp::PumpExportQueue(double dt_seconds) {
             StartQueuedExport(id);
         }
     }
+}
+
+// ── project lifecycle ─────────────────────────────────────────────
+// Legacy parity: VideoEditorAppWidget owned project_dirty_ +
+// ConfirmDiscardChanges + the autosave manager; here the same three
+// pieces hang off the shell — the dirty flag is armed by
+// NotifyTimelineChanged (the single mutation funnel) and cleared by
+// the save/load/new paths below.
+
+void VeApp::RequestCloseGuard(std::function<void()> proceed) {
+    RunCloseGuard(std::move(proceed), /*for_window_close=*/false);
+}
+
+void VeApp::RunCloseGuard(std::function<void()> proceed,
+                          bool for_window_close) {
+    if (!project_dirty_) {
+        if (for_window_close) close_approved_ = true;
+        if (proceed) proceed();
+        return;
+    }
+    if (close_guard_open_) return;   // one prompt at a time
+    close_guard_open_ = true;
+    close_guard_for_window_ = for_window_close;
+    close_guard_proceed_ = std::move(proceed);
+
+    const std::string name =
+        project_path_.empty()
+            ? (project_name_.empty() ? "Untitled.xerproj"
+                                     : project_name_ + ".xerproj")
+            : [&] {
+                  const std::size_t s =
+                      project_path_.find_last_of("/\\");
+                  return s == std::string::npos
+                             ? project_path_
+                             : project_path_.substr(s + 1);
+              }();
+    auto body = PlaceholderPanel::Create(
+        "close.guard", "",
+        "Save changes to \"" + name +
+            "\"?\nYour edits will be lost if you don't save.");
+    close_guard_dialog_ =
+        W::Dialog::Create("Unsaved changes", body, "", "");
+    std::vector<W::Dialog::Button> buttons;
+    buttons.push_back({"Save", W::ButtonStyle::Primary,
+                       W::Dialog::Result::None,
+                       [this] {
+                           ResolveCloseGuard(CloseGuardChoice::Save);
+                       }});
+    buttons.push_back({"Don't Save", W::ButtonStyle::Secondary,
+                       W::Dialog::Result::None,
+                       [this] {
+                           ResolveCloseGuard(
+                               CloseGuardChoice::Discard);
+                       }});
+    buttons.push_back({"Cancel", W::ButtonStyle::Secondary,
+                       W::Dialog::Result::Rejected, nullptr});
+    close_guard_dialog_->SetButtons(std::move(buttons));
+    close_guard_dialog_->SetOnClosed([this] {
+        HideOverlay();
+        // Dismissal paths (Escape, scrim, the X) count as Cancel —
+        // the pending op is dropped with the prompt.
+        close_guard_open_ = false;
+        close_guard_for_window_ = false;
+        close_guard_proceed_ = nullptr;
+        close_guard_dialog_ = nullptr;
+    });
+    ShowOverlay(close_guard_dialog_);
+}
+
+void VeApp::ResolveCloseGuard(CloseGuardChoice choice) {
+    if (!close_guard_open_) return;
+    switch (choice) {
+        case CloseGuardChoice::Save:
+            // A cancelled/failed save aborts the destructive op too —
+            // legacy SaveProject(false) semantics.
+            if (!SaveProjectInteractive(false)) return;
+            break;
+        case CloseGuardChoice::Discard:
+            break;
+        case CloseGuardChoice::Cancel: {
+            close_guard_open_ = false;
+            close_guard_for_window_ = false;
+            close_guard_proceed_ = nullptr;
+            if (close_guard_dialog_ != nullptr) {
+                close_guard_dialog_->Close();   // OnClosed resets state
+            }
+            return;
+        }
+    }
+    auto proceed = std::move(close_guard_proceed_);
+    const bool for_window = close_guard_for_window_;
+    close_guard_proceed_ = nullptr;
+    close_guard_open_ = false;
+    close_guard_for_window_ = false;
+    if (close_guard_dialog_ != nullptr) {
+        close_guard_dialog_->Close();
+    } else {
+        HideOverlay();
+    }
+    if (for_window) close_approved_ = true;
+    if (proceed) proceed();
+    if (for_window && on_close_approved_ != nullptr) {
+        on_close_approved_();
+    }
+}
+
+bool VeApp::RequestClose() {
+    // One-shot latch: the approval resolves exactly one real close —
+    // consume it so a later dirty state re-arms the guard.
+    if (close_approved_) {
+        close_approved_ = false;
+        return true;
+    }
+    if (!project_dirty_) return true;
+    RunCloseGuard([] {}, /*for_window_close=*/true);
+    return false;
+}
+
+void VeApp::SetOnCloseApproved(std::function<void()> callback) {
+    on_close_approved_ = std::move(callback);
+}
+
+void VeApp::NewProject() {
+    // Legacy order: refuse while an export runs, then the
+    // save/discard/cancel prompt gates the reset.
+    if (export_engine_ != nullptr && export_engine_->IsRunning()) {
+        SetStatus("Wait for export to finish", true);
+        return;
+    }
+    RunCloseGuard([this] { DoNewProject(); },
+                  /*for_window_close=*/false);
+}
+
+void VeApp::DoNewProject() {
+    if (history_ != nullptr) history_->Clear();
+    if (media_prep_ != nullptr) media_prep_->CancelAllQueued();
+    project_ = Project{};
+    project_path_.clear();
+    project_name_.clear();
+    playhead_ = 0.0;
+    // Rebuild the document pair — the bridge is rebound so the
+    // surface's hooks point at the fresh history (the old shell's
+    // NewProject ran the same reset).
+    EnsureTimelineDocument();
+    WireTimelineBridge();
+    NotifyTimelineChanged();
+    autosave_ = XER::VideoEditor::AutosaveManager{};
+    project_dirty_ = false;   // fresh canvas — nothing to lose
+    autosave_.ClearDirty();
+    SyncAutosaveBadge();
+    SetStatus("New project");
+    RebuildMenus();
+}
+
+bool VeApp::LoadProject(const std::string& utf8_path) {
+    std::string error;
+    if (history_ != nullptr) history_->Clear();
+    if (media_prep_ != nullptr) media_prep_->CancelAllQueued();
+    Project loaded;
+    if (!XER::VideoEditor::ProjectStore::Load(
+            XER::Helper::Path::NormalizeUtf8Path(utf8_path), &loaded,
+            &error)) {
+        SetStatus("Open failed: " + error, true);
+        return false;
+    }
+    project_ = std::move(loaded);
+    if (project_.tracks.empty()) {
+        EnsureTimelineDocument();   // seed the editable grid
+    }
+    project_path_ =
+        XER::Helper::Path::NormalizeUtf8Path(utf8_path);
+    playhead_ = 0.0;
+    NotifyTimelineChanged();
+    InitAutosave();
+    CheckAutosaveRecovery();
+    project_dirty_ = false;   // matches the file on disk
+    autosave_.ClearDirty();
+    SyncAutosaveBadge();
+    SetStatus("Opened " +
+              std::filesystem::path(project_path_)
+                  .filename()
+                  .string());
+    RebuildMenus();
+    return true;
+}
+
+void VeApp::OpenProjectInteractive() {
+    // Guard first — a cancelled prompt must not strand the picker on
+    // an op the user just aborted (legacy OpenProject parity).
+    RunCloseGuard(
+        [this] {
+#if defined(_WIN32)
+            wchar_t buffer[1024] = {};
+            OPENFILENAMEW ofn{};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.lpstrFile = buffer;
+            ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+            ofn.lpstrFilter =
+                L"XER project\0*.xerproj\0All files\0*.*\0";
+            ofn.lpstrTitle = L"Open project";
+            ofn.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST |
+                        OFN_NOCHANGEDIR;
+            if (!::GetOpenFileNameW(&ofn)) return;
+            LoadProject(
+                XER::Helper::String::WideToUtf8(buffer));
+#else
+            SetStatus("Open dialog is Windows-only", true);
+#endif
+        },
+        /*for_window_close=*/false);
+}
+
+bool VeApp::SaveProject(bool choose_path) {
+    if (project_path_.empty() || choose_path) {
+#if defined(_WIN32)
+        const std::wstring suggested = XER::Helper::String::Utf8ToWide(
+            project_name_.empty() ? "untitled.xerproj"
+                                  : project_name_ + ".xerproj");
+        wchar_t buffer[1024] = {};
+        wcsncpy_s(buffer, suggested.c_str(), _TRUNCATE);
+        OPENFILENAMEW ofn{};
+        ofn.lStructSize = sizeof(ofn);
+        ofn.lpstrFile = buffer;
+        ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+        ofn.lpstrFilter =
+            L"XER project\0*.xerproj\0All files\0*.*\0";
+        ofn.lpstrTitle = L"Save project";
+        ofn.lpstrDefExt = L"xerproj";
+        ofn.Flags =
+            OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR;
+        if (!::GetSaveFileNameW(&ofn)) return false;
+        project_path_ = XER::Helper::Path::NormalizeUtf8Path(
+            XER::Helper::String::WideToUtf8(buffer));
+#else
+        SetStatus("Save dialog is Windows-only", true);
+        return false;
+#endif
+    }
+    std::string error;
+    if (!XER::VideoEditor::ProjectStore::Save(project_, project_path_,
+                                              &error)) {
+        SetStatus("Save failed: " + error, true);
+        return false;
+    }
+    InitAutosave();           // bind to a first-saved/renamed path
+    autosave_.ClearDirty();
+    project_dirty_ = false;
+    SyncAutosaveBadge();
+    SetStatus("Saved " +
+              std::filesystem::path(project_path_)
+                  .filename()
+                  .string());
+    RebuildMenus();
+    return true;
+}
+
+bool VeApp::SaveProjectInteractive(bool choose_path) {
+    return SaveProject(choose_path);
+}
+
+// Headless save seam for the smoke harness — no picker, no guard.
+bool VeApp::SaveProjectAs(const std::string& utf8_path) {
+    project_path_ =
+        XER::Helper::Path::NormalizeUtf8Path(utf8_path);
+    return SaveProject(false);
+}
+
+// ── application dialogs ─────────────────────────────────────────────
+
+void VeApp::ShowExportDialog() {
+    export_form_ = ExportDialog::Create();
+    export_form_->SetProject(&project_);
+    ExportRequest seed;
+    if (!project_path_.empty()) {
+        std::string stem =
+            std::filesystem::path(project_path_)
+                .filename()
+                .string();
+        const std::size_t dot = stem.find_last_of('.');
+        if (dot != std::string::npos) stem.resize(dot);
+        std::filesystem::path dir =
+            !prefs_.scratch_dir.empty()
+                ? std::filesystem::path(prefs_.scratch_dir)
+                : std::filesystem::path(project_path_).parent_path();
+        seed.output_path =
+            (dir / (stem + ".mp4")).string();
+    } else {
+        std::error_code ec;
+        const auto dir =
+            !prefs_.scratch_dir.empty()
+                ? std::filesystem::path(prefs_.scratch_dir)
+                : std::filesystem::temp_directory_path(ec) /
+                      "xer_exports";
+        seed.output_path =
+            (dir / "untitled.mp4").string();
+    }
+    export_form_->SetRequest(seed);
+    export_form_->SetBrowseHandler(
+        [](const std::string& extension,
+           const std::string& suggested) -> std::string {
+#if defined(_WIN32)
+            const std::wstring filter =
+                std::wstring(L"Export (*.") +
+                XER::Helper::String::Utf8ToWide(extension) +
+                L")\0*." +
+                XER::Helper::String::Utf8ToWide(extension) +
+                L"\0All files\0*.*\0";
+            wchar_t buffer[1024] = {};
+            const std::wstring wide =
+                XER::Helper::String::Utf8ToWide(
+                    suggested.empty() ? std::string("export.") +
+                                            extension
+                                      : suggested);
+            wcsncpy_s(buffer, wide.c_str(), _TRUNCATE);
+            OPENFILENAMEW ofn{};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.lpstrFile = buffer;
+            ofn.nMaxFile = static_cast<DWORD>(std::size(buffer));
+            ofn.lpstrFilter = filter.c_str();
+            ofn.lpstrTitle = L"Export media";
+            const std::wstring wide_ext =
+                XER::Helper::String::Utf8ToWide(extension);
+            ofn.lpstrDefExt = wide_ext.c_str();
+            ofn.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST |
+                        OFN_NOCHANGEDIR;
+            if (!::GetSaveFileNameW(&ofn)) return {};
+            return XER::Helper::Path::NormalizeUtf8Path(
+                XER::Helper::String::WideToUtf8(buffer));
+#else
+            (void)extension;
+            (void)suggested;
+            return {};
+#endif
+        });
+    export_dialog_ =
+        W::Dialog::Create("Export", export_form_, "Export", "Cancel");
+    export_dialog_->SetPanelWidth(470.0f);
+    export_dialog_->SetPanelHeight(500.0f);
+    export_dialog_->SetMovable(true);
+    export_dialog_->SetResizable(true);
+    std::weak_ptr<ExportDialog> weak_form = export_form_;
+    export_dialog_->SetOnResult(
+        [this, weak_form](W::Dialog::Result r) {
+            if (r == W::Dialog::Result::Accepted) {
+                SubmitExportForm();
+            }
+        });
+    export_dialog_->SetOnClosed([this] { HideOverlay(); });
+    ShowOverlay(export_dialog_);
+    // Reveal the Queue tab so the job row is visible on submit.
+    if (right_dock_ != nullptr) {
+        for (int i = 0; i < right_dock_->TabCount(); ++i) {
+            if (right_dock_->PanelAt(i).get() ==
+                queue_panel_.get()) {
+                right_dock_->SetActiveIndex(i);
+                break;
+            }
+        }
+    }
+}
+
+void VeApp::SubmitExportForm() {
+    if (export_form_ == nullptr) return;
+    std::string error = export_form_->Validate();
+    const ExportRequest request = export_form_->GetRequest();
+    if (!error.empty()) {
+        SetStatus("Export: " + error, true);
+        return;   // dialog stays open with the error line set
+    }
+    if (!EnqueueExportJob(request, &error)) {
+        export_form_->SetOutputPath(request.output_path);
+        SetStatus("Export: " + error, true);
+        return;
+    }
+    last_export_request_ = request;
+    if (export_dialog_ != nullptr) export_dialog_->Close();
+}
+
+bool VeApp::EnqueueExportJob(const ExportRequest& request,
+                             std::string* error_out) {
+    if (queue_panel_ == nullptr) {
+        if (error_out != nullptr) *error_out = "queue unavailable";
+        return false;
+    }
+    if (request.output_path.empty()) {
+        if (error_out != nullptr) *error_out = "no output path";
+        return false;
+    }
+    const int serial = ++export_serial_;
+    std::string base =
+        std::filesystem::path(request.output_path)
+            .filename()
+            .string();
+    QueueJob job;
+    job.id = "export-" + std::to_string(serial);
+    job.name = base.empty() ? (job.id + "." + request.container)
+                          : base;
+    job.format = export_form_ != nullptr
+                     ? export_form_->FormatSummary()
+                     : request.video_codec + " " + request.container;
+    job.detail = export_form_ != nullptr
+                     ? export_form_->RangeSummary()
+                     : (request.range ==
+                                ExportRequest::Range::WholeTimeline
+                            ? "entire sequence"
+                            : "range");
+    job.output_path = request.output_path;
+    export_requests_[job.id] = request;
+    queue_panel_->Enqueue(std::move(job));
+    SetStatus("Queued " + job.name);
+    return true;
+}
+
+void VeApp::ShowProjectSettingsDialog() {
+    settings_form_ = ProjectSettingsDialog::Create();
+    settings_form_->SetProject(&project_);
+    Ui2ProjectSettings s = settings_form_->GetSettings();
+    s.display_name = project_name_;
+    s.audio_sample_rate = prefs_.audio_sample_rate;
+    s.scratch_dir = prefs_.scratch_dir;
+    s.transcript_max_minutes = prefs_.transcript_max_minutes;
+    s.autosave_enabled = prefs_.autosave_enabled;
+    s.autosave_interval_s = prefs_.autosave_interval_s;
+    settings_form_->SetSettings(s);
+    settings_dialog_ = W::Dialog::Create(
+        "Project Settings", settings_form_, "Apply", "Cancel");
+    settings_dialog_->SetPanelWidth(480.0f);
+    settings_dialog_->SetPanelHeight(430.0f);
+    settings_dialog_->SetMovable(true);
+    settings_dialog_->SetResizable(true);
+    settings_dialog_->SetOnResult([this](W::Dialog::Result r) {
+        if (r == W::Dialog::Result::Accepted &&
+            settings_form_ != nullptr) {
+            if (settings_form_->Validate().empty()) {
+                ApplyProjectSettings(settings_form_->GetSettings());
+            } else {
+                // Reopen on invalid input — the error line is set on
+                // the form but the dialog already closed; surface it
+                // on the status strip too.
+                SetStatus("Settings: " +
+                              settings_form_->ErrorText(),
+                          true);
+            }
+        }
+    });
+    settings_dialog_->SetOnClosed([this] { HideOverlay(); });
+    ShowOverlay(settings_dialog_);
+}
+
+void VeApp::ApplyProjectSettings(const Ui2ProjectSettings& s) {
+    // Undoable document half — the legacy SetProjectSettingsCommand:
+    // snapshot everything the command touches so Revert restores
+    // verbatim (canvas/fps + the whole proxy workflow block).
+    class SetProjectSettingsCommand final
+        : public XER::VideoEditor::Command {
+    public:
+        explicit SetProjectSettingsCommand(Ui2ProjectSettings next)
+            : next_(std::move(next)) {}
+        bool Apply(Project& p) override {
+            before_.width = p.width;
+            before_.height = p.height;
+            before_.fps_num = p.fps_num;
+            before_.fps_den = p.fps_den;
+            before_.use_proxies = p.use_proxies;
+            before_.proxy_ingest = p.proxy_ingest;
+            before_.proxy_max_dim = p.proxy_max_dim;
+            before_.proxy_crf = p.proxy_crf;
+            before_.proxy_cache_max_mb = p.proxy_cache_max_mb;
+            ApplyTo(p, next_);
+            return true;
+        }
+        bool Revert(Project& p) override {
+            ApplyTo(p, before_);
+            return true;
+        }
+        std::string Label() const override {
+            return "Project settings";
+        }
+
+    private:
+        static void ApplyTo(Project& p,
+                            const Ui2ProjectSettings& s) {
+            p.width = s.width;
+            p.height = s.height;
+            p.fps_num = s.fps_num;
+            p.fps_den = s.fps_den;
+            p.use_proxies = s.use_proxies;
+            p.proxy_ingest = s.proxy_ingest;
+            p.proxy_max_dim = s.proxy_max_dim;
+            p.proxy_crf = s.proxy_crf;
+            p.proxy_cache_max_mb = s.proxy_cache_max_mb;
+        }
+        Ui2ProjectSettings before_{};
+        Ui2ProjectSettings next_;
+    };
+    if (history_ != nullptr) {
+        history_->Execute(
+            std::make_unique<SetProjectSettingsCommand>(s));
+        NotifyTimelineChanged();
+    }
+    // App-level half — straight into prefs (persisted through the
+    // normal debounced flush).
+    project_name_ = s.display_name;
+    prefs_.audio_sample_rate = s.audio_sample_rate;
+    prefs_.scratch_dir = s.scratch_dir;
+    prefs_.transcript_max_minutes = s.transcript_max_minutes;
+    prefs_.autosave_enabled = s.autosave_enabled;
+    prefs_.autosave_interval_s = s.autosave_interval_s;
+    if (autosave_.IsInitialized()) {
+        autosave_.SetIntervalMs(
+            static_cast<std::int64_t>(s.autosave_interval_s) * 1000);
+    }
+    MarkPrefsDirty();
+    SyncAutosaveBadge();
+    SetStatus("Project settings applied");
+}
+
+// ── autosave ────────────────────────────────────────────────────────
+
+void VeApp::InitAutosave() {
+    if (project_path_.empty()) return;
+    // Premiere-style "autosave" folder next to the project file
+    // (the task's <project>.autosave.xerproj lives here as
+    // <stem>.autosave-N.xerproj — rotating crash-safe slots).
+    const std::string dir = XER::Helper::Path::NormalizeUtf8Path(
+        (std::filesystem::path(
+             XER::Helper::Path::FromUtf8(project_path_))
+             .parent_path() /
+         "autosave")
+            .string());
+    std::string error;
+    if (!autosave_.Init(project_path_, dir, &error)) {
+        SetStatus("Autosave disabled: " + error, true);
+        return;
+    }
+    autosave_.SetIntervalMs(
+        static_cast<std::int64_t>(prefs_.autosave_interval_s) *
+        1000);
+}
+
+void VeApp::PumpAutosave(double dt_seconds) {
+    if (!prefs_.autosave_enabled || !autosave_.IsInitialized()) {
+        return;
+    }
+    autosave_poll_ += dt_seconds;
+    if (autosave_poll_ < 2.0) return;   // legacy ~2 s poll cadence
+    autosave_poll_ = 0.0;
+    const auto now_ms =
+        std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    std::string error;
+    if (!autosave_.MaybeAutosave(project_, now_ms, &error) &&
+        !error.empty()) {
+        SetStatus("Autosave failed: " + error, true);
+    }
+    SyncAutosaveBadge();
+}
+
+void VeApp::SyncAutosaveBadge() {
+    if (status_ == nullptr) return;
+    std::vector<StatusStrip::Badge> badges;
+    if (autosave_.IsInitialized() && prefs_.autosave_enabled) {
+        badges.push_back({"autosave",
+                          project_dirty_ ? "autosave • dirty"
+                                         : "autosave • saved",
+                          project_dirty_});
+    } else {
+        badges.push_back({"autosave", "autosave off", true});
+    }
+    if (export_engine_ != nullptr && export_engine_->IsRunning()) {
+        badges.push_back({"export", "exporting…", true});
+    }
+    status_->SetBadges(std::move(badges));
+}
+
+void VeApp::CheckAutosaveRecovery() {
+    autosave_offer_ = false;
+    autosave_offer_dir_.clear();
+    autosave_offer_project_.clear();
+    if (project_path_.empty() || !autosave_.IsInitialized()) {
+        RebuildMenus();
+        return;
+    }
+    const auto slots = autosave_.ListAutosaves();
+    if (slots.empty()) {
+        RebuildMenus();
+        return;
+    }
+    // Offer only when the newest slot is NEWER than the project file
+    // — a slot written before the last manual save is just history.
+    std::error_code ec;
+    const auto project_time =
+        std::filesystem::last_write_time(
+            XER::Helper::Path::FromUtf8(project_path_), ec);
+    const auto slot_time =
+        std::filesystem::last_write_time(
+            XER::Helper::Path::FromUtf8(slots.front()), ec);
+    if (ec || slot_time <= project_time) {
+        RebuildMenus();
+        return;
+    }
+    autosave_offer_ = true;
+    autosave_offer_dir_ = autosave_.AutosaveDir();
+    autosave_offer_project_ = project_path_;
+    RebuildMenus();
+    // Restore prompt — same shape as the close guard's dialog.
+    auto body = PlaceholderPanel::Create(
+        "autosave.offer", "",
+        "A newer autosave was found for this project.\n" +
+            std::filesystem::path(slots.front())
+                .filename()
+                .string() +
+            "\nRestore it?");
+    autosave_dialog_ =
+        W::Dialog::Create("Autosave recovery", body,
+                          "Restore", "Ignore");
+    autosave_dialog_->SetOnResult([this](W::Dialog::Result r) {
+        if (r == W::Dialog::Result::Accepted) {
+            AcceptAutosaveRecovery();
+        } else {
+            DeclineAutosaveRecovery();
+        }
+    });
+    autosave_dialog_->SetOnClosed([this] { HideOverlay(); });
+    ShowOverlay(autosave_dialog_);
+}
+
+void VeApp::AcceptAutosaveRecovery() {
+    if (!autosave_offer_) {
+        SetStatus("No autosave to recover", true);
+        return;
+    }
+    autosave_offer_ = false;
+    Project restored;
+    std::string error;
+    if (!XER::VideoEditor::AutosaveManager::LoadLatest(
+            autosave_offer_project_, autosave_offer_dir_, &restored,
+            &error)) {
+        SetStatus("Autosave restore failed: " + error, true);
+        RebuildMenus();
+        return;
+    }
+    if (history_ != nullptr) history_->Clear();
+    project_ = std::move(restored);
+    // Keep the bound path — the autosave only wins its CONTENT back;
+    // the next save still lands on the project file.
+    playhead_ = 0.0;
+    NotifyTimelineChanged();
+    project_dirty_ = true;   // recovered content ≠ file on disk
+    SyncAutosaveBadge();
+    SetStatus("Autosave restored — save to keep it");
+    RebuildMenus();
+}
+
+void VeApp::DeclineAutosaveRecovery() {
+    autosave_offer_ = false;
+    SetStatus("Autosave ignored");
+    RebuildMenus();
 }
 
 std::string VeApp::ExtensionsDir() const {

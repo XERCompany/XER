@@ -117,6 +117,15 @@ public:
     void SetOnClose(Callback callback);
     void SetOnResize(std::function<void(int, int)> callback);
 
+    // WM_CLOSE veto seam: when set, the guard runs on the UI thread at the
+    // top of the WM_CLOSE handler — BEFORE the window is destroyed (and
+    // before the close-hooks/on_close notifications). Returning false
+    // cancels the close entirely so unsaved-changes prompts can keep the
+    // window alive; returning true lets teardown proceed normally.
+    // Covers every close path that reaches WM_CLOSE: the title-bar close
+    // button, Alt+F4 and the system menu.
+    void SetCloseGuard(std::function<bool()> guard);
+
     // Additional close observers, invoked while the window is still
     // alive during WM_CLOSE teardown (and once more if the Window object
     // is destroyed without a prior WM_CLOSE). Used by DevTools to shut

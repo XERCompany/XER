@@ -64,7 +64,9 @@
 #include "ui2/ui2_timeline_smoke.h"    // Ui2TimelineSmoke hook
 #include "ui2/ui2_panels_smoke.h"      // Ui2PanelsSmoke hook
 #include "ui2/ui2_panels2_smoke.h"     // Ui2Panels2Smoke hook
+#include "ui2/ui2_media_prep_smoke.h"  // Ui2MediaPrepSmoke hook
 #include "ui2/ui2_color_mixer_smoke.h" // Ui2ColorMixerSmoke hook
+#include "ui2/ui2_lifecycle_smoke.h"   // Ui2LifecycleSmoke hook
 #include "ui2/photo_workspace.h"      // Ui2PhotoWorkspaceSmoke hook
 #include "ui2/ve_app.h"
 #include "ui2/ve_theme.h"
@@ -1411,6 +1413,12 @@ int RunGui(const std::string& project_path) {
     auto editor =
         std::make_shared<XER::VideoEditor::Ui2::VeApp>(project_path);
     window->SetContent(editor);
+    // Unsaved-changes close guard: WM_CLOSE asks the app first; a
+    // dirty project gets the Save/Don't-Save/Cancel prompt and the
+    // resolved choice re-posts the real close through
+    // on_close_approved (legacy ConfirmDiscardChanges parity).
+    window->SetCloseGuard([editor] { return editor->RequestClose(); });
+    editor->SetOnCloseApproved([window] { window->Close(); });
     window->SetTheme(XER::UI::Theme::Variant::Dark);
     XER::VideoEditor::Ui2::Theme::ApplyToWindow(
         window.get(),
@@ -1680,8 +1688,14 @@ int main(int argc, char** argv) {
             "ui2_panels2",
             &XER::VideoEditor::Ui2::Ui2Panels2Smoke);
         XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_media_prep",
+            &XER::VideoEditor::Ui2::Ui2MediaPrepSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
             "ui2_color_mixer",
             &XER::VideoEditor::Ui2::Ui2ColorMixerSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_lifecycle",
+            &XER::VideoEditor::Ui2::Ui2LifecycleSmoke);
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);
@@ -1718,8 +1732,14 @@ int main(int argc, char** argv) {
             "ui2_panels2",
             &XER::VideoEditor::Ui2::Ui2Panels2Smoke);
         XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_media_prep",
+            &XER::VideoEditor::Ui2::Ui2MediaPrepSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
             "ui2_color_mixer",
             &XER::VideoEditor::Ui2::Ui2ColorMixerSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "ui2_lifecycle",
+            &XER::VideoEditor::Ui2::Ui2LifecycleSmoke);
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);

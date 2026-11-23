@@ -72,6 +72,12 @@ Goal started: 2026-11-15. Design doc:
   for tree view (G3), scrub number field (G5), virtualized table (G4),
   tags input, stepper, filter bar, inspector; prioritized 17-item port
   table with file names and effort estimates (2026-11-22).
+- [2026-11-23-ai-features-wave2.md](research/2026-11-23-ai-features-wave2.md)
+  — next AI wave: verified-contract candidates (RIFE 4.25-lite MIT,
+  realesr-general-x4v3 BSD-3, YuNet MIT, Depth-Anything-V2-S Apache,
+  Silero VAD MIT, BeatThis MIT) + license blocklist additions (demucs
+  weights research-only, SCRFD provenance, musdb stems NC); adopt/defer
+  table + 3-wave plan (2026-11-23).
 - [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
   pass-2 review of session's own changes: seqlock ordering bug in
   RenderStore, channel/worker leak in UiRenderHost, nested-transform
