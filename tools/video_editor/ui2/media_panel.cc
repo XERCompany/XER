@@ -252,16 +252,22 @@ void MediaPanel::EnsureChildren() {
             if (e->proxy_state == 1) meta += " · PX..";
             else if (e->proxy_state == 2) meta += " · PX";
             else if (e->proxy_state == 3) meta += " · PX!";
+            const XER::UI::Rendering::TextStyle name_style{
+                tokens.foreground, Theme::kFontBody, 500};
             renderer.DrawText(
-                Basename(e->path),
+                W::EllipsizeText(renderer, Basename(e->path),
+                                 name_style, row.width - 30.0f),
                 {row.x + 24.0f, row.y + 4.0f, row.width - 30.0f,
                  row.height * 0.55f},
-                {tokens.foreground, Theme::kFontBody, 500});
+                name_style);
+            const XER::UI::Rendering::TextStyle meta_style{
+                tokens.muted, Theme::kFontCaption, 400};
             renderer.DrawText(
-                meta,
+                W::EllipsizeText(renderer, meta, meta_style,
+                                 row.width - 30.0f),
                 {row.x + 24.0f, row.y + row.height * 0.5f,
                  row.width - 30.0f, row.height * 0.5f - 2.0f},
-                {tokens.muted, Theme::kFontCaption, 400});
+                meta_style);
         });
     list_->SetOnSelectionChanged([this] { PullSelectionFromList(); });
     list_->SetOnItemActivated([this](int index) {
