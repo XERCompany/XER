@@ -72,6 +72,7 @@
 #include "ui2/ve_theme.h"
 
 #include "rendering/windows/software_renderer.h"  // --screenshot --ui
+#include "debug/debug_map_ui.h"                  // XER_VE_UI_DUMP tree dump
 #include "theme/tokens.h"
 #include "widgets/widget_tree.h"
 
@@ -684,6 +685,18 @@ int RunScreenshotUi(const std::string& project_path, double t,
             app->TickTree(1.0 / 30.0);
             tree.Layout(bounds, tokens);
             tree.Render(renderer, tokens, nullptr);
+        }
+        // Layout forensics: XER_VE_UI_DUMP=<path> writes the settled
+        // widget tree (type + geometry per node) as XML — the fastest
+        // way to see which panel actually owns a broken rect.
+        if (const char* dump = std::getenv("XER_VE_UI_DUMP");
+            dump != nullptr && dump[0] != '\0') {
+            const std::string xml =
+                XER::UI::Debug::DebugMapUI::Dump(app.get());
+            if (std::ofstream out{Path::FromUtf8(dump),
+                                  std::ios::binary | std::ios::trunc}) {
+                out << xml;
+            }
         }
     } catch (const std::exception& e) {
         std::cerr << "Error: UI render failed: " << e.what() << '\n';

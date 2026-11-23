@@ -1618,6 +1618,28 @@ void TimelineSurface::Render(
     }
     renderer.PopClip();   // tracks_viewport
 
+    // Empty-state hint: a centered muted line in the track area when
+    // the timeline holds no clips — plain dark lanes otherwise read
+    // as a rendering dead zone, not a destination.
+    if (project_ != nullptr && project_->clips.empty() &&
+        tracks_viewport.width > 120.0f && tracks_viewport.height > 30.0f) {
+        constexpr std::string_view hint = "Drag media here to start editing";
+        const UI::Rendering::TextStyle hint_style{tokens.muted,
+                                                  tokens.font_small};
+        const auto hs = renderer.MeasureText(hint, hint_style);
+        renderer.DrawText(
+            hint,
+            Rect{tracks_viewport.x +
+                     std::max(0.0f, (tracks_viewport.width - hs.width) *
+                                        0.5f),
+                 tracks_viewport.y +
+                     std::max(0.0f, (tracks_viewport.height - hs.height) *
+                                        0.5f),
+                 std::min(hs.width, tracks_viewport.width),
+                 std::min(hs.height, tracks_viewport.height)},
+            hint_style);
+    }
+
     // Zoom marquee (rubber band) across the full track area.
     if (marquee_active_ && marquee_x1_ > marquee_x0_) {
         const Rect band{marquee_x0_, ruler_bottom,

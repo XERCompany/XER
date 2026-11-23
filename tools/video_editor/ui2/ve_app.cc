@@ -155,11 +155,18 @@ void VeApp::BuildShell() {
 
     // Far-left icon rail (collapsed Sidebar — icon column only).
     nav_rail_ = W::Sidebar::Create();
-    nav_rail_->SetCollapsed(true);
+    // Snap collapsed — the animated path leaves a half-width first
+    // frame that reads as doubled, clipped glyphs in captures.
+    nav_rail_->SetCollapsed(true, /*animate=*/false);
     nav_rail_->SetItems(
-        {{"Edit", "E"}, {"Fx", "F"}, {"Audio", "A", true},
-         {"Color", "C"}, {"Markers", "M", true}, {"Photo", "P"},
-         {"Lab", "L"}});
+        {// {label, glyph, enabled, separator_before, icon_name}
+         {"Edit", "E", true, false, "nav.media"},
+         {"Fx", "F", true, false, "nav.fx"},
+         {"Audio", "A", true, false, "nav.audio"},
+         {"Color", "C", true, false, "fx.color"},
+         {"Markers", "M", true, false, "nav.markers"},
+         {"Photo", "P", true, false, "bin.kind.image"},
+         {"Lab", "L", true, false, "tab.lab"}});
     nav_rail_->SetOnSelect([this](int index) {
         // Rail presets — same WorkspaceLayout data as the switcher.
         static const char* kNames[] = {"Editing", "Effects", "Audio",
@@ -278,40 +285,43 @@ void VeApp::BuildDockPanels() {
     transcript_panel_ = TranscriptPanel::Create();
 
     left_dock_->AddTab("Media", "Media bin — catalog browser",
-                       media_panel_);
+                       media_panel_, "nav.media");
     left_dock_->AddTab("Effects", "Effects browser",
-                       effects_panel_);
+                       effects_panel_, "tab.effects");
     left_dock_->AddTab("Audio", "Audio tools (M3)",
                        PH("dock.audio", "Audio",
-                          "Clip mixer + track controls"));
+                          "Clip mixer + track controls"),
+                       "nav.audio");
     left_dock_->AddTab("Text", "Titles & text (M3)",
-                       PH("dock.text", "Text", "Title designer"));
+                       PH("dock.text", "Text", "Title designer"),
+                       "nav.text");
     left_dock_->AddTab("Trans", "Transitions browser (M3)",
                        PH("dock.transitions", "Transitions",
-                          "Transition presets"));
+                          "Transition presets"),
+                       "fx.overlay");
 
     right_dock_->AddTab("Inspector", "Clip inspector",
-                        inspector_panel_);
+                        inspector_panel_, "tab.inspector");
     right_dock_->AddTab("Color", "Color workspace — wheels, tint, "
                                  "white balance",
-                        color_panel_);
+                        color_panel_, "tool.color_wheel");
     right_dock_->AddTab("Markers", "Markers list — seek, edit, color",
-                        markers_panel_);
+                        markers_panel_, "tab.markers");
     right_dock_->AddTab("History", "Undo history — jump to any state",
-                        history_panel_);
+                        history_panel_, "tab.history");
     right_dock_->AddTab("Mix", "Audio mixer — track faders, pan, "
                                "meters",
-                        mixer_panel_);
+                        mixer_panel_, "tab.mixer");
     right_dock_->AddTab("Queue", "Export queue — render jobs",
-                        queue_panel_);
+                        queue_panel_, "tab.export");
     right_dock_->AddTab("Ext", "Extensions — xer-ext host",
-                        extensions_panel_);
+                        extensions_panel_, "tab.extensions");
     right_dock_->AddTab("Scopes", "Video scopes — waveform, "
                                   "histogram, more",
-                        scopes_panel_);
+                        scopes_panel_, "audio.waveform");
     right_dock_->AddTab("Trn", "Transcript editor — text-based "
                                "editing",
-                        transcript_panel_);
+                        transcript_panel_, "bin.list");
     left_dock_->SetOnChanged([this](int i) {
         prefs_.left_tab = i;
         MarkPrefsDirty();

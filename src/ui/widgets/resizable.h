@@ -59,6 +59,11 @@ private:
     // sizes_ alone can't express this (0 there means "auto").
     std::vector<bool> collapsed_;
     std::vector<Layout::Rect> handle_rects_;
+    // Panel index each handle follows — handle k sits between
+    // handle_panels_[k] and the next visible panel. Required because
+    // collapsed panels own a slot in panels_ but no handle, so a raw
+    // handle index can't double as a panel index.
+    std::vector<int> handle_panels_;
     int drag_handle_ = -1;
     float drag_start_ = 0.0f;
     float drag_start_frac_ = 0.0f;

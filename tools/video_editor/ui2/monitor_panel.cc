@@ -237,7 +237,8 @@ void MonitorPanel::BuildChildren() {
         };
     };
 
-    to_start_btn_ = make_btn("|‹", nullptr, "Go to start (Home)");
+    to_start_btn_ = make_btn(nullptr, "transport.skip_back",
+                             "Go to start (Home)");
     to_start_btn_->SetOnClick(fire(&hooks_.on_to_start));
     prev_btn_ = make_btn(nullptr, "transport.step_back",
                          "Previous frame (←)");
@@ -257,7 +258,8 @@ void MonitorPanel::BuildChildren() {
         Activate();
         if (hooks_.on_frame_step) hooks_.on_frame_step(1);
     });
-    to_end_btn_ = make_btn("›|", nullptr, "Go to end (End)");
+    to_end_btn_ = make_btn(nullptr, "transport.skip_forward",
+                           "Go to end (End)");
     to_end_btn_->SetOnClick(fire(&hooks_.on_to_end));
 
     mark_in_btn_ = make_btn("IN", nullptr,
@@ -509,7 +511,14 @@ float MonitorPanel::CenterStripLeft(float row_width) const {
     float strip = 0.0f;
     for (float w : kCenterW) strip += w;
     strip += kGap * (kCenterW.size() - 1);
-    return (row_width - strip) * 0.5f;
+    // The timecode readout owns the row's left edge — centering the
+    // strip on the full width parks its first button ON the timecode
+    // text at narrow panel widths. Center in the span that remains
+    // after the readout instead, and never slide back into it.
+    const float tc_right = 4.0f + kTimecodeWidth;
+    const float centered = tc_right +
+        std::max(0.0f, (row_width - tc_right - strip) * 0.5f);
+    return std::max(centered, tc_right + kGap);
 }
 
 XER::UI::Layout::Rect MonitorPanel::ChromeRect(ChromeId id) const {
@@ -607,9 +616,7 @@ void MonitorPanel::Layout(const Layout::Rect& bounds) {
         auto* w = Chrome(order[i]);
         if (w == nullptr) continue;   // scope-hidden slot
         needed += ChromeWidth(order[i]) + (needed > 0 ? kGap : 0.0f);
-        if (needed <= avail || i < 2u) {
-            // The mark buttons never drop — an empty cluster still
-            // keeps the edit identity visible.
+        if (needed <= avail) {
             ++kept;
         } else {
             break;

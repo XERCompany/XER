@@ -20,6 +20,11 @@ public:
         std::string icon;      // short glyph/text shown left of label
         bool enabled = true;
         bool separator_before = false;
+        // Optional bitmap icon name resolved through the host-installed
+        // IconResolver (same contract as Button::SetIconResolver); the
+        // `icon` glyph remains the fallback when no resolver is set or
+        // the name fails to resolve.
+        std::string icon_name;
     };
 
     static std::shared_ptr<Sidebar> Create(std::string header = {});
@@ -28,9 +33,20 @@ public:
     void SetItems(std::vector<Item> items);
     void SetActiveIndex(int index);   // -1 = none
     int GetActiveIndex() const { return active_; }
-    void SetCollapsed(bool collapsed);
+    // animate=false snaps the collapse state instantly — for hosts
+    // that build the rail already-collapsed (avoids a one-frame flash
+    // of expanded labels, which headless captures can also catch).
+    void SetCollapsed(bool collapsed, bool animate = true);
     bool IsCollapsed() const { return collapsed_; }
     void SetOnSelect(std::function<void(int)> cb);
+
+    // Same host-installed resolver contract as
+    // Button::SetIconResolver/Tabs::SetIconResolver.
+    using IconResolver =
+        std::function<bool(Rendering::Renderer& renderer,
+                           const char* icon_name, int px,
+                           Theme::Color tint, Layout::Rect box)>;
+    static void SetIconResolver(IconResolver resolver);
 
     void Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) override;
     void Layout(const Layout::Rect& bounds) override;

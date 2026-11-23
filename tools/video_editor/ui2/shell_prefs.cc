@@ -104,9 +104,19 @@ bool LoadShellPrefs(const std::filesystem::path& path, ShellPrefs* out,
         out->transcript_max_minutes =
             root["transcript_max_minutes"].asDouble();
     }
-    SizesFromJson(root["top_sizes"], &out->top_sizes);
-    SizesFromJson(root["outer_sizes"], &out->outer_sizes);
-    SizesFromJson(root["monitor_sizes"], &out->monitor_sizes);
+    // Split fractions written by the pre-fix Resizable (AddPanel zeroed
+    // earlier shares + SetCollapsed(false) rescaled siblings) encode
+    // the corruption as a plausible-looking layout — a version gate
+    // drops them once so the fixed code starts from preset geometry.
+    int layout_version = 1;
+    if (root["layout_version"].isInt()) {
+        layout_version = root["layout_version"].asInt();
+    }
+    if (layout_version >= 2) {
+        SizesFromJson(root["top_sizes"], &out->top_sizes);
+        SizesFromJson(root["outer_sizes"], &out->outer_sizes);
+        SizesFromJson(root["monitor_sizes"], &out->monitor_sizes);
+    }
     (void)text;
     return true;
 }
@@ -132,6 +142,9 @@ bool SaveShellPrefs(const std::filesystem::path& path,
     root["scratch_dir"] = prefs.scratch_dir;
     root["audio_sample_rate"] = prefs.audio_sample_rate;
     root["transcript_max_minutes"] = prefs.transcript_max_minutes;
+    // layout_version 2 = post-Resizable-fix fractions (see the loader's
+    // version gate — v1 files' sizes were the corrupted splits).
+    root["layout_version"] = 2;
     root["top_sizes"] = SizesToJson(prefs.top_sizes);
     root["outer_sizes"] = SizesToJson(prefs.outer_sizes);
     root["monitor_sizes"] = SizesToJson(prefs.monitor_sizes);

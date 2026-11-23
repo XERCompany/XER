@@ -124,6 +124,33 @@ public:
         }
 
         title_ = title;
+
+        // Clamp the requested frame to the primary work area. A
+        // window created wider than the desktop spills content past
+        // the screen edge and reads as clipped UI (the VE shell's
+        // 1560px default lands past smaller displays).
+        RECT work{};
+        if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+            const int work_w =
+                static_cast<int>(work.right - work.left);
+            const int work_h =
+                static_cast<int>(work.bottom - work.top);
+            if (work_w > 0) width = std::min(width, work_w);
+            if (work_h > 0) height = std::min(height, work_h);
+            // Keep the frame fully on-screen when a stored position
+            // would leave part of it off the edges. CW_USEDEFAULT is
+            // left alone — it asks Windows to cascade the placement.
+            const auto clamp_coord = [](int v, int lo, int size,
+                                        int extent) {
+                if (v == CW_USEDEFAULT) return v;
+                const int hi = std::max(lo, lo + extent - size);
+                return std::clamp(v, lo, hi);
+            };
+            x_ = clamp_coord(x_, static_cast<int>(work.left), width,
+                             work_w);
+            y_ = clamp_coord(y_, static_cast<int>(work.top), height,
+                             work_h);
+        }
         width_ = width;
         height_ = height;
 

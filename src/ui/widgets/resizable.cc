@@ -21,7 +21,12 @@ void Resizable::AddPanel(Panel panel) {
     if (panel.widget) AddChild(panel.widget);
     panels_.push_back(std::move(panel));
     collapsed_.push_back(false);
-    sizes_.assign(panels_.size(), 0.0f);
+    // Grow the share vector without disturbing the fractions already
+    // stored for earlier panels — assign(n, 0) used to wipe them and
+    // every earlier panel silently fell into the auto pool.
+    if (sizes_.size() < panels_.size()) {
+        sizes_.resize(panels_.size(), 0.0f);
+    }
     sizes_.back() = panels_.back().size;
     RequestLayout();
 }
@@ -31,6 +36,7 @@ void Resizable::ClearPanels() {
     sizes_.clear();
     collapsed_.clear();
     handle_rects_.clear();
+    handle_panels_.clear();
     RequestLayout();
 }
 
@@ -51,7 +57,12 @@ void Resizable::SetOnLayout(
 
 void Resizable::SetCollapsed(int index, bool collapsed) {
     if (index < 0 || index >= static_cast<int>(panels_.size())) return;
-    const auto i = static_cast<std::size_t>(index);
+    const auto i = std::size_t(index);
+    // Already in the requested state: nothing to stash/restore. The
+    // restore path below rescales the OTHER panels' shares — running
+    // it on a never-collapsed panel corrupts the split (it used to
+    // multiply siblings by (1-restored)/others on every shell sync).
+    if (collapsed == collapsed_[i]) return;
     if (collapsed) {
         // Stash the resolved share so expanding restores the dragged size,
         // not just the originally configured fraction.
@@ -90,9 +101,13 @@ void Resizable::NotifyLayout() {
 void Resizable::RecomputeSizes(const Layout::Rect& bounds) {
     const int n = static_cast<int>(panels_.size());
     if (n == 0) return;
+    int active = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!collapsed_[static_cast<std::size_t>(i)]) ++active;
+    }
     const float total =
         (dir_ == Direction::Horizontal ? bounds.width : bounds.height) -
-        handle_size_ * static_cast<float>(n - 1);
+        handle_size_ * static_cast<float>(active > 0 ? active - 1 : 0);
     if (total <= 0.0f) {
         std::fill(sizes_.begin(), sizes_.end(), 0.0f);
         return;
@@ -172,6 +187,7 @@ void Resizable::Layout(const Layout::Rect& bounds) {
     SetBounds(bounds);
     RecomputeSizes(bounds);
     handle_rects_.clear();
+    handle_panels_.clear();
 
     const int n = static_cast<int>(panels_.size());
     if (n == 0) return;
@@ -179,9 +195,26 @@ void Resizable::Layout(const Layout::Rect& bounds) {
     float cursor = dir_ == Direction::Horizontal ? bounds.x : bounds.y;
     const float span =
         dir_ == Direction::Horizontal ? bounds.width : bounds.height;
-    const float usable = span - handle_size_ * static_cast<float>(n - 1);
+    int visible_count = 0;
+    for (int i = 0; i < n; ++i) {
+        if (!collapsed_[static_cast<std::size_t>(i)]) ++visible_count;
+    }
+    const float usable =
+        std::max(0.0f, span - handle_size_ * static_cast<float>(
+                                       visible_count > 0
+                                           ? visible_count - 1
+                                           : 0));
 
     for (int i = 0; i < n; ++i) {
+        // Collapsed panels own no span — park them on an empty rect so
+        // they neither paint over siblings nor keep a stale clickable
+        // area (they used to lay out at their pre-collapse share, past
+        // the end of the strip).
+        if (collapsed_[static_cast<std::size_t>(i)]) {
+            panels_[i].widget->Layout({}, CachedLayoutTokens());
+            panels_[i].widget->SetBounds({});
+            continue;
+        }
         const float px = usable * sizes_[i];
         Layout::Rect r;
         if (dir_ == Direction::Horizontal) {
@@ -192,7 +225,16 @@ void Resizable::Layout(const Layout::Rect& bounds) {
         panels_[i].widget->Layout(r, CachedLayoutTokens());
         panels_[i].widget->SetBounds(r);
         cursor += px;
-        if (i + 1 < n) {
+        // A handle slot follows only when another VISIBLE panel still
+        // comes after this one.
+        bool more_visible = false;
+        for (int j = i + 1; j < n; ++j) {
+            if (!collapsed_[static_cast<std::size_t>(j)]) {
+                more_visible = true;
+                break;
+            }
+        }
+        if (more_visible) {
             Layout::Rect hr;
             if (dir_ == Direction::Horizontal) {
                 hr = {cursor, bounds.y, handle_size_, bounds.height};
@@ -200,6 +242,7 @@ void Resizable::Layout(const Layout::Rect& bounds) {
                 hr = {bounds.x, cursor, bounds.width, handle_size_};
             }
             handle_rects_.push_back(hr);
+            handle_panels_.push_back(i);
             cursor += handle_size_;
         }
     }
@@ -244,11 +287,13 @@ bool Resizable::HandleEvent(const Event& event) {
         case Event::Type::MouseDown:
             if (event.mouse_button == MouseButton::Left) {
                 const float hit = HandleHit(GetBounds(), p);
-                if (hit >= 0.0f) {
+                if (hit >= 0.0f &&
+                    hit < static_cast<float>(handle_panels_.size())) {
                     drag_handle_ = static_cast<int>(hit);
                     drag_start_ =
                         dir_ == Direction::Horizontal ? p.x : p.y;
-                    drag_start_frac_ = sizes_[drag_handle_];
+                    drag_start_frac_ =
+                        sizes_[handle_panels_[drag_handle_]];
                     return true;
                 }
             }
@@ -268,9 +313,23 @@ bool Resizable::HandleEvent(const Event& event) {
                 const float usable = std::max(
                     1.0f, span - handle_size_ * static_cast<float>(n - 1));
                 const float dfrac = delta / usable;
-                const int left = drag_handle_;
-                const int right = drag_handle_ + 1;
-                if (left >= 0 && right < n) {
+                // The handle separates the panel it follows from the
+                // next VISIBLE one — collapsed panels between them own
+                // no span to redistribute.
+                int left = -1;
+                int right = -1;
+                if (drag_handle_ >= 0 &&
+                    drag_handle_ <
+                        static_cast<int>(handle_panels_.size())) {
+                    left = handle_panels_[drag_handle_];
+                    for (int j = left + 1; j < n; ++j) {
+                        if (!collapsed_[static_cast<std::size_t>(j)]) {
+                            right = j;
+                            break;
+                        }
+                    }
+                }
+                if (left >= 0 && right >= 0 && right < n) {
                     // Steal/give fraction between the two adjacent panels,
                     // keeping every other panel's share intact.
                     const float others =

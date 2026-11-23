@@ -412,11 +412,24 @@ void MonitorSurface::Paint(Rendering::Renderer& renderer,
         renderer.StrokeRect(dest, tokens.border, 1.0f, 0.0f);
         DrawOverlays(renderer, tokens, dest);
     } else {
-        renderer.DrawText(
-            status_text_.empty() ? "No video" : status_text_,
-            video_area,
-            {status_error_ ? tokens.danger : tokens.muted,
-             tokens.font_body, 500});
+        // Centered empty state — DrawText is top-left aligned, so
+        // measure first and hand it a box centered in the video area.
+        const std::string_view text =
+            status_text_.empty()
+                ? std::string_view{"No video"}
+                : std::string_view{status_text_};
+        const Rendering::TextStyle st{
+            status_error_ ? tokens.danger : tokens.muted,
+            tokens.font_body, 500};
+        const auto ts = renderer.MeasureText(text, st);
+        const Layout::Rect tr{
+            video_area.x +
+                std::max(0.0f, (video_area.width - ts.width) * 0.5f),
+            video_area.y +
+                std::max(0.0f, (video_area.height - ts.height) * 0.5f),
+            std::min(ts.width, video_area.width),
+            std::min(ts.height, video_area.height)};
+        renderer.DrawText(text, tr, st);
     }
 
     DrawRuler(renderer, tokens, RulerRect());

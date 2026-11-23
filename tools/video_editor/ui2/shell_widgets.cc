@@ -197,8 +197,10 @@ std::shared_ptr<DockTabGroup> DockTabGroup::Create() {
 }
 
 void DockTabGroup::AddTab(std::string label, std::string tooltip,
-                          std::shared_ptr<Widgets::Widget> panel) {
-    tabs_->AddTab(std::move(label), std::move(tooltip));
+                          std::shared_ptr<Widgets::Widget> panel,
+                          std::string icon) {
+    tabs_->AddTab(std::move(label), std::move(tooltip),
+                  std::move(icon));
     if (panel != nullptr) {
         panel->SetVisible(false);
         AddChild(panel);
@@ -365,31 +367,51 @@ void StatusStrip::Render(Rendering::Renderer& renderer,
     renderer.DrawLine({b.x, b.y + 0.5f}, {b.x + b.width, b.y + 0.5f},
                       tokens.border, 1.0f);
     const float pad = Theme::kSpaceMd;
-    Layout::Rect status{b.x + pad, b.y, b.width * 0.5f, b.height};
-    const Rendering::TextStyle status_style{
-        tokens.muted, Theme::kFontCaption};
+    const float cy = b.y + b.height * 0.5f;
+    const float text_h = 14.0f;
+    const Rendering::TextStyle status_style{tokens.muted,
+                                            Theme::kFontCaption};
+    // Left segment: status text (vertically centered — DrawText is
+    // top-aligned, so hand it a text-height box centered on the strip).
+    Layout::Rect status{b.x + pad, cy - text_h * 0.5f, b.width * 0.5f,
+                        text_h};
     renderer.DrawText(
         Widgets::EllipsizeText(renderer, status_text_, status_style,
                                status.width),
         status, status_style);
-    // Right-aligned badge chips.
+
+    // Right segments: plain text runs separated by thin hairline
+    // dividers — the pro-NLE status-bar grammar (segments, not chips).
+    // A small state dot leads each segment; only warnings take the
+    // amber accent, everything else stays muted chrome.
     float x = b.x + b.width - pad;
     for (auto it = badges_.rbegin(); it != badges_.rend(); ++it) {
-        const float w = renderer.MeasureText(
-                            it->text, {tokens.muted, Theme::kFontCaption})
-                            .width +
-                        14.0f;
-        x -= w;
-        const Layout::Rect chip{x, b.y + 4.0f, w, b.height - 8.0f};
-        const Theme::Color fill = it->warning
-                                      ? Theme::WithAlpha(
-                                            tokens.warning_chip, 0.18f)
-                                      : tokens.secondary;
-        const Theme::Color fg =
-            it->warning ? tokens.warning_chip : tokens.muted;
-        renderer.FillRect(chip, fill, Theme::kRadiusSm);
-        renderer.DrawText(it->text, chip, {fg, Theme::kFontCaption});
-        x -= Theme::kSpaceXs;
+        const Rendering::TextStyle seg_style{
+            it->warning ? tokens.warning_chip : tokens.muted,
+            Theme::kFontCaption};
+        const float text_w =
+            renderer.MeasureText(it->text, seg_style).width;
+        const float seg_w = text_w + 14.0f + Theme::kSpaceSm;
+        x -= seg_w;
+        const float seg_x = x;
+        // Leading state dot (warning -> amber, idle -> disabled-grey).
+        const Theme::Color dot = it->warning ? tokens.warning_chip
+                                             : tokens.disabled;
+        renderer.FillRect(
+            Layout::Rect{seg_x, cy - 2.0f, 4.0f, 4.0f}, dot, 2.0f);
+        renderer.DrawText(
+            it->text,
+            Layout::Rect{seg_x + 10.0f, cy - text_h * 0.5f,
+                         text_w + 4.0f, text_h},
+            seg_style);
+        // Divider hairline between segments.
+        if (std::next(it) != badges_.rend()) {
+            Theme::Color line = tokens.border;
+            line.a *= 0.8f;
+            renderer.DrawLine({seg_x - Theme::kSpaceSm, cy - 5.0f},
+                              {seg_x - Theme::kSpaceSm, cy + 5.0f},
+                              line, 1.0f);
+        }
         if (x < b.x + b.width * 0.5f) break;
     }
 }

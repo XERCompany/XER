@@ -96,7 +96,8 @@ public:
     static std::shared_ptr<DockTabGroup> Create();
 
     void AddTab(std::string label, std::string tooltip,
-                std::shared_ptr<Widgets::Widget> panel);
+                std::shared_ptr<Widgets::Widget> panel,
+                std::string icon = {});
     int TabCount() const { return static_cast<int>(panels_.size()); }
     int ActiveIndex() const;
     void SetActiveIndex(int index);

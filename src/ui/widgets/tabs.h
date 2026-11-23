@@ -27,10 +27,25 @@ public:
     // `tooltip` is optional per-tab hover text — surfaced through the
     // widget tooltip channel as the pointer crosses cells (useful when
     // labels are abbreviated for a compact strip).
-    void AddTab(std::string label, std::string tooltip = {});
+    // `icon` names a glyph the host's IconResolver can draw; when every
+    // tab carries one and the strip is too narrow for the full labels,
+    // the cells collapse to icon-only (tooltips still show the label).
+    void AddTab(std::string label, std::string tooltip = {},
+                std::string icon = {});
     // Sets/replaces the hover tooltip of the tab at `index`.
     void SetTabTooltip(int index, std::string tooltip);
+    // Sets/replaces the icon name of the tab at `index`.
+    void SetTabIcon(int index, std::string icon);
     void ClearTabs();
+
+    // Same host-installed resolver contract as Button::SetIconResolver —
+    // draws `icon_name` at `px` size tinted `tint` centered in `box`,
+    // returns false when unavailable. Empty => tabs stay text-only.
+    using IconResolver =
+        std::function<bool(Rendering::Renderer& renderer,
+                           const char* icon_name, int px,
+                           Theme::Color tint, Layout::Rect box)>;
+    static void SetIconResolver(IconResolver resolver);
     int GetActiveIndex() const { return active_index_; }
     void SetActiveIndex(int index);
     void SetOnChanged(std::function<void(int)> callback);
@@ -61,7 +76,11 @@ private:
 
     std::vector<std::string> labels_;
     std::vector<std::string> tooltips_;
+    std::vector<std::string> icons_;
     std::vector<Layout::Rect> tab_rects_;
+    // Icon-only fallback engaged for the current strip width (set by
+    // Layout when every tab has an icon and labels can't fit whole).
+    bool icon_mode_ = false;
     int active_index_ = -1;
     int hovered_tab_ = -1;
     int pressed_tab_ = -1;

@@ -37,9 +37,27 @@ void Sidebar::SetActiveIndex(int index) {
     Invalidate();
 }
 
-void Sidebar::SetCollapsed(bool collapsed) {
+namespace {
+// Host-installed icon lookup (same pattern as Button's/Tabs's
+// resolver). Empty => items always draw their text glyph.
+Sidebar::IconResolver g_sidebar_icon_resolver;
+} // namespace
+
+void Sidebar::SetIconResolver(IconResolver resolver) {
+    g_sidebar_icon_resolver = std::move(resolver);
+}
+
+void Sidebar::SetCollapsed(bool collapsed, bool animate) {
     collapsed_ = collapsed;
-    collapse_t_.Set(collapsed ? 1.0f : 0.0f, 0.18f);
+    if (animate) {
+        collapse_t_.Set(collapsed ? 1.0f : 0.0f, 0.18f);
+    } else {
+        // Snap: land on the end state now so the first render is
+        // already collapsed (no expanded-label flash).
+        collapse_ = collapsed ? 1.0f : 0.0f;
+        collapse_t_.from = collapse_t_.to = collapse_;
+        collapse_t_.t = 1.0f;
+    }
     RequestLayout();
 }
 
@@ -65,11 +83,28 @@ void Sidebar::Render(Rendering::Renderer& renderer,
     const auto b = GetBounds();
     if (b.width <= 0.0f || b.height <= 0.0f) return;
 
-    renderer.FillRect(b, tokens.surface, tokens.radius_medium);
-    renderer.StrokeRect(b, tokens.border, 1.0f, tokens.radius_medium);
+    // Two chrome modes: a floating card (rounded fill + ring) when the
+    // sidebar owns a wide column, or a docked edge rail (flat fill +
+    // one hairline seam) when it is narrow — the rail look NLE shells
+    // use for the far-left icon strip.
+    if (b.width < 72.0f) {
+        renderer.FillRect(b, tokens.surface, 0.0f);
+        renderer.DrawLine({b.x + b.width - 0.5f, b.y},
+                          {b.x + b.width - 0.5f, b.y + b.height},
+                          tokens.border, 1.0f);
+    } else {
+        renderer.FillRect(b, tokens.surface, tokens.radius_medium);
+        renderer.StrokeRect(b, tokens.border, 1.0f,
+                            tokens.radius_medium);
+    }
 
-    const float w = b.width * (1.0f - collapse_ * 0.55f);  // shrink when collapsed
     const bool icon_only = collapse_ > 0.5f;
+    // Collapsed item strip: interpolates toward a real icon-rail width
+    // (was a 45%-of-bounds shrink that left icons off-center in a
+    // sliver whenever the host kept fixed bounds).
+    const float collapsed_w = std::min(b.width, 48.0f);
+    const float w =
+        b.width - collapse_ * (b.width - collapsed_w);
 
     // Header: section label, not a page title — font_title (30px) does not
     // fit the 26px band and was being clipped.
@@ -86,8 +121,6 @@ void Sidebar::Render(Rendering::Renderer& renderer,
     // Items.
     const float ih = ItemHeight();
     float y = b.y + (header_.empty() ? 8.0f : 52.0f);
-    const Rendering::TextStyle is{tokens.foreground, tokens.font_small,
-                                  500};
     for (size_t i = 0; i < items_.size(); ++i) {
         const auto& item = items_[i];
         const bool act = static_cast<int>(i) == active_;
@@ -112,29 +145,43 @@ void Sidebar::Render(Rendering::Renderer& renderer,
                                  : tokens.foreground);
         const Rendering::TextStyle item_style{tc, tokens.font_small, 500};
 
-        // Icon slot.
-        float tx = b.x + 14.0f;
-        if (!item.icon.empty()) {
-            const Rendering::TextStyle icon_s{tc, tokens.font_small, 600};
-            Layout::Rect ir{b.x + 12.0f, y + ih * 0.5f - 9.0f, 20.0f, 18.0f};
+        // Icon slot — a resolved bitmap icon wins over the text glyph.
+        const auto draw_icon = [&](const Layout::Rect& box) {
+            if (!item.icon_name.empty() && g_sidebar_icon_resolver) {
+                if (g_sidebar_icon_resolver(
+                        renderer, item.icon_name.c_str(), 18, tc,
+                        box)) {
+                    return;
+                }
+            }
+            if (item.icon.empty()) return;
+            const Rendering::TextStyle icon_s{tc, tokens.font_small,
+                                              600};
+            const auto ts = renderer.MeasureText(item.icon, icon_s);
+            // Center the glyph inside the slot rather than drawing from
+            // the slot's left edge — 1-2 char rail glyphs read centered.
+            const Layout::Rect ir{
+                box.x + std::max(0.0f, (box.width - ts.width) * 0.5f),
+                box.y, std::min(box.width, ts.width), box.height};
             renderer.DrawText(item.icon, ir, icon_s);
+        };
+        float tx = b.x + 14.0f;
+        if (!item.icon.empty() || !item.icon_name.empty()) {
+            draw_icon({b.x + 12.0f, y + ih * 0.5f - 9.0f, 20.0f, 18.0f});
             tx = b.x + 36.0f;
         }
         if (!icon_only) {
-            Layout::Rect tr{tx, y + ih * 0.5f - 9.0f, w - (tx - b.x) - 12.0f,
-                            18.0f};
+            Layout::Rect tr{tx, y + ih * 0.5f - 9.0f,
+                            w - (tx - b.x) - 12.0f, 18.0f};
             renderer.DrawText(item.label, tr, item_style);
         } else {
             // Center icon when collapsed.
-            Layout::Rect ir{b.x + w * 0.5f - 10.0f,
-                            y + ih * 0.5f - 9.0f, 20.0f, 18.0f};
-            const Rendering::TextStyle icon_s{tc, tokens.font_small, 600};
-            renderer.DrawText(item.icon, ir, icon_s);
+            draw_icon({b.x + w * 0.5f - 10.0f, y + ih * 0.5f - 9.0f,
+                       20.0f, 18.0f});
         }
         y += ih;
         if (y > b.y + b.height) break;
     }
-    (void)is;
 }
 
 void Sidebar::Tick(double dt_seconds) {

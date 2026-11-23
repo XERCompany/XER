@@ -8,6 +8,8 @@
 #include "theme/tokens.h"
 #include "ve_theme.h"
 #include "widgets/button.h"
+#include "widgets/sidebar.h"
+#include "widgets/tabs.h"
 
 namespace XER::VideoEditor::Ui2::VeIcons {
 
@@ -60,11 +62,14 @@ void InstallButtonIconResolver() {
     static bool installed = false;
     if (installed) return;
     installed = true;
-    XER::UI::Widgets::Button::SetIconResolver(
+    const auto resolve =
         [](XER::UI::Rendering::Renderer& renderer, const char* name,
            int px, Color tint, const XER::UI::Layout::Rect& box) {
             return DrawIcon(renderer, name, px, tint, box);
-        });
+        };
+    XER::UI::Widgets::Button::SetIconResolver(resolve);
+    XER::UI::Widgets::Tabs::SetIconResolver(resolve);
+    XER::UI::Widgets::Sidebar::SetIconResolver(resolve);
 }
 
 void DrawChevron(XER::UI::Rendering::Renderer& renderer, Color color,
