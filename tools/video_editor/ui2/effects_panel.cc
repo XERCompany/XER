@@ -89,7 +89,8 @@ std::string CategoryForBuiltin(const std::string& id) {
         "xer.fx.edge_glow",   "xer.fx.tone_split",
     };
     if (id.rfind("xer.af.", 0) == 0) return "Audio Effects";
-    if (id == "xer.fx.smart_reframe" || id == "xer.fx.track_mosaic") {
+    if (id == "xer.fx.smart_reframe" || id == "xer.fx.track_mosaic" ||
+        id == "xer.fx.face_blur") {
         return "AI & Tracking";
     }
     if (kGrading.count(id) || kBlur.count(id) || kDistort.count(id) ||

@@ -18,6 +18,7 @@
 #include <mutex>
 #include <set>
 
+#include "ai/face_detect.h"
 #include "ai/object_track.h"
 #include "ai/smart_reframe.h"
 #include "app_runtime/app_runtime.h"
@@ -1496,7 +1497,13 @@ struct Compositor::Impl {
                 // Tracked Mosaic is also track-driven: its pixelated
                 // region comes from Clip::object_track at the frame's
                 // source time (the live-reference pin, auto-censor).
-                if (desc != nullptr && desc->id == Ai::kTrackMosaicId) {
+                // Face Blur is the same region on the same track —
+                // the YuNet scan lands label "face" there, so both
+                // ids resolve identically and only the registered
+                // name/defaults differ.
+                if (desc != nullptr &&
+                    (desc->id == Ai::kTrackMosaicId ||
+                     desc->id == Ai::kFaceBlurId)) {
                     ApplyTrackedMosaic(s, effect, clip_time_s);
                     continue;
                 }

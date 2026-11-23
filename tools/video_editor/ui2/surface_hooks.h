@@ -157,6 +157,11 @@ struct TimelineHooks {
     std::function<void(const std::string&)> on_pin_title;
     std::function<void(const std::string&)> on_pin_mosaic;
     std::function<void(const std::string&)> on_clear_track;
+    // Clip context menu "Auto-blur faces": the shell runs the async
+    // YuNet scan (ai/face_detect.h ScanClipFaces), stores the
+    // ClipTrack labeled "face" on Clip::object_track and applies the
+    // builtin:xer.fx.face_blur effect — the auto-censor preset.
+    std::function<void(const std::string&)> on_face_blur;
     // Clip context menu "Edit by Transcript": the shell selects
     // the clip, focuses the Transcript dock and (cache miss)
     // starts the whisper job — media clips only.

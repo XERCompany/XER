@@ -1330,6 +1330,26 @@ const std::vector<PluginDesc>& Effects() {
             d.params.assign(std::begin(kParams), std::end(kParams));
             return d;
         }(),
+        // ── video (Face Blur — YuNet track-driven, compositor) ──
+        // The privacy-named sibling of Tracked Mosaic: "Auto-blur
+        // faces" (ctx menu) scans the clip with YuNet into
+        // Clip::object_track label "face" and applies this effect.
+        // Same dispatch contract — the compositor resolves the
+        // tracked box per frame; the ABI fn stays identity. Params
+        // default a finer block + a touch more padding than the
+        // generic mosaic since faces are the privacy target.
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.face_blur", "Face Blur (AI)",
+                     XER_PLUGIN_VIDEO_FX, &smart_reframe_noop, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"block", 2.0f, 128.0f, 16.0f},   // pixel-block px
+                {"padding", 0.0f, 1.0f, 0.25f},   // grow box, frac of it
+                {"smoothing", 0.0f, 1.0f, 0.5f},  // track temporal smoothing
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
         // ── audio (former xer_audio_fx) ──
         Desc("xer.af.echo", "Echo", XER_PLUGIN_AUDIO_FX, nullptr,
              &echo),

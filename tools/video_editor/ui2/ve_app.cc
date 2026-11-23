@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "ai/audio_pcm.h"
+#include "ai/face_detect.h"
 #include "ai/whisper_transcribe.h"
 #include "app_runtime/app_runtime.h"
 #include "builtin_fx.h"
@@ -122,6 +123,8 @@ VeApp::~VeApp() {
     // members it captures — cancel + join before the fields go.
     transcript_cancel_ = true;
     if (transcript_worker_.joinable()) transcript_worker_.join();
+    face_cancel_ = true;
+    if (face_worker_.joinable()) face_worker_.join();
     // export_engine_ tears itself down (ExportEngine::~ExportEngine
     // Cancel()s + Wait()s the worker).
 }
@@ -680,6 +683,11 @@ void VeApp::WireTimelineBridge() {
     };
     host.cancel_queued_media = [this](const std::string& path) {
         if (media_prep_ != nullptr) media_prep_->CancelQueued(path);
+    };
+    // AI seams — bound here (not in the bridge) so the ctx-menu
+    // items appear only when the shell actually implements them.
+    host.face_blur = [this](const std::string& clip_id) {
+        StartFaceBlur(clip_id);
     };
     bridge_->SetHost(std::move(host));
 
@@ -1825,6 +1833,7 @@ void VeApp::Tick(double dt_seconds) {
     // never touch widgets.
     PumpExportQueue(dt_seconds);
     PumpTranscriptJob();
+    PumpFaceBlurJob();
     // Autosave rides the same ~2 s poll cadence the old shell used —
     // the manager gates on dirty + interval before touching disk.
     PumpAutosave(dt_seconds);
@@ -4048,6 +4057,141 @@ void VeApp::PumpTranscriptJob() {
         transcript_panel_->SetSegments(std::move(segments));
     }
     SetStatus("Transcription complete");
+}
+
+// ---- auto face-blur (YuNet) ------------------------------------------
+// Mirrors the whisper job's marshalling exactly: the worker runs the
+// detector-agnostic frame scan (ai/face_detect.h ScanClipFaces ->
+// ScanClipFrames), writes ONLY the mutex-guarded result slot, and
+// Tick's PumpFaceBlurJob commits the track + effect through history
+// on the UI thread.
+
+void VeApp::StartFaceBlur(const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("Auto-blur: clip not found", true);
+        return;
+    }
+    if (clip->source.kind != SourceKind::Media ||
+        clip->source_path.empty() || clip->is_adjustment) {
+        SetStatus("Auto-blur needs a media clip", true);
+        return;
+    }
+    if (face_running_) {
+        SetStatus("Face scan already running");
+        return;
+    }
+    const std::string model = Ai::FaceDetectModel();
+    if (model.empty()) {
+        SetStatus(std::string("Auto-blur: ") +
+                      Ai::FaceDetectModelHint(),
+                  true);
+        return;
+    }
+    face_cancel_ = false;
+    face_progress_ = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(face_result_mutex_);
+        face_result_ready_ = false;
+        face_result_ok_ = false;
+        face_result_ = ClipTrack{};
+        face_result_error_.clear();
+    }
+    face_job_clip_id_ = clip_id;
+    face_running_ = true;
+    SetStatus("Scanning faces on " +
+              (clip->name.empty()
+                   ? std::filesystem::path(clip->source_path)
+                         .filename()
+                         .string()
+                   : clip->name) +
+              "…");
+    const Clip scanned = *clip;   // worker owns a copy — never the model
+    face_worker_ = std::thread([this, scanned, model] {
+        ClipTrack track;
+        std::string error;
+        const bool ok = Ai::ScanClipFaces(
+            scanned, model, Ai::ReframeScanParams{},
+            Ai::FaceDetectParams{},
+            [this](float f) { face_progress_ = f; },
+            [this] { return face_cancel_.load(); }, &track, &error);
+        std::lock_guard<std::mutex> lock(face_result_mutex_);
+        face_result_ = std::move(track);
+        face_result_error_ = error;
+        face_result_ok_ = ok && !face_cancel_.load();
+        face_result_ready_ = true;
+    });
+}
+
+void VeApp::PumpFaceBlurJob() {
+    if (!face_running_.load()) return;
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> lock(face_result_mutex_);
+        ready = face_result_ready_;
+    }
+    if (!ready) return;
+    if (face_worker_.joinable()) face_worker_.join();
+    face_running_ = false;
+    ClipTrack track;
+    std::string error;
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(face_result_mutex_);
+        track = std::move(face_result_);
+        error = face_result_error_;
+        ok = face_result_ok_;
+        face_result_ready_ = false;
+    }
+    if (!ok) {
+        SetStatus("Face scan failed" +
+                      (error.empty() ? std::string() : ": " + error),
+                  true);
+        return;
+    }
+    const Clip* clip = FindClip(project_, face_job_clip_id_);
+    if (clip == nullptr) {
+        SetStatus("Face scan finished but the clip is gone", true);
+        return;
+    }
+    Clip updated = *clip;
+    updated.object_track = std::move(track);
+    // The face-blur preset rides the live track (the compositor
+    // resolves the box per frame). Dedup: an existing face_blur
+    // keeps its tuned params — a re-scan refreshes the track only.
+    const auto already = std::any_of(
+        updated.effects.begin(), updated.effects.end(),
+        [](const ClipEffect& e) {
+            return e.type == "builtin:xer.fx.face_blur" ||
+                   e.type == "xer.fx.face_blur";
+        });
+    if (!already) {
+        updated.effects.push_back(
+            {"builtin:xer.fx.face_blur", {16.0f, 0.25f, 0.5f}});
+    }
+    MediaBounds bounds;
+    if (const CatalogEntry* e = FindCatalogEntry(clip->source_path)) {
+        bounds.duration_seconds = e->duration_seconds;
+        bounds.has_video = e->HasVideo();
+    } else {
+        bounds.duration_seconds = clip->duration;
+    }
+    std::string err2;
+    history_->BeginMacro("Auto-blur faces");
+    const bool applied =
+        history_->ReplaceClip(face_job_clip_id_, updated, bounds,
+                              &err2);
+    history_->EndMacro();
+    if (!applied) {
+        SetStatus("Auto-blur commit failed: " + err2, true);
+        return;
+    }
+    NotifyTimelineChanged();
+    char buf[96];
+    std::snprintf(buf, sizeof(buf),
+                  "Auto-blur faces: %zu track sample(s) + Face Blur",
+                  updated.object_track.samples.size());
+    SetStatus(buf);
 }
 
 void VeApp::WireTranscriptPanel() {

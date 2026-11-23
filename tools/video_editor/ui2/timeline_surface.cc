@@ -2833,6 +2833,25 @@ bool TimelineSurface::ShowContextMenu(
                 }
             }
 
+            // Auto-blur faces: YuNet scan -> face ClipTrack ->
+            // xer.fx.face_blur. Its own gate (like the track block)
+            // so the item shows whenever the shell wires the seam.
+            if (hooks_.on_face_blur != nullptr) {
+                const bool scannable =
+                    clip.source.kind == SourceKind::Media &&
+                    !clip.source_path.empty() && !clip.is_adjustment;
+                Widgets::ContextMenu::Item fb;
+                fb.label = "Auto-blur Faces";
+                fb.separator_before = true;
+                fb.enabled = scannable;
+                fb.action = [this, id] {
+                    if (hooks_.on_face_blur) {
+                        hooks_.on_face_blur(id);
+                    }
+                };
+                items.push_back(std::move(fb));
+            }
+
             if (hooks_.on_ai_find_objects != nullptr ||
                 hooks_.on_ai_clear_tags != nullptr) {
                 Widgets::ContextMenu::Item find;

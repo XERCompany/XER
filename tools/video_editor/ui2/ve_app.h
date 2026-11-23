@@ -497,6 +497,12 @@ private:
     // Transcript worker drain — Tick pushes progress/result into the
     // panel + cache.
     void PumpTranscriptJob();
+    // "Auto-blur faces" (ctx menu): kicks the async YuNet scan for
+    // clip_id; PumpFaceBlurJob drains the result slot in Tick and
+    // commits object_track + builtin:xer.fx.face_blur through
+    // history_->ReplaceClip in one undoable macro.
+    void StartFaceBlur(const std::string& clip_id);
+    void PumpFaceBlurJob();
     // ColorPanel::on_color_changed — upserts the color-fx param
     // snapshot onto the clip (temperature/tint/lift_gamma_gain/
     // channel_mixer — see color_panel.h for the param→fx mapping)
@@ -690,6 +696,21 @@ private:
         transcript_result_;
     std::string transcript_result_error_;
     std::string transcript_job_path_;
+
+    // "Auto-blur faces" async YuNet job — same marshalling contract
+    // as the whisper worker: the thread writes ONLY the
+    // mutex-guarded slot, Tick() drains it via PumpFaceBlurJob into
+    // the clip's object_track + xer.fx.face_blur effect commit.
+    std::thread face_worker_;
+    std::atomic<bool> face_cancel_{false};
+    std::atomic<float> face_progress_{0.0f};
+    std::atomic<bool> face_running_{false};
+    std::mutex face_result_mutex_;
+    bool face_result_ready_ = false;
+    bool face_result_ok_ = false;
+    ClipTrack face_result_;
+    std::string face_result_error_;
+    std::string face_job_clip_id_;
 
     // ── layout state (mirrors prefs_) ────────────────────────
     std::string workspace_name_ = "Editing";

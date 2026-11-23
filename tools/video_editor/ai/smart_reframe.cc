@@ -287,6 +287,54 @@ bool ScanClipDetections(
         return false;
     }
 
+    FindObj::Options opts;
+    opts.confidence_threshold = params.confidence_threshold;
+    opts.nms_threshold = params.nms_threshold;
+
+    return ScanClipFrames(
+        clip, params,
+        [&](const std::uint8_t* bgra, int w, int h,
+            int stride) -> std::vector<TrackDetection> {
+            const auto found =
+                detector.Detect(bgra, w, h, stride, opts);
+            std::vector<TrackDetection> dets;
+            dets.reserve(found.size());
+            for (const FindObj::Detection& d : found) {
+                TrackDetection td;
+                td.x = d.x;
+                td.y = d.y;
+                td.w = d.w;
+                td.h = d.h;
+                td.confidence = d.confidence;
+                td.class_id = d.class_id;
+                td.label = d.label;
+                dets.push_back(std::move(td));
+            }
+            return dets;
+        },
+        pick, progress, should_cancel, out, error_out);
+}
+
+bool ScanClipFrames(
+    const Clip& clip, const ReframeScanParams& params,
+    const DetectFrameFn& detect,
+    const std::function<const TrackDetection*(
+        const std::vector<TrackDetection>&)>& pick,
+    const std::function<void(float)>& progress,
+    const std::function<bool()>& should_cancel, ClipReframe* out,
+    std::string* error_out) {
+    if (out == nullptr) return false;
+    out->samples.clear();
+    if (clip.source_path.empty() || clip.is_adjustment) {
+        if (error_out) *error_out = "clip has no media to scan";
+        return false;
+    }
+    if (detect == nullptr) {
+        if (error_out) *error_out = "no detector bound to the scan";
+        return false;
+    }
+
+    std::string err;
     MediaDecoderPtr decoder = MakeBridgeDecoder();
     if (decoder == nullptr) {
         if (error_out) *error_out = "no media decoder";
@@ -313,10 +361,6 @@ bool ScanClipDetections(
         if (error_out) *error_out = "clip span is empty";
         return false;
     }
-
-    FindObj::Options opts;
-    opts.confidence_threshold = params.confidence_threshold;
-    opts.nms_threshold = params.nms_threshold;
 
     std::vector<std::uint8_t> bgra;
     std::vector<std::uint8_t> kept;
@@ -374,22 +418,8 @@ bool ScanClipDetections(
         prev = sig;
         have_prev = true;
 
-        const auto found = detector.Detect(pixels, pw, ph, pw * 4, opts);
-        // Neutral candidates for the caller's reduction — FindObj::
-        // Detection stays a .cc type; `pick` only sees TrackDetection.
-        std::vector<TrackDetection> dets;
-        dets.reserve(found.size());
-        for (const FindObj::Detection& d : found) {
-            TrackDetection td;
-            td.x = d.x;
-            td.y = d.y;
-            td.w = d.w;
-            td.h = d.h;
-            td.confidence = d.confidence;
-            td.class_id = d.class_id;
-            td.label = d.label;
-            dets.push_back(std::move(td));
-        }
+        const std::vector<TrackDetection> dets =
+            detect(pixels, pw, ph, pw * 4);
         const TrackDetection* subject =
             pick != nullptr ? pick(dets) : nullptr;
         if (subject != nullptr) {

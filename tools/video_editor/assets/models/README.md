@@ -89,6 +89,48 @@ whisper ggml model lives in `<exe>/models/` (see below).
   - model metadata (readable in Netron/onnx): model_type=gtcrn,
     sample_rate=16000, n_fft=512, hop=256, win=512, window=hann_sqrt
 
+## silero_vad.onnx — voice-activity detection (WIRED: silence cut)
+
+- **Source:** https://huggingface.co/onnx-community/silero-vad
+  (`onnx/model.onnx`, fp32, 2.24 MB), export of snakers4/silero-vad v5
+- **License:** MIT (upstream repo LICENSE — code + weights)
+- **Consumer:** `tools/video_editor/ai/silero_vad.cc` via
+  `ai/silence_detect.cc` (`DetectSilences` method "auto"/"vad" —
+  falls back to the RMS envelope when the model or a backend is
+  missing)
+- **Contract (verified by protobuf inspection):**
+  - input `input` f32 `[B,N]` — 16 kHz mono PCM, **N = 512**
+    (32 ms window; 256 on the 8 kHz branch)
+  - input `state` f32 `[2,B,128]` — zero-init, then previous `stateN`
+    verbatim (streaming carry, same pattern as gtcrn caches)
+  - input `sr` **int64** scalar — 16000 (the graph is a top-level
+    `If(Equal(sr,16000))` selecting the 16 kHz subgraph; ORT runs it,
+    cv::dnn rejects the If — the VAD path degrades to RMS there)
+  - outputs `output` f32 `[B,1]` speech prob + `stateN` f32 `[2,B,128]`
+  - RTF ~1e-3 — a 10-min clip scans in well under a second
+
+## face_detection_yunet.onnx — face detection (WIRED: face blur)
+
+- **Source:** opencv_zoo —
+  https://github.com/opencv/opencv_zoo `models/face_detection_yunet/
+  face_detection_yunet_2023mar.onnx` (233 KB, fp32)
+- **License:** MIT (LICENSE in the zoo model dir, © 2020 Shiqi Yu)
+- **Consumer:** `tools/video_editor/ai/face_detect.cc` —
+  `ScanClipFaces` reuses `ScanClipFrames` (ai/smart_reframe.h) to
+  land a `ClipTrack` labeled "face" on `Clip::object_track`; the
+  `builtin:xer.fx.face_blur` / `xer.fx.track_mosaic` effect
+  pixelates it live. UI: ctx-menu "Auto-blur Faces"
+- **Contract (verified by protobuf inspection):**
+  - input `input` f32 `[1,3,640,640]` BGR NCHW, raw 0..255
+    (**fixed 640²** — probes are stretched, boxes mapped back;
+    dnn::blobFromImage semantics, no mean/std)
+  - outputs per stride s ∈ {8,16,32}: `cls_s`/`obj_s` `[1,N,1]`
+    (activated), `bbox_s` `[1,N,4]` anchor-relative,
+    `kps_s` `[1,N,10]` (5 landmarks: re, le, nose, rm, lm)
+  - decode mirrors cv::FaceDetectorYN: score = sqrt(cls·obj),
+    center = (anchor+bbox)·s, size = exp(bbox)·s — implemented in
+    face_detect.cc DecodeYunet + greedy IoU NMS
+
 ## ggml-base.en.bin — whisper transcription (WIRED, different dir)
 
 - **Location:** `<exe>/models/ggml-base.en.bin` — the whisper consumer

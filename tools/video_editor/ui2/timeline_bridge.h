@@ -95,6 +95,9 @@ public:
         std::function<void(const std::string&)> pin_title;
         std::function<void(const std::string&)> pin_mosaic;
         std::function<void(const std::string&)> clear_track;
+        // "Auto-blur faces" — YuNet scan -> face ClipTrack ->
+        // xer.fx.face_blur effect, all shell-side.
+        std::function<void(const std::string&)> face_blur;
         std::function<void(const std::string&)> edit_transcript;
     };
 

@@ -104,6 +104,26 @@ bool ScanClipDetections(
     const std::function<bool()>& should_cancel, ClipReframe* out,
     std::string* error_out);
 
+// ---- detector-agnostic frame scan ----------------------------------
+// ScanClipDetections with the detector abstracted: `detect` receives
+// the (possibly downscaled) BGRA8 probed frame + dims and returns
+// the raw candidates — FindObject::Detector for objects, YuNet for
+// faces (ai/face_detect.h). The scan owns decode cadence, downscale,
+// scene-cut signatures, sample normalization and progress; the
+// detector owns nothing but frame->boxes. `detect` is invoked on the
+// caller's thread once per probe; returning an empty vector is a
+// documented "no detection" probe, not an error.
+using DetectFrameFn = std::function<std::vector<TrackDetection>(
+    const std::uint8_t* bgra, int w, int h, int stride)>;
+bool ScanClipFrames(
+    const Clip& clip, const ReframeScanParams& params,
+    const DetectFrameFn& detect,
+    const std::function<const TrackDetection*(
+        const std::vector<TrackDetection>&)>& pick,
+    const std::function<void(float)>& progress,
+    const std::function<bool()>& should_cancel, ClipReframe* out,
+    std::string* error_out);
+
 // ---- render-side geometry -------------------------------------------------
 // Axis-aligned crop window in FRAME PIXELS.
 struct ReframeWindow {

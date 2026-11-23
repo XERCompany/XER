@@ -202,3 +202,41 @@ claim stands, flag remains.
    contract change).
 5. Stereo `ExtractPcm` variant only becomes needed if/when stem plumbing
    lands (wave 3) — don't build it early.
+
+## 12. Wave-1 adoption note (implemented 2026-11-23)
+
+The two **ADOPT (S–M)** items at the top of the adoption order shipped
+on `feat/ui-kit-ve-shell`:
+
+- **§8 Silero VAD** — `tools/video_editor/ai/silero_vad.{h,cc}` wraps
+  `silero_vad.onnx` (onnx-community fp32, 2.24 MB, MIT) on the shared
+  `Onnx::Session`. Streaming `[2,B,128]` state carries across 512-sample
+  windows exactly like GTCRN's caches in `voice_isolate.cc`; `sr` rides
+  a new `Input::data_i64` binding in `onnx_session.h` (the model is a
+  top-level `If(Equal(sr,16000))` — ORT runs it, cv::dnn rejects it and
+  the caller degrades). Hysteresis defaults on=0.5/off=0.35,
+  min_speech=0.25 s, min_silence=0.3 s — all tunable via
+  `SilenceDetectParams`. `DetectSilences` gained `method`
+  "auto"/"vad"/"rms": auto takes the VAD path when the model + backend
+  load and inverts its speech spans ("silence = not speech"), keeping
+  the RMS envelope's per-gap `rms_db`; any model-path failure reports
+  `method:"rms"` + `method_detail` — never an error.
+- **§5 YuNet faces** — `tools/video_editor/ai/face_detect.{h,cc}` runs
+  `face_detection_yunet.onnx` (opencv_zoo 2023mar, 233 KB, MIT): fixed
+  [1,3,640,640] BGR NCHW raw 0..255; 12 heads over strides 8/16/32
+  decoded cv::FaceDetectorYN-style (score=√(cls·obj), anchor+exp·stride,
+  greedy IoU NMS + 5 landmarks). `ScanClipFaces` reuses the now
+  detector-agnostic `ScanClipFrames` (smart_reframe.h generalized:
+  `ScanClipDetections` = FindObject detect-callback + pick; YuNet binds
+  the same seam) → `Clip::object_track` labeled `"face"`. New
+  `builtin:xer.fx.face_blur` ("Face Blur (AI)", finer default block +
+  padding) shares the track_mosaic compositor branch; ctx-menu
+  "Auto-blur Faces" runs the async scan and commits track + effect in
+  one history macro.
+- Smoke: `silero_vad` + `face_detect` checks in `smoke_checks.cc` —
+  degradation contract always verified (missing model/bad call → reason,
+  no crash), real-inference sections print `SKIP` when the staged model
+  or a backend is absent. Decode/NMS math is exercised model-free via
+  synthetic head tensors.
+- §11.3 resolved as designed: single-track `Clip::object_track` keeps
+  the primary (largest) face per probe; multi-face storage stays open.

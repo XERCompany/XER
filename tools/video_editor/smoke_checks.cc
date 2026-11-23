@@ -30,7 +30,10 @@
 
 #include <json/json.h>
 
+#include "ai/face_detect.h"
 #include "ai/object_track.h"
+#include "ai/silence_detect.h"
+#include "ai/silero_vad.h"
 #include "ai/smart_reframe.h"
 #include "ai/whisper_transcribe.h"
 #include "ai_tags.h"
@@ -2179,9 +2182,10 @@ std::string CheckJsFx() {
 std::string CheckBuiltinFx() {
     const std::vector<std::string> ids = BuiltinFx::Ids();
     // 49 migrated effects + xer.fx.smart_reframe + xer.fx.track_mosaic
-    // (both geometric — their ABI fns are identities; the compositor
-    // applies them at the warp/mask pass).
-    if (ids.size() != 51) {
+    // + xer.fx.face_blur (all three geometric/track-driven — their ABI
+    // fns are identities; the compositor applies them at the warp/mask
+    // pass).
+    if (ids.size() != 52) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -6256,6 +6260,492 @@ std::string CheckObjectTrack() {
     return {};
 }
 
+// Silero VAD (ai/silero_vad.h) + the VAD silence-cut upgrade
+// (ai/silence_detect.h method "auto"/"vad"). What MUST hold
+// regardless of the environment: a missing model path, an unloaded
+// session and a bad DetectSpeech call all produce reasons, never
+// crashes. When silero_vad.onnx + an ONNX backend are staged the
+// check runs real inference on synthetic PCM (silence -> speech-like
+// harmonics -> loud noise -> silence): the noise region must read
+// non-speech under VAD (where RMS sees it as non-silent — the
+// upgrade's whole point), the harmonic region must stay speech, and
+// DetectSilences must report method "vad" while "rms" still answers
+// the envelope path.
+std::string CheckSileroVad() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::SileroVad vad;
+    if (vad.IsLoaded()) return "fresh SileroVad reports loaded";
+    if (vad.Load("definitely/missing/silero_vad.onnx", &err)) {
+        return "SileroVad::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "SileroVad::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<float> window(Ai::kVadWindowSamples, 0.0f);
+    float prob = -1.0f;
+    if (vad.ProcessWindow(window.data(), &prob, &err)) {
+        return "ProcessWindow ran on an unloaded session";
+    }
+    err.clear();
+    std::vector<Ai::SpeechSpan> spans;
+    if (Ai::DetectSpeech(vad, window.data(), window.size(),
+                         Ai::VadSpeechParams{}, &spans, nullptr,
+                         &err)) {
+        return "DetectSpeech ran on an unloaded session";
+    }
+    err.clear();
+
+    // DetectSilences on a missing file still fails the documented way.
+    Ai::SilenceResult res;
+    if (Ai::DetectSilences("definitely/missing/audio.wav",
+                           Ai::SilenceDetectParams{}, false, &res,
+                           &err)) {
+        return "DetectSilences accepted a nonexistent file";
+    }
+
+    // ---- real-model path: only when staged + loadable ----
+    const std::string model = Ai::SileroVadModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  silero_vad: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!vad.Load(model, &err)) {
+        std::fprintf(stdout,
+                     "  silero_vad: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+
+    // Synthetic 4.5 s @16 kHz mono:
+    //   0.0-1.0  digital silence
+    //   1.0-2.5  speech-like harmonic stack (150 Hz + partials,
+    //            4 Hz AM) over light noise
+    //   2.5-3.5  LOUD broadband noise only — RMS reads energy
+    //            (not silence), VAD should read non-speech
+    //   3.5-4.5  digital silence
+    const int n = static_cast<int>(4.5 * Ai::kVadSampleRate);
+    std::vector<float> pcm(static_cast<std::size_t>(n), 0.0f);
+    std::uint32_t rng = 0x13579BDFu;
+    auto noise = [&] {
+        rng = rng * 1664525u + 1013904223u;
+        return (static_cast<float>((rng >> 9) & 0x7FFFFF) /
+                    4194304.0f -
+                1.0f);
+    };
+    for (int i = 0; i < n; ++i) {
+        const double t = static_cast<double>(i) / Ai::kVadSampleRate;
+        if (t >= 1.0 && t < 2.5) {
+            float v = 0.0f;
+            for (int k = 1; k <= 8; ++k) {
+                v += (0.35f / k) *
+                     std::sin(2.0f * 3.14159265f * 150.0f * k *
+                              static_cast<float>(t));
+            }
+            // Shallow 4 Hz AM — a speech-like envelope without troughs
+            // deep enough to dip the model under speech_off.
+            pcm[static_cast<std::size_t>(i)] =
+                v * (0.75f + 0.25f * std::sin(2.0f * 3.14159265f *
+                                            4.0f *
+                                            static_cast<float>(t))) +
+                noise() * 0.02f;
+        } else if (t >= 2.5 && t < 3.5) {
+            pcm[static_cast<std::size_t>(i)] = noise() * 0.3f;
+        }
+    }
+
+    // Streaming contract: per-window probs over the file — speech
+    // windows inside [1.0,2.5], non-speech elsewhere.
+    std::vector<float> probs;
+    if (!Ai::DetectSpeech(vad, pcm.data(), pcm.size(),
+                          Ai::VadSpeechParams{}, &spans, &probs,
+                          &err)) {
+        return "DetectSpeech failed on synthetic PCM: " + err;
+    }
+    const std::size_t expected_windows =
+        (pcm.size() + Ai::kVadWindowSamples - 1) /
+        Ai::kVadWindowSamples;
+    if (probs.size() != expected_windows) {
+        return "DetectSpeech produced the wrong window count";
+    }
+    bool any_prob_out_of_range = false;
+    for (const float p : probs) {
+        if (!(p >= 0.0f && p <= 1.0f)) any_prob_out_of_range = true;
+    }
+    if (any_prob_out_of_range) {
+        return "VAD probability outside [0,1]";
+    }
+    std::fprintf(stdout,
+                 "  silero_vad: %zu windows -> %zu speech span(s)\n",
+                 probs.size(), spans.size());
+    for (const Ai::SpeechSpan& s : spans) {
+        std::fprintf(stdout,
+                     "    speech %.2f-%.2f (mean prob %.2f)\n", s.t0,
+                     s.t1, s.mean_prob);
+    }
+    std::fflush(stdout);
+    const auto overlaps = [](const std::vector<Ai::SpeechSpan>& v,
+                             double t0, double t1) {
+        for (const Ai::SpeechSpan& s : v) {
+            if (s.t1 > t0 && s.t0 < t1) return true;
+        }
+        return false;
+    };
+    // Speech preserved: most of [1.2, 2.3] must be covered by speech.
+    double covered = 0.0;
+    for (const Ai::SpeechSpan& s : spans) {
+        covered += std::max(0.0, std::min(s.t1, 2.3) -
+                                     std::max(s.t0, 1.2));
+    }
+    if (covered < 0.8) {
+        return "VAD dropped the harmonic speech region";
+    }
+    // Noise reads non-speech: no speech span may cover [2.7, 3.3].
+    if (overlaps(spans, 2.7, 3.3)) {
+        return "VAD called loud broadband noise speech";
+    }
+    // Real silence reads non-speech too.
+    if (overlaps(spans, 0.1, 0.9) || overlaps(spans, 3.7, 4.4)) {
+        return "VAD called digital silence speech";
+    }
+
+    // End-to-end silence cut: write the PCM as a PCM16 WAV and run
+    // DetectSilences under both methods on the same file.
+    const auto dir = SmokeTempDir() / "silero_vad";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    const auto wav_path = dir / "vad_test.wav";
+    {
+        std::ofstream w(wav_path,
+                        std::ios::binary | std::ios::trunc);
+        if (!w) return "could not write the VAD test WAV";
+        const std::uint32_t data_size =
+            static_cast<std::uint32_t>(pcm.size() * 2);
+        const std::uint32_t riff_size = 36 + data_size;
+        const char riff[] = "RIFF";
+        const char wave[] = "WAVE";
+        const char fmt[] = "fmt ";
+        const char data_id[] = "data";
+        const std::uint32_t fmt_len = 16;
+        const std::uint16_t audio_fmt = 1;      // PCM
+        const std::uint16_t channels = 1;
+        const std::uint32_t rate = Ai::kVadSampleRate;
+        const std::uint32_t byte_rate = rate * 2;
+        const std::uint16_t align = 2;
+        const std::uint16_t bits = 16;
+        const auto put = [&](const void* p, std::size_t bytes) {
+            w.write(static_cast<const char*>(p),
+                    static_cast<std::streamsize>(bytes));
+        };
+        put(riff, 4);
+        put(&riff_size, 4);
+        put(wave, 4);
+        put(fmt, 4);
+        put(&fmt_len, 4);
+        put(&audio_fmt, 2);
+        put(&channels, 2);
+        put(&rate, 4);
+        put(&byte_rate, 4);
+        put(&align, 2);
+        put(&bits, 2);
+        put(data_id, 4);
+        put(&data_size, 4);
+        std::vector<std::int16_t> s16(pcm.size());
+        for (std::size_t i = 0; i < pcm.size(); ++i) {
+            s16[i] = static_cast<std::int16_t>(std::lround(
+                std::clamp(pcm[i], -1.0f, 1.0f) * 32767.0f));
+        }
+        put(s16.data(), s16.size() * 2);
+    }
+    const std::string wav_utf8 = Utf8Path(wav_path);
+
+    // RMS method on the same file: the loud noise region must NOT be
+    // flagged silent (the envelope sees energy) — the VAD upgrade's
+    // distinguishing behavior.
+    Ai::SilenceDetectParams rms_params;
+    rms_params.method = "rms";
+    rms_params.min_silence = 0.3;
+    Ai::SilenceResult rms_result;
+    Ai::SilenceDetectParams vad_params;
+    vad_params.method = "auto";
+    vad_params.min_silence = 0.3;
+    vad_params.vad_min_silence = 0.3;
+    try {
+        if (!Ai::DetectSilences(wav_utf8, rms_params, false,
+                                &rms_result, &err)) {
+            return "DetectSilences(rms) failed on the test WAV: " +
+                   err;
+        }
+        // VAD/auto on the same file: silence = "not speech". The
+        // noise region must now appear as a silence; the harmonic
+        // region must not. Environments where the model failed to
+        // load earlier never reach this point.
+        if (!Ai::DetectSilences(wav_utf8, vad_params, false, &res,
+                                &err)) {
+            return "DetectSilences(auto) failed on the test WAV: " +
+                   err;
+        }
+    } catch (const std::exception& e) {
+        // A throwing analysis path is a defect worth a FAIL line,
+        // not a suite crash (audio_pcm's drain regression was found
+        // exactly this way).
+        return std::string("DetectSilences threw std::exception: ") +
+               e.what();
+    } catch (...) {
+        return "DetectSilences threw a non-std exception";
+    }
+    if (rms_result.method != "rms") {
+        return "DetectSilences(rms) did not report method rms";
+    }
+    const auto silent_overlap = [](const Ai::SilenceResult& r,
+                                   double t0, double t1) {
+        for (const Ai::SilenceSpan& s : r.silences) {
+            if (s.t1 > t0 && s.t0 < t1) return true;
+        }
+        return false;
+    };
+    if (silent_overlap(rms_result, 2.7, 3.3)) {
+        return "RMS flagged loud noise as silence — the fixture is "
+               "unprovable";
+    }
+    if (res.method != "vad") {
+        return "DetectSilences(auto) did not take the VAD path "
+               "(method='" +
+               res.method + "', detail='" + res.method_detail + "')";
+    }
+    if (!silent_overlap(res, 2.7, 3.3)) {
+        return "VAD silence cut missed the noise region";
+    }
+    if (silent_overlap(res, 1.3, 2.2)) {
+        return "VAD silence cut ate the speech region";
+    }
+    if (!silent_overlap(res, 0.0, 0.9) ||
+        !silent_overlap(res, 3.7, 4.5)) {
+        return "VAD silence cut missed the real silence";
+    }
+    return {};
+}
+
+// YuNet face detection (ai/face_detect.h) — the auto face-blur scan.
+// What MUST hold regardless of the environment: Load on a missing
+// file fails with a reason, Detect on an unloaded detector returns
+// empty, and ScanClipFaces degrades like ScanClipTrack. Decode+NMS
+// are exercised WITHOUT a model via synthetic head tensors (a
+// synthetic drawn face would not reliably trigger YuNet — documented
+// fixture limit). When the model + backend are staged, Detect runs
+// on a synthetic frame end to end (zero faces is a legal result).
+std::string CheckFaceDetect() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::FaceDetector detector;
+    if (detector.IsLoaded()) return "fresh FaceDetector reports loaded";
+    if (detector.Load("definitely/missing/yunet.onnx", &err)) {
+        return "FaceDetector::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "FaceDetector::Load failed a missing model with no "
+               "reason";
+    }
+    std::vector<std::uint8_t> bgra(160 * 120 * 4, 0x80);
+    for (std::size_t p = 3; p < bgra.size(); p += 4) bgra[p] = 0xFF;
+    if (!detector.Detect(bgra.data(), 160, 120, 160 * 4,
+                         Ai::FaceDetectParams{})
+             .empty()) {
+        return "unloaded FaceDetector returned detections";
+    }
+
+    Clip clip;
+    clip.id = "face-scan";
+    clip.source_path = "definitely/missing/media.mp4";
+    clip.duration = 5.0;
+    ClipTrack track;
+    if (Ai::ScanClipFaces(clip, "", Ai::ReframeScanParams{},
+                          Ai::FaceDetectParams{}, nullptr, nullptr,
+                          &track, &err)) {
+        return "ScanClipFaces succeeded with no model";
+    }
+    if (err.empty() || !track.samples.empty()) {
+        return "no-model face scan did not report a reason";
+    }
+    Clip generated = MakeGeneratedClip("genf", 0, 0.0, 1.0,
+                                       SourceKind::ColorBars,
+                                       "smpte75");
+    if (Ai::ScanClipFaces(generated, "x.onnx",
+                          Ai::ReframeScanParams{},
+                          Ai::FaceDetectParams{}, nullptr, nullptr,
+                          &track, &err)) {
+        return "ScanClipFaces scanned a generated clip";
+    }
+
+    // ---- decode + NMS math (model-free) ----
+    // 640x640 input: stride-8 head has 80x80 = 6400 anchors. Plant
+    // two overlapping hits (one stronger) at cells (r=10,c=20) and
+    // (r=10,c=21) plus a distant one at (r=60,c=60); NMS must keep
+    // the strong + the distant and suppress the weak neighbor.
+    {
+        constexpr int S = Ai::kYunetInputSize;   // 640
+        const std::size_t count =
+            static_cast<std::size_t>(S / 8) * (S / 8);
+        std::vector<float> cls(count, 0.0f), obj(count, 0.0f);
+        std::vector<float> bbox(count * 4, 0.0f);
+        std::vector<float> kps(count * 10, 0.0f);
+        const int cols = S / 8;
+        const auto plant = [&](int r, int c, float score,
+                               float dx, float dy, float log_w,
+                               float log_h) {
+            const std::size_t idx =
+                static_cast<std::size_t>(r) * cols + c;
+            cls[idx] = score;
+            obj[idx] = score;
+            bbox[idx * 4 + 0] = dx;
+            bbox[idx * 4 + 1] = dy;
+            bbox[idx * 4 + 2] = log_w;
+            bbox[idx * 4 + 3] = log_h;
+        };
+        plant(10, 20, 0.9f, 0.25f, -0.25f, std::log(4.0f),
+              std::log(4.0f));
+        plant(10, 21, 0.5f, 0.0f, 0.0f, std::log(4.0f),
+              std::log(4.0f));
+        plant(60, 60, 0.8f, 0.0f, 0.0f, std::log(8.0f),
+              std::log(8.0f));
+        Ai::YunetHeadView head;
+        head.stride = 8;
+        head.cls = cls.data();
+        head.obj = obj.data();
+        head.bbox = bbox.data();
+        head.kps = kps.data();
+        head.count = count;
+        Ai::FaceDetectParams p;
+        p.score_threshold = 0.3f;
+        const auto faces =
+            Ai::DecodeYunet(&head, 1, S, S, p);
+        if (faces.size() != 2) {
+            return "DecodeYunet kept " +
+                   std::to_string(faces.size()) +
+                   " boxes (expected 2 after NMS)";
+        }
+        // NMS keeps score order: the 0.9 box first.
+        const Ai::FaceBox& f = faces[0];
+        if (std::fabs(f.score - 0.9f) > 1e-3f) {
+            return "DecodeYunet did not keep the strongest box first";
+        }
+        // Cell (r=10,c=20): cx=(20.25)*8=162, cy=(9.75)*8=78,
+        // w=h=exp(log4)*8=32 -> x=146, y=62.
+        if (std::fabs(f.x - 146.0f) > 0.6f ||
+            std::fabs(f.y - 62.0f) > 0.6f ||
+            std::fabs(f.w - 32.0f) > 0.6f ||
+            std::fabs(f.h - 32.0f) > 0.6f) {
+            return "DecodeYunet box decode is off the anchor math";
+        }
+    }
+
+    // ---- registered descriptor + compositor branch ----
+    {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:xer.fx.face_blur");
+        if (desc == nullptr || !desc->builtin ||
+            desc->id != Ai::kFaceBlurId) {
+            return "builtin:xer.fx.face_blur is not registered";
+        }
+        if (desc->params.size() != 3 ||
+            std::string(desc->params[0].name) != "block" ||
+            std::string(desc->params[1].name) != "padding" ||
+            std::string(desc->params[2].name) != "smoothing") {
+            return "face_blur param table is not {block, padding, "
+                   "smoothing}";
+        }
+        // The face-blur id must pixelate the same way track_mosaic
+        // does: same clip + track as the object_track check, thin
+        // effect id swapped.
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        Clip bars_clip = MakeGeneratedClip("bars-f", 0, 0.0, 1.0,
+                                           SourceKind::ColorBars,
+                                           "smpte75");
+        bars_clip.effects.push_back(
+            {"builtin:xer.fx.face_blur", {128.0f, 0.0f, 0.0f}});
+        ReframeSample s;
+        s.t = 0.0;
+        s.cx = 0.25f;
+        s.cy = 0.5f;
+        s.w = 0.10f;
+        s.h = 1.0f;
+        s.confidence = 0.9f;
+        bars_clip.object_track.label = "face";
+        bars_clip.object_track.samples.push_back(s);
+        project.clips.push_back(bars_clip);
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> out;
+        const bool rendered = compositor.RenderFrameAt(0.0, &out, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const auto px = [&out](int x, int y) {
+            const std::uint8_t* p =
+                out.data() +
+                (static_cast<std::size_t>(y) * 200 + x) * 4;
+            return std::array<int, 4>{p[0], p[1], p[2], p[3]};
+        };
+        if (px(42, 50) != px(58, 50)) {
+            return "face_blur did not pixelate the tracked face box";
+        }
+    }
+
+    // ---- real-model path: only when staged + loadable ----
+    const std::string model = Ai::FaceDetectModel();
+    if (model.empty() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  face_detect: SKIP (model or ONNX backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!detector.Load(model, &err)) {
+        std::fprintf(stdout,
+                     "  face_detect: SKIP (staged model rejected: "
+                     "%s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    // A uniform gray frame is legal inference input — zero faces is
+    // the expected result; the contract is "returns, does not
+    // crash" (synthetic faces are fixture-limited per the header).
+    const auto faces = detector.Detect(bgra.data(), 160, 120,
+                                       160 * 4,
+                                       Ai::FaceDetectParams{});
+    std::fprintf(stdout,
+                 "  face_detect: inference ran on '%s' -> %zu "
+                 "detection(s)\n",
+                 detector.BackendId().c_str(), faces.size());
+    std::fflush(stdout);
+    for (const Ai::FaceBox& f : faces) {
+        if (!std::isfinite(f.x) || !std::isfinite(f.w) || f.w <= 0.0f ||
+            f.h <= 0.0f) {
+            return "face_detect produced a degenerate box";
+        }
+    }
+    return {};
+}
+
 // Object Lab AI ops (lab/ai_ops.h on the shared YA.AIFindObject
 // onnx_session): BiRefNet alpha matting + EfficientSAM smart-select.
 // What MUST hold regardless of the environment: bad inputs and a
@@ -7384,6 +7874,8 @@ constexpr CheckEntry kChecks[] = {
     {"ai_tags", &CheckAiTags},
     {"smart_reframe", &CheckSmartReframe},
     {"object_track", &CheckObjectTrack},
+    {"silero_vad", &CheckSileroVad},
+    {"face_detect", &CheckFaceDetect},
     // Env-gated: ai_lab_ops crashes inside ORT SAM inference on this machine
     // (onnxruntime + SAM encoder/decoder; fails before any repo code returns,
     // confirmed 2026-11-23). Re-enable when the ORT/model stack is fixed.
