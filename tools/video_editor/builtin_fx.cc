@@ -31,6 +31,19 @@
 #include <vector>
 
 #include "audio/effects_rack/fx_distortion_tube.h"
+#include "audio/effects_rack/fx_dynamics_compressor.h"
+#include "audio/effects_rack/fx_dynamics_expander.h"
+#include "audio/effects_rack/fx_dynamics_gate.h"
+#include "audio/effects_rack/fx_dynamics_limiter.h"
+#include "audio/effects_rack/fx_eq_graphic.h"
+#include "audio/effects_rack/fx_eq_parametric.h"
+#include "audio/effects_rack/fx_mod_chorus.h"
+#include "audio/effects_rack/fx_mod_extra.h"
+#include "audio/effects_rack/fx_mod_flanger.h"
+#include "audio/effects_rack/fx_mod_phaser.h"
+#include "audio/effects_rack/fx_pitch_auto_tune_correct.h"
+#include "audio/effects_rack/fx_reverb_algorithmic.h"
+#include "audio/effects_rack/fx_reverb_convolution.h"
 #include "voice_isolate.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
@@ -1766,6 +1779,353 @@ int voice_isolate(XER_AudioBuffer* b, const float* p, int32_t n) {
     return 0;
 }
 
+// ── audio (effects_rack exposure wave) ─────────────────────────────
+// The src/audio/effects_rack classes are mono-per-instance engines
+// with real per-sample state (envelopes, delay lines, LFO phases).
+// The ABI fn is stateless per call, so each fn (a) constructs its
+// rack instance inside the call — state lives exactly one block, the
+// same contract the ported echo/onepole kernels already keep — and
+// (b) runs one instance PER CHANNEL via PerChannel below: flat
+// interleaved processing would alternate L/R samples through a
+// single envelope/delay line and corrupt stereo content.
+//
+// fn(float* mono, int32_t frames, int channel) -> bool ok
+template <typename Fn>
+int PerChannel(XER_AudioBuffer* b, Fn&& fn) {
+    if (!AudioValid(b)) return 0;
+    const int32_t ch = b->channels;
+    const int32_t frames = b->frames;
+    std::vector<std::vector<float>> lanes(static_cast<size_t>(ch));
+    for (int32_t c = 0; c < ch; ++c) {
+        lanes[static_cast<size_t>(c)].assign(
+            static_cast<size_t>(frames), 0.f);
+    }
+    for (int32_t i = 0; i < frames; ++i) {
+        float* frame = b->samples + static_cast<size_t>(i) * ch;
+        for (int32_t c = 0; c < ch; ++c) {
+            lanes[static_cast<size_t>(c)][static_cast<size_t>(i)] =
+                frame[c];
+        }
+    }
+    for (int32_t c = 0; c < ch; ++c) {
+        if (!fn(lanes[static_cast<size_t>(c)].data(), frames, c)) {
+            return 1;
+        }
+    }
+    for (int32_t i = 0; i < frames; ++i) {
+        float* frame = b->samples + static_cast<size_t>(i) * ch;
+        for (int32_t c = 0; c < ch; ++c) {
+            frame[c] = lanes[static_cast<size_t>(c)][static_cast<size_t>(i)];
+        }
+    }
+    return 0;
+}
+
+namespace Rack = XER::Audio::FX;
+
+// xer.af.compressor — DynamicsCompressor: threshold/ratio/attack/
+// release, per-channel envelope.
+int af_compressor(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float th = std::clamp(Param(p, n, 0, -18.f), -60.f, 0.f);
+    const float ratio = std::clamp(Param(p, n, 1, 4.f), 1.f, 20.f);
+    const float atk = std::clamp(Param(p, n, 2, 10.f), 0.1f, 500.f);
+    const float rel = std::clamp(Param(p, n, 3, 120.f), 1.f, 2000.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::DynamicsCompressor comp;
+        comp.SetSampleRate(b->sample_rate);
+        comp.SetThresholdDb(th);
+        comp.SetRatio(ratio);
+        comp.SetAttackMs(atk);
+        comp.SetReleaseMs(rel);
+        return comp.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.limiter — DynamicsLimiter: ceiling + release. The class's
+// release_ is a raw per-sample one-pole coefficient; the param is a
+// friendlier release_ms mapped to that coefficient.
+int af_limiter(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float ceil_db =
+        std::clamp(Param(p, n, 0, -1.f), -20.f, 0.f);
+    const float rel_ms =
+        std::clamp(Param(p, n, 1, 50.f), 0.1f, 2000.f);
+    const float coeff =
+        1.f - std::exp(-1.f / (b->sample_rate * rel_ms * 0.001f));
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::DynamicsLimiter lim;
+        lim.SetCeilingDb(ceil_db);
+        lim.SetRelease(coeff);
+        return lim.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.gate — DynamicsGate: threshold + hold time (ms -> samples).
+int af_gate(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float th = std::clamp(Param(p, n, 0, -50.f), -80.f, 0.f);
+    const float hold_ms =
+        std::clamp(Param(p, n, 1, 50.f), 0.f, 2000.f);
+    const size_t hold = static_cast<size_t>(
+        hold_ms * 0.001f * b->sample_rate + 0.5f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::DynamicsGate gate;
+        gate.SetThresholdDb(th);
+        gate.SetHoldSamples(hold);
+        return gate.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.expander — DynamicsExpander: threshold/ratio/range.
+int af_expander(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float th = std::clamp(Param(p, n, 0, -40.f), -60.f, 0.f);
+    const float ratio = std::clamp(Param(p, n, 1, 2.f), 1.f, 10.f);
+    const float range = std::clamp(Param(p, n, 2, 60.f), 0.f, 80.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::DynamicsExpander ex;
+        ex.SetThresholdDb(th);
+        ex.SetRatio(ratio);
+        ex.SetRangeDb(range);
+        return ex.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.eq_parametric — ParametricEQ: 3 parallel band-pass bands,
+// (freq, gain_db, q) triples. gain_db == 0 leaves the band a no-op.
+int af_eq_parametric(XER_AudioBuffer* b, const float* p, int32_t n) {
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::ParametricEQ eq;
+        if (!eq.Initialize(b->sample_rate, 3)) return false;
+        static constexpr float kDefaultFreq[3] = {200.f, 1000.f,
+                                                  8000.f};
+        for (int band = 0; band < 3; ++band) {
+            Rack::ParametricBand desc{
+                std::clamp(Param(p, n, band * 3 + 0,
+                                 kDefaultFreq[band]),
+                           20.f, 20000.f),
+                std::clamp(Param(p, n, band * 3 + 2, 1.f), 0.2f, 10.f),
+                std::clamp(Param(p, n, band * 3 + 1, 0.f), -18.f,
+                           18.f),
+                true};
+            eq.SetBand(static_cast<size_t>(band), desc);
+        }
+        return eq.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.eq_graphic — GraphicEQ: fixed ISO octave centers, ten
+// per-band gain params.
+int af_eq_graphic(XER_AudioBuffer* b, const float* p, int32_t n) {
+    static const std::vector<float> kCenters = {
+        31.25f, 62.5f, 125.f, 250.f, 500.f,
+        1000.f, 2000.f, 4000.f, 8000.f, 16000.f};
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::GraphicEQ eq;
+        if (!eq.Initialize(b->sample_rate, kCenters)) return false;
+        for (size_t band = 0; band < kCenters.size(); ++band) {
+            eq.SetBandGainDb(
+                band, std::clamp(
+                          Param(p, n, static_cast<int32_t>(band), 0.f),
+                          -18.f, 18.f));
+        }
+        return eq.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.chorus — ModChorus: rate/depth(ms)/mix over a 60 ms delay.
+int af_chorus(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float rate = std::clamp(Param(p, n, 0, 0.8f), 0.05f, 10.f);
+    const float depth_ms =
+        std::clamp(Param(p, n, 1, 8.f), 0.f, 20.f);
+    const float mix = std::clamp(Param(p, n, 2, 0.5f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::ModChorus fx;
+        if (!fx.Initialize(b->sample_rate,
+                           static_cast<size_t>(b->sample_rate * 0.06f)))
+            return false;
+        fx.SetRateHz(rate);
+        fx.SetDepthSamples(depth_ms * 0.001f * b->sample_rate);
+        fx.SetMix(mix);
+        return fx.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.flanger — ModFlanger: rate/depth/feedback/mix, 20 ms line.
+int af_flanger(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float rate = std::clamp(Param(p, n, 0, 0.5f), 0.05f, 10.f);
+    const float depth_ms =
+        std::clamp(Param(p, n, 1, 2.f), 0.f, 10.f);
+    const float fb = std::clamp(Param(p, n, 2, 0.5f), -0.95f, 0.95f);
+    const float mix = std::clamp(Param(p, n, 3, 0.5f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::ModFlanger fx;
+        if (!fx.Initialize(b->sample_rate,
+                           static_cast<size_t>(b->sample_rate * 0.02f)))
+            return false;
+        fx.SetRateHz(rate);
+        fx.SetDepthSamples(depth_ms * 0.001f * b->sample_rate);
+        fx.SetFeedback(fb);
+        fx.SetMix(mix);
+        return fx.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.phaser — ModPhaser: stages/rate/depth/feedback/mix.
+int af_phaser(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float stages = std::clamp(Param(p, n, 0, 4.f), 1.f, 12.f);
+    const float rate = std::clamp(Param(p, n, 1, 0.5f), 0.05f, 10.f);
+    const float depth = std::clamp(Param(p, n, 2, 0.7f), 0.f, 1.f);
+    const float fb = std::clamp(Param(p, n, 3, 0.4f), -0.95f, 0.95f);
+    const float mix = std::clamp(Param(p, n, 4, 0.5f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::ModPhaser fx;
+        if (!fx.Initialize(b->sample_rate,
+                           static_cast<size_t>(stages)))
+            return false;
+        fx.SetRateHz(rate);
+        fx.SetDepth(depth);
+        fx.SetFeedback(fb);
+        fx.SetMix(mix);
+        return fx.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.vibrato — ModVibrato (fx_mod_extra): rate/depth_ms/mix on a
+// 30 ms fractional delay.
+int af_vibrato(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float rate = std::clamp(Param(p, n, 0, 5.f), 0.05f, 20.f);
+    const float depth_ms =
+        std::clamp(Param(p, n, 1, 4.f), 0.f, 15.f);
+    const float mix = std::clamp(Param(p, n, 2, 1.f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::ModVibrato fx;
+        if (!fx.Initialize(b->sample_rate,
+                           static_cast<size_t>(b->sample_rate * 0.03f)))
+            return false;
+        fx.SetRateHz(rate);
+        fx.SetDepthMs(depth_ms);
+        fx.SetMix(mix);
+        return fx.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.ring_mod — ModRingMod (fx_mod_extra): carrier freq + mix.
+int af_ring_mod(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float freq =
+        std::clamp(Param(p, n, 0, 80.f), 1.f, 2000.f);
+    const float mix = std::clamp(Param(p, n, 1, 1.f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::ModRingMod fx;
+        if (!fx.Initialize(b->sample_rate)) return false;
+        fx.SetFrequencyHz(freq);
+        fx.SetMix(mix);
+        return fx.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// xer.af.autotune — AutoTuneCorrectPitch: amount/retune/humanize/
+// scale (root+mode)/presence/wet. ProcessBlock caps at
+// max_block_size, so each channel runs in 4096-sample chunks.
+int af_autotune(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float amount = std::clamp(Param(p, n, 0, 0.88f), 0.f, 1.f);
+    const float retune =
+        std::clamp(Param(p, n, 1, 18.f), 1.f, 400.f);
+    const float humanize =
+        std::clamp(Param(p, n, 2, 0.12f), 0.f, 1.f);
+    const float root = std::clamp(Param(p, n, 3, 0.f), 0.f, 11.f);
+    const float mode = std::clamp(Param(p, n, 4, 0.f), 0.f, 3.f);
+    const float presence =
+        std::clamp(Param(p, n, 5, 1.6f), -12.f, 12.f);
+    const float wet = std::clamp(Param(p, n, 6, 0.92f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::AutoTuneCorrectPitch fx;
+        constexpr size_t kChunk = 4096;
+        if (!fx.Initialize(b->sample_rate, kChunk)) return false;
+        fx.SetCorrectionAmount(amount);
+        fx.SetRetuneSpeedMs(retune);
+        fx.SetHumanize(humanize);
+        fx.SetScaleRoot(root);
+        fx.SetScaleMode(mode);
+        fx.SetPresenceDb(presence);
+        fx.SetWetMix(wet);
+        for (int32_t off = 0; off < frames; off += kChunk) {
+            const size_t count = static_cast<size_t>(
+                std::min<int32_t>(frames - off, kChunk));
+            if (!fx.ProcessBlock(s + off, count, s + off)) return false;
+        }
+        return true;
+    });
+}
+
+// xer.af.reverb — ReverbAlgorithmic: room_size/damping/mix.
+int af_reverb(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float room = std::clamp(Param(p, n, 0, 0.6f), 0.f, 1.f);
+    const float damp = std::clamp(Param(p, n, 1, 0.5f), 0.f, 1.f);
+    const float mix = std::clamp(Param(p, n, 2, 0.3f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int) {
+        Rack::ReverbAlgorithmic fx;
+        // Longest internal tap scales to ~140 ms at room_size 1 —
+        // 250 ms of line covers every setting.
+        if (!fx.Initialize(
+                b->sample_rate,
+                static_cast<size_t>(b->sample_rate * 0.25f)))
+            return false;
+        fx.SetRoomSize(room);
+        fx.SetDamping(damp);
+        fx.SetMix(mix);
+        return fx.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
+// Procedural impulse response for xer.af.reverb_ir: exponentially
+// decaying white noise (-60 dB at the tail) with a progressive
+// one-pole HF rolloff — `damp` sweeps the coefficient from bright
+// to dark along the tail. Per-channel seeds decorrelate L/R so the
+// space isn't perfectly mono.
+std::vector<float> MakeImpulseResponse(float sample_rate,
+                                       float decay_s, float damp,
+                                       std::uint32_t seed) {
+    const size_t len = std::max<size_t>(
+        64, static_cast<size_t>(decay_s * sample_rate + 0.5f));
+    std::vector<float> ir(len);
+    std::uint32_t rng = seed;
+    float lp = 0.f;
+    for (size_t i = 0; i < len; ++i) {
+        rng = rng * 1664525u + 1013904223u;
+        const float white =
+            static_cast<float>((rng >> 9) & 0x7FFFFFu) / 4194304.f -
+            1.f;
+        const float t = static_cast<float>(i) / len;
+        // a sweeps 0.95 -> 0.03 as damp*time rises (damp 0 = flat).
+        const float a =
+            std::clamp(0.95f - 0.92f * damp * t, 0.01f, 1.f);
+        lp += a * (white - lp);
+        ir[i] = lp * std::exp(-6.9078f * t);
+    }
+    return ir;
+}
+
+// xer.af.reverb_ir — ReverbConvolution: decay/damp/mix against a
+// synthesized IR (the ABI has no string/file param channel, so the
+// IR is generated rather than loaded — deterministic and
+// license-free). Per-channel seeds give a stereo-correlated but not
+// identical tail.
+int af_reverb_ir(XER_AudioBuffer* b, const float* p, int32_t n) {
+    const float decay =
+        std::clamp(Param(p, n, 0, 1.2f), 0.05f, 6.f);
+    const float damp = std::clamp(Param(p, n, 1, 0.4f), 0.f, 1.f);
+    const float mix = std::clamp(Param(p, n, 2, 0.3f), 0.f, 1.f);
+    return PerChannel(b, [&](float* s, int32_t frames, int c) {
+        Rack::ReverbConvolution fx;
+        const std::vector<float> ir = MakeImpulseResponse(
+            b->sample_rate, decay, damp,
+            0x9E3779B9u + static_cast<std::uint32_t>(c) * 0x85EBCA6Bu);
+        if (!fx.LoadImpulseResponse(ir.data(), ir.size())) {
+            return false;
+        }
+        fx.SetMix(mix);
+        return fx.ProcessBlock(s, static_cast<size_t>(frames), s);
+    });
+}
+
 // Smart Reframe is a geometric, track-driven effect — the compositor
 // applies it at the warp stage. This identity keeps the registered ABI
 // entry inert for any generic pixel-fx path that still invokes it.
@@ -2076,6 +2436,198 @@ const std::vector<PluginDesc>& Effects() {
                      XER_PLUGIN_AUDIO_FX, nullptr, &voice_isolate);
             static const XER_ParamDesc kParams[] = {
                 {"amount", 0.f, 1.f, 1.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        // ── audio (effects_rack exposure — src/audio/effects_rack) ──
+        // Dynamics. Per-channel instances inside the ABI fn (see the
+        // wave comment above PerChannel).
+        [] {
+            PluginDesc d =
+                Desc("xer.af.compressor", "Compressor",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_compressor);
+            static const XER_ParamDesc kParams[] = {
+                {"threshold_db", -60.f, 0.f, -18.f},
+                {"ratio", 1.f, 20.f, 4.f},
+                {"attack_ms", 0.1f, 500.f, 10.f},
+                {"release_ms", 1.f, 2000.f, 120.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.limiter", "Limiter",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_limiter);
+            static const XER_ParamDesc kParams[] = {
+                {"ceiling_db", -20.f, 0.f, -1.f},
+                {"release_ms", 0.1f, 2000.f, 50.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d = Desc("xer.af.gate", "Noise Gate",
+                                XER_PLUGIN_AUDIO_FX, nullptr, &af_gate);
+            static const XER_ParamDesc kParams[] = {
+                {"threshold_db", -80.f, 0.f, -50.f},
+                {"hold_ms", 0.f, 2000.f, 50.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.expander", "Expander",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_expander);
+            static const XER_ParamDesc kParams[] = {
+                {"threshold_db", -60.f, 0.f, -40.f},
+                {"ratio", 1.f, 10.f, 2.f},
+                {"range_db", 0.f, 80.f, 60.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        // EQ. Parametric is 3 (freq, gain, q) triples; graphic is a
+        // fixed 10-band ISO set of gains.
+        [] {
+            PluginDesc d =
+                Desc("xer.af.eq_parametric", "Parametric EQ",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_eq_parametric);
+            static const XER_ParamDesc kParams[] = {
+                {"freq_1", 20.f, 20000.f, 200.f},
+                {"gain_1", -18.f, 18.f, 0.f},
+                {"q_1", 0.2f, 10.f, 1.f},
+                {"freq_2", 20.f, 20000.f, 1000.f},
+                {"gain_2", -18.f, 18.f, 0.f},
+                {"q_2", 0.2f, 10.f, 1.f},
+                {"freq_3", 20.f, 20000.f, 8000.f},
+                {"gain_3", -18.f, 18.f, 0.f},
+                {"q_3", 0.2f, 10.f, 1.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.eq_graphic", "Graphic EQ (10-band)",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_eq_graphic);
+            static const XER_ParamDesc kParams[] = {
+                {"31_hz", -18.f, 18.f, 0.f},
+                {"62_hz", -18.f, 18.f, 0.f},
+                {"125_hz", -18.f, 18.f, 0.f},
+                {"250_hz", -18.f, 18.f, 0.f},
+                {"500_hz", -18.f, 18.f, 0.f},
+                {"1k_hz", -18.f, 18.f, 0.f},
+                {"2k_hz", -18.f, 18.f, 0.f},
+                {"4k_hz", -18.f, 18.f, 0.f},
+                {"8k_hz", -18.f, 18.f, 0.f},
+                {"16k_hz", -18.f, 18.f, 0.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        // Modulation.
+        [] {
+            PluginDesc d =
+                Desc("xer.af.chorus", "Chorus",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_chorus);
+            static const XER_ParamDesc kParams[] = {
+                {"rate_hz", 0.05f, 10.f, 0.8f},
+                {"depth_ms", 0.f, 20.f, 8.f},
+                {"mix", 0.f, 1.f, 0.5f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.flanger", "Flanger",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_flanger);
+            static const XER_ParamDesc kParams[] = {
+                {"rate_hz", 0.05f, 10.f, 0.5f},
+                {"depth_ms", 0.f, 10.f, 2.f},
+                {"feedback", -0.95f, 0.95f, 0.5f},
+                {"mix", 0.f, 1.f, 0.5f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.phaser", "Phaser",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_phaser);
+            static const XER_ParamDesc kParams[] = {
+                {"stages", 1.f, 12.f, 4.f},
+                {"rate_hz", 0.05f, 10.f, 0.5f},
+                {"depth", 0.f, 1.f, 0.7f},
+                {"feedback", -0.95f, 0.95f, 0.4f},
+                {"mix", 0.f, 1.f, 0.5f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.vibrato", "Vibrato",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_vibrato);
+            static const XER_ParamDesc kParams[] = {
+                {"rate_hz", 0.05f, 20.f, 5.f},
+                {"depth_ms", 0.f, 15.f, 4.f},
+                {"mix", 0.f, 1.f, 1.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.ring_mod", "Ring Modulator",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_ring_mod);
+            static const XER_ParamDesc kParams[] = {
+                {"freq_hz", 1.f, 2000.f, 80.f},
+                {"mix", 0.f, 1.f, 1.f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        // Pitch + space.
+        [] {
+            PluginDesc d =
+                Desc("xer.af.autotune", "Auto-Tune (Pitch Correct)",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_autotune);
+            static const XER_ParamDesc kParams[] = {
+                {"amount", 0.f, 1.f, 0.88f},
+                {"retune_ms", 1.f, 400.f, 18.f},
+                {"humanize", 0.f, 1.f, 0.12f},
+                {"root", 0.f, 11.f, 0.f},   // 0=C
+                {"scale", 0.f, 3.f, 0.f},   // 0 chromatic
+                {"presence_db", -12.f, 12.f, 1.6f},
+                {"wet", 0.f, 1.f, 0.92f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.reverb", "Reverb",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_reverb);
+            static const XER_ParamDesc kParams[] = {
+                {"room_size", 0.f, 1.f, 0.6f},
+                {"damping", 0.f, 1.f, 0.5f},
+                {"mix", 0.f, 1.f, 0.3f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.af.reverb_ir", "Reverb IR (Convolution)",
+                     XER_PLUGIN_AUDIO_FX, nullptr, &af_reverb_ir);
+            static const XER_ParamDesc kParams[] = {
+                {"decay_s", 0.05f, 6.f, 1.2f},
+                {"damping", 0.f, 1.f, 0.4f},
+                {"mix", 0.f, 1.f, 0.3f},
             };
             d.params.assign(std::begin(kParams), std::end(kParams));
             return d;

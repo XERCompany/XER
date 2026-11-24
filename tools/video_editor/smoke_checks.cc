@@ -108,6 +108,7 @@
 #include "url_import.h"
 #include "worker_pipe.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
+#include "xer_transition_bridge.h"
 
 #if defined(_WIN32)
 #include <windows.h>   // GetModuleFileNameW — worker-exe sibling lookup
@@ -2450,8 +2451,11 @@ std::string CheckBuiltinFx() {
     // applies them at the warp/mask pass) + the film-look kit
     // (xer.fx.halation/gate_weave/light_leak/film_flicker/
     // dust_scratch/vignette2 — film_grain was already migrated and
-    // is upgraded in place, not added).
-    if (ids.size() != 59) {
+    // is upgraded in place, not added) + the 14 effects_rack
+    // exposures (xer.af.compressor/limiter/gate/expander,
+    // eq_parametric/eq_graphic, chorus/flanger/phaser/vibrato/
+    // ring_mod, autotune, reverb + reverb_ir).
+    if (ids.size() != 73) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -2606,6 +2610,120 @@ std::string CheckBuiltinFx() {
             return "voice_isolate destroyed the harmonic region";
         }
     }
+    return {};
+}
+
+// FFmpeg xfade transitions (docs/wiki/research/2026-11-24 §1.2):
+// synthetic A/B frames through the cached-graph bridge plus the
+// compositor's Type::Xfade dispatch. Endpoints must pin to A/B,
+// a true wipe must differ from alpha crossfade at mid-progress,
+// xfade "fade" must match our crossfade math (±1 LSB of rounding),
+// and the unknown-name contract must fall back to crossfade.
+std::string CheckXfade() {
+    if (!XfadeAvailable()) {
+        return "xfade filter missing from the linked libavfilter";
+    }
+    constexpr int kW = 64, kH = 48;
+    // A = solid opaque red; B = opaque blue with a horizontal
+    // gradient so both a uniform blend and a spatial wipe are
+    // distinguishable.
+    video::Frame A, B;
+    if (!A.Allocate(kW, kH, video::PixelFormat::BGRA8) ||
+        !B.Allocate(kW, kH, video::PixelFormat::BGRA8)) {
+        return "xfade test frames failed to allocate";
+    }
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            std::uint8_t* a =
+                A.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            std::uint8_t* b =
+                B.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            a[0] = 0;   a[1] = 0;   a[2] = 255; a[3] = 255;
+            b[0] = static_cast<std::uint8_t>(64 + x * 2);
+            b[1] = 32;  b[2] = 0;   b[3] = 255;
+        }
+    }
+    const auto same = [](const video::Frame& x, const video::Frame& y) {
+        return x.DataSize() == y.DataSize() &&
+               std::memcmp(x.Data(), y.Data(), x.DataSize()) == 0;
+    };
+    const auto max_diff = [](const video::Frame& x,
+                             const video::Frame& y) {
+        int worst = 0;
+        const size_t n = std::min(x.DataSize(), y.DataSize());
+        for (size_t i = 0; i < n; ++i) {
+            worst = std::max(worst, std::abs(
+                static_cast<int>(x.Data()[i]) -
+                static_cast<int>(y.Data()[i])));
+        }
+        return worst;
+    };
+    // The exported type table must be populated and probeable.
+    if (XfadeTransitions().empty() ||
+        !XfadeTypeAvailable("circleopen") ||
+        XfadeTypeAvailable("not_a_real_xfade")) {
+        return "xfade type table / availability probe is wrong";
+    }
+    // Endpoints: w=0 must be exactly A, w=1 exactly B.
+    video::Frame out;
+    if (!ApplyXfadeTransition("circleopen", 0.0, A, B, &out) ||
+        !same(out, A)) {
+        return "xfade w=0 did not reproduce the outgoing frame";
+    }
+    if (!ApplyXfadeTransition("circleopen", 1.0, A, B, &out) ||
+        !same(out, B)) {
+        return "xfade w=1 did not reproduce the incoming frame";
+    }
+    // Our plain crossfade at w=0.5 as the blend reference.
+    video::Frame xf;
+    if (!ApplyTransitionPixels(Transition::Type::Crossfade, 0.5,
+                               A, B, &xf, "")) {
+        return "crossfade reference eval failed";
+    }
+    // Wipes must differ from a uniform blend at mid-progress;
+    // xfade's own "fade" must match it (same linear math, allow
+    // 1 LSB of pixel-format rounding inside the filter graph).
+    const char* kWipes[] = {"radial", "circleopen", "coverleft",
+                            "pixelize"};
+    for (const char* name : kWipes) {
+        if (!ApplyXfadeTransition(name, 0.5, A, B, &out)) {
+            return std::string("xfade '") + name + "' eval failed";
+        }
+        if (same(out, xf)) {
+            return std::string("xfade '") + name +
+                "' is indistinguishable from crossfade at w=0.5";
+        }
+    }
+    if (!ApplyXfadeTransition("fade", 0.5, A, B, &out) ||
+        max_diff(out, xf) > 1) {
+        return "xfade 'fade' diverged from crossfade at w=0.5";
+    }
+    // Compositor dispatch: Type::Xfade + name must equal the bridge
+    // result; an unknown name must fall back to crossfade.
+    video::Frame via_comp;
+    if (!ApplyTransitionPixels(Transition::Type::Xfade, 0.5,
+                               A, B, &via_comp, "circleopen")) {
+        return "Type::Xfade compositor dispatch failed";
+    }
+    video::Frame circle;
+    if (!ApplyXfadeTransition("circleopen", 0.5, A, B, &circle) ||
+        !same(via_comp, circle)) {
+        return "Type::Xfade dispatch diverged from the bridge";
+    }
+    if (!ApplyTransitionPixels(Transition::Type::Xfade, 0.5,
+                               A, B, &via_comp,
+                               "not_a_real_xfade") ||
+        !same(via_comp, xf)) {
+        return "unknown xfade name did not fall back to crossfade";
+    }
+    // Cache-exercise: sweep progress on one (name,geometry) graph —
+    // must stay sane across repeated evals, then drop the cache.
+    for (double w = 0.1; w < 1.0; w += 0.2) {
+        if (!ApplyXfadeTransition("wipetl", w, A, B, &out)) {
+            return "xfade progress sweep failed mid-graph";
+        }
+    }
+    XfadeGraphCacheClear();
     return {};
 }
 
@@ -2786,6 +2904,164 @@ std::string CheckXerTransitions() {
                 &back) ||
             back != Transition::Type::XerFx) {
             return "XerFx wire-name round trip failed";
+        }
+    }
+    return {};
+}
+
+// The 14 effects_rack exposures (xer.af.* added in wave-1 §1.2b):
+// every descriptor must resolve + apply on stereo 48 kHz PCM with
+// both default and out-of-range params (params must clamp, never
+// crash or return NaN), and the dynamics/space kernels get a real
+// semantic assert — limiter ceiling, gate muting, compressor
+// gain reduction, and the convolution reverb's tail.
+std::string CheckAudioFxRack() {
+    const char* kIds[] = {
+        "xer.af.compressor", "xer.af.limiter",
+        "xer.af.gate",       "xer.af.expander",
+        "xer.af.eq_parametric", "xer.af.eq_graphic",
+        "xer.af.chorus",     "xer.af.flanger",
+        "xer.af.phaser",     "xer.af.vibrato",
+        "xer.af.ring_mod",   "xer.af.autotune",
+        "xer.af.reverb",     "xer.af.reverb_ir",
+    };
+    constexpr int kFrames = 4096, kCh = 2, kSr = 48000;
+    const auto make_pcm = [&](double amp, double hz, int frames) {
+        std::vector<float> v(static_cast<size_t>(frames) * kCh);
+        for (int i = 0; i < frames; ++i) {
+            const float s = static_cast<float>(
+                amp * std::sin(2.0 * 3.14159265 * hz * i / kSr));
+            for (int c = 0; c < kCh; ++c) {
+                v[static_cast<size_t>(i) * kCh + c] = s;
+            }
+        }
+        return v;
+    };
+    const auto finite = [](const std::vector<float>& v) {
+        for (float s : v) {
+            if (!std::isfinite(s)) return false;
+        }
+        return true;
+    };
+    const auto peak = [](const std::vector<float>& v) {
+        float p = 0.f;
+        for (float s : v) p = std::max(p, std::fabs(s));
+        return p;
+    };
+    const auto rms = [](const std::vector<float>& v) {
+        double acc = 0.0;
+        for (float s : v) acc += static_cast<double>(s) * s;
+        return std::sqrt(acc / static_cast<double>(v.size()));
+    };
+    const auto apply = [&](const char* id, std::vector<float>* pcm,
+                           const std::vector<float>& params) {
+        const PluginDesc* d =
+            PluginHost::ForEffectType(std::string("builtin:") + id);
+        if (d == nullptr || !d->builtin || d->audio_fn == nullptr) {
+            return false;
+        }
+        return PluginHost::ApplyAudio(
+            *d, pcm->data(),
+            static_cast<int32_t>(pcm->size() / kCh), kCh, kSr,
+            params);
+    };
+    // Resolve + apply: defaults, then deliberately wild params.
+    for (const char* id : kIds) {
+        std::vector<float> pcm = make_pcm(0.5, 440.0, kFrames);
+        if (!apply(id, &pcm, {})) {
+            return std::string(id) + " apply failed on defaults";
+        }
+        if (!finite(pcm)) {
+            return std::string(id) + " produced non-finite output";
+        }
+        std::vector<float> wild = make_pcm(0.5, 440.0, kFrames);
+        const PluginDesc* d =
+            PluginHost::ForEffectType(std::string("builtin:") + id);
+        std::vector<float> params(d->params.size(), 1.0e9f);
+        if (!apply(id, &wild, params)) {
+            return std::string(id) +
+                " rejected out-of-range params (must clamp)";
+        }
+        if (!finite(wild)) {
+            return std::string(id) +
+                " produced non-finite output on wild params";
+        }
+    }
+    // Limiter: ceiling -20 dB on a constant 0.95 DC input. A sine
+    // would legitimately recover gain between peaks (the release
+    // runs per-sample through the troughs), so DC is the honest
+    // probe — gain converges to ceiling/0.95 ≈ 0.105 and the tail
+    // of the block must sit at ~0.1.
+    {
+        std::vector<float> pcm(static_cast<size_t>(kFrames) * kCh,
+                               0.95f);
+        if (!apply("xer.af.limiter", &pcm, {-20.f, 5.f})) {
+            return "xer.af.limiter apply failed";
+        }
+        float tail_peak = 0.f;
+        for (size_t i = pcm.size() / 2; i < pcm.size(); ++i) {
+            tail_peak = std::max(tail_peak, std::fabs(pcm[i]));
+        }
+        if (tail_peak > 0.13f) {
+            return "xer.af.limiter overshot its ceiling";
+        }
+        if (tail_peak < 0.05f) {
+            return "xer.af.limiter crushed the signal below ceiling";
+        }
+    }
+    // Gate: -70 dBFS noise floor under a -40 dB threshold must come
+    // back (near-)silent.
+    {
+        std::vector<float> pcm(static_cast<size_t>(kFrames) * kCh);
+        std::uint32_t rng = 0x51ED1E55u;
+        for (float& s : pcm) {
+            rng = rng * 1664525u + 1013904223u;
+            s = (static_cast<float>((rng >> 9) & 0x7FFFFF) /
+                     4194304.f - 1.f) * 0.0004f;
+        }
+        const double in = rms(pcm);
+        if (!apply("xer.af.gate", &pcm, {-40.f, 10.f})) {
+            return "xer.af.gate apply failed";
+        }
+        if (rms(pcm) > in * 0.2) {
+            return "xer.af.gate did not mute below-threshold audio";
+        }
+    }
+    // Compressor: -20 dB threshold / 8:1 on a 0.9 sine — steady-state
+    // gain reduction must pull the tail of the block well under the
+    // input peak (early attack overshoot is allowed, so compare the
+    // last half).
+    {
+        std::vector<float> pcm = make_pcm(0.9, 440.0, kFrames);
+        if (!apply("xer.af.compressor", &pcm,
+                   {-20.f, 8.f, 5.f, 80.f})) {
+            return "xer.af.compressor apply failed";
+        }
+        float tail_peak = 0.f;
+        for (size_t i = pcm.size() / 2; i < pcm.size(); ++i) {
+            tail_peak = std::max(tail_peak, std::fabs(pcm[i]));
+        }
+        if (tail_peak > 0.45f || tail_peak < 0.02f) {
+            return "xer.af.compressor did not reduce gain in range";
+        }
+    }
+    // Convolution reverb: an impulse must grow a decaying tail.
+    {
+        std::vector<float> pcm(static_cast<size_t>(kFrames) * kCh,
+                               0.f);
+        pcm[0] = pcm[1] = 1.f;
+        if (!apply("xer.af.reverb_ir", &pcm, {1.0f, 0.4f, 1.0f})) {
+            return "xer.af.reverb_ir apply failed";
+        }
+        double tail = 0.0;
+        for (int i = 200; i < kFrames; ++i) {
+            for (int c = 0; c < kCh; ++c) {
+                const float s = pcm[static_cast<size_t>(i) * kCh + c];
+                tail += s * s;
+            }
+        }
+        if (tail < 1.0e-6) {
+            return "xer.af.reverb_ir produced no impulse tail";
         }
     }
     return {};
@@ -9553,7 +9829,9 @@ constexpr CheckEntry kChecks[] = {
     {"preview_perf", &CheckPreviewPerf},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},
+    {"xfade", &CheckXfade},
     {"xer_transitions", &CheckXerTransitions},
+    {"audio_fx_rack", &CheckAudioFxRack},
     {"film_fx", &CheckFilmFx},
     {"audio_mixer", &CheckAudioMixer},
     {"audio_sync", &CheckAudioSync},

@@ -270,3 +270,45 @@ The portable core is three abstractions — texture-backed VideoFrame,
 deadline-driven Render(), audio-derived TimeSource — and they're
 reachable entirely with libraries already in `bin/` (ANGLE + Ganesh-GL
 Skia + FFmpeg-d3d11va + our existing keyed-mutex presenter).
+
+---
+
+## 8. Slice-1 status — 2026-11-24 (render primitives landed, unwired)
+
+First slice of this port landed under `tools/video_editor/render/` — new
+files only, **not yet wired** into `compositor.cc`/`monitor_surface.cc`/
+`ve_app.cc` (owned by follow-up tickets). A self-test runs via
+`video_editor --probe-render` (17/17 checks pass):
+
+| File | Ticket | Contents |
+|------|--------|----------|
+| `render/video_frame.{h,cc}` | R3 (CPU half) / R9 | Refcounted, immutable `VideoFrame` — Chromium-style `StorageType` (`kOwnedMemory` now, `kTexture` slot reserved for D3D11/NV12), `coded_size`/`visible_rect`/`timestamp`, `WrapOwnedMemory`/`WrapTexture` factories, mailbox-style release callback fired on last ref. `VideoFramePool` is bounded and keyed by `size+format` — the zero-copy handoff primitive that replaces today's `assign()`/`make_shared<vector>` copies (B and C in §2) |
+| `render/frame_scheduler.{h,cc}` | R7 / R8 | `TimeSource` interface + `AudioClockTimeSource` (front timestamp = `frames_written/sample_rate`, `SetBaseTime` rebase — same rule Chromium's `AudioRendererImpl` uses) + `WallClockTimeSource` (anchor + `wallDelta·rate`, freeze on pause — matches today's PreviewEngine math). `FrameScheduler` runs a BeginFrame-style tick on a vsync grid producing `(deadline, drop_budget)` and counts dropped/missed-deadline frames |
+| `render/presenter.h`, `render/d2d_presenter.cc` | R6 seam | `Presenter` interface (`PresentVideoFrame(frame)` + `Composite(canvas)`); `D2DVideoPresenter` skeleton documenting where ANGLE SharedImage / keyed-mutex handoff plugs in |
+
+**Findings while landing (affect R3–R9 execution):**
+
+- `src/ui/rendering/windows/d2d_presenter.{h,cc}` already implements the
+  Chromium SharedImage pattern: dedicated present thread owning the
+  swapchain + second D3D11 device, keyed-mutex shared-texture handoff
+  from the UI thread, coalesced newest-wins submit, dirty-rect
+  `Present1`. The new `render/` presenter is a separate skeleton — slice
+  2 should bridge into it rather than grow a parallel presenter.
+- `src/media/base/audio_clock.h` + `src/media/renderers/time_source.h`
+  already contain design-doc stubs in `XER::Media` — consider whether
+  `render/frame_scheduler`'s TimeSource should satisfy/subclass that
+  interface rather than duplicate it.
+- `src/video/frame.h` `video::Frame` is mutable vector-backed and NOT
+  refcounted; `render::VideoFrame` is a deliberately parallel type.
+  Slice 2 needs a coexistence/adaptation story (adapt `video::Frame`
+  internals or add `VideoFrame → video::Frame` view) before R9's
+  `MonitorSurface::SetFrame(shared_ptr<const Frame>)` overload.
+- Probe note: `VideoFramePool::idle_buffers` stays 0 while a re-acquired
+  storage is still held by the caller — count only reflects truly-idle
+  buffers (assertion in probe was corrected to match).
+
+**Slice-2 integration points:** `OnVideoFrame` → `shared_ptr` handoff
+through `preview_binding.cc` pending slots (R9); `MonitorSurface` pull
+via `(t_min,t_max)` `FrameProvider` signature (R6 contract); feed
+`FrameScheduler` from `D2DPresenter`'s post-`Present1` ack for a real
+BeginFrame.
