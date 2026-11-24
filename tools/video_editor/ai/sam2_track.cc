@@ -440,6 +440,17 @@ bool MaskTrackAt(const ClipMaskTrack& track, double t,
         if (box_out != nullptr) *box_out = TrackBox{};
         return false;
     }
+    // Outside the sampled span there is nothing tracked: same
+    // empty-coverage contract as a degenerate track (a8 cleared,
+    // false — the compositor treats it as an fx no-op). Endpoint
+    // samples still hold AT their own t (t == front.t/back.t lands
+    // inside the span and resolves verbatim below).
+    if (t < track.samples.front().t ||
+        t > track.samples.back().t) {
+        a8_out->clear();
+        if (box_out != nullptr) *box_out = TrackBox{};
+        return false;
+    }
     std::size_t i0 = 0, i1 = 0;
     double w01 = 0.0;
     BracketSamples(track.samples, t, &i0, &i1, &w01);
@@ -453,8 +464,12 @@ bool MaskTrackAt(const ClipMaskTrack& track, double t,
     const std::size_t want =
         (static_cast<std::size_t>(gw) * gh + 7) / 8;
 
-    if (snap || i0 == i1 || from.bits.size() == want) {
-        UnpackBits(from.bits.data(), gw, gh, a8_out);
+    if (snap || i0 == i1) {
+        // Single-sample path. A malformed bitmap unpacks as zero
+        // coverage rather than reading past its end.
+        UnpackBits(from.bits.size() == want ? from.bits.data()
+                                            : nullptr,
+                   gw, gh, a8_out);
     } else {
         // Crossfade the two bitmaps as coverage.
         std::vector<std::uint8_t> a_a8, b_a8;
