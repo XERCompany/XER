@@ -10,11 +10,14 @@
 #include <string>
 
 #include "monitor_panel.h"
+#include "photo_workspace.h"
 #include "shell_widgets.h"
 #include "timeline_strip.h"
 #include "shortcut_router.h"
 #include "ve_app.h"
 #include "ve_theme.h"
+#include "widgets/resizable.h"
+#include "widgets/sidebar.h"
 #include "widgets/widget_tree.h"
 #include "workspace_layout.h"
 
@@ -90,6 +93,99 @@ std::string CheckWorkspaces(VeApp& app) {
     }
     if (app.ApplyWorkspaceByName("NoSuchWorkspace")) {
         return "unknown preset name accepted";
+    }
+    return {};
+}
+
+std::string CheckWorkspaceSwitchGeometry(
+    VeApp& app, W::WidgetTree& tree,
+    const XER::UI::Theme::Tokens& tokens) {
+    const XER::UI::Layout::Rect frame{0.0f, 0.0f, 1440.0f, 860.0f};
+    // Real rail-click path — MouseDown + MouseUp on the same hit target
+    // synthesizes a Click inside the tree, which bubbles to the
+    // Sidebar's on_select_ -> ApplyWorkspaceByName. Driving the events
+    // (not the verb) covers the dispatch half of the reported
+    // "clicking a preset does nothing" regression.
+    const auto click_rail = [&app, &tree](int item) {
+        const auto rb = app.NavRail()->GetBounds();
+        W::Event down{};
+        down.type = W::Event::Type::MouseDown;
+        down.mouse_button = W::MouseButton::Left;
+        down.position = {rb.x + rb.width * 0.5f,
+                         rb.y + 8.0f + item * 34.0f + 17.0f};
+        tree.HandleEvent(down);
+        W::Event up = down;
+        up.type = W::Event::Type::MouseUp;
+        tree.HandleEvent(up);
+    };
+    const auto empty = [](const XER::UI::Layout::Rect& r) {
+        return r.width <= 0.0f || r.height <= 0.0f;
+    };
+
+    // Editing -> Audio via the rail: the preset hides the left dock —
+    // after layout the dock must own NO span (collapsed panels park on
+    // an empty rect).
+    click_rail(2);   // rail item 2 -> "Audio"
+    if (app.CurrentWorkspace() != "Audio") {
+        return "rail click did not apply the Audio preset (got '" +
+               app.CurrentWorkspace() + "')";
+    }
+    tree.Layout(frame, tokens);
+    if (!app.TopSplit()->IsCollapsed(0) ||
+        !empty(app.LeftDock()->GetBounds())) {
+        return "Audio preset: left dock still owns span after layout";
+    }
+    if (empty(app.RightDock()->GetBounds()) ||
+        empty(app.MonitorSplit()->GetBounds())) {
+        return "Audio preset: right dock/monitors lost their rect";
+    }
+
+    // Audio -> Photo: the photo band takes the top split's center; the
+    // monitor pair is orphaned and must be parked, docks + timeline
+    // collapse.
+    click_rail(5);   // rail item 5 -> "Photo"
+    if (app.CurrentWorkspace() != "Photo") {
+        return "rail click did not apply the Photo preset";
+    }
+    if (app.PhotoWorkspaceView() == nullptr) {
+        return "Photo preset did not create the photo workspace";
+    }
+    tree.Layout(frame, tokens);
+    if (empty(app.PhotoWorkspaceView()->GetBounds())) {
+        return "Photo preset: photo workspace got no rect";
+    }
+    if (!empty(app.MonitorSplit()->GetBounds())) {
+        return "Photo preset: monitor split kept its rect (stale "
+               "orphan covers the workspace)";
+    }
+    if (!app.OuterSplit()->IsCollapsed(1) ||
+        !empty(app.Timeline()->GetBounds())) {
+        return "Photo preset: timeline still owns span";
+    }
+
+    // Photo -> Editing — THE regression: the photo band is orphaned by
+    // the panel rebuild; it used to keep its stale full-width rect,
+    // paint over the restored docks/monitors and swallow their clicks,
+    // leaving the app visually stuck on the Photo workspace.
+    click_rail(0);   // rail item 0 -> "Editing"
+    if (app.CurrentWorkspace() != "Editing") {
+        return "rail click did not apply the Editing preset";
+    }
+    tree.Layout(frame, tokens);
+    if (!empty(app.PhotoWorkspaceView()->GetBounds())) {
+        return "Photo->Editing: photo workspace kept a stale rect — "
+               "it paints over the video layout (stuck workspace)";
+    }
+    if (empty(app.LeftDock()->GetBounds()) ||
+        empty(app.RightDock()->GetBounds()) ||
+        empty(app.MonitorSplit()->GetBounds()) ||
+        empty(app.Timeline()->GetBounds())) {
+        return "Photo->Editing: docks/monitors/timeline did not "
+               "reclaim their rects";
+    }
+    if (app.TopSplit()->IsCollapsed(0) ||
+        app.TopSplit()->IsCollapsed(2)) {
+        return "Photo->Editing: docks still collapsed";
     }
     return {};
 }
@@ -195,6 +291,11 @@ std::string Ui2ShellSmoke() {
     }
     if (const std::string err = CheckWorkspaces(*app); !err.empty()) {
         return "workspaces: " + err;
+    }
+    if (const std::string err =
+            CheckWorkspaceSwitchGeometry(*app, tree, tokens);
+        !err.empty()) {
+        return "workspace switch: " + err;
     }
     if (const std::string err = CheckRouter(*app, tree); !err.empty()) {
         return "router: " + err;

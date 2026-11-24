@@ -1,6 +1,7 @@
 #include "ve_app.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <utility>
@@ -84,6 +85,12 @@ std::shared_ptr<PlaceholderPanel> PH(const char* id, const char* title,
                                      const char* desc) {
     return PlaceholderPanel::Create(id, title, desc);
 }
+
+// Nav-rail item -> workspace preset name (item order matches the
+// SetItems list in BuildShell). Used both ways: rail click resolves
+// the name, ApplyWorkspace syncs the rail's active highlight back.
+constexpr std::array<const char*, 7> kRailWorkspaces = {
+    "Editing", "Effects", "Audio", "Color", "Markers", "Photo", "Cut"};
 
 }  // namespace
 
@@ -169,11 +176,9 @@ void VeApp::BuildShell() {
          {"Lab", "L", true, false, "tab.lab"}});
     nav_rail_->SetOnSelect([this](int index) {
         // Rail presets — same WorkspaceLayout data as the switcher.
-        static const char* kNames[] = {"Editing", "Effects", "Audio",
-                                       "Color",    "Markers", "Photo",
-                                       "Cut"};
-        if (index >= 0 && index < 7) {
-            ApplyWorkspaceByName(kNames[index]);
+        if (index >= 0 &&
+            index < static_cast<int>(kRailWorkspaces.size())) {
+            ApplyWorkspaceByName(kRailWorkspaces[index]);
         }
     });
     nav_rail_->SetTooltip("Workspace rail");
@@ -335,16 +340,25 @@ void VeApp::BuildDockPanels() {
 void VeApp::RebuildOuterSplit() {
     if (top_split_ == nullptr) return;
     const std::vector<float>& saved = prefs_.top_sizes;
+    // A collapsed dock records a 0 share in the saved fractions
+    // (collapsed panels own no span after RecomputeSizes). When the new
+    // preset wants that dock visible again, a literal 0 would resurface
+    // it at nothing but its min floor — fall back to the default share
+    // so restore lands on real geometry.
+    const bool have_saved = saved.size() == 3u;
     const float l =
-        saved.size() == 3u ? saved[0]
-                           : (left_visible_ ? 0.22f : 0.0f);
+        have_saved && saved[0] > 0.001f
+            ? saved[0]
+            : (left_visible_ ? 0.22f : 0.0f);
     const float r =
-        saved.size() == 3u ? saved[2]
-                           : (right_visible_ ? 0.26f : 0.0f);
-    const float c =
-        saved.size() == 3u
-            ? saved[1]
-            : std::max(0.2f, 1.0f - l - r);
+        have_saved && saved[2] > 0.001f
+            ? saved[2]
+            : (right_visible_ ? 0.26f : 0.0f);
+    // The center share is the remainder by definition — a saved center
+    // fraction is only meaningful alongside the dock shares it was
+    // resolved with (a Photo session's near-1.0 center must not leak
+    // into a restored two-dock row).
+    const float c = std::max(0.2f, 1.0f - l - r);
     top_split_->ClearPanels();
     top_split_->AddPanel(RP(left_dock_, l, 160.0f));
     if (photo_mode_ && photo_workspace_ != nullptr) {
@@ -1662,6 +1676,16 @@ void VeApp::ApplyWorkspace(const WorkspaceLayout& ws) {
     }
     if (title_bar_ != nullptr) {
         title_bar_->SetWorkspaceLabel(ws.name);
+    }
+    if (nav_rail_ != nullptr) {
+        // Keep the rail highlight honest when a preset lands via the
+        // menu/palette/shortcuts rather than a rail click.
+        for (std::size_t i = 0; i < kRailWorkspaces.size(); ++i) {
+            if (ws.name == kRailWorkspaces[i]) {
+                nav_rail_->SetActiveIndex(static_cast<int>(i));
+                break;
+            }
+        }
     }
     // "Photo" swaps the top split's center for the photo band — the
     // same slot the monitor pair fills in every other preset.

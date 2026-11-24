@@ -189,6 +189,27 @@ void Resizable::Layout(const Layout::Rect& bounds) {
     handle_rects_.clear();
     handle_panels_.clear();
 
+    // Children that are no longer registered panels — ClearPanels'd
+    // and never re-added, or adopted without AddPanel — own no span.
+    // Park them on an empty rect: without this an orphan keeps its
+    // last bounds, keeps painting over the live panels (it's still a
+    // child, so RenderSubtree draws it) and keeps winning hit-tests
+    // (FindHitTarget walks children, not panels_). The ui2 shell hits
+    // this on every workspace switch that swaps the center widget.
+    for (const auto& child : GetChildren()) {
+        bool is_panel = false;
+        for (const auto& panel : panels_) {
+            if (panel.widget.get() == child.get()) {
+                is_panel = true;
+                break;
+            }
+        }
+        if (!is_panel) {
+            child->Layout({}, CachedLayoutTokens());
+            child->SetBounds({});
+        }
+    }
+
     const int n = static_cast<int>(panels_.size());
     if (n == 0) return;
 
