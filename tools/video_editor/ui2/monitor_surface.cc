@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 #include "lab/object_ops.h"   // MaskToPolygon — mask-contour overlay
@@ -170,6 +171,12 @@ void MonitorSurface::SetMarks(double in_seconds, double out_seconds) {
     mark_in_ = in_seconds;
     mark_out_ = out_seconds;
     Invalidate(RulerRect());
+}
+
+void MonitorSurface::SetSpeedBadge(double rate) {
+    if (speed_rate_ == rate) return;
+    speed_rate_ = rate;
+    Invalidate(VideoAreaRect());
 }
 
 // ---- overlay toggles --------------------------------------------------------
@@ -430,6 +437,26 @@ void MonitorSurface::Paint(Rendering::Renderer& renderer,
             std::min(ts.width, video_area.width),
             std::min(ts.height, video_area.height)};
         renderer.DrawText(text, tr, st);
+    }
+
+    // Speed badge — top-left chip while the applied rate is anything
+    // but stopped or plain +1x (JKL shuttle, K-held slow shuttle,
+    // reverse). The shell pushes the raw rate; 0/+1 hides.
+    if (speed_rate_ != 0.0 && speed_rate_ != 1.0) {
+        char badge[24];
+        std::snprintf(badge, sizeof(badge), "%gx", speed_rate_);
+        const Rendering::TextStyle badge_style{tokens.accent,
+                                               tokens.font_body, 700};
+        const auto bs = renderer.MeasureText(badge, badge_style);
+        const Layout::Rect chip{video_area.x + 8.0f,
+                                video_area.y + 8.0f,
+                                bs.width + 14.0f, bs.height + 8.0f};
+        renderer.FillRect(chip, WithAlpha(tokens.background, 0.72f),
+                          tokens.radius_small);
+        renderer.DrawText(badge,
+                          {chip.x + 7.0f, chip.y + 4.0f, bs.width,
+                           bs.height},
+                          badge_style);
     }
 
     DrawRuler(renderer, tokens, RulerRect());

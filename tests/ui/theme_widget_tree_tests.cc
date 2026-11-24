@@ -218,6 +218,12 @@ XER_UI_TEST(WidgetTreeSkipsHiddenAndDisabledControlsDuringFocusTraversal) {
     auto disabled = std::make_shared<ProbeWidget>("disabled");
     auto last = std::make_shared<ProbeWidget>("last");
 
+    // Probes must not consume the Tab key — a focused widget that eats
+    // Tab keeps it from reaching the traversal path (real widgets like
+    // TextInput return false and let the tree move focus).
+    for (const auto& w : {first, hidden, disabled, last}) {
+        w->consumes_events = false;
+    }
     first->SetFocusable(true);
     hidden->SetFocusable(true);
     hidden->SetVisible(false);
@@ -313,7 +319,10 @@ XER_UI_TEST(WidgetTreeDispatchesPointerEventsToTopmostHitWidget) {
     down.position = {5, 5};
     XER_UI_EXPECT_TRUE(tree.HandleEvent(down));
     XER_UI_EXPECT_EQ(0, lower->handled_events);
-    XER_UI_EXPECT_EQ(1, upper->handled_events);
+    // Two events: the synthetic Focus notification the tree delivers on
+    // every focus change (views contract), then the MouseDown itself.
+    XER_UI_EXPECT_EQ(2, upper->handled_events);
+    XER_UI_EXPECT_EQ(Event::Type::MouseDown, upper->last_event);
     XER_UI_EXPECT_TRUE(upper->IsFocused());
 }
 
@@ -505,7 +514,9 @@ XER_UI_TEST(WidgetTreeRoutesKeyboardEventsToFocusedWidget) {
     character.type = Event::Type::TextInput;
     character.text = "\xC3\xA9";
     XER_UI_EXPECT_TRUE(tree.HandleEvent(character));
-    XER_UI_EXPECT_EQ(1, child->handled_events);
+    // The Tab focus move delivered a Focus event first; the text event
+    // is the second one the widget saw.
+    XER_UI_EXPECT_EQ(2, child->handled_events);
     XER_UI_EXPECT_EQ(Event::Type::TextInput, child->last_event);
     XER_UI_EXPECT_EQ(std::string{"\xC3\xA9"}, child->last_text);
 }

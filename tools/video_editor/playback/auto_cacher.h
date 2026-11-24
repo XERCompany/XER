@@ -109,7 +109,9 @@ public:
         std::function<std::string(const std::string&)> media_resolver;
     };
 
-    // Counters for the smoke log / HUD — all monotonic per Init.
+    // Counters for the smoke log / HUD — monotonic, cumulative across
+    // re-Init (the PreviewEngine re-binds this worker on quality-tier
+    // flips; readers see one continuous stream).
     struct Stats {
         std::uint64_t windows = 0;     // windows scheduled
         std::uint64_t queued = 0;      // frame entries enqueued

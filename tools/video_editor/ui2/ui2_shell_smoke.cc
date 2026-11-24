@@ -43,6 +43,13 @@ W::Event Key(W::KeyCode key, bool ctrl = false) {
     return ev;
 }
 
+W::Event KeyUp(W::KeyCode key) {
+    W::Event ev{};
+    ev.type = W::Event::Type::KeyUp;
+    ev.key = key;
+    return ev;
+}
+
 std::string CheckStructure(VeApp& app) {
     if (app.TitleBar() == nullptr) return "no title bar";
     if (app.NavRail() == nullptr) return "no nav rail";
@@ -219,6 +226,54 @@ std::string CheckRouter(VeApp& app, W::WidgetTree& tree) {
         return "'j' not dispatched in source scope";
     }
     app.Shortcuts().ActivateScope(ShortcutRouter::kScopeProgram);
+    // Held-key contract: 'k' records a held binding — while it is
+    // down, 'j' runs the fixed slow shuttle (not the ladder), and
+    // the release routes to the recorded binding's on_up even
+    // though the press arrived as TextInput and the release as a
+    // KeyUp letter code (cross-channel identity, router's job).
+    if (!tree.HandleEvent(Text("k"))) {
+        return "'k' not dispatched";
+    }
+    if (!app.Shortcuts().IsHeld('k')) {
+        return "held 'k' press not recorded";
+    }
+    if (!tree.HandleEvent(Text("j"))) {
+        return "held 'j' not dispatched";
+    }
+    if (app.ProgramPlayback().ShuttleRate() !=
+        -VeApp::kHeldShuttleRate) {
+        return "K+J did not run the held slow shuttle (rate " +
+               std::to_string(app.ProgramPlayback().ShuttleRate()) +
+               ")";
+    }
+    if (app.ProgramMonitor()->VideoSurface().SpeedBadgeRate() !=
+        -VeApp::kHeldShuttleRate) {
+        return "held shuttle did not push the speed badge";
+    }
+    if (!tree.HandleEvent(KeyUp(W::KeyCode::J))) {
+        return "'j' release did not reach the held binding";
+    }
+    if (app.ProgramPlayback().ShuttleRate() != 0.0) {
+        return "held shuttle did not stop on 'j' release";
+    }
+    if (!app.Shortcuts().IsHeld('k')) {
+        return "'k' hold lost under the 'j' release";
+    }
+    if (!tree.HandleEvent(KeyUp(W::KeyCode::K))) {
+        return "'k' release not routed";
+    }
+    if (app.Shortcuts().IsHeld('k')) {
+        return "'k' still held after its release";
+    }
+    // Shift+K play-around and Shift+I/O go-to dispatch per scope
+    // (program here — the verbs run on the empty project).
+    if (!tree.HandleEvent(Text("k", /*shift=*/true))) {
+        return "Shift+K not dispatched";
+    }
+    if (!tree.HandleEvent(Text("i", /*shift=*/true)) ||
+        !tree.HandleEvent(Text("o", /*shift=*/true))) {
+        return "Shift+I/O not dispatched";
+    }
     // Tool letters bind globally.
     if (!tree.HandleEvent(Text("c"))) {
         return "'c' razor tool not dispatched";
@@ -240,6 +295,31 @@ std::string CheckRouter(VeApp& app, W::WidgetTree& tree) {
     ime.text = "\xE6\x97\xA5";  // multi-byte UTF-8 (e.g. CJK char)
     if (tree.HandleEvent(ime)) {
         return "multi-byte text consumed as a shortcut";
+    }
+    return {};
+}
+
+std::string CheckFocus(W::WidgetTree& tree) {
+    // views FocusManager contract on the kit: traversal focus carries
+    // kTraversal (ring visible), and the tree answers which widget owns
+    // focus. The VE shell always has focusable widgets (tool strip
+    // buttons, fields).
+    if (!tree.AdvanceFocus(false)) {
+        return "AdvanceFocus found nothing focusable";
+    }
+    const auto focused = tree.GetFocusedWidget();
+    if (focused == nullptr) {
+        return "GetFocusedWidget null after AdvanceFocus";
+    }
+    if (focused->GetFocusReason() != W::FocusReason::kTraversal) {
+        return "AdvanceFocus did not tag focus as kTraversal";
+    }
+    if (!focused->IsFocusRingVisible()) {
+        return "traversal focus did not raise the ring";
+    }
+    tree.RequestFocus(nullptr);
+    if (tree.GetFocusedWidget() != nullptr) {
+        return "RequestFocus(nullptr) did not clear focus";
     }
     return {};
 }
@@ -299,6 +379,9 @@ std::string Ui2ShellSmoke() {
     }
     if (const std::string err = CheckRouter(*app, tree); !err.empty()) {
         return "router: " + err;
+    }
+    if (const std::string err = CheckFocus(tree); !err.empty()) {
+        return "focus: " + err;
     }
     if (const std::string err = CheckPrefsRoundTrip(); !err.empty()) {
         return "prefs: " + err;

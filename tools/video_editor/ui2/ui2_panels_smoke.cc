@@ -217,6 +217,61 @@ std::string CheckGridEvents() {
     return "";
 }
 
+// ---- 1b. BinGridSurface hover-scrub --------------------------------
+// Pointer x over a card maps to a media-time slice (kScrubBuckets
+// buckets); PosterSeconds is the exact seconds value DrawCard feeds
+// PosterFor -> get_poster, so the seam is asserted without a
+// renderer (this smoke never paints).
+
+std::string CheckBinHoverScrub() {
+    BinGridSurface grid;
+    BinItem item;
+    item.path = "D:/media/scrub.mp4";
+    item.duration_seconds = 8.0;
+    item.has_video = true;
+    item.has_audio = true;
+    grid.SetItems({item});
+    grid.Layout(Rect{0.0f, 0.0f, 540.0f, 300.0f});
+
+    // No hover: the card asks for the catalog mid-clip poster.
+    if (!NearlyEqual(static_cast<float>(grid.PosterSeconds(0)),
+                     4.0f)) {
+        return "idle card did not ask the mid-clip poster";
+    }
+    const Rect card = grid.CardRect(0);
+    grid.HandleEvent(Mouse(W::Event::Type::MouseMove,
+                           card.x + card.width * 0.1f,
+                           card.y + 4.0f));
+    if (grid.HoveredIndex() != 0) {
+        return "hover did not land on the card";
+    }
+    // Bucket 0 of 8 centers at duration * 0.5/8 = 0.5s.
+    if (!NearlyEqual(static_cast<float>(grid.PosterSeconds(0)),
+                     0.5f)) {
+        return "hover bucket 0 wrong: " +
+               std::to_string(grid.PosterSeconds(0));
+    }
+    grid.HandleEvent(Mouse(W::Event::Type::MouseMove,
+                           card.x + card.width * 0.9f,
+                           card.y + 4.0f));
+    // Bucket 7 of 8 centers at duration * 7.5/8 = 7.5s.
+    if (!NearlyEqual(static_cast<float>(grid.PosterSeconds(0)),
+                     7.5f)) {
+        return "hover bucket 7 wrong: " +
+               std::to_string(grid.PosterSeconds(0));
+    }
+    // Leaving the card restores the mid-clip request.
+    grid.HandleEvent(Mouse(W::Event::Type::MouseMove,
+                           card.x + card.width + 4.0f,
+                           card.y + 4.0f));
+    if (grid.HoveredIndex() != -1 ||
+        !NearlyEqual(static_cast<float>(grid.PosterSeconds(0)),
+                     4.0f)) {
+        return "leaving the card did not restore the mid poster";
+    }
+    return "";
+}
+
 // ---- 2. MediaPanel search + sort ------------------------------------
 
 std::string CheckMediaFilterSort() {
@@ -521,6 +576,9 @@ std::string Ui2PanelsSmoke() {
     }
     if (const std::string err = CheckGridEvents(); !err.empty()) {
         return "grid events: " + err;
+    }
+    if (const std::string err = CheckBinHoverScrub(); !err.empty()) {
+        return "bin hover-scrub: " + err;
     }
     if (const std::string err = CheckMediaFilterSort(); !err.empty()) {
         return "media: " + err;

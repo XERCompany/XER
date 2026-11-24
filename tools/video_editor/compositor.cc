@@ -20,6 +20,7 @@
 
 #include "ai/face_detect.h"
 #include "ai/object_track.h"
+#include "ai/sam2_track.h"
 #include "ai/smart_reframe.h"
 #include "app_runtime/app_runtime.h"
 #include "color/ocio_transform.h"
@@ -880,6 +881,30 @@ std::uint64_t ClipStateHash(const Clip& clip, double preview_quality,
         h = HashF32(h, s.confidence);
         h = HashU64(h, s.scene_boundary ? 1ull : 0ull);
     }
+    // SAM mask track — xer.fx.track_mask resolves the silhouette
+    // from it per frame, so a re-track busts caches like reframe.
+    h = HashStr(h, clip.mask_track.label);
+    h = HashU64(h, static_cast<std::uint64_t>(
+                      (static_cast<std::uint64_t>(
+                           static_cast<std::uint32_t>(
+                               clip.mask_track.grid_w))
+                       << 32) |
+                      static_cast<std::uint32_t>(
+                          clip.mask_track.grid_h)));
+    h = HashU64(h, static_cast<std::uint64_t>(
+                      clip.mask_track.samples.size()));
+    for (const ClipMaskSample& s : clip.mask_track.samples) {
+        h = HashF64(h, s.t);
+        h = HashF32(h, s.cx);
+        h = HashF32(h, s.cy);
+        h = HashF32(h, s.w);
+        h = HashF32(h, s.h);
+        h = HashF32(h, s.confidence);
+        h = HashU64(h, s.scene_boundary ? 1ull : 0ull);
+        if (!s.bits.empty()) {
+            h = HashRaw(h, s.bits.data(), s.bits.size());
+        }
+    }
     h = HashU64(h, static_cast<std::uint64_t>(clip.masks.size()));
     for (const ClipMask& m : clip.masks) {
         h = HashU64(h, static_cast<std::uint64_t>(m.shape));
@@ -1471,6 +1496,241 @@ struct Compositor::Impl {
         }
     }
 
+    // xer.fx.track_mask: resolve the clip's SAM mask track in
+    // CLIP-FRAME space (Clip::mask_track stores grid bitmaps +
+    // bbox fractions, so the mask rides the later warp with the
+    // content — same live-reference contract as ApplyTrackedMosaic).
+    // Params {mode, feather, smoothing}: mode 0 "isolate" keeps the
+    // masked region and alphas out the rest; 1 "blur_bg" blurs
+    // everything BUT the mask; 2 "key" emits the mask as alpha.
+    // Feather is a soft edge as a fraction of the grid (a separable
+    // box blur on the 64-cell bitmap — resolution-independent).
+    // Empty track / degenerate grid leaves the frame untouched.
+    void ApplyTrackMask(ClipSession& s, const ClipEffect& effect,
+                        double clip_time_s) {
+        video::Frame& frame = s.frame;
+        const Clip& clip = *s.clip;
+        if (!frame.IsValid() ||
+            frame.Format() != video::PixelFormat::BGRA8 ||
+            clip.mask_track.samples.empty()) {
+            return;
+        }
+        const double rate =
+            std::isfinite(clip.playback_rate) && clip.playback_rate > 0.0
+                ? clip.playback_rate
+                : 1.0;
+        const double src_t = clip.in_point + clip_time_s * rate;
+        const int mode = std::clamp(EffectParamInt(effect, 0, 0), 0, 2);
+        const double feather =
+            std::clamp(EffectParamDouble(effect, 1, 0.1), 0.0, 1.0);
+
+        std::vector<std::uint8_t> grid;
+        if (!Ai::MaskTrackAt(clip.mask_track, src_t, &grid)) {
+            return;
+        }
+        const int gw = clip.mask_track.grid_w;
+        const int gh = clip.mask_track.grid_h;
+        if (gw <= 0 || gh <= 0 ||
+            grid.size() != static_cast<std::size_t>(gw) * gh) {
+            return;
+        }
+        // Feather: separable box blur on the grid coverage — the
+        // radius rides the grid, not frame pixels, so the soft edge
+        // is resolution-independent.
+        const int radius = std::clamp(
+            static_cast<int>(std::lround(feather * gw * 0.125)), 0,
+            12);
+        if (radius > 0) {
+            std::vector<std::uint8_t> tmp(grid.size());
+            // Horizontal pass.
+            for (int y = 0; y < gh; ++y) {
+                std::uint8_t* row = grid.data() + y * gw;
+                std::uint8_t* orow = tmp.data() + y * gw;
+                int acc = 0;
+                for (int x = -radius; x < gw + radius; ++x) {
+                    if (x + radius < gw) acc += row[x + radius];
+                    if (x - radius - 1 >= 0) acc -= row[x - radius - 1];
+                    if (x >= 0) {
+                        const int lo = std::max(0, x - radius);
+                        const int hi = std::min(gw - 1, x + radius);
+                        orow[x] = static_cast<std::uint8_t>(
+                            acc / (hi - lo + 1));
+                    }
+                }
+            }
+            // Vertical pass back into grid.
+            for (int y = 0; y < gh; ++y) {
+                for (int x = 0; x < gw; ++x) {
+                    int acc = 0, n = 0;
+                    const int lo = std::max(0, y - radius);
+                    const int hi = std::min(gh - 1, y + radius);
+                    for (int yy = lo; yy <= hi; ++yy) {
+                        acc += tmp[yy * gw + x];
+                        ++n;
+                    }
+                    grid[y * gw + x] =
+                        static_cast<std::uint8_t>(acc / n);
+                }
+            }
+        }
+
+        const int fw = frame.Width();
+        const int fh = frame.Height();
+        const int stride = frame.Stride();
+        std::uint8_t* data = frame.Data();
+        // Per-pixel coverage: bilinear sample of the grid in frame
+        // space — the grid maps onto the full frame extent.
+        const auto coverage_at = [&](int x, int y) -> double {
+            const double gx =
+                (x + 0.5) / static_cast<double>(fw) * gw - 0.5;
+            const double gy =
+                (y + 0.5) / static_cast<double>(fh) * gh - 0.5;
+            const int x0 = std::clamp(
+                static_cast<int>(std::floor(gx)), 0, gw - 1);
+            const int x1 = std::min(x0 + 1, gw - 1);
+            const int y0 = std::clamp(
+                static_cast<int>(std::floor(gy)), 0, gh - 1);
+            const int y1 = std::min(y0 + 1, gh - 1);
+            const double fx = std::clamp(gx - x0, 0.0, 1.0);
+            const double fy = std::clamp(gy - y0, 0.0, 1.0);
+            const double c00 = grid[y0 * gw + x0];
+            const double c10 = grid[y0 * gw + x1];
+            const double c01 = grid[y1 * gw + x0];
+            const double c11 = grid[y1 * gw + x1];
+            return (c00 * (1.0 - fx) + c10 * fx) * (1.0 - fy) +
+                   (c01 * (1.0 - fx) + c11 * fx) * fy;
+        };
+
+        if (mode == 1) {
+            // blur_bg: quarter-res double box-blur as the defocused
+            // plate — cheap, reads as a background blur at monitor
+            // sizes, honest at export too.
+            video::Frame lo;
+            const int lw = std::max(1, fw / 4);
+            const int lh = std::max(1, fh / 4);
+            if (lo.Allocate(lw, lh, video::PixelFormat::BGRA8)) {
+                ResampleBilinearBGRA(frame, &lo);
+                const int br = 3;
+                std::vector<std::uint8_t> tmp(
+                    static_cast<std::size_t>(lw) * lh * 4);
+                for (int pass = 0; pass < 2; ++pass) {
+                    // Horizontal.
+                    for (int y = 0; y < lh; ++y) {
+                        const std::uint8_t* row =
+                            lo.Data() + y * lo.Stride();
+                        std::uint8_t* orow = tmp.data() + y * lw * 4;
+                        for (int x = 0; x < lw; ++x) {
+                            unsigned acc[4] = {0, 0, 0, 0};
+                            int n = 0;
+                            const int xa = std::max(0, x - br);
+                            const int xb = std::min(lw - 1, x + br);
+                            for (int xx = xa; xx <= xb; ++xx) {
+                                const std::uint8_t* p = row + xx * 4;
+                                acc[0] += p[0];
+                                acc[1] += p[1];
+                                acc[2] += p[2];
+                                acc[3] += p[3];
+                                ++n;
+                            }
+                            std::uint8_t* o = orow + x * 4;
+                            o[0] = static_cast<std::uint8_t>(acc[0] / n);
+                            o[1] = static_cast<std::uint8_t>(acc[1] / n);
+                            o[2] = static_cast<std::uint8_t>(acc[2] / n);
+                            o[3] = static_cast<std::uint8_t>(acc[3] / n);
+                        }
+                    }
+                    // Vertical back into lo.
+                    for (int y = 0; y < lh; ++y) {
+                        std::uint8_t* row = lo.Data() + y * lo.Stride();
+                        const int ya = std::max(0, y - br);
+                        const int yb = std::min(lh - 1, y + br);
+                        for (int x = 0; x < lw; ++x) {
+                            unsigned acc[4] = {0, 0, 0, 0};
+                            int n = 0;
+                            for (int yy = ya; yy <= yb; ++yy) {
+                                const std::uint8_t* p =
+                                    tmp.data() + yy * lw * 4 + x * 4;
+                                acc[0] += p[0];
+                                acc[1] += p[1];
+                                acc[2] += p[2];
+                                acc[3] += p[3];
+                                ++n;
+                            }
+                            std::uint8_t* o = row + x * 4;
+                            o[0] = static_cast<std::uint8_t>(acc[0] / n);
+                            o[1] = static_cast<std::uint8_t>(acc[1] / n);
+                            o[2] = static_cast<std::uint8_t>(acc[2] / n);
+                            o[3] = static_cast<std::uint8_t>(acc[3] / n);
+                        }
+                    }
+                }
+                // Blend: inside mask -> original, outside -> blurred
+                // plate resampled on the fly (quarter-res bilinear).
+                for (int y = 0; y < fh; ++y) {
+                    std::uint8_t* row =
+                        data + static_cast<std::size_t>(y) * stride;
+                    const double ly =
+                        (y + 0.5) / fh * lh - 0.5;
+                    const int ly0 = std::clamp(
+                        static_cast<int>(std::floor(ly)), 0, lh - 1);
+                    const int ly1 = std::min(ly0 + 1, lh - 1);
+                    const double fy = std::clamp(ly - ly0, 0.0, 1.0);
+                    for (int x = 0; x < fw; ++x) {
+                        const double cov = coverage_at(x, y) / 255.0;
+                        if (cov >= 0.999) continue;   // fully inside
+                        const double lx =
+                            (x + 0.5) / fw * lw - 0.5;
+                        const int lx0 = std::clamp(
+                            static_cast<int>(std::floor(lx)), 0,
+                            lw - 1);
+                        const int lx1 = std::min(lx0 + 1, lw - 1);
+                        const double fx =
+                            std::clamp(lx - lx0, 0.0, 1.0);
+                        std::uint8_t* p = row + x * 4;
+                        for (int c = 0; c < 4; ++c) {
+                            const double b00 =
+                                lo.Data()[ly0 * lo.Stride() +
+                                          lx0 * 4 + c];
+                            const double b10 =
+                                lo.Data()[ly0 * lo.Stride() +
+                                          lx1 * 4 + c];
+                            const double b01 =
+                                lo.Data()[ly1 * lo.Stride() +
+                                          lx0 * 4 + c];
+                            const double b11 =
+                                lo.Data()[ly1 * lo.Stride() +
+                                          lx1 * 4 + c];
+                            const double bb =
+                                (b00 * (1.0 - fx) + b10 * fx) *
+                                    (1.0 - fy) +
+                                (b01 * (1.0 - fx) + b11 * fx) * fy;
+                            p[c] = Clamp8(p[c] * cov + bb * (1.0 - cov));
+                        }
+                    }
+                }
+            }
+            return;
+        }
+
+        // isolate (0) / key (2): per-pixel alpha on coverage.
+        // isolate scales existing alpha (keeps the subject cutout);
+        // key REPLACES alpha with the mask (a matte for downstream
+        // blending).
+        for (int y = 0; y < fh; ++y) {
+            std::uint8_t* row =
+                data + static_cast<std::size_t>(y) * stride;
+            for (int x = 0; x < fw; ++x) {
+                const double cov = coverage_at(x, y);
+                std::uint8_t* p = row + x * 4;
+                if (mode == 2) {
+                    p[3] = Clamp8(cov);
+                } else {
+                    p[3] = Clamp8(p[3] * cov / 255.0);
+                }
+            }
+        }
+    }
+
     void ApplyClipEffects(ClipSession& s,
                           const std::vector<ClipEffect>& effects,
                           double clip_time_s) {
@@ -1505,6 +1765,14 @@ struct Compositor::Impl {
                     (desc->id == Ai::kTrackMosaicId ||
                      desc->id == Ai::kFaceBlurId)) {
                     ApplyTrackedMosaic(s, effect, clip_time_s);
+                    continue;
+                }
+                // Tracked Mask is also track-driven: the silhouette
+                // resolves from Clip::mask_track at the frame's
+                // source time (the SAM2 "click object → it stays
+                // masked" live reference).
+                if (desc != nullptr && desc->id == Ai::kTrackMaskId) {
+                    ApplyTrackMask(s, effect, clip_time_s);
                     continue;
                 }
                 if (desc != nullptr &&

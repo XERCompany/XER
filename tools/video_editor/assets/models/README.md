@@ -179,6 +179,59 @@ whisper ggml model lives in `<exe>/models/` (see below).
   - input `timestep` f32 `[1,1,1,1]` — interpolation position, 0..1
   - output `frame` f32 `[1,3,H,W]` RGB 0..1, clamped
 
+## sam21/ — SAM2.1 hiera-tiny promptable segmentation (WIRED: Track Mask)
+
+- **Source:** https://huggingface.co/onnx-community/sam2.1-hiera-tiny-ONNX
+  (`onnx/vision_encoder.onnx` + `vision_encoder.onnx_data`,
+   `onnx/prompt_encoder_mask_decoder.onnx` +
+   `prompt_encoder_mask_decoder.onnx_data` — **fp32 external-data
+   pairs**; the repo also ships fp16/q4/int8 variants, fp32 chosen for
+   cv::dnn safety — fp16 still declares f32 graph I/O so it adds
+   nothing), ONNX export of Meta sam2.1 hiera-tiny
+- **SHA-256:**
+  - `vision_encoder.onnx` (354,238 B):
+    `4f30aacd3aaefbca81a0b7fe4c1fc96345570ea0a6f80ced599493d1b3be2e8c`
+  - `vision_encoder.onnx_data` (134,084,864 B):
+    `e83df9866a5afe68ea7f0f721f18f65137fc3acbf0da1c74e946d363e09c69cc`
+  - `prompt_encoder_mask_decoder.onnx` (213,114 B):
+    `874414704c5d686db7d206a35f6e15d26563d50c8c4468fccc6739bd7e491dcf`
+  - `prompt_encoder_mask_decoder.onnx_data` (20,958,208 B):
+    `e9874d900dd4134ed60eab1e97910327c2419e0b2954485d8fd6e7f1a1470f47`
+- **License:** Apache-2.0 (upstream Meta SAM2 LICENSE; onnx-community
+  repackage) — top-1 adopt per
+  `docs/wiki/research/2026-11-23-hf-org-scan.md`
+- **Consumer:** `tools/video_editor/ai/sam2_session.cc` (two-stage
+  encoder/decoder wrapper on `src/content/ai/onnx_session`) +
+  `ai/sam2_track.cc` (per-frame re-prompt tracker — image-mode SAM2,
+  masks serialized as packed-bit grids on `Clip::mask_track`). UI:
+  clip ctx-menu "Track Mask (AI)" → click a subject in the monitor →
+  tracked `xer.fx.track_mask` effect (isolate / blur_bg / key modes).
+  Smoke: `sam2_track`.
+- **Contract (verified by protobuf inspection —
+  `inspect_onnx.py`):**
+  - encoder `vision_encoder.onnx`:
+    - input `pixel_values` f32 `[B,3,1024,1024]` RGB,
+      **ImageNet-normalized** (mean .485/.456/.406, std .229/.224/.225
+      per preprocessor_config.json)
+    - outputs `image_embeddings.0` f32 `[B,32,256,256]`,
+      `image_embeddings.1` f32 `[B,64,128,128]`,
+      `image_embeddings.2` f32 `[B,256,64,64]` — all three feed the
+      decoder (SAM2 memory-attention split, not a choose-one)
+  - decoder `prompt_encoder_mask_decoder.onnx`:
+    - inputs `input_points` f32 `[B,1,N,2]` (x,y at the 1024² input
+      scale), `input_labels` **i64** `[B,1,N]` (1 fg / 0 bg),
+      `input_boxes` f32 `[B,M,4]` xyxy, + the 3 encoder embeddings;
+      unused prompt types must still be bound **empty**
+      (`input_boxes [1,0,4]` etc.) — Onnx::Session accepts zero-dim
+      tensors (dim check relaxed `d <= 0` → `d < 0` for exactly this)
+    - outputs `iou_scores` f32 `[B,N,3]`, `pred_masks` f32
+      `[B,N,3,256,256]` (256² logits, >=0 = mask, resize to frame),
+      `object_score_logits` — pick best-IoU of the 3 candidate masks
+  - **image-mode only**: no memory/stream state is fed between frames;
+    `sam2_track.cc` propagates by re-prompting each frame with the
+    previous mask's bbox+centroid, which is also the drift-control
+    seam (confidence/IoU collapse stops the track)
+
 ## ggml-base.en.bin — whisper transcription (WIRED, different dir)
 
 - **Location:** `<exe>/models/ggml-base.en.bin` — the whisper consumer

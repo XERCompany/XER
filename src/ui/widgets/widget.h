@@ -42,23 +42,60 @@ enum class KeyCode {
     PageDown,
     Escape,
     F5,
-    // Letter keys are reported only while Ctrl is held (editing/app shortcuts).
+    // Letter keys: KeyDown chords are reported only while Ctrl is held
+    // (editing/app shortcuts); KeyUp reports letters regardless so
+    // held-key tracking (K+J/L combos) sees every release.
     A,
+    B,
     C,
     D,
+    E,
     F,
+    G,
+    H,
+    I,
+    J,
     K,
+    L,
     M,
     N,
     O,
     P,
+    Q,
+    R,
     S,
+    T,
+    U,
     V,
+    W,
     X,
     Y,
     Z,
+    // Digit-row keys (Ctrl-held only, like the letters above).
+    D0,
+    D1,
+    D2,
+    D3,
+    D4,
+    D5,
+    D6,
+    D7,
+    D8,
+    D9,
     // Punctuation shortcuts (Ctrl-held only, like the letters above).
     Slash
+};
+
+// How keyboard focus arrived on a widget — the views
+// FocusManager::FocusChangeReason split (kDirectFocusChange /
+// kFocusTraversal / kFocusRestore collapsed to three reasons). Focus
+// itself is tracked per widget either way; the reason only decides
+// whether the focus ring paints: views-style, a mouse click must never
+// show the ring — keyboard traversal and programmatic focus do.
+enum class FocusReason {
+    kPointer,       // mouse click / tap routed through WidgetTree
+    kTraversal,     // Tab / Shift+Tab / AdvanceFocus
+    kProgrammatic   // RequestFocus, direct SetFocused, overlay handoff
 };
 
 enum class TextDirection {
@@ -78,6 +115,19 @@ std::string EllipsizeText(Rendering::Renderer& renderer,
                           std::string_view text,
                           const Rendering::TextStyle& style,
                           float max_width);
+
+// ── Layout-time text measurement seam ────────────────────────────────
+// GetMinSize/GetPreferredSize are const and run before the first
+// Render — no Renderer is in scope at layout time. The host points
+// this at the live renderer once one exists (Core::Window installs it
+// automatically whenever its renderer changes); tests may install any
+// Renderer with a stub MeasureText. With no target installed, widgets
+// fall back to their documented estimates/measure caches — never a
+// crash. Not owned: the host must call SetTextMeasureTarget(nullptr)
+// before the renderer dies so no widget measures through a dangling
+// pointer (Core::Window does this on teardown/recreation).
+void SetTextMeasureTarget(const Rendering::Renderer* renderer);
+const Rendering::Renderer* GetTextMeasureTarget();
 
 enum class MouseButton {
     None,
@@ -195,7 +245,17 @@ public:
     bool IsFocusable() const;
 
     void SetFocused(bool focused);
+    // Same as SetFocused plus how focus arrived — the reason controls
+    // focus-ring visibility (kPointer never paints the ring). The
+    // one-arg overload is the programmatic path existing callers use.
+    void SetFocused(bool focused, FocusReason reason);
     bool IsFocused() const;
+    // True when the widget is focused AND the ring should paint —
+    // keyboard traversal or programmatic focus, never a mouse click.
+    // RenderFocusRing consults this; widgets that draw their own ring
+    // should check it instead of IsFocused().
+    bool IsFocusRingVisible() const;
+    FocusReason GetFocusReason() const { return focus_reason_; }
 
     void SetHovered(bool hovered);
     bool IsHovered() const;
@@ -391,8 +451,10 @@ protected:
 
     void RequestLayout();
 
-    // Draws the shadcn-style outer focus ring around the widget bounds when
-    // the widget is focused. `radius` is the widget's own corner radius.
+    // Draws the shadcn-style outer focus ring around the widget bounds
+    // when the ring should paint — i.e. IsFocusRingVisible() (focused via
+    // keyboard traversal or programmatic request, never a mouse click).
+    // `radius` is the widget's own corner radius.
     void RenderFocusRing(
         Rendering::Renderer& renderer,
         const Theme::Tokens& tokens,
@@ -446,6 +508,9 @@ private:
     bool enabled_ = true;
     bool focusable_ = false;
     bool focused_ = false;
+    // Cleared widgets reset to kProgrammatic so a stale kPointer can't
+    // suppress the ring on the next traversal/programmatic focus.
+    FocusReason focus_reason_ = FocusReason::kProgrammatic;
     bool hovered_ = false;
     bool active_ = false;
     std::string tooltip_text_;

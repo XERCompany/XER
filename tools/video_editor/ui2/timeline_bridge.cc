@@ -166,6 +166,8 @@ void TimelineBridge::BuildHooks() {
     if (host_.pin_mosaic) hooks_.on_pin_mosaic = host_.pin_mosaic;
     if (host_.clear_track) hooks_.on_clear_track = host_.clear_track;
     if (host_.face_blur) hooks_.on_face_blur = host_.face_blur;
+    if (host_.track_mask) hooks_.on_track_mask = host_.track_mask;
+    if (host_.clear_mask) hooks_.on_clear_mask = host_.clear_mask;
     if (host_.ai_slowmo) hooks_.on_ai_slowmo = host_.ai_slowmo;
     if (host_.edit_transcript) {
         hooks_.on_edit_transcript = host_.edit_transcript;

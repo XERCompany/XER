@@ -165,6 +165,42 @@ struct ClipTrack {
     std::vector<std::string> classes;     // labels observed in the span
 };
 
+// SAM2.1 mask-track sample (ai/sam2_track.h — ctx-menu "Track Mask
+// (SAM)…" → xer.fx.track_mask). One analyzed frame's mask: the
+// bounding box rides the SAME source-seconds / frame-fraction
+// convention as ReframeSample so all existing track math applies,
+// and the silhouette itself is a packed 1bpp bitmap resampled onto
+// the track's fixed grid (grid_w x grid_h cells, row-major, MSB-
+// first, ceil(w*h/8) bytes — ~512 B/sample at the default 64x64).
+// A packed bitmap (not the photo/ A8 TiledDevice) is the deliberate
+// storage choice: it serializes verbatim into .xerproj as base64,
+// interpolates as raw coverage, and stays small enough that a
+// minute of 0.5 s-cadence tracking costs ~60 KB.
+struct ClipMaskSample {
+    double t = 0.0;        // source seconds
+    float cx = 0.5f;       // mask bbox center x, frame fraction 0..1
+    float cy = 0.5f;       // mask bbox center y, frame fraction
+    float w = 0.0f;        // mask bbox width, frame fraction
+    float h = 0.0f;        // mask bbox height, frame fraction
+    float confidence = 0.0f;  // decoder-chosen head's IoU score
+    bool scene_boundary = false;  // a cut/drift collapse precedes
+                                  // this sample — snappable like
+                                  // ReframeSample::scene_boundary
+    std::vector<std::uint8_t> bits;  // packed grid bitmap (see above)
+};
+
+// Analyzed SAM mask track on a clip (ai/sam2_track.h). Kept separate
+// from Clip::object_track — the box track is the coarse pin/censor
+// target while this carries per-pixel silhouettes for the
+// xer.fx.track_mask isolate/blur-behind/key compositor branch.
+// grid_w/grid_h describe every sample's bitmap (0 => empty track).
+struct ClipMaskTrack {
+    int grid_w = 0;
+    int grid_h = 0;
+    std::vector<ClipMaskSample> samples;  // sorted by t, source seconds
+    std::string label;                    // "sam" — provenance tag
+};
+
 struct Clip {
     std::string id;             // uuid (NewClipId)
     std::string source_path;    // UTF-8
@@ -197,6 +233,8 @@ struct Clip {
     std::vector<ClipTag> tags;  // AI find-objects result (source seconds)
     ClipReframe reframe;        // AI smart-reframe subject track
     ClipTrack object_track;     // AI track-object result for pinning
+    ClipMaskTrack mask_track;   // SAM2.1 mask-track result for
+                                // xer.fx.track_mask (roto/isolate)
     // Compound clip (Premiere "Nest" / Resolve "Compound Clip" /
     // FCP "Compound"): non-empty `compound` is the id of a Sequence in
     // Project::sequences whose timeline the clip renders/mixes. The

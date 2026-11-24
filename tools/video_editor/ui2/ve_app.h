@@ -388,6 +388,26 @@ public:
     void EditSourceToTimeline(bool insert);
     void StopSourceTransport();
 
+    // Held-combo + play-around transports (the router's held-key
+    // contract): while 'k' is held, J/L presses run a fixed slow
+    // shuttle instead of the ladder (Premiere K+J/K+L); Shift+K
+    // plays around the playhead and pauses at the post-roll edge.
+    void ProgramHeldShuttle(int direction);   // K-held J/L, ±1
+    void SourceHeldShuttle(int direction);
+    void EndHeldShuttle(int direction);       // 0=K up, ±1=J/L up
+    void ProgramPlayAround();                 // Shift+K
+    void SourcePlayAround();
+    // Shift+I/Shift+O — go to in/out (work-area edges on program,
+    // marks on source — Premiere "Go to In/Out Point").
+    void ProgramGoToWorkAreaEdge(bool mark_in);
+    void SourceGoToMark(bool mark_in);
+    // F — match frame: the timeline clip under the playhead loads
+    // into the source monitor at the matching source time.
+    void ProgramMatchFrame();
+    static constexpr double kHeldShuttleRate = 0.25;
+    static constexpr double kPlayAroundPre = 3.0;
+    static constexpr double kPlayAroundPost = 3.0;
+
     // ── widget contract ──────────────────────────────────────
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
@@ -444,6 +464,10 @@ private:
     // methods above, activation → ShortcutRouter scope, status →
     // SetStatus) and attaches each binding to its panel.
     void WireMonitorPanels();
+    // Last-active-viewer scope: the router's active scope and the
+    // monitor accent borders move together (single seam for
+    // on_activate hooks + OpenInSourceMonitor).
+    void ActivateViewerScope(const char* scope);
     // ── M3 panel/media wiring ─────────────────────────────────
     // Opens the catalog (DefaultDbPath) and builds the MediaPrep
     // pool + ProxyManager on first call — deferred from the ctor so
@@ -504,6 +528,21 @@ private:
     // history_->ReplaceClip in one undoable macro.
     void StartFaceBlur(const std::string& clip_id);
     void PumpFaceBlurJob();
+    // "Track Mask (AI)…" (clip ctx menu): arms the program monitor's
+    // click-point seam — the next frame click is the SAM2 prompt
+    // (track_mask_clip_id_ remembers which clip). The click maps
+    // into source-frame fractions (ai/sam2_track.h
+    // CanvasPointToSourceFraction) and BeginTrackMaskJob launches
+    // the async per-frame re-prompt scan; PumpTrackMaskJob drains
+    // the mutex slot in Tick and commits mask_track +
+    // builtin:xer.fx.track_mask through history_->ReplaceClip.
+    // ClearMaskTrack empties the track through the same history
+    // path (the effect stays — it no-ops on an empty track).
+    void StartTrackMask(const std::string& clip_id);
+    void BeginTrackMaskJob(const Clip& clip, float fx, float fy,
+                           double src_seconds);
+    void PumpTrackMaskJob();
+    void ClearMaskTrack(const std::string& clip_id);
     // "AI Upscale 4x" (bin ctx) + "Smooth slow-mo (AI)" (clip ctx):
     // one shared async bounce slot (both are seconds-per-frame CPU
     // work — serializing is honest). The worker runs
@@ -600,6 +639,15 @@ private:
     int source_fps_num_ = 30, source_fps_den_ = 1;
     bool source_has_video_ = false, source_has_audio_ = false;
     std::unordered_map<std::string, SourceMarks> source_marks_;
+    // K-held combo state: which J/L direction the gesture is
+    // shuttling (0 = none) and which binding owns it. The router's
+    // on_up path ends it when K or the direction key releases.
+    int held_shuttle_dir_ = 0;
+    bool held_shuttle_source_ = false;
+    // Shift+K play-around: the post-roll time the Tick pump pauses
+    // at (-1 = idle) and which binding owns the gesture.
+    double playaround_until_ = -1.0;
+    bool playaround_source_ = false;
 
     // ── M3 panels + media stack (shell-owned; panels see hooks) ──
     std::shared_ptr<MediaPanel> media_panel_;
@@ -724,6 +772,24 @@ private:
     ClipTrack face_result_;
     std::string face_result_error_;
     std::string face_job_clip_id_;
+
+    // "Track Mask (AI)" armed-pick + async SAM2 job — same
+    // marshalling contract as the face worker (worker writes ONLY
+    // the mutex-guarded slot; Tick drains it). track_mask_armed_
+    // shares the click seam with color_pick_armed_ — first writer
+    // wins; both can't be armed at once.
+    bool track_mask_armed_ = false;
+    std::string track_mask_clip_id_;
+    std::thread mask_worker_;
+    std::atomic<bool> mask_cancel_{false};
+    std::atomic<float> mask_progress_{0.0f};
+    std::atomic<bool> mask_running_{false};
+    std::mutex mask_result_mutex_;
+    bool mask_result_ready_ = false;
+    bool mask_result_ok_ = false;
+    ClipMaskTrack mask_result_;
+    std::string mask_result_error_;
+    std::string mask_job_clip_id_;
 
     // AI bounce jobs (upscale + slow-mo share ONE slot — both are
     // seconds-per-frame CPU work, so serializing them is the honest

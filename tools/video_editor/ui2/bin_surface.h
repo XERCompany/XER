@@ -16,6 +16,12 @@
 //     draws the BGRA frame, kPending keeps the placeholder and re-asks
 //     next frame, kFailed is negative-cached (bounded, like
 //     TimelineSurface::PrimeMediaLookups' contract).
+//   * Hover-scrub: pointer x over a card maps to a normalized media
+//     time bucketed into kScrubBuckets slices; the hovered card asks
+//     get_poster for that second (the hook is already time-keyed —
+//     MediaPrep quantizes decode at 0.25 s). Entries cache under
+//     composite path@time keys so re-hovering a spot is instant;
+//     stills and zero-duration items keep the mid-clip poster.
 //   * Drag-out is a surface-level handoff (the kit has no drag
 //     events): a left-drag armed on a card promotes past a threshold,
 //     then fires on_begin_drag / on_drag_update / on_end_drag — the
@@ -132,6 +138,16 @@ public:
     void ScrollTo(float y);
     void EnsureVisible(int index);
 
+    // ---- hover-scrub seam ------------------------------------------
+    int HoveredIndex() const { return hovered_; }
+    // The seconds value the next paint would ask get_poster for on
+    // `index`: the hover-scrub bucket while the card is hovered
+    // (video with a known duration only), the mid-clip poster
+    // otherwise. Exported so the smoke asserts the mapping without
+    // a renderer.
+    double PosterSeconds(int index) const;
+    static constexpr int kScrubBuckets = 8;
+
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
     void Layout(const XER::UI::Layout::Rect& bounds) override;
@@ -156,7 +172,9 @@ private:
         std::shared_ptr<const video::Frame> frame;
     };
 
-    const video::Frame* PosterFor(const BinItem& item);
+    const video::Frame* PosterFor(const BinItem& item,
+                                  double at_seconds);
+    double ScrubSeconds(const BinItem& item) const;
     const AudioPeaks* PeaksFor(const BinItem& item);
     void DrawCard(XER::UI::Rendering::Renderer& renderer,
                   const XER::UI::Theme::Tokens& tokens, int index,
@@ -174,6 +192,7 @@ private:
     std::set<int> selected_;
     int anchor_ = -1;             // shift-range selection origin
     int hovered_ = -1;
+    int hover_bucket_ = -1;       // x→time slice under the cursor
 
     float scroll_ = 0.0f;
     bool scrollbar_drag_ = false;
@@ -202,8 +221,9 @@ private:
     std::chrono::steady_clock::time_point last_up_time_{};
     XER::UI::Layout::Point last_up_point_{};
 
-    // Poster cache — bounded LRU by path; misses are negative-cached
-    // so a permanently-undecodable path is never re-probed per frame.
+    // Poster cache — bounded LRU by "path@seconds" (hover-scrub
+    // buckets share the pool); misses are negative-cached so a
+    // permanently-undecodable path is never re-probed per frame.
     std::unordered_map<std::string, PosterEntry> posters_;
     std::deque<std::string> posters_lru_;
     std::unordered_set<std::string> poster_failed_;

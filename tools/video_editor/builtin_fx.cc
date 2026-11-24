@@ -1350,6 +1350,27 @@ const std::vector<PluginDesc>& Effects() {
             d.params.assign(std::begin(kParams), std::end(kParams));
             return d;
         }(),
+        // ── video (Track Mask — SAM2.1 mask-driven, compositor) ──
+        // The mask-native sibling of Tracked Mosaic: "Track Mask (AI)"
+        // (clip ctx menu → click the subject) runs SAM2.1-hiera-tiny
+        // per frame into Clip::mask_track (packed-bit silhouette
+        // grids), and this effect resolves that mask at the frame's
+        // source time. Same compositor-dispatch contract as the other
+        // track effects — the ABI fn stays identity. Modes: isolate
+        // (alpha out everything but the subject), blur_bg (defocus the
+        // background plate), key (emit the matte as alpha).
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.track_mask", "Track Mask (AI)",
+                     XER_PLUGIN_VIDEO_FX, &smart_reframe_noop, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"mode", 0.0f, 2.0f, 0.0f},  // 0 isolate|1 blur_bg|2 key
+                {"feather", 0.0f, 1.0f, 0.1f},  // soft edge, frac of grid
+                {"smoothing", 0.0f, 1.0f, 0.5f},  // track temporal smoothing
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
         // ── audio (former xer_audio_fx) ──
         Desc("xer.af.echo", "Echo", XER_PLUGIN_AUDIO_FX, nullptr,
              &echo),

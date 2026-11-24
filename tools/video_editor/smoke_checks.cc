@@ -35,6 +35,7 @@
 #include "ai/img2img_runner.h"
 #include "ai/object_track.h"
 #include "ai/rife_interp.h"
+#include "ai/sam2_track.h"
 #include "ai/silence_detect.h"
 #include "ai/silero_vad.h"
 #include "ai/smart_reframe.h"
@@ -2186,10 +2187,10 @@ std::string CheckJsFx() {
 std::string CheckBuiltinFx() {
     const std::vector<std::string> ids = BuiltinFx::Ids();
     // 49 migrated effects + xer.fx.smart_reframe + xer.fx.track_mosaic
-    // + xer.fx.face_blur (all three geometric/track-driven — their ABI
-    // fns are identities; the compositor applies them at the warp/mask
-    // pass).
-    if (ids.size() != 52) {
+    // + xer.fx.face_blur + xer.fx.track_mask (all four geometric/
+    // track-driven — their ABI fns are identities; the compositor
+    // applies them at the warp/mask pass).
+    if (ids.size() != 53) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -6750,6 +6751,423 @@ std::string CheckFaceDetect() {
     return {};
 }
 
+// SAM2.1-hiera-tiny mask tracking (ai/sam2_session.h +
+// ai/sam2_track.h) — the "Track Mask (AI)" clip seam landing
+// Clip::mask_track + builtin:xer.fx.track_mask. Always verified:
+// the graceful-degradation contract (unloaded sessions reject
+// cleanly, scans fail with a reason), every model-free mask helper
+// (bounds/centroid/packed-bits/IoU), MaskTrackAt's crossfade +
+// scene-boundary snap, the armed-click transform map, the
+// registered descriptor, and a synthetic-mask isolate render
+// through the compositor branch. The LIVE model path is env-gated
+// behind XER_SMOKE_SAM2_LIVE=1: ORT hard-crashes inside SAM-family
+// encoder/decoder inference on this machine (ai_lab_ops is
+// commented out of kChecks for the same confirmed 2026-11-23 crash
+// — a crash kills the whole suite, so real inference is opt-in
+// until the ORT/model stack is fixed).
+std::string CheckSam2Track() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::Sam2Encoder encoder;
+    if (encoder.IsLoaded()) {
+        return "fresh Sam2Encoder reports loaded";
+    }
+    if (encoder.Load("definitely/missing/vision_encoder.onnx",
+                     &err)) {
+        return "Sam2Encoder::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "Sam2Encoder::Load failed a missing model with no "
+               "reason";
+    }
+    err.clear();
+    Ai::Sam2Embedding emb;
+    std::vector<std::uint8_t> bgra(160 * 120 * 4, 0x40);
+    for (std::size_t p = 3; p < bgra.size(); p += 4) bgra[p] = 0xFF;
+    if (encoder.Encode(bgra.data(), 160, 120, 160 * 4, &emb, &err)) {
+        return "Sam2Encoder::Encode ran on an unloaded session";
+    }
+    err.clear();
+    Ai::Sam2Decoder decoder;
+    if (decoder.IsLoaded()) {
+        return "fresh Sam2Decoder reports loaded";
+    }
+    if (decoder.Load("definitely/missing/decoder.onnx", &err)) {
+        return "Sam2Decoder::Load accepted a nonexistent model";
+    }
+    err.clear();
+    Ai::Sam2Prompt prompt;
+    prompt.points = {80.0f, 60.0f};
+    prompt.labels = {1};
+    Ai::Sam2Mask mask;
+    if (decoder.Decode(emb, prompt, &mask, &err)) {
+        return "Sam2Decoder::Decode ran on an unloaded session";
+    }
+    err.clear();
+    Clip scan_clip;
+    scan_clip.id = "sam-scan";
+    scan_clip.source_path = "definitely/missing/media.mp4";
+    scan_clip.duration = 5.0;
+    ClipMaskTrack track;
+    if (Ai::ScanClipMaskTrack(scan_clip, "", "",
+                              Ai::Sam2TrackParams{}, nullptr, nullptr,
+                              &track, &err)) {
+        return "ScanClipMaskTrack succeeded with no models";
+    }
+    if (err.empty() || !track.samples.empty()) {
+        return "no-model mask scan did not report a reason";
+    }
+    err.clear();
+    Clip generated = MakeGeneratedClip("gensam", 0, 0.0, 1.0,
+                                       SourceKind::ColorBars,
+                                       "smpte75");
+    if (Ai::ScanClipMaskTrack(generated, "e.onnx", "d.onnx",
+                              Ai::Sam2TrackParams{}, nullptr, nullptr,
+                              &track, &err)) {
+        return "ScanClipMaskTrack scanned a generated clip";
+    }
+    err.clear();
+
+    // ---- mask math (model-free) ---------------------------------
+    // 8x8 logits with a 4x4 >=0 block at rows/cols 2..5 (centered):
+    // bounds + centroid land on the block, the packed-bit resample
+    // reproduces it, and IoU math agrees with the shifts.
+    {
+        constexpr int MW = 8, MH = 8;
+        std::vector<float> logits(MW * MH, -1.0f);
+        for (int y = 2; y <= 5; ++y) {
+            for (int x = 2; x <= 5; ++x) {
+                logits[y * MW + x] = 1.0f;
+            }
+        }
+        float cx = 0.0f, cy = 0.0f, w = 0.0f, h = 0.0f;
+        if (!Ai::Sam2MaskBounds(logits.data(), MW, MH, &cx, &cy, &w,
+                                &h)) {
+            return "Sam2MaskBounds rejected a non-empty mask";
+        }
+        // Block covers cols 2..5 -> x span [2,6)/8 = [0.25,0.75) ->
+        // center 0.5, width 0.5.
+        if (std::fabs(cx - 0.5f) > 1e-3f ||
+            std::fabs(cy - 0.5f) > 1e-3f ||
+            std::fabs(w - 0.5f) > 1e-3f ||
+            std::fabs(h - 0.5f) > 1e-3f) {
+            return "Sam2MaskBounds bbox is off the block math";
+        }
+        // Cell-center mean of cols/rows 2..5 -> (2.5+3.5+4.5+5.5)/4
+        // = 4 -> 4/8 = 0.5.
+        if (!Ai::Sam2MaskCentroid(logits.data(), MW, MH, &cx, &cy) ||
+            std::fabs(cx - 0.5f) > 0.02f ||
+            std::fabs(cy - 0.5f) > 0.02f) {
+            return "Sam2MaskCentroid missed the block center";
+        }
+        std::vector<float> empty_logits(MW * MH, -1.0f);
+        if (Ai::Sam2MaskBounds(empty_logits.data(), MW, MH, &cx, &cy,
+                               &w, &h) ||
+            Ai::Sam2MaskCentroid(empty_logits.data(), MW, MH, &cx,
+                                 &cy)) {
+            return "empty mask reported bounds/centroid";
+        }
+        const auto bits = Ai::Sam2MaskBits(logits.data(), MW, MH, 8,
+                                           8);
+        if (bits.size() != 8) {
+            return "Sam2MaskBits packed the wrong byte count";
+        }
+        // Cells 2..5 set => each row byte is 0b00111100 = 0x3C.
+        for (std::size_t i = 0; i < bits.size(); ++i) {
+            const std::uint8_t want =
+                (i >= 2 && i <= 5) ? 0x3C : 0x00;
+            if (bits[i] != want) {
+                return "Sam2MaskBits cell coverage is wrong";
+            }
+        }
+        if (!Ai::Sam2BitAt(bits.data(), 8, 8, 3, 3) ||
+            Ai::Sam2BitAt(bits.data(), 8, 8, 0, 0) ||
+            Ai::Sam2BitAt(bits.data(), 8, 8, 7, 7)) {
+            return "Sam2BitAt reads the wrong cells";
+        }
+        if (std::fabs(Ai::Sam2BitsIoU(bits.data(), bits.data(), 8,
+                                      8) -
+                      1.0f) > 1e-6f) {
+            return "Sam2BitsIoU self-overlap is not 1";
+        }
+        const auto empty_bits =
+            Ai::Sam2MaskBits(empty_logits.data(), MW, MH, 8, 8);
+        if (Ai::Sam2BitsIoU(bits.data(), empty_bits.data(), 8, 8) !=
+            0.0f) {
+            return "Sam2BitsIoU vs empty is not 0";
+        }
+        // Shift the block one cell right -> halves the overlap with
+        // the original (3x4 vs 4x4 -> IoU 12/20 = 0.6).
+        std::vector<float> shifted(MW * MH, -1.0f);
+        for (int y = 2; y <= 5; ++y) {
+            for (int x = 3; x <= 6; ++x) {
+                shifted[y * MW + x] = 1.0f;
+            }
+        }
+        const auto sbits =
+            Ai::Sam2MaskBits(shifted.data(), MW, MH, 8, 8);
+        if (std::fabs(Ai::Sam2BitsIoU(bits.data(), sbits.data(), 8,
+                                      8) -
+                      0.6f) > 1e-3f) {
+            return "Sam2BitsIoU on a shifted mask is off";
+        }
+    }
+
+    // ---- MaskTrackAt: crossfade + snap + span ends --------------
+    {
+        ClipMaskTrack mt;
+        mt.grid_w = 8;
+        mt.grid_h = 8;
+        mt.label = "sam";
+        ClipMaskSample a;
+        a.t = 0.0;
+        a.confidence = 0.9f;
+        // Left half covered: cols 0..3 -> 0xF0 per row.
+        a.bits.assign(8, 0xF0);
+        ClipMaskSample b;
+        b.t = 1.0;
+        b.confidence = 0.9f;
+        // Right half covered: cols 4..7 -> 0x0F.
+        b.bits.assign(8, 0x0F);
+        mt.samples = {a, b};
+        std::vector<std::uint8_t> a8;
+        if (!Ai::MaskTrackAt(mt, 0.0, &a8) ||
+            a8.size() != 64 || a8[0] != 255 || a8[7] != 0) {
+            return "MaskTrackAt at t0 is not the left-half mask";
+        }
+        if (!Ai::MaskTrackAt(mt, 1.0, &a8) ||
+            a8[0] != 0 || a8[7] != 255) {
+            return "MaskTrackAt at t1 is not the right-half mask";
+        }
+        if (!Ai::MaskTrackAt(mt, 0.5, &a8)) {
+            return "MaskTrackAt mid-span failed";
+        }
+        // Crossfade at 0.5: both halves partial (~128).
+        if (a8[0] < 100 || a8[0] > 160 || a8[7] < 100 ||
+            a8[7] > 160) {
+            return "MaskTrackAt did not crossfade between samples";
+        }
+        // Past the sampled span coverage goes empty.
+        if (Ai::MaskTrackAt(mt, 3.0, &a8)) {
+            bool any = false;
+            for (const std::uint8_t v : a8) any = any || v != 0;
+            if (any) {
+                return "MaskTrackAt emitted coverage outside the "
+                       "span";
+            }
+        }
+        // scene_boundary on b snaps the lerp: at t=0.9 the mask is
+        // still fully the a bitmap.
+        mt.samples[1].scene_boundary = true;
+        if (!Ai::MaskTrackAt(mt, 0.9, &a8) || a8[0] != 255 ||
+            a8[7] != 0) {
+            return "MaskTrackAt did not snap across a scene "
+                   "boundary";
+        }
+        // Degenerate tracks resolve as "nothing tracked".
+        ClipMaskTrack empty_track;
+        if (Ai::MaskTrackAt(empty_track, 0.0, &a8)) {
+            return "MaskTrackAt accepted an empty track";
+        }
+        ClipMaskTrack no_grid = mt;
+        no_grid.grid_w = 0;
+        if (Ai::MaskTrackAt(no_grid, 0.0, &a8)) {
+            return "MaskTrackAt accepted a zero-grid track";
+        }
+    }
+
+    // ---- armed-click -> source-fraction map ----------------------
+    {
+        Clip clip;
+        clip.duration = 4.0;
+        // Default transform = identity: a 320x180 src sits
+        // un-scaled top-left on the 1920x1080 canvas.
+        float fx = 0.0f, fy = 0.0f;
+        if (!Ai::CanvasPointToSourceFraction(clip, 0.0, 1920, 1080,
+                                           320, 180, 0.08, 0.08,
+                                           &fx, &fy)) {
+            return "in-rect canvas click did not map";
+        }
+        // canvas px (153.6, 86.4); rect center (160,90), dw=320,
+        // dh=180 -> fractions (0.48, 0.48).
+        if (std::fabs(fx - 0.48f) > 0.01f ||
+            std::fabs(fy - 0.48f) > 0.01f) {
+            return "canvas->source map produced wrong fractions";
+        }
+        if (Ai::CanvasPointToSourceFraction(clip, 0.0, 1920, 1080,
+                                            320, 180, 0.5, 0.5, &fx,
+                                            &fy)) {
+            return "out-of-rect canvas click mapped anyway";
+        }
+        // Offset 0.25,0: rect slides right 480px — a click just
+        // inside its left edge maps near x-fraction 0.18.
+        clip.transform.offset_x = 0.25f;
+        if (!Ai::CanvasPointToSourceFraction(clip, 0.0, 1920, 1080,
+                                           320, 180, 0.28, 0.08,
+                                           &fx, &fy)) {
+            return "offset-rect canvas click did not map";
+        }
+        if (std::fabs(fx - 0.18f) > 0.01f ||
+            std::fabs(fy - 0.48f) > 0.01f) {
+            return "offset-rect map produced wrong fractions";
+        }
+    }
+
+    // ---- registered descriptor + compositor isolate branch ------
+    {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:xer.fx.track_mask");
+        if (desc == nullptr || !desc->builtin ||
+            desc->id != Ai::kTrackMaskId) {
+            return "builtin:xer.fx.track_mask is not registered";
+        }
+        if (desc->params.size() != 3 ||
+            std::string(desc->params[0].name) != "mode" ||
+            std::string(desc->params[1].name) != "feather" ||
+            std::string(desc->params[2].name) != "smoothing") {
+            return "track_mask param table is not {mode, feather, "
+                   "smoothing}";
+        }
+        // Isolate mode: a mask covering the LEFT half of the grid
+        // alphas out the right half — proven by COLOR, not alpha:
+        // the masked red matte sits over a blue matte, so the left
+        // half reads red and the right half shows the blue plate
+        // through the cutout.
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        project.tracks.push_back(Track{TrackKind::Video, "V2"});
+        project.clips.push_back(MakeGeneratedClip(
+            "blue", 0, 0.0, 1.0, SourceKind::ColorMatte, "#3366CC"));
+        Clip red = MakeGeneratedClip("red", 1, 0.0, 1.0,
+                                     SourceKind::ColorMatte,
+                                     "#CC3333");
+        red.effects.push_back(
+            {"builtin:xer.fx.track_mask", {0.0f, 0.0f, 0.5f}});
+        ClipMaskSample ms;
+        ms.t = 0.0;
+        ms.cx = 0.25f;
+        ms.cy = 0.5f;
+        ms.w = 0.5f;
+        ms.h = 1.0f;
+        ms.confidence = 0.9f;
+        ms.bits.assign(8, 0xF0);   // 8x8 grid, left half set
+        red.mask_track.grid_w = 8;
+        red.mask_track.grid_h = 8;
+        red.mask_track.label = "sam";
+        red.mask_track.samples.push_back(ms);
+        project.clips.push_back(red);
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> out;
+        const bool rendered = compositor.RenderFrameAt(0.0, &out, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const auto px = [&out](int x, int y) {
+            const std::uint8_t* p =
+                out.data() +
+                (static_cast<std::size_t>(y) * 200 + x) * 4;
+            return std::array<int, 3>{p[0], p[1], p[2]};   // B,G,R
+        };
+        // Left: the red matte survived the mask (B low, R high).
+        // Right: the unmasked side was cut to alpha 0 -> the blue
+        // backdrop shows (B high, R low).
+        const auto left = px(50, 50);
+        const auto right = px(150, 50);
+        if (left[2] < 0xB0 || left[0] > 0x60) {
+            return "track_mask isolate cut the masked half";
+        }
+        if (right[0] < 0xB0 || right[2] > 0x60) {
+            return "track_mask isolate kept the unmasked half";
+        }
+    }
+
+    // ---- live model path: opt-in (ORT crash class — see header) --
+    if (std::getenv("XER_SMOKE_SAM2_LIVE") == nullptr ||
+        !Ai::Sam2ModelsStaged() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  sam2_track: SKIP (live inference opt-in via "
+                     "XER_SMOKE_SAM2_LIVE=1, or models/backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!encoder.Load(Ai::Sam2EncoderModel(), &err)) {
+        std::fprintf(stdout,
+                     "  sam2_track: SKIP (encoder rejected: %s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    if (!decoder.Load(Ai::Sam2DecoderModel(), &err)) {
+        std::fprintf(stdout,
+                     "  sam2_track: SKIP (decoder rejected: %s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    // Synthetic 640x360 frame: dark plate + bright 120x120 square
+    // centered at (200,180). Encode once, decode a point prompt at
+    // the square's center — the contract is "a non-empty mask whose
+    // bounds contain the prompt".
+    {
+        constexpr int FW = 640, FH = 360;
+        std::vector<std::uint8_t> frame(FW * FH * 4, 0x20);
+        for (int y = 120; y < 240; ++y) {
+            for (int x = 140; x < 260; ++x) {
+                std::uint8_t* p =
+                    frame.data() +
+                    (static_cast<std::size_t>(y) * FW + x) * 4;
+                p[0] = p[1] = p[2] = 0xF0;
+            }
+        }
+        for (std::size_t p = 3; p < frame.size(); p += 4) {
+            frame[p] = 0xFF;
+        }
+        if (!encoder.Encode(frame.data(), FW, FH, FW * 4, &emb,
+                            &err)) {
+            return "Sam2 encode failed on a synthetic frame: " + err;
+        }
+        if (!emb.Valid() || emb.src_w != FW || emb.src_h != FH) {
+            return "Sam2 embedding is degenerate";
+        }
+        prompt.points = {200.0f, 180.0f};
+        if (!decoder.Decode(emb, prompt, &mask, &err)) {
+            return "Sam2 decode failed on a point prompt: " + err;
+        }
+        if (mask.w <= 0 || mask.h <= 0 || mask.logits.empty()) {
+            return "Sam2 mask is degenerate";
+        }
+        float cx = 0.0f, cy = 0.0f, w = 0.0f, h = 0.0f;
+        if (!Ai::Sam2MaskBounds(mask.logits.data(), mask.w, mask.h,
+                                &cx, &cy, &w, &h)) {
+            return "Sam2 decoded an empty mask for a bright square";
+        }
+        // The prompt point in fractions: (200/640, 180/360) =
+        // (0.3125, 0.5) — must fall inside the mask bbox.
+        if (0.3125f < cx - w * 0.5f || 0.3125f > cx + w * 0.5f ||
+            0.5f < cy - h * 0.5f || 0.5f > cy + h * 0.5f) {
+            return "Sam2 mask bounds do not contain the prompt "
+                   "point";
+        }
+        std::fprintf(stdout,
+                     "  sam2_track: inference ran on '%s' -> mask "
+                     "bbox (%.2f,%.2f %.2fx%.2f)\n",
+                     decoder.BackendId().c_str(), cx, cy, w, h);
+        std::fflush(stdout);
+    }
+    return {};
+}
+
 // Real-ESRGAN x4v3 upscale (ai/img2img_runner.h + ai/upscale_x4v3.h)
 // — the wave-2 "AI Upscale 4x" bin bounce. What MUST hold
 // regardless of the environment: Load on a missing file fails with
@@ -8430,6 +8848,7 @@ constexpr CheckEntry kChecks[] = {
     {"face_detect", &CheckFaceDetect},
     {"upscale_x4v3", &CheckUpscaleX4v3},
     {"rife_interp", &CheckRifeInterp},
+    {"sam2_track", &CheckSam2Track},
     // Env-gated: ai_lab_ops crashes inside ORT SAM inference on this machine
     // (onnxruntime + SAM encoder/decoder; fails before any repo code returns,
     // confirmed 2026-11-23). Re-enable when the ORT/model stack is fixed.

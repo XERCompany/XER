@@ -5,6 +5,7 @@
 #include <utility>
 
 #include "rendering/renderer.h"
+#include "theme/theme.h"
 #include "theme/tokens.h"
 
 namespace XER::UI::Widgets {
@@ -287,7 +288,16 @@ void Card::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
 }
 
 void Card::Layout(const Layout::Rect& bounds) {
-    Layout(bounds, CachedLayoutTokens());
+    // One-arg Layout before any themed pass sees the zero-initialized
+    // token cache (font_body == 0) — spacing/typography metrics would
+    // collapse to zero, so fall back to the stock theme tokens. A real
+    // themed Layout always caches tokens with font_body > 0.
+    static const Theme::Tokens fallback_tokens =
+        Theme::Provider().GetTokens();
+    const Theme::Tokens& tokens = CachedLayoutTokens().font_body > 0.0f
+        ? CachedLayoutTokens()
+        : fallback_tokens;
+    Layout(bounds, tokens);
 }
 
 void Card::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {

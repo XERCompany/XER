@@ -133,9 +133,12 @@ public:
     // continuity rules above.
     void SetLoop(double in_s, double out_s);
     // Preview render scale in (0,1] — values > 1 or non-finite clamp
-    // to 1 (full res). Applies a nearest-neighbor downsample of the
-    // composited BGRA before OnVideoFrame (decodes still run at
-    // source resolution; cheap CPU post-pass, honest "1/2" preview).
+    // to 1 (full res). Scales the CANVAS the compositor renders to
+    // (the warp, blend, canvas and delivery copies all shrink
+    // quadratically — decode still runs at source resolution), so
+    // the tier is honest render work reduction, not a display
+    // downsample. Canvas dims are effect-cache key material, so a
+    // tier flip re-binds the compositor and re-primes the AutoCacher.
     void SetQuality(float scale);
     // Master fader in dB — forwarded to the audio mixer and applied
     // to the mixed output BEFORE the peak read, so OnAudioPeakLevels
@@ -159,6 +162,24 @@ public:
     // AutoCacher counters (windows/queued/done/skipped/cancelled/
     // failed) — all zeros when the feature is disabled.
     AutoCacher::Stats AutoCacheStats() const;
+    // Coarse per-stage wall-clock totals accumulated by the worker —
+    // the "why is preview slow" breakdown. `render` is the compositor
+    // call (decode + effect chain + warp + blend happen inside it),
+    // `deliver` is the frame wrap/copy + Sink::OnVideoFrame marshal,
+    // `audio` is the mixer pump, `tick` is the whole loop iteration.
+    // Monotonic from Init; ResetPerfStats() re-zeroes for a
+    // measurement window (smoke checks, perf HUDs).
+    struct PerfStats {
+        std::uint64_t ticks = 0;      // worker loop iterations
+        std::uint64_t renders = 0;    // RenderAndDeliver attempts
+        double render_ms = 0.0;       // comp_.RenderFrameAt total
+        double deliver_ms = 0.0;      // frame wrap + OnVideoFrame total
+        double audio_ms = 0.0;        // PumpAudio total
+        double tick_ms = 0.0;         // full tick (work, excl. sleep)
+        double sleep_ms = 0.0;        // idle pacing total
+    };
+    PerfStats GetPerfStats() const;
+    void ResetPerfStats();
     // Waits until the AutoCacher queue is drained and no window is
     // pending (up to timeout_ms) — tests/smoke only; returns false on
     // timeout or when disabled-but-idle (idle is always true then:

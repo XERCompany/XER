@@ -98,6 +98,12 @@ public:
         // "Auto-blur faces" — YuNet scan -> face ClipTrack ->
         // xer.fx.face_blur effect, all shell-side.
         std::function<void(const std::string&)> face_blur;
+        // "Track Mask (AI)…" — the shell arms the monitor click
+        // seam, the click becomes the SAM2 prompt, and the async
+        // mask scan lands Clip::mask_track + xer.fx.track_mask,
+        // all shell-side. "Clear Mask Track" empties it.
+        std::function<void(const std::string&)> track_mask;
+        std::function<void(const std::string&)> clear_mask;
         // "Smooth slow-mo (AI)" — RIFE bounce of the consumed span
         // -> baked media + clip repoint (ai/rife_interp.h), all
         // shell-side.

@@ -134,7 +134,7 @@ void PreviewBinding::SetProject(const Project& snapshot) {
     dirty_ = true;
     playhead_ = 0.0;
     ui_playing_ = false;
-    shuttle_rate_ = 0.0;
+    SetShuttleRate(0.0);
 }
 
 double PreviewBinding::Duration() const { return snapshot_.duration(); }
@@ -190,10 +190,15 @@ void PreviewBinding::Shutdown() {
     if (engine_ != nullptr) engine_->Shutdown();
     ready_ = false;
     ui_playing_ = false;
-    shuttle_rate_ = 0.0;
+    SetShuttleRate(0.0);
 }
 
 // ---- transport --------------------------------------------------------------------
+
+void PreviewBinding::SetShuttleRate(double rate) {
+    shuttle_rate_ = rate;
+    if (panel_ != nullptr) panel_->SetSpeedBadge(rate);
+}
 
 void PreviewBinding::ApplyLoopCommand() {
     // Loop honors the explicit range, else the pushed work area; the
@@ -224,13 +229,13 @@ void PreviewBinding::StartPlayback(double rate) {
     engine_->SetRate(rate);
     engine_->SetPlaying(true);
     ui_playing_ = true;
-    shuttle_rate_ = rate;
+    SetShuttleRate(rate);
     if (panel_ != nullptr) panel_->SetPlaying(true);
 }
 
 void PreviewBinding::TogglePlay() {
     const bool next = !ui_playing_;
-    shuttle_rate_ = 0.0;   // Space always returns to normal 1x
+    SetShuttleRate(0.0);   // Space always returns to normal 1x
     if (next) {
         if (!Ensure()) {
             Report("Preview engine unavailable", true);
@@ -284,7 +289,7 @@ void PreviewBinding::ShuttleStep(int direction) {
         // playhead never jumps on a rate flip (engine contract).
         engine_->SetRate(rate);
         engine_->SetPlaying(true);
-        shuttle_rate_ = rate;
+        SetShuttleRate(rate);
         if (panel_ != nullptr) panel_->SetPlaying(true);
     }
     char label[32];
@@ -292,15 +297,37 @@ void PreviewBinding::ShuttleStep(int direction) {
     Report(std::string("Shuttle ") + label);
 }
 
+void PreviewBinding::HeldShuttle(double rate) {
+    // Fixed-rate shuttle for K+J/K+L held combos — NOT the ladder.
+    // The router re-fires the held binding on OS auto-repeat, so the
+    // apply path must be idempotent: SetRate while playing just
+    // rebases the wall-clock anchor at the same rate.
+    const bool rebuilt = dirty_;
+    if (!Ensure()) {
+        Report("Preview engine unavailable", true);
+        return;
+    }
+    if (!ui_playing_) {
+        StartPlayback(rate);
+    } else {
+        if (rebuilt) {
+            engine_->Seek(playhead_);
+        }
+        engine_->SetRate(rate);
+        engine_->SetPlaying(true);
+        SetShuttleRate(rate);
+        if (panel_ != nullptr) panel_->SetPlaying(true);
+    }
+}
+
 void PreviewBinding::ShuttleStop() {
     // Premiere K = pause only (Space toggles) — also the shuttle
     // brake; a paused K is a no-op beyond resetting the ladder.
-    shuttle_rate_ = 0.0;
     Stop();
 }
 
 void PreviewBinding::Stop() {
-    shuttle_rate_ = 0.0;
+    SetShuttleRate(0.0);
     if (ready_) {
         engine_->SetRate(1.0);
         engine_->SetPlaying(false);
@@ -392,7 +419,7 @@ void PreviewBinding::DrainPending() {
         if (ready_ && !engine_->Playing() && ui_playing_) {
             // Engine auto-stopped at the end (or at t=0 on a reverse
             // shuttle) — mirror onto the chrome.
-            shuttle_rate_ = 0.0;
+            SetShuttleRate(0.0);
             ui_playing_ = false;
             panel_->SetPlaying(false);
         }

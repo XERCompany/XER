@@ -48,6 +48,52 @@ bool Frame::Allocate(int w, int h, PixelFormat fmt) {
     return sz > 0;
 }
 
+bool Frame::Adopt(int w, int h, PixelFormat fmt,
+                  std::vector<std::uint8_t>&& pixels) {
+    if (w <= 0 || h <= 0) {
+        Release();
+        return false;
+    }
+    const auto width = static_cast<size_t>(w);
+    const auto height = static_cast<size_t>(h);
+    if (width > std::numeric_limits<size_t>::max() / height) {
+        Release();
+        return false;
+    }
+    const size_t count = width * height;
+    size_t sz = 0;
+    switch (fmt) {
+        case PixelFormat::BGRA8:
+        case PixelFormat::RGBA8:
+            if (count > std::numeric_limits<size_t>::max() / 4) {
+                Release();
+                return false;
+            }
+            sz = count * 4;
+            break;
+        case PixelFormat::NV12:
+        case PixelFormat::YUV420P:
+            if (count > (std::numeric_limits<size_t>::max() / 3) * 2) {
+                Release();
+                return false;
+            }
+            sz = count * 3 / 2;
+            break;
+    }
+    if (pixels.size() != sz) {
+        // Wrong size: releasing (rather than keeping the old frame)
+        // surfaces the contract violation instead of silently serving
+        // a stale buffer.
+        Release();
+        return false;
+    }
+    meta_.width = w;
+    meta_.height = h;
+    meta_.format = fmt;
+    data_ = std::move(pixels);
+    return true;
+}
+
 void Frame::Release() {
     data_.clear();
     meta_ = {};

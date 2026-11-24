@@ -32,19 +32,41 @@ Widgets::KeyCode TranslateKey(WPARAM key) {
 Widgets::KeyCode TranslateShortcutKey(WPARAM key) {
     switch (key) {
     case 'A': return Widgets::KeyCode::A;
+    case 'B': return Widgets::KeyCode::B;
     case 'C': return Widgets::KeyCode::C;
     case 'D': return Widgets::KeyCode::D;
+    case 'E': return Widgets::KeyCode::E;
     case 'F': return Widgets::KeyCode::F;
+    case 'G': return Widgets::KeyCode::G;
+    case 'H': return Widgets::KeyCode::H;
+    case 'I': return Widgets::KeyCode::I;
+    case 'J': return Widgets::KeyCode::J;
     case 'K': return Widgets::KeyCode::K;
+    case 'L': return Widgets::KeyCode::L;
     case 'M': return Widgets::KeyCode::M;
     case 'N': return Widgets::KeyCode::N;
     case 'O': return Widgets::KeyCode::O;
     case 'P': return Widgets::KeyCode::P;
+    case 'Q': return Widgets::KeyCode::Q;
+    case 'R': return Widgets::KeyCode::R;
     case 'S': return Widgets::KeyCode::S;
+    case 'T': return Widgets::KeyCode::T;
+    case 'U': return Widgets::KeyCode::U;
     case 'V': return Widgets::KeyCode::V;
+    case 'W': return Widgets::KeyCode::W;
     case 'X': return Widgets::KeyCode::X;
     case 'Y': return Widgets::KeyCode::Y;
     case 'Z': return Widgets::KeyCode::Z;
+    case '0': return Widgets::KeyCode::D0;
+    case '1': return Widgets::KeyCode::D1;
+    case '2': return Widgets::KeyCode::D2;
+    case '3': return Widgets::KeyCode::D3;
+    case '4': return Widgets::KeyCode::D4;
+    case '5': return Widgets::KeyCode::D5;
+    case '6': return Widgets::KeyCode::D6;
+    case '7': return Widgets::KeyCode::D7;
+    case '8': return Widgets::KeyCode::D8;
+    case '9': return Widgets::KeyCode::D9;
     case VK_OEM_2: return Widgets::KeyCode::Slash;   // '/' key (Ctrl+/)
     default: return Widgets::KeyCode::None;
     }
@@ -152,6 +174,16 @@ std::optional<Widgets::Event> InputTranslator::Translate(
         if (wParam == VK_MENU || wParam == VK_LMENU || wParam == VK_RMENU) {
             alt_down_ = false;
             return std::nullopt;
+        }
+        // Letter releases report as KeyUp too — held-key tracking
+        // (K+J/L combos) needs the release no matter which channel
+        // the press arrived on (TextInput for unmodified letters,
+        // KeyDown for Ctrl chords).
+        if (const auto key = TranslateShortcutKey(wParam);
+            key != Widgets::KeyCode::None) {
+            auto event = CreateEvent(Widgets::Event::Type::KeyUp);
+            event.key = key;
+            return event;
         }
         if (const auto key = TranslateKey(wParam); key != Widgets::KeyCode::None) {
             auto event = CreateEvent(Widgets::Event::Type::KeyUp);

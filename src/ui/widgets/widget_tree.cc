@@ -162,7 +162,7 @@ void WidgetTree::ShowOverlay(std::shared_ptr<Widget> overlay) {
             CollectFocusable(overlay_, true, focusable);
         }
         if (!focusable.empty()) {
-            SetFocusedWidget(focusable.front());
+            SetFocusedWidget(focusable.front(), FocusReason::kProgrammatic);
         }
     }
 }
@@ -429,7 +429,7 @@ bool WidgetTree::HandleEvent(const Event& event) {
             return false;
         }
         if (target->IsFocusable()) {
-            SetFocusedWidget(target);
+            SetFocusedWidget(target, FocusReason::kPointer);
         }
         const bool handled = target->HandleEvent(evt);
         // Right-clicks that no widget consumed bubble to the tree-level
@@ -525,7 +525,7 @@ bool WidgetTree::DispatchClick(
         // Dead click — the pre-bubbling rule: a directly hit focusable
         // widget still takes focus; anything else leaves focus alone.
         if (target->IsFocusable()) {
-            SetFocusedWidget(target);
+            SetFocusedWidget(target, FocusReason::kPointer);
         }
         return false;
     }
@@ -538,7 +538,7 @@ bool WidgetTree::DispatchClick(
     for (std::shared_ptr<Widget> widget = target; widget != nullptr;
          widget = widget->GetParent()) {
         if (widget->IsFocusable()) {
-            SetFocusedWidget(widget);
+            SetFocusedWidget(widget, FocusReason::kPointer);
             break;
         }
     }
@@ -722,15 +722,77 @@ bool WidgetTree::MoveFocus(bool backwards) {
             ? (index + focusable.size() - 1) % focusable.size()
             : (index + 1) % focusable.size();
     }
-    SetFocusedWidget(focusable[next]);
+    SetFocusedWidget(focusable[next], FocusReason::kTraversal);
     return true;
 }
 
-void WidgetTree::SetFocusedWidget(const std::shared_ptr<Widget>& widget) {
+bool WidgetTree::AdvanceFocus(bool reverse) {
+    return MoveFocus(reverse);
+}
+
+std::shared_ptr<Widget> WidgetTree::GetFocusedWidget() const {
+    if (auto focused = FindFocused(root_); focused != nullptr) {
+        return focused;
+    }
+    return FindFocused(overlay_);
+}
+
+void WidgetTree::RequestFocus(const std::shared_ptr<Widget>& widget) {
+    SetFocusedWidget(widget, FocusReason::kProgrammatic);
+}
+
+std::shared_ptr<Widget> WidgetTree::FindFocused(
+    const std::shared_ptr<Widget>& widget) const {
+    if (widget == nullptr) {
+        return nullptr;
+    }
+    if (widget->IsFocused()) {
+        return widget;
+    }
+    for (const auto& child : widget->GetChildren()) {
+        if (auto focused = FindFocused(child); focused != nullptr) {
+            return focused;
+        }
+    }
+    return nullptr;
+}
+
+void WidgetTree::SetFocusedWidget(
+    const std::shared_ptr<Widget>& widget,
+    FocusReason reason) {
+    auto previous = FindFocused(root_);
+    if (previous == nullptr) {
+        previous = FindFocused(overlay_);
+    }
+    if (previous == widget) {
+        // Same widget, possibly a new reason — a traversal landing on the
+        // already-focused widget still upgrades pointer focus so the ring
+        // appears when the user starts tabbing.
+        if (widget != nullptr) {
+            widget->SetFocused(true, reason);
+        }
+        return;
+    }
     ClearFocus(root_);
     ClearFocus(overlay_);
     if (widget != nullptr) {
-        widget->SetFocused(true);
+        widget->SetFocused(true, reason);
+    }
+    // Per-widget Focus/Blur notification — views' FocusManager delivers
+    // both on every tree-level change; ours previously only fired on
+    // window activation (WM_SETFOCUS/KILLFOCUS). Delivered AFTER the
+    // flags settle so handlers read a consistent IsFocused().
+    if (previous != nullptr) {
+        Event blur;
+        blur.type = Event::Type::Blur;
+        previous->HandleEvent(blur);
+    }
+    // The Blur handler may have re-moved focus — only deliver Focus when
+    // the request still stands.
+    if (widget != nullptr && widget->IsFocused()) {
+        Event focus;
+        focus.type = Event::Type::Focus;
+        widget->HandleEvent(focus);
     }
 }
 

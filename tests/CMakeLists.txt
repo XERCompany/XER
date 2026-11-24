@@ -8,6 +8,7 @@ add_executable(XER_UI_Tests
     ui/presentation_widget_tests.cc
     ui/flex_layout_tests.cc
     ui/widget_geometry_tests.cc
+    ui/label_focus_tests.cc
     ui/ffmpeg_avatar_tests.cc
     ui/ffmpeg_video_decode_tests.cc
     ui/ffmpeg_audio_tap_tests.cc

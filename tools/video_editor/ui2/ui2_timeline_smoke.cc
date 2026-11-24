@@ -368,6 +368,34 @@ std::string CheckChromeHooks(TimelineSurface& s, Rec& r) {
     return "";
 }
 
+std::string CheckSnapIndicator(TimelineSurface& s) {
+    // SnapCandidate is the const tool-facing seam — a resolved-
+    // different result marks the guide time the Render pass draws.
+    // c1's in edge sits at 1.0; the 8px window is 0.1s at zoom 80.
+    const double snapped = s.SnapCandidate(1.04, 0);
+    if (!Near(snapped, 1.0, 1e-9)) {
+        return "candidate did not snap to the clip edge";
+    }
+    if (s.SnapIndicatorSeconds() != snapped) {
+        return "snapped candidate did not mark the guide";
+    }
+    // An unsnapped call hides the guide again (drag moved off).
+    if (s.SnapCandidate(3.4, 0) != 3.4 ||
+        s.SnapIndicatorSeconds() != -1.0) {
+        return "unsnapped candidate kept the guide marked";
+    }
+    // Re-mark, then the release that ends the drag clears it.
+    s.SnapCandidate(1.04, 0);
+    if (s.SnapIndicatorSeconds() < 0.0) {
+        return "guide failed to re-mark";
+    }
+    s.HandleEvent(Up(s.XAtTime(4.0), s.GetBounds().y + 120.0f));
+    if (s.SnapIndicatorSeconds() != -1.0) {
+        return "drag release did not clear the guide";
+    }
+    return "";
+}
+
 std::string CheckStrip() {
     auto strip = TimelineStrip::Create();
     if (strip == nullptr || strip->Surface() == nullptr) {
@@ -483,6 +511,10 @@ std::string Ui2TimelineSmoke() {
     if (const std::string err = CheckChromeHooks(*surface, rec);
         !err.empty()) {
         return "chrome: " + err;
+    }
+    if (const std::string err = CheckSnapIndicator(*surface);
+        !err.empty()) {
+        return "snap indicator: " + err;
     }
     // Async media seam: every clip source gets probed through the
     // tri-state hooks and kPending answers return immediately.

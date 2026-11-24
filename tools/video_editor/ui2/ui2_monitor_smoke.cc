@@ -3,6 +3,7 @@
 // assertions through a real WidgetTree, never pixel comparison.
 #include "ui2_monitor_smoke.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -33,19 +34,44 @@ class RecordingRenderer final : public Renderer {
 public:
     int frame_calls = 0;
     int text_calls = 0;
+    int stroke_calls = 0;
     Layout::Rect last_frame_dst{};
+    struct Stroke {
+        XER::UI::Theme::Color color;
+        float width;
+    };
+    std::vector<Stroke> strokes;
+    std::vector<std::string> texts;
 
     void BeginFrame(Layout::Rect) override {}
     void EndFrame() override {}
     void FillRect(Layout::Rect, XER::UI::Theme::Color,
                   float) override {}
-    void StrokeRect(Layout::Rect, XER::UI::Theme::Color, float,
-                    float) override {}
+    void StrokeRect(Layout::Rect, XER::UI::Theme::Color color,
+                    float width, float) override {
+        ++stroke_calls;
+        strokes.push_back({color, width});
+    }
+    bool DrewStroke(XER::UI::Theme::Color color, float width) const {
+        for (const Stroke& s : strokes) {
+            if (s.width == width && s.color.a == color.a &&
+                s.color.r == color.r && s.color.g == color.g &&
+                s.color.b == color.b) {
+                return true;
+            }
+        }
+        return false;
+    }
     void DrawLine(Layout::Point, Layout::Point,
                   XER::UI::Theme::Color, float) override {}
-    void DrawText(std::string_view, Layout::Rect,
+    void DrawText(std::string_view text, Layout::Rect,
                   TextStyle) override {
         ++text_calls;
+        texts.emplace_back(text);
+    }
+    bool DrewText(std::string_view wanted) const {
+        return std::find(texts.begin(), texts.end(), wanted) !=
+               texts.end();
     }
     Layout::Size MeasureText(std::string_view text,
                              TextStyle) const override {
@@ -306,6 +332,42 @@ std::string CheckPanelChrome() {
         if (r.text_calls == 0) return "panel painted no chrome text";
     }
 
+    // Active-viewer accent border: the scoped panel strokes its
+    // border in tokens.accent at 2px instead of the quiet 1px ring.
+    if (source->ScopeActive()) return "panel starts scoped";
+    source->SetScopeActive(true);
+    if (!source->ScopeActive()) return "scope flag did not latch";
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (!r.DrewStroke(tokens.accent, 2.0f)) {
+            return "scoped panel did not paint the accent border";
+        }
+    }
+    // Speed badge: a non-1 rate paints the "<rate>x" chip on the
+    // surface; 0 / +1 hides it (PreviewBinding pushes the raw rate).
+    source->SetSpeedBadge(-0.25);
+    if (source->VideoSurface().SpeedBadgeRate() != -0.25) {
+        return "speed badge rate did not latch";
+    }
+    source->VideoSurface().SetDuration(10.0);
+    source->VideoSurface().SetFrame(FakeBgra(160, 90), 160, 90);
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (!r.DrewText("-0.25x")) {
+            return "speed badge did not paint the rate chip";
+        }
+    }
+    source->SetSpeedBadge(1.0);
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (r.DrewText("-0.25x")) {
+            return "badge stayed visible at +1x";
+        }
+    }
+
     // Hook dispatch: press inside the panel activates; a click in
     // the frame toggles play.
     int activated = 0, toggled = 0, marked_in = 0;
@@ -350,6 +412,12 @@ std::string CheckShellWiring() {
         std::string(ShortcutRouter::kScopeProgram)) {
         return "default scope is not program";
     }
+    // Last-active-viewer border: the program monitor starts scoped,
+    // the source does not (WireMonitorPanels pushes the default).
+    if (!app->ProgramMonitor()->ScopeActive() ||
+        app->SourceMonitor()->ScopeActive()) {
+        return "default scope border is not on the program monitor";
+    }
 
     // Program transport — real binding, empty project (zero clips
     // decode nothing; the engine worker is bounded by the app dtor).
@@ -373,6 +441,10 @@ std::string CheckShellWiring() {
         std::string(ShortcutRouter::kScopeSource)) {
         return "source load did not activate the source scope";
     }
+    if (!app->SourceMonitor()->ScopeActive() ||
+        app->ProgramMonitor()->ScopeActive()) {
+        return "source load did not move the scope border";
+    }
 
     // Marks at the playhead -> insert edit lands a clip on A1
     // through history (undoable, three-point dispatch).
@@ -383,6 +455,22 @@ std::string CheckShellWiring() {
     app->EditSourceToTimeline(/*insert=*/false);
     if (app->Document()->clips.size() != clips_before + 1) {
         return "source overwrite edit did not land a clip";
+    }
+    // F match frame: playhead inside the landed clip loads its media
+    // into the source monitor at the matching source time —
+    // src_t = in_point + (playhead - start) * rate (the smoke clip
+    // is [0,3) at rate 1, in_point 0).
+    app->Seek(1.5);
+    app->ProgramMatchFrame();
+    if (app->SourcePath() != "smoke_src.wav") {
+        return "match frame did not reload the clip's source";
+    }
+    if (!Near(static_cast<float>(
+                  app->SourcePlayback().Playhead()),
+              1.5f, 0.001f)) {
+        return "match frame mapped the wrong source time (got " +
+               std::to_string(app->SourcePlayback().Playhead()) +
+               ")";
     }
     app->Undo();
     if (app->Document()->clips.size() != clips_before) {
@@ -416,6 +504,10 @@ std::string CheckShellWiring() {
     if (app->Shortcuts().ActiveScope() !=
         std::string(ShortcutRouter::kScopeProgram)) {
         return "program press did not activate the program scope";
+    }
+    if (!app->ProgramMonitor()->ScopeActive() ||
+        app->SourceMonitor()->ScopeActive()) {
+        return "program press did not move the scope border back";
     }
 
     tree.SetRoot(nullptr);

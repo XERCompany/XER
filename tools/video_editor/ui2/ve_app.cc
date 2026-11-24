@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cmath>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -11,6 +12,7 @@
 #include "ai/audio_pcm.h"
 #include "ai/face_detect.h"
 #include "ai/rife_interp.h"
+#include "ai/sam2_track.h"
 #include "ai/upscale_x4v3.h"
 #include "ai/whisper_transcribe.h"
 #include "app_runtime/app_runtime.h"
@@ -718,6 +720,12 @@ void VeApp::WireTimelineBridge() {
     host.face_blur = [this](const std::string& clip_id) {
         StartFaceBlur(clip_id);
     };
+    host.track_mask = [this](const std::string& clip_id) {
+        StartTrackMask(clip_id);
+    };
+    host.clear_mask = [this](const std::string& clip_id) {
+        ClearMaskTrack(clip_id);
+    };
     host.ai_slowmo = [this](const std::string& clip_id) {
         StartAiSlowmo(clip_id);
     };
@@ -847,7 +855,7 @@ void VeApp::WireMonitorPanels() {
 
     MonitorPanel::Hooks ph;
     ph.on_activate = [this] {
-        shortcuts_.ActivateScope(ShortcutRouter::kScopeProgram);
+        ActivateViewerScope(ShortcutRouter::kScopeProgram);
     };
     ph.on_play_toggle = [this] { ProgramTogglePlay(); };
     ph.on_stop = [this] { ProgramShuttleStop(); };
@@ -879,6 +887,50 @@ void VeApp::WireMonitorPanels() {
     // owns the seam for now (SmartSelect/lab arming lands with the
     // lab wave — both can't be armed at once, first writer wins).
     ph.on_click_point = [this](float nx, float ny) {
+        // Armed pick seams share the monitor's click slot — the
+        // SAM mask prompt takes precedence when armed (both can't
+        // be armed at once; arming one disarms the other).
+        if (track_mask_armed_) {
+            track_mask_armed_ = false;
+            program_monitor_->SetClickPointsArmed(false);
+            const std::string clip_id = track_mask_clip_id_;
+            track_mask_clip_id_.clear();
+            const Clip* clip = FindClip(project_, clip_id);
+            if (clip == nullptr) {
+                SetStatus("Track Mask: clip is gone", true);
+                return;
+            }
+            // Canvas point -> source-frame fractions through the
+            // clip's effective transform at the displayed frame
+            // (u = clip-local seconds; src_t = consumed source).
+            const double u =
+                std::clamp(playhead_ - clip->timeline_start, 0.0,
+                           clip->duration);
+            const double rate =
+                std::isfinite(clip->playback_rate) &&
+                        clip->playback_rate > 0.0
+                    ? clip->playback_rate
+                    : 1.0;
+            const double src_t = clip->in_point + u * rate;
+            int src_w = 0, src_h = 0;
+            if (const CatalogEntry* e =
+                    FindCatalogEntry(clip->source_path)) {
+                src_w = e->width;
+                src_h = e->height;
+            }
+            float fx = 0.0f, fy = 0.0f;
+            if (src_w <= 0 || src_h <= 0 ||
+                !Ai::CanvasPointToSourceFraction(
+                    *clip, u, project_.width, project_.height,
+                    src_w, src_h, nx, ny, &fx, &fy)) {
+                SetStatus(
+                    "Track Mask: click inside the clip's frame",
+                    true);
+                return;
+            }
+            BeginTrackMaskJob(*clip, fx, fy, src_t);
+            return;
+        }
         if (!color_pick_armed_) return;
         color_pick_armed_ = false;
         program_monitor_->SetClickPointsArmed(false);
@@ -898,7 +950,7 @@ void VeApp::WireMonitorPanels() {
 
     MonitorPanel::Hooks sh;
     sh.on_activate = [this] {
-        shortcuts_.ActivateScope(ShortcutRouter::kScopeSource);
+        ActivateViewerScope(ShortcutRouter::kScopeSource);
     };
     sh.on_play_toggle = [this] { SourceTogglePlay(); };
     sh.on_stop = [this] { SourceShuttleStop(); };
@@ -929,8 +981,24 @@ void VeApp::WireMonitorPanels() {
     sh.on_status = status;
     source_monitor_->SetHooks(std::move(sh));
 
-    // Initial pushed state — the document mirror fields.
+    // Initial pushed state — the document mirror fields + the
+    // default program-scope accent border (router starts in the
+    // program scope).
     NotifyTimelineChanged();
+    ActivateViewerScope(ShortcutRouter::kScopeProgram);
+}
+
+void VeApp::ActivateViewerScope(const char* scope) {
+    shortcuts_.ActivateScope(scope);
+    const std::string_view s = scope != nullptr ? scope : "";
+    if (program_monitor_ != nullptr) {
+        program_monitor_->SetScopeActive(
+            s == ShortcutRouter::kScopeProgram);
+    }
+    if (source_monitor_ != nullptr) {
+        source_monitor_->SetScopeActive(
+            s == ShortcutRouter::kScopeSource);
+    }
 }
 
 void VeApp::ApplyProgramPlayhead(double seconds) {
@@ -1037,7 +1105,7 @@ void VeApp::OpenInSourceMonitor(const std::string& path,
     source_monitor_visible_ = true;
     SyncDockCollapsed();
     RebuildMenus();
-    shortcuts_.ActivateScope(ShortcutRouter::kScopeSource);
+    ActivateViewerScope(ShortcutRouter::kScopeSource);
     SetStatus("Source: " + source_name_);
 }
 
@@ -1162,6 +1230,192 @@ void VeApp::StopSourceTransport() {
         return;
     }
     source_engine_.ShuttleStop();
+}
+
+// ── held combos / play-around / go-to / match frame ────────────────
+// Premiere transport extras riding the router's held-key contract:
+// K held turns J/L into a fixed-rate slow shuttle (release either
+// key → stop), Shift+K plays around the playhead, Shift+I/O goes to
+// the in/out edge, F match-frames the clip under the playhead into
+// the source monitor.
+
+void VeApp::ProgramHeldShuttle(int direction) {
+    // Exclusive playback — the engines share the audio endpoint.
+    StopSourceTransport();
+    held_shuttle_dir_ = direction;
+    held_shuttle_source_ = false;
+    program_engine_.HeldShuttle(
+        direction * kHeldShuttleRate);
+}
+
+void VeApp::SourceHeldShuttle(int direction) {
+    if (source_path_.empty()) {
+        SetStatus("Source: no clip loaded");
+        return;
+    }
+    StopProgramTransport();
+    held_shuttle_dir_ = direction;
+    held_shuttle_source_ = true;
+    source_engine_.HeldShuttle(
+        direction * kHeldShuttleRate);
+}
+
+void VeApp::EndHeldShuttle(int direction) {
+    if (held_shuttle_dir_ == 0) return;
+    if (direction != 0 && held_shuttle_dir_ != direction) return;
+    const bool was_source = held_shuttle_source_;
+    held_shuttle_dir_ = 0;
+    // K still held + the OTHER shuttle key still down → the combo
+    // keeps shuttling in that direction (releasing J under a held
+    // K+L resumes forward slow shuttle).
+    if (direction != 0 && shortcuts_.IsHeld('k')) {
+        const int other = -direction;
+        if (shortcuts_.IsHeld(other > 0 ? 'l' : 'j')) {
+            if (was_source) {
+                SourceHeldShuttle(other);
+            } else {
+                ProgramHeldShuttle(other);
+            }
+            return;
+        }
+    }
+    (was_source ? source_engine_ : program_engine_).ShuttleStop();
+}
+
+void VeApp::ProgramPlayAround() {
+    // Premiere Shift+K: seek back by the pre-roll, play, and pause at
+    // the post-roll edge — the Tick pump owns the stop.
+    StopSourceTransport();
+    if (program_engine_.Playing()) program_engine_.ShuttleStop();
+    const double dur = std::max(0.0, project_.duration());
+    const double t = std::clamp(playhead_, 0.0, dur);
+    playaround_until_ = std::min(dur, t + kPlayAroundPost);
+    playaround_source_ = false;
+    Seek(std::max(0.0, t - kPlayAroundPre));
+    program_engine_.TogglePlay();
+    SetStatus("Play around");
+}
+
+void VeApp::SourcePlayAround() {
+    if (source_path_.empty()) {
+        SetStatus("Source: no clip loaded");
+        return;
+    }
+    StopProgramTransport();
+    if (source_engine_.Playing()) source_engine_.ShuttleStop();
+    const double t =
+        std::clamp(source_playhead_, 0.0, source_duration_);
+    playaround_until_ =
+        std::min(source_duration_, t + kPlayAroundPost);
+    playaround_source_ = true;
+    SourceSeek(std::max(0.0, t - kPlayAroundPre));
+    source_engine_.TogglePlay();
+    SetStatus("Play around");
+}
+
+void VeApp::ProgramGoToWorkAreaEdge(bool mark_in) {
+    // work_out <= work_in means "whole project" (model parity) —
+    // the edge falls back to the document bounds.
+    const bool has_area = project_.work_out > project_.work_in;
+    const double target =
+        mark_in ? (has_area ? project_.work_in : 0.0)
+                : (has_area ? project_.work_out
+                            : project_.duration());
+    Seek(target);
+    SetStatus(mark_in ? "Go to in point" : "Go to out point");
+}
+
+void VeApp::SourceGoToMark(bool mark_in) {
+    if (source_path_.empty()) {
+        SetStatus("Source: no clip loaded");
+        return;
+    }
+    const auto it = source_marks_.find(source_path_);
+    const double target =
+        it != source_marks_.end()
+            ? (mark_in ? it->second.in : it->second.out)
+            : -1.0;
+    if (target < 0.0) {
+        SetStatus(mark_in ? "No source mark in"
+                          : "No source mark out");
+        return;
+    }
+    SourceSeek(target);
+    SetStatus(mark_in ? "Go to mark in" : "Go to mark out");
+}
+
+void VeApp::ProgramMatchFrame() {
+    // Premiere F: the timeline clip under the playhead loads into the
+    // source monitor at the matching source time. Video tracks win
+    // over audio; the topmost (lowest-indexed) track wins within a
+    // kind. Compounds/generators have no media source to load.
+    const Clip* best = nullptr;
+    int best_pri = 0;
+    for (const Clip& c : project_.clips) {
+        if (c.source_path.empty() || !c.compound.empty()) continue;
+        if (playhead_ < c.timeline_start ||
+            playhead_ >= c.timeline_start + c.duration) {
+            continue;
+        }
+        if (c.track < 0 ||
+            c.track >= static_cast<int>(project_.tracks.size())) {
+            continue;
+        }
+        const Track& tr = project_.tracks[c.track];
+        if (tr.hidden) continue;
+        const int pri =
+            (tr.kind == TrackKind::Video ? 2 : 1) * 10000 - c.track;
+        if (best == nullptr || pri > best_pri) {
+            best = &c;
+            best_pri = pri;
+        }
+    }
+    if (best == nullptr) {
+        SetStatus("Match frame: no clip under playhead");
+        return;
+    }
+    const Track& tr = project_.tracks[best->track];
+    // source t = in_point + (playhead - timeline_start) * rate
+    // (Clip::playback_rate contract).
+    const double src_t =
+        best->in_point +
+        (playhead_ - best->timeline_start) * best->playback_rate;
+    // Probed metadata from the catalog when it knows the file;
+    // clip/track-derived values otherwise.
+    double dur = 0.0;
+    int w = 0, h = 0;
+    int fps_num = project_.fps_num > 0 ? project_.fps_num : 30;
+    int fps_den = project_.fps_den > 0 ? project_.fps_den : 1;
+    bool has_video = tr.kind == TrackKind::Video;
+    bool has_audio = true;
+    if (const CatalogEntry* e = FindCatalogEntry(best->source_path);
+        e != nullptr) {
+        dur = e->duration_seconds;
+        w = e->width;
+        h = e->height;
+        has_video = e->HasVideo();
+        has_audio = e->has_audio;
+        if (e->fps > 0.0) {
+            fps_num = static_cast<int>(e->fps * 1000.0 + 0.5);
+            fps_den = 1000;
+        }
+    }
+    if (w <= 0 || h <= 0) {
+        w = project_.width;
+        h = project_.height;
+    }
+    if (dur <= 0.0) {
+        // No probe: the consumed source span is the best estimate.
+        dur = best->in_point + best->duration * best->playback_rate;
+    }
+    std::string name =
+        !best->name.empty() ? best->name : best->source_path;
+    const std::size_t slash = name.find_last_of("/\\");
+    if (slash != std::string::npos) name = name.substr(slash + 1);
+    OpenInSourceMonitor(best->source_path, name, dur, fps_num,
+                        fps_den, has_video, has_audio, w, h);
+    SourceSeek(std::clamp(src_t, 0.0, source_duration_));
+    SetStatus("Match frame: " + name);
 }
 
 void VeApp::EditSourceToTimeline(bool insert) {
@@ -1352,37 +1606,100 @@ void VeApp::BindShellShortcuts() {
     using R = ShortcutRouter;
     // J/K/L transport — bound per viewer scope; ActivateScope follows
     // MonitorHooks::on_activate (last-active-viewer rule). The
-    // PreviewBinding pair carries the ±{1,2,4,8} ladder.
-    shortcuts_.BindKey('j', [this] {
-                           SourceShuttleStep(-1);
+    // PreviewBinding pair carries the ±{1,2,4,8} ladder. All three
+    // are HELD bindings now: the router records the press and routes
+    // the release to the recorded binding (K+J/K+L held slow shuttle
+    // stops wherever the scope moved; a direction-key release while K
+    // stays down ends that shuttle — Premiere parity).
+    shortcuts_.BindHeldKey('j', [this] {
+                               if (shortcuts_.IsHeld('k')) {
+                                   SourceHeldShuttle(-1);
+                               } else {
+                                   SourceShuttleStep(-1);
+                               }
+                               return true;
+                           },
+                           [this] {
+                               EndHeldShuttle(-1);
+                               return true;
+                           },
+                           R::kScopeSource);
+    shortcuts_.BindHeldKey('k', [this] {
+                               SourceShuttleStop();
+                               return true;
+                           },
+                           [this] {
+                               EndHeldShuttle(0);
+                               return true;
+                           },
+                           R::kScopeSource);
+    shortcuts_.BindHeldKey('l', [this] {
+                               if (shortcuts_.IsHeld('k')) {
+                                   SourceHeldShuttle(1);
+                               } else {
+                                   SourceShuttleStep(1);
+                               }
+                               return true;
+                           },
+                           [this] {
+                               EndHeldShuttle(1);
+                               return true;
+                           },
+                           R::kScopeSource);
+    shortcuts_.BindHeldKey('j', [this] {
+                               if (shortcuts_.IsHeld('k')) {
+                                   ProgramHeldShuttle(-1);
+                               } else {
+                                   ProgramShuttleStep(-1);
+                               }
+                               return true;
+                           },
+                           [this] {
+                               EndHeldShuttle(-1);
+                               return true;
+                           },
+                           R::kScopeProgram);
+    shortcuts_.BindHeldKey('k', [this] {
+                               ProgramShuttleStop();
+                               return true;
+                           },
+                           [this] {
+                               EndHeldShuttle(0);
+                               return true;
+                           },
+                           R::kScopeProgram);
+    shortcuts_.BindHeldKey('l', [this] {
+                               if (shortcuts_.IsHeld('k')) {
+                                   ProgramHeldShuttle(1);
+                               } else {
+                                   ProgramShuttleStep(1);
+                               }
+                               return true;
+                           },
+                           [this] {
+                               EndHeldShuttle(1);
+                               return true;
+                           },
+                           R::kScopeProgram);
+    // Shift+K play-around — pre-roll seek + timed play (the Tick pump
+    // stops at the post-roll edge).
+    shortcuts_.BindShiftKey('k', [this] {
+                               SourcePlayAround();
+                               return true;
+                           },
+                           R::kScopeSource);
+    shortcuts_.BindShiftKey('k', [this] {
+                               ProgramPlayAround();
+                               return true;
+                           },
+                           R::kScopeProgram);
+    // F — match frame: clip under the playhead loads into the source
+    // monitor at the matching source time (global: reads program
+    // state regardless of the active viewer).
+    shortcuts_.BindKey('f', [this] {
+                           ProgramMatchFrame();
                            return true;
-                       },
-                       R::kScopeSource);
-    shortcuts_.BindKey('k', [this] {
-                           SourceShuttleStop();
-                           return true;
-                       },
-                       R::kScopeSource);
-    shortcuts_.BindKey('l', [this] {
-                           SourceShuttleStep(1);
-                           return true;
-                       },
-                       R::kScopeSource);
-    shortcuts_.BindKey('j', [this] {
-                           ProgramShuttleStep(-1);
-                           return true;
-                       },
-                       R::kScopeProgram);
-    shortcuts_.BindKey('k', [this] {
-                           ProgramShuttleStop();
-                           return true;
-                       },
-                       R::kScopeProgram);
-    shortcuts_.BindKey('l', [this] {
-                           ProgramShuttleStep(1);
-                           return true;
-                       },
-                       R::kScopeProgram);
+                       });
     // I/O: source marks vs program work-area edges (old
     // SourceActive() routing lives in the scope dispatch now).
     shortcuts_.BindKey('i', [this] {
@@ -1405,6 +1722,18 @@ void VeApp::BindShellShortcuts() {
                            return true;
                        },
                           R::kScopeSource);
+    // Shift+I/Shift+O — go to the mark (source) / work-area edge
+    // (program), no mark write.
+    shortcuts_.BindShiftKey('i', [this] {
+                               SourceGoToMark(true);
+                               return true;
+                           },
+                           R::kScopeSource);
+    shortcuts_.BindShiftKey('o', [this] {
+                               SourceGoToMark(false);
+                               return true;
+                           },
+                           R::kScopeSource);
     shortcuts_.BindKey('i', [this] {
                            ProgramSetWorkAreaPoint(true);
                            return true;
@@ -1415,6 +1744,16 @@ void VeApp::BindShellShortcuts() {
                            return true;
                        },
                        R::kScopeProgram);
+    shortcuts_.BindShiftKey('i', [this] {
+                               ProgramGoToWorkAreaEdge(true);
+                               return true;
+                           },
+                           R::kScopeProgram);
+    shortcuts_.BindShiftKey('o', [this] {
+                               ProgramGoToWorkAreaEdge(false);
+                               return true;
+                           },
+                           R::kScopeProgram);
     // Three-point edits / range edits + per-scope Space/arrows. An
     // unscoped press falls through to the global program bindings
     // below — same default the old monitor_target_ routing had.
@@ -1840,6 +2179,18 @@ void VeApp::Tick(double dt_seconds) {
     // engine callbacks never touch widgets).
     program_engine_.DrainPending();
     source_engine_.DrainPending();
+    // Shift+K play-around: pause the owning binding when its playhead
+    // reaches the post-roll edge; an early stop (user brake, engine
+    // auto-stop at the end) just clears the pending window.
+    if (playaround_until_ >= 0.0) {
+        PreviewBinding& bound = playaround_source_ ? source_engine_
+                                                 : program_engine_;
+        if (!bound.Playing() ||
+            bound.Playhead() >= playaround_until_) {
+            if (bound.Playing()) bound.ShuttleStop();
+            playaround_until_ = -1.0;
+        }
+    }
     // Media-prep drains: poster/peaks results repaint the bin
     // (NotifyMediaChanged clears negative caches + invalidates), an
     // import poster writing poster_path refreshes the row data.
@@ -1876,6 +2227,7 @@ void VeApp::Tick(double dt_seconds) {
     PumpExportQueue(dt_seconds);
     PumpTranscriptJob();
     PumpFaceBlurJob();
+    PumpTrackMaskJob();
     PumpAiBounceJob();
     // Autosave rides the same ~2 s poll cadence the old shell used —
     // the manager gates on dirty + interval before touching disk.
@@ -2573,6 +2925,10 @@ void VeApp::WireColorPanel() {
     // WireMonitorPanels' on_click_point, which samples the current
     // frame and feeds it back through ApplyPickedColor.
     hooks.on_arm_pick = [this] {
+        // First writer wins on the shared click seam — drop any
+        // pending mask prompt so the next click is a color sample.
+        track_mask_armed_ = false;
+        track_mask_clip_id_.clear();
         color_pick_armed_ = true;
         if (program_monitor_ != nullptr) {
             program_monitor_->SetClickPointsArmed(true);
@@ -4238,6 +4594,209 @@ void VeApp::PumpFaceBlurJob() {
                   "Auto-blur faces: %zu track sample(s) + Face Blur",
                   updated.object_track.samples.size());
     SetStatus(buf);
+}
+
+// ---- track mask (SAM2.1) ------------------------------------------
+// Two-stage like the color pick: "Track Mask (AI)…" (ctx menu) ARMS
+// the program monitor's click seam — the next frame click maps into
+// source-frame fractions (Ai::CanvasPointToSourceFraction) and
+// becomes the SAM2 point prompt for BeginTrackMaskJob. The worker
+// runs ScanClipMaskTrack (per-frame re-prompt, ai/sam2_track.h) and
+// writes ONLY the mutex-guarded slot; PumpTrackMaskJob commits
+// mask_track + builtin:xer.fx.track_mask through history on the UI
+// thread — the face-blur marshalling contract verbatim.
+
+void VeApp::StartTrackMask(const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("Track Mask: clip not found", true);
+        return;
+    }
+    if (clip->source.kind != SourceKind::Media ||
+        clip->source_path.empty() || clip->is_adjustment) {
+        SetStatus("Track Mask needs a media clip", true);
+        return;
+    }
+    if (!Ai::Sam2ModelsStaged()) {
+        SetStatus(std::string("Track Mask: ") + Ai::Sam2ModelHint(),
+                  true);
+        return;
+    }
+    if (mask_running_) {
+        SetStatus("Mask track already running");
+        return;
+    }
+    // First writer wins on the shared click seam — disarm the color
+    // eyedropper if it held it.
+    color_pick_armed_ = false;
+    track_mask_armed_ = true;
+    track_mask_clip_id_ = clip_id;
+    if (program_monitor_ != nullptr) {
+        program_monitor_->SetClickPointsArmed(true);
+    }
+    // The prompt applies to the frame under the playhead — seek onto
+    // the clip first if the playhead sits outside it (same
+    // "prompt at the displayed frame" rule the transform mapping
+    // uses).
+    if (playhead_ < clip->timeline_start ||
+        playhead_ > clip->timeline_start + clip->duration) {
+        Seek(clip->timeline_start);
+    }
+    SetStatus("Track Mask: click the subject in the program monitor");
+}
+
+void VeApp::BeginTrackMaskJob(const Clip& clip, float fx, float fy,
+                              double src_seconds) {
+    if (mask_running_) {
+        SetStatus("Mask track already running");
+        return;
+    }
+    const std::string encoder = Ai::Sam2EncoderModel();
+    const std::string decoder = Ai::Sam2DecoderModel();
+    if (encoder.empty() || decoder.empty()) {
+        SetStatus(std::string("Track Mask: ") + Ai::Sam2ModelHint(),
+                  true);
+        return;
+    }
+    mask_cancel_ = false;
+    mask_progress_ = 0.0f;
+    {
+        std::lock_guard<std::mutex> lock(mask_result_mutex_);
+        mask_result_ready_ = false;
+        mask_result_ok_ = false;
+        mask_result_ = ClipMaskTrack{};
+        mask_result_error_.clear();
+    }
+    mask_job_clip_id_ = clip.id;
+    mask_running_ = true;
+    SetStatus("Tracking mask on " +
+              (clip.name.empty()
+                   ? std::filesystem::path(clip.source_path)
+                         .filename()
+                         .string()
+                   : clip.name) +
+              "…");
+    const Clip scanned = clip;   // worker owns a copy — never the model
+    mask_worker_ = std::thread(
+        [this, scanned, encoder, decoder, fx, fy, src_seconds] {
+            Ai::Sam2TrackParams params;
+            // The armed click is the T0 foreground point.
+            params.prompt_points = {fx, fy};
+            params.prompt_labels = {1};
+            params.start_seconds = src_seconds;
+            ClipMaskTrack track;
+            std::string error;
+            const bool ok = Ai::ScanClipMaskTrack(
+                scanned, encoder, decoder, params,
+                [this](float f) { mask_progress_ = f; },
+                [this] { return mask_cancel_.load(); }, &track,
+                &error);
+            std::lock_guard<std::mutex> lock(mask_result_mutex_);
+            mask_result_ = std::move(track);
+            mask_result_error_ = error;
+            mask_result_ok_ = ok && !mask_cancel_.load();
+            mask_result_ready_ = true;
+        });
+}
+
+void VeApp::PumpTrackMaskJob() {
+    if (!mask_running_.load()) return;
+    bool ready = false;
+    {
+        std::lock_guard<std::mutex> lock(mask_result_mutex_);
+        ready = mask_result_ready_;
+    }
+    if (!ready) return;
+    if (mask_worker_.joinable()) mask_worker_.join();
+    mask_running_ = false;
+    ClipMaskTrack track;
+    std::string error;
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(mask_result_mutex_);
+        track = std::move(mask_result_);
+        error = mask_result_error_;
+        ok = mask_result_ok_;
+        mask_result_ready_ = false;
+    }
+    if (!ok) {
+        SetStatus("Mask track failed" +
+                      (error.empty() ? std::string() : ": " + error),
+                  true);
+        return;
+    }
+    const Clip* clip = FindClip(project_, mask_job_clip_id_);
+    if (clip == nullptr) {
+        SetStatus("Mask track finished but the clip is gone", true);
+        return;
+    }
+    Clip updated = *clip;
+    updated.mask_track = std::move(track);
+    // The track-mask preset rides the live track (the compositor
+    // resolves the silhouette per frame). Dedup: an existing
+    // track_mask keeps its tuned params — a re-track refreshes the
+    // track only.
+    const auto already = std::any_of(
+        updated.effects.begin(), updated.effects.end(),
+        [](const ClipEffect& e) {
+            return e.type == "builtin:xer.fx.track_mask" ||
+                   e.type == "xer.fx.track_mask";
+        });
+    if (!already) {
+        updated.effects.push_back(
+            {"builtin:xer.fx.track_mask", {0.0f, 0.1f, 0.5f}});
+    }
+    MediaBounds bounds;
+    if (const CatalogEntry* e = FindCatalogEntry(clip->source_path)) {
+        bounds.duration_seconds = e->duration_seconds;
+        bounds.has_video = e->HasVideo();
+    } else {
+        bounds.duration_seconds = clip->duration;
+    }
+    std::string err2;
+    history_->BeginMacro("Track mask");
+    const bool applied =
+        history_->ReplaceClip(mask_job_clip_id_, updated, bounds,
+                              &err2);
+    history_->EndMacro();
+    if (!applied) {
+        SetStatus("Mask track commit failed: " + err2, true);
+        return;
+    }
+    NotifyTimelineChanged();
+    char buf[96];
+    std::snprintf(buf, sizeof(buf),
+                  "Track Mask: %zu mask sample(s) + Track Mask fx",
+                  updated.mask_track.samples.size());
+    SetStatus(buf);
+}
+
+void VeApp::ClearMaskTrack(const std::string& clip_id) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        SetStatus("Clear Mask: clip not found", true);
+        return;
+    }
+    Clip updated = *clip;
+    updated.mask_track = ClipMaskTrack{};
+    MediaBounds bounds;
+    if (const CatalogEntry* e = FindCatalogEntry(clip->source_path)) {
+        bounds.duration_seconds = e->duration_seconds;
+        bounds.has_video = e->HasVideo();
+    } else {
+        bounds.duration_seconds = clip->duration;
+    }
+    std::string err;
+    history_->BeginMacro("Clear mask track");
+    const bool applied =
+        history_->ReplaceClip(clip_id, updated, bounds, &err);
+    history_->EndMacro();
+    if (!applied) {
+        SetStatus("Clear mask failed: " + err, true);
+        return;
+    }
+    NotifyTimelineChanged();
+    SetStatus("Mask track cleared");
 }
 
 // ---- AI bounces: upscale (bin) + slow-mo (clip) -----------------

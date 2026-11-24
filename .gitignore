@@ -81,6 +81,10 @@ EngineBuilder
 # tools/video_editor/assets/models/README.md — not committed)
 /tools/video_editor/assets/models/*.onnx
 /tools/video_editor/assets/models/*.bin
+# SAM2.1 ships ONNX external-data pairs (weights in a sidecar
+# .onnx_data blob) inside a per-model subdirectory.
+/tools/video_editor/assets/models/*.onnx_data
+/tools/video_editor/assets/models/sam21/
 
 # Generated files
 *.flowcache.*
@@ -132,3 +136,4 @@ yarn-error.log*
 # Vendored official ORT runtime binaries — committed on purpose,
 # see third_party/VENDORED.md (onnxruntime/win-x64 section).
 !/third_party/onnxruntime/win-x64/*.dll
+nul

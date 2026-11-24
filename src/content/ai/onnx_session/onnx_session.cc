@@ -348,10 +348,13 @@ struct OrtSessionImpl final : SessionImpl {
             const Input& in = inputs[i];
             std::size_t count = 1;
             for (const std::int64_t d : in.dims) {
-                if (d <= 0) {
+                // Zero-size dims bind as EMPTY tensors — legal ONNX
+                // (SAM's decoder contract feeds empty input_points /
+                // input_boxes for the prompt kind not in use).
+                if (d < 0) {
                     if (error_out) {
                         *error_out = "input '" + resolved[i] +
-                                     "' has a non-positive dim";
+                                     "' has a negative dim";
                     }
                     release_inputs();
                     return false;

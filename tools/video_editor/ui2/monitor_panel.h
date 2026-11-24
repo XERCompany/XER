@@ -121,6 +121,16 @@ public:
     float QualityScale() const { return quality_scale_; }
     // Free-form chip override ("PRX", "1/2"…); empty hides.
     void SetProxyBadge(std::string text);
+    // Shuttle-rate overlay chip on the surface (PreviewBinding pushes
+    // the applied rate; 0 / +1 hides — see MonitorSurface).
+    void SetSpeedBadge(double rate) {
+        surface_->SetSpeedBadge(rate);
+    }
+    // Last-active-viewer accent: the shell marks the scoped panel —
+    // Render strokes the panel border in tokens.accent (Premiere's
+    // blue viewer highlight).
+    void SetScopeActive(bool active);
+    bool ScopeActive() const { return scope_active_; }
     void SetStatusText(std::string text, bool is_error = false);
     // Overlay-state mirrors (the shell pushes the requested state
     // back so the buttons stay honest).
@@ -204,6 +214,7 @@ private:
     std::shared_ptr<XER::UI::Widgets::Slider> zoom_slider_;
 
     bool playing_ = false;
+    bool scope_active_ = false;
     bool loop_enabled_ = false;
     float quality_scale_ = 1.0f;
     bool syncing_quality_ = false;

@@ -1,5 +1,6 @@
 #include "label.h"
 
+#include <algorithm>
 #include <utility>
 
 #include "rendering/renderer.h"
@@ -7,6 +8,14 @@
 
 namespace XER::UI::Widgets {
 namespace {
+
+constexpr std::string_view kEllipsis = "\xE2\x80\xA6";  // U+2026
+
+// The pre-measurement char-width estimate — kept ONLY as the fallback
+// when neither an installed measure target nor a Render-populated
+// cache exists (headless layouts before first paint).
+constexpr float kEstimatedCharWidth = 7.7f;
+constexpr float kEstimatedLineHeight = 18.0f;
 
 std::size_t Utf8Length(std::string_view text) {
     std::size_t count = 0;
@@ -31,6 +40,7 @@ void Label::SetText(std::string text) {
         return;
     }
     text_ = std::move(text);
+    measured_valid_ = false;
     Invalidate();
     RequestLayout();
 }
@@ -57,6 +67,17 @@ void Label::Render(Rendering::Renderer& renderer, const Theme::Tokens& tokens) {
         tokens.font_body,
         400
     };
+    // Populate the measure cache so GetMinSize/GetPreferredSize report
+    // real metrics even when no text-measure target is installed. A
+    // changed measurement means the preferred size just moved — flag a
+    // relayout so the box model sees the honest extents on the next pass.
+    const Layout::Size measured = renderer.MeasureText(text_, style);
+    if (!measured_valid_ || measured.width != measured_.width ||
+        measured.height != measured_.height) {
+        measured_ = measured;
+        measured_valid_ = true;
+        RequestLayout();
+    }
     const Layout::Rect rect =
         CenteredTextRect(renderer, text_, style, 0.0f);
     // DrawText wraps word-broken text — a label squeezed under its
@@ -75,12 +96,52 @@ bool Label::HandleEvent(const Event&) {
     return false;
 }
 
+Rendering::TextStyle Label::MeasureStyle() const {
+    // Same style Render() uses, minus the color (measurement is
+    // color-independent). CachedLayoutTokens carries the theme's font
+    // size once the widget has been through a themed Layout; before
+    // that it is zero-initialized, so fall back to the stock 14px body
+    // size (Theme::Provider's default tokens) rather than measure a
+    // 0pt font.
+    const float size = CachedLayoutTokens().font_body;
+    return Rendering::TextStyle{
+        Theme::Color{},
+        size > 0.0f ? size : 14.0f,
+        400
+    };
+}
+
+Layout::Size Label::Measure(std::string_view text) const {
+    if (const auto* target = GetTextMeasureTarget(); target != nullptr) {
+        return target->MeasureText(text, MeasureStyle());
+    }
+    if (measured_valid_ && text == text_) {
+        return measured_;
+    }
+    return {
+        static_cast<float>(Utf8Length(text)) * kEstimatedCharWidth,
+        kEstimatedLineHeight
+    };
+}
+
 Layout::Size Label::GetMinSize() const {
-    return {0.0f, 0.0f};
+    // A squeezed label draws "…" (see Render), so the honest minimum is
+    // one ellipsis glyph wide by one line tall — never {0,0}, which lied
+    // to flex layouts into assigning zero extent.
+    const Layout::Size ellipsis = Measure(kEllipsis);
+    const float height = std::max(
+        ellipsis.height,
+        text_.empty() ? 0.0f : Measure(text_).height);
+    return {ellipsis.width, height};
 }
 
 Layout::Size Label::GetPreferredSize() const {
-    return {static_cast<float>(Utf8Length(text_)) * 7.7f, 18.0f};
+    return Measure(text_);
+}
+
+bool Label::IsDisplayTextClipped() const {
+    // Half-pixel slack absorbs measurement rounding on boundary widths.
+    return Measure(text_).width > GetBounds().width + 0.5f;
 }
 
 Layout::Size Label::GetMaxSize() const {

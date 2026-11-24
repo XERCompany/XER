@@ -129,7 +129,11 @@ bool AutoCacher::Init(const Project& snapshot, const Options& options,
                     options_.quality > 0.0f && options_.quality < 1.0f)
                        ? options_.quality
                        : 1.0f;
-        stats_ = Stats{};
+        // stats_ deliberately NOT reset: the PreviewEngine re-Inits
+        // this worker on every quality-tier flip (canvas dims are
+        // cache-key material), and stats readers — smoke checks, perf
+        // HUDs — rely on the counters staying monotonic across those
+        // re-binds. Shutdown() clears everything anyway.
         warnings_.clear();
         warned_once_.clear();
     }

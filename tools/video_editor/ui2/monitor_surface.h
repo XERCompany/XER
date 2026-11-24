@@ -130,6 +130,11 @@ public:
     std::pair<double, double> Marks() const {
         return {mark_in_, mark_out_};
     }
+    // Shuttle-rate badge: the shell pushes the applied rate (0 or
+    // exactly +1 hides; everything else — slow shuttle, reverse,
+    // fast — paints a small "0.25x"/"-4x" chip on the video area).
+    void SetSpeedBadge(double rate);
+    double SpeedBadgeRate() const { return speed_rate_; }
 
     // ---- overlay toggles (surface view state) ----
     void SetSafeMargins(bool on);
@@ -194,6 +199,41 @@ public:
         return surface_.get();
     }
 
+    // ---- transform gizmo (program monitor; spec §6 S2 addition) ----
+    // Premiere/After-Effects direct manipulation: when the shell
+    // binds MonitorHooks::gizmo_target and the PROGRAM surface has a
+    // frame, the selected clip's transformed rect is drawn with 8
+    // scale handles + a rotation stem + a center anchor. Gestures:
+    //   * drag inside the box        — move (offset_x/offset_y)
+    //   * corner/edge handle drag    — uniform scale about the
+    //     anchor (Transform carries ONE `scale` — free aspect is
+    //     not representable; edge drags scale by that axis's factor)
+    //   * rotation stem drag         — rotation_deg about the anchor
+    //     (Shift snaps to 15-degree steps)
+    //   * press on another clip      — selects it via gizmo_pick +
+    //     on_gizmo_select (topmost warped-rect hit test), then the
+    //     same press arms a move drag on it
+    //   * double-click inside box    — on_gizmo_reset (the shell
+    //     restores the imported placement)
+    //   * Esc mid-drag               — cancels: preview(orig) is
+    //     re-fired, nothing commits
+    // Snapping (gizmo_snap_enabled): move and edge-midpoint drags
+    // snap the box's center/edges (move: rotated AABB) to frame
+    // edges/center and the 90%/80% safe-margin lines; snapped guides
+    // paint as accent indicator lines (timeline snap parity).
+    //
+    // Everything is hook-out: the surface never touches the document.
+    // A drag fires on_gizmo_begin -> on_gizmo_preview* (in-memory
+    // only) -> ONE on_gizmo_commit on release -> on_gizmo_end —
+    // one undo step per gesture.
+    bool GizmoVisible() const;
+    bool GizmoDragging() const {
+        return gizmo_mode_ != GizmoMode::None;
+    }
+    // Axis-aligned bbox of the gizmo box in CLIENT coordinates
+    // (smoke/debug seam — empty rect when hidden).
+    XER::UI::Layout::Rect GizmoBounds() const;
+
     // ---- widget contract ----
     void Render(XER::UI::Rendering::Renderer& renderer,
                 const XER::UI::Theme::Tokens& tokens) override;
@@ -234,6 +274,75 @@ private:
     void EmitStatus(const std::string& text, bool is_error = false);
     void Activate();   // focus + on_activate (last-active-viewer)
 
+    // ---- transform gizmo internals ----
+    enum class GizmoMode {
+        None,
+        Move,
+        Rotate,
+        ScaleNW, ScaleN, ScaleNE,
+        ScaleW,               ScaleE,
+        ScaleSW, ScaleS, ScaleSE,
+    };
+    // One gizmo geometry: the clip's warped rect in CLIENT coords.
+    // `c` is the transform center (anchor — compositor rotates about
+    // it); `pt[0..3]` the TL/TR/BR/BL corners; `rot` the rotation-
+    // stem tip; `aabb` the client-space bounding box. The
+    // UNROTATED half-size (pre-scale, pre-rotation: src*scale /2 in
+    // frame px) is carried so scale drags can recompute the ratio
+    // from pointer distance to center.
+    struct GizmoGeom {
+        float pt[4][2] = {};
+        float c[2] = {};
+        float rot[2] = {};
+        float half_w = 0.0f;   // src*scale/2 mapped into client px
+        float half_h = 0.0f;
+        XER::UI::Layout::Rect aabb{};
+    };
+    // The hook-resolved target plus the geometry derived from it;
+    // re-pulled per paint and at gesture start.
+    struct GizmoState {
+        MonitorGizmoTarget target;
+        GizmoGeom geom;
+        bool valid = false;
+    };
+    // Pulls hooks_.gizmo_target() and maps it through the CURRENT
+    // frame rect into client coords. valid==false hides the box.
+    GizmoState ResolveGizmo() const;
+    bool GizmoGeomValid(const MonitorGizmoTarget& t) const;
+    GizmoGeom GizmoGeometry(const MonitorGizmoTarget& t) const;
+    void DrawGizmo(XER::UI::Rendering::Renderer& renderer,
+                   const XER::UI::Theme::Tokens& tokens,
+                   const GizmoState& s);
+    GizmoMode GizmoHit(XER::UI::Layout::Point p,
+                       const GizmoState& s) const;
+    // Pointer-to-transform math for one drag frame; returns the
+    // next effective transform (offset/scale/rotation only —
+    // opacity untouched).
+    Transform GizmoApplyDrag(XER::UI::Layout::Point p,
+                             const XER::UI::Widgets::Event& e) const;
+    // Frame-normalized snap for the current candidate transform;
+    // mutates the offset to land on a snap line and records the
+    // winning vertical/horizontal client-x/y guides for paint.
+    void GizmoSnapMove(Transform* t) const;
+    void GizmoCancel();
+    void GizmoFinish(bool commit);
+
+    // The gizmo target the last paint/drag resolved (kept so a drag
+    // survives one dropped hook pull).
+    MonitorGizmoTarget gizmo_target_;
+    GizmoMode gizmo_mode_ = GizmoMode::None;
+    Transform gizmo_orig_{};           // transform at drag start
+    Transform gizmo_live_{};           // last previewed transform
+    // Center<->pointer grab delta at drag start (frame-normalized)
+    // so a move tracks by the grabbed point, not the box center.
+    float gizmo_grab_dx_ = 0.0f, gizmo_grab_dy_ = 0.0f;
+    // Down-press position that only armed selection (press-to-select
+    // promotes to Move once the drag threshold is crossed).
+    bool gizmo_pending_select_ = false;
+    // Snap guides from the last move preview (client coords, -1 = none).
+    float gizmo_snap_x_ = -1.0f, gizmo_snap_y_ = -1.0f;
+    bool gizmo_dirty_commit_ = false;  // live != orig at release
+
     Id id_;
     MonitorHooks hooks_;
     std::function<void(float)> on_zoom_changed_;
@@ -253,6 +362,7 @@ private:
     double duration_ = 0.0;
     double work_in_ = 0.0, work_out_ = 0.0;
     double mark_in_ = -1.0, mark_out_ = -1.0;   // source marks
+    double speed_rate_ = 0.0;                   // badge: 0/+1 hides
     std::vector<Marker> markers_;
 
     // Overlay toggles.

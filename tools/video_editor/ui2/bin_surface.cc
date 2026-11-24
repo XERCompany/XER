@@ -278,35 +278,35 @@ void BinGridSurface::EnsureVisible(int index) {
 
 // ---- async media --------------------------------------------------------
 
-const video::Frame* BinGridSurface::PosterFor(const BinItem& item) {
+const video::Frame* BinGridSurface::PosterFor(const BinItem& item,
+                                              double at_seconds) {
     if (item.path.empty()) return nullptr;
-    if (const auto it = posters_.find(item.path);
-        it != posters_.end()) {
-        TouchLru(&posters_lru_, item.path);
+    // Composite cache key — hover-scrub buckets get their own slots
+    // so re-hovering a spot reuses the decoded frame; the mid-clip
+    // default is just one more bucket.
+    const std::string key =
+        item.path + "@" + std::to_string(at_seconds);
+    if (const auto it = posters_.find(key); it != posters_.end()) {
+        TouchLru(&posters_lru_, key);
         return it->second.frame.get();
     }
-    if (poster_failed_.count(item.path)) return nullptr;
+    if (poster_failed_.count(key)) return nullptr;
     if (!get_poster) {
         // Unwired seam — treat as a permanent miss so paint never
         // stalls on a hook that will never answer.
         return nullptr;
     }
     auto frame = std::make_shared<video::Frame>();
-    // Poster moment: mid-clip, same convention as the catalog's
-    // ExtractPoster (duration*0.5, mid-stream when out of range).
-    const double at = item.duration_seconds > 0.0
-                          ? item.duration_seconds * 0.5
-                          : 0.0;
-    switch (get_poster(item.path, at, frame.get())) {
+    switch (get_poster(item.path, at_seconds, frame.get())) {
         case MediaLookup::kReady:
             if (IsValidBgraFrame(*frame)) {
                 if (posters_.size() >= kPosterCacheMax) {
                     posters_.erase(posters_lru_.front());
                     posters_lru_.pop_front();
                 }
-                posters_.emplace(item.path, PosterEntry{std::move(frame)});
-                posters_lru_.push_back(item.path);
-                return posters_.at(item.path).frame.get();
+                posters_.emplace(key, PosterEntry{std::move(frame)});
+                posters_lru_.push_back(key);
+                return posters_.at(key).frame.get();
             }
             [[fallthrough]];   // invalid payload counts as a miss
         case MediaLookup::kFailed:
@@ -314,13 +314,34 @@ const video::Frame* BinGridSurface::PosterFor(const BinItem& item) {
                 poster_failed_.erase(poster_failed_lru_.front());
                 poster_failed_lru_.pop_front();
             }
-            poster_failed_.insert(item.path);
-            poster_failed_lru_.push_back(item.path);
+            poster_failed_.insert(key);
+            poster_failed_lru_.push_back(key);
             return nullptr;
         case MediaLookup::kPending:
         default:
             return nullptr;   // ask again next paint — never block
     }
+}
+
+double BinGridSurface::ScrubSeconds(const BinItem& item) const {
+    // Bucket center — the card maps [0,1) onto kScrubBuckets slices.
+    return item.duration_seconds *
+           (static_cast<double>(hover_bucket_) + 0.5) / kScrubBuckets;
+}
+
+double BinGridSurface::PosterSeconds(int index) const {
+    const BinItem* item = Item(index);
+    if (item == nullptr) return 0.0;
+    // Hover-scrub applies to video with a known duration; stills and
+    // zero-duration items keep the catalog's mid-clip convention
+    // (ExtractPoster duration*0.5, mid-stream when out of range).
+    if (index == hovered_ && hover_bucket_ >= 0 && item->has_video &&
+        !item->is_still && item->duration_seconds > 0.0) {
+        return ScrubSeconds(*item);
+    }
+    return item->duration_seconds > 0.0
+               ? item->duration_seconds * 0.5
+               : 0.0;
 }
 
 const AudioPeaks* BinGridSurface::PeaksFor(const BinItem& item) {
@@ -372,7 +393,8 @@ void BinGridSurface::DrawCard(Rendering::Renderer& renderer,
     // Thumb: async BGRA poster -> disk PNG -> kind placeholder.
     bool drew_media = false;
     if (item.has_video) {
-        if (const video::Frame* frame = PosterFor(item);
+        if (const video::Frame* frame =
+                PosterFor(item, PosterSeconds(index));
             frame != nullptr) {
             drew_media = renderer.DrawFrameBgra(
                 frame->Data(), frame->Width(), frame->Height(), thumb,
@@ -690,8 +712,22 @@ bool BinGridSurface::HandleEvent(const XER::UI::Widgets::Event& event) {
             }
             const int hit =
                 GetBounds().Contains(p) ? ItemAtPoint(p) : -1;
-            if (hit != hovered_) {
+            // Hover-scrub bucket: pointer x inside the card maps to a
+            // media-time slice (PosterSeconds reads it at paint).
+            int bucket = -1;
+            if (hit >= 0) {
+                const Layout::Rect card = CardRect(hit);
+                if (card.width > 0.0f) {
+                    const float norm =
+                        std::clamp((p.x - card.x) / card.width, 0.0f,
+                                   0.999f);
+                    bucket =
+                        static_cast<int>(norm * kScrubBuckets);
+                }
+            }
+            if (hit != hovered_ || bucket != hover_bucket_) {
                 hovered_ = hit;
+                hover_bucket_ = bucket;
                 Invalidate();
             }
             return GetBounds().Contains(p) || pressed_index_ >= 0;

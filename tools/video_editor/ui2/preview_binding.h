@@ -104,6 +104,10 @@ public:
     // opposite key halves and flips direction at 1x; a stopped
     // shuttle cold-starts at ±1x (old ShuttleStep parity).
     void ShuttleStep(int direction);   // +1 = L, -1 = J
+    // K+J/K+L held combos: plays at a fixed `rate` (bypasses the
+    // ladder — Premiere's held slow shuttle). Idempotent under OS
+    // key auto-repeat; release is the caller's ShuttleStop().
+    void HeldShuttle(double rate);
     void ShuttleStop();                // K — pause + reset ladder
     // Pause at the playhead + reset the ladder (old
     // StopProgramTransport/StopSourceTransport).
@@ -151,6 +155,9 @@ private:
     void EnsurePlatformAudioSink();
     // Shared cold-start boot (Seek + SetLoop + SetRate + play flags).
     void StartPlayback(double rate);
+    // Single write point for shuttle_rate_ — pushes the speed-badge
+    // mirror onto the attached panel (hidden at 0 / +1x).
+    void SetShuttleRate(double rate);
     void ApplyLoopCommand();
     void Report(const std::string& text, bool is_error = false);
 

@@ -67,6 +67,15 @@ public:
     }
     void SetSnapEnabled(bool enabled);
     bool SnapEnabled() const { return snap_enabled_; }
+    // Snap-indicator seam: while a drag resolves through
+    // SnapCandidate to a snapped time, this reports that time (the
+    // Render pass draws a full-height guide line there); -1 hides.
+    // Cleared on the release that ends the drag.
+    double SnapIndicatorSeconds() const { return snap_indicator_t_; }
+    // The snap query itself — read-only, so it stays public (the
+    // mutating ToolCommit ops below remain tool-private); the
+    // snap-indicator smoke resolves candidates through it.
+    double SnapCandidate(double seconds, int track) const override;
     void SetZoom(double px_per_second);
     double PxPerSecond() const { return px_per_second_; }
     void SetScrollSeconds(double seconds);
@@ -283,7 +292,6 @@ private:
                    bool is_error = false) override;
     void SelectClip(const std::string& clip_id) override;
     void RequestRepaint() override { Invalidate(); }
-    double SnapCandidate(double seconds, int track) const override;
     void SetClipPreview(const std::string& clip_id,
                         double start_seconds,
                         double end_seconds) override;
@@ -357,6 +365,11 @@ private:
     bool marquee_active_ = false;
     float marquee_x0_ = 0.0f;
     float marquee_x1_ = 0.0f;
+
+    // Snap indicator — the last snapped drag time (mutable:
+    // SnapCandidate is a const tool-facing seam, so the record lives
+    // here; -1 = hidden). MouseUp clears; Render draws the guide.
+    mutable double snap_indicator_t_ = -1.0;
 
     // Work-area bar drag (edges + whole-bar move).
     WorkDrag work_drag_ = WorkDrag::None;

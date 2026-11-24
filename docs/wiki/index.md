@@ -91,6 +91,21 @@ Goal started: 2026-11-15. Design doc:
   patching/track-targeting and panel chrome across Premiere/Resolve/FCP/
   CapCut/Descript; per-topic ui2 comparison tables + 20-item prioritized
   gap list (S/M/L, owning file per item) (2026-11-23).
+- [2026-11-24-cool-effects-tech.md](research/2026-11-24-cool-effects-tech.md)
+  — signature-look wave: per-family effect candidates (halation/bloom/
+  film kit, warps, stylize, glow, glitch, temporal, texture) with impl
+  sketches + effort/wow; tech evals (xfade~58 transitions near-free,
+  effects_rack exposure ~9 audio fx free, ACES/OCIO finish, GL-transitions
+  MIT, GPU ladder CPU-parallel→Vulkan/libplacebo, OFX/frei0r/VST3/SoundTouch
+  licenses checked) + ranked top-10 (2026-11-24).
+- [2026-11-24-adobe-render-pipeline.md](research/2026-11-24-adobe-render-pipeline.md)
+  — Adobe/BMD render & playback pipeline anatomy: Mercury Playback
+  Engine GPU/CPU split, green/yellow/red render bars, I-frame preview
+  files, AE RAM/persistent-disk cache + MFR + adaptive-resolution
+  ladder, Resolve 3-tier smart/user cache; per-product table + gap
+  analysis + ranked tickets T1–T10 (dropped-frame counter, render
+  bar, adaptive quality, priority autocache, disk preview tier,
+  MFR export) (2026-11-24).
 - [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
   pass-2 review of session's own changes: seqlock ordering bug in
   RenderStore, channel/worker leak in UiRenderHost, nested-transform

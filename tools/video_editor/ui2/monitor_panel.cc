@@ -429,6 +429,11 @@ void MonitorPanel::SetProxyBadge(std::string text) {
         !proxy_badge_->GetText().empty());
     RequestLayout();
 }
+void MonitorPanel::SetScopeActive(bool active) {
+    if (scope_active_ == active) return;
+    scope_active_ = active;
+    Invalidate();
+}
 void MonitorPanel::SetStatusText(std::string text, bool is_error) {
     surface_->SetStatusText(std::move(text), is_error);
 }
@@ -640,7 +645,16 @@ void MonitorPanel::Render(Rendering::Renderer& renderer,
                           const Theme::Tokens& tokens) {
     const auto b = GetBounds();
     renderer.FillRect(b, tokens.surface, tokens.radius_large);
-    renderer.StrokeRect(b, tokens.border, 1.0f, tokens.radius_large);
+    // Last-active-viewer accent border — the shell marks the panel
+    // whose scope the shortcut router currently serves (Premiere's
+    // blue viewer highlight).
+    if (scope_active_) {
+        renderer.StrokeRect(b, tokens.accent, 2.0f,
+                            tokens.radius_large);
+    } else {
+        renderer.StrokeRect(b, tokens.border, 1.0f,
+                            tokens.radius_large);
+    }
     // Separators under the header and above the transport row.
     const auto header = HeaderRect();
     const auto row = TransportRect();

@@ -5,6 +5,7 @@
 #include "preview_engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
@@ -36,20 +37,38 @@ constexpr std::size_t kAudioGapSkipChunks = 96;   // ~2 s at 1024/48k
 // ordinary per-tick jitter.
 constexpr double kAudioLeadSeconds = 0.12;
 
-// Nearest-neighbor BGRA8 downsample for the quality post-pass — both
-// buffers are packed stride==width*4.
-void DownsampleNearestBGRA(const std::uint8_t* src, int sw, int sh,
-                           std::uint8_t* dst, int dw, int dh) {
-    for (int y = 0; y < dh; ++y) {
-        const int sy = std::min(sh - 1, (y * sh) / dh);
-        const std::uint8_t* srow =
-            src + static_cast<std::size_t>(sy) * sw * 4u;
-        std::uint8_t* drow = dst + static_cast<std::size_t>(y) * dw * 4u;
-        for (int x = 0; x < dw; ++x) {
-            const int sx = std::min(sw - 1, (x * sw) / dw);
-            std::memcpy(drow + x * 4, srow + sx * 4, 4);
+// Quality-tier canvas scaling: the "1/2 / 1/4" monitor options shrink
+// the canvas the compositor renders to, so warp, blend, layer and
+// canvas copies all drop quadratically with scale — the honest form
+// of preview-quality (a post-pass downsample would still pay full
+// price for every upstream stage). Canvas dims are folded into the
+// effect-cache state hash, so the scaled project is ALSO what the
+// AutoCacher binds: keys stay aligned between pre-render and playback.
+Project ScaledRenderProject(const Project& p, double scale) {
+    if (!(scale > 0.0) || scale >= 1.0) {
+        return p;
+    }
+    Project rp = p;
+    rp.width = std::max(
+        1, static_cast<int>(std::lround(p.width * scale)));
+    rp.height = std::max(
+        1, static_cast<int>(std::lround(p.height * scale)));
+    return rp;
+}
+
+// The shared EffectFrameCache only stores clips with a non-empty
+// effect or mask chain (see the `cacheable` gate in
+// compositor.cc's RenderClipLayer — an empty chain is a memcpy, not
+// worth a cache round-trip). A project without ANY such clip can
+// never benefit from pre-rendering: the AutoCacher's second decoder
+// set and render loop would burn a CPU core for zero hits.
+bool ProjectHasCacheableContent(const Project& p) {
+    for (const Clip& clip : p.clips) {
+        if (!clip.effects.empty() || !clip.masks.empty()) {
+            return true;
         }
     }
+    return false;
 }
 
 }  // namespace
@@ -86,6 +105,16 @@ struct PreviewEngine::Impl {
 
     // ---- worker-owned playback state (worker thread only) ----
     Compositor comp_;
+    // The canvas-scaled snapshot the compositor and the AutoCacher
+    // bind — rebuilt when the applied quality tier flips (the
+    // command block's quality_cmd_ is the request, render_scale_ the
+    // tier actually bound). At scale 1 this is just project_.
+    Project render_project_;
+    float render_scale_ = 1.0f;
+    // Set by the worker when render_scale_ changes — canvas dims are
+    // cache-key material, so the AutoCacher must re-Init on the scaled
+    // snapshot or it fills keys playback never requests.
+    bool autocache_reset_pending_ = false;
     // Shared effect-chain result cache — injected into every
     // compositor session this engine opens. Survives ReopenCompositor
     // (every backward seek / loop wrap re-binds the compositor), so
@@ -107,6 +136,7 @@ struct PreviewEngine::Impl {
     double anchor_t_ = 0.0;             // playhead at anchor_wall_
     double anchor_wall_ = 0.0;          // clock seconds at anchor
     double last_render_t_ = -1.0;       // <0: nothing rendered this session
+    double last_render_tr_ = -1.0;      // last frame-snapped render t
     std::size_t audio_next_index_ = 0;  // next chunk index to produce
     std::size_t audio_chunk_count_ = 0;
     double chunk_dur_ = 0.0;            // chunk_samples / sample_rate
@@ -117,6 +147,9 @@ struct PreviewEngine::Impl {
     std::atomic<double> playhead_{0.0};
     std::atomic<bool> playing_{false};
     std::atomic<std::uint64_t> frames_presented_{0};
+    // Per-stage wall-clock totals (PerfStats) — written on the worker
+    // under mutex_, read on the UI thread by GetPerfStats().
+    PreviewEngine::PerfStats perf_;
 
     std::thread worker_;
 
@@ -208,6 +241,14 @@ struct PreviewEngine::Impl {
         anchor_t_ = 0.0;
         anchor_wall_ = 0.0;
         last_render_t_ = -1.0;
+        last_render_tr_ = -1.0;
+        render_scale_ = 1.0f;
+        render_project_ = project_;
+        autocache_reset_pending_ = false;
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            perf_ = PreviewEngine::PerfStats{};
+        }
         audio_next_index_ = 0;
         audio_chunk_count_ = 0;
         chunk_dur_ = 0.0;
@@ -216,18 +257,20 @@ struct PreviewEngine::Impl {
         frames_presented_.store(0, std::memory_order_relaxed);
         // AutoCacher: pre-renders the playhead window into
         // frame_cache_ on its own low-priority thread + private
-        // compositor. Same snapshot + factory, same cache — playback
-        // renders then hit instead of re-decoding. Init failures are
-        // non-fatal (the feature degrades to plain playback).
+        // compositor. Same (scaled) snapshot + factory, same cache —
+        // playback renders then hit instead of re-decoding. Init
+        // failures are non-fatal (the feature degrades to plain
+        // playback). Skipped entirely when no clip carries a
+        // cacheable chain — the EffectFrameCache only stores
+        // effect/mask-bearing frames, so pre-rendering an fx-free
+        // timeline would just burn a second decoder set for nothing.
         if (options_.autocache && AutoCacher::EnabledByEnv() &&
-            frame_cache_->CapacityBytes() > 0) {
-            AutoCacher::Options aco;
-            aco.decoder_factory = factory_;
-            aco.frame_cache = frame_cache_;
-            aco.media_resolver = options_.media_resolver;
+            frame_cache_->CapacityBytes() > 0 &&
+            ProjectHasCacheableContent(project_)) {
             auto ac = std::make_unique<AutoCacher>();
             std::string ac_err;
-            if (ac->Init(project_, aco, &ac_err)) {
+            if (ac->Init(render_project_, AutoCacheOptions(),
+                         &ac_err)) {
                 autocache_ = std::move(ac);
             } else {
                 WarnOnce("autocache disabled: " + ac_err);
@@ -356,6 +399,18 @@ struct PreviewEngine::Impl {
 
     // ---- session lifecycle (worker thread) ----------------------------
 
+    AutoCacher::Options AutoCacheOptions() const {
+        AutoCacher::Options aco;
+        aco.decoder_factory = factory_;
+        aco.frame_cache = frame_cache_;
+        aco.media_resolver = options_.media_resolver;
+        // The heavy-effect detour tier must equal the playback
+        // compositor's — preview_quality is folded into the cache
+        // state hash, so a mismatched tier fills unreachable keys.
+        aco.quality = render_scale_;
+        return aco;
+    }
+
     void ReopenCompositor() {
         if (comp_open_) {
             comp_.Shutdown();
@@ -367,7 +422,7 @@ struct PreviewEngine::Impl {
         opts.media_resolver = options_.media_resolver;
         std::string err;
         std::vector<std::string> w;
-        if (!comp_.Init(project_, opts, &err, &w)) {
+        if (!comp_.Init(render_project_, opts, &err, &w)) {
             // Pre-validated at Init — only reachable on allocation
             // failure. Warn once; the next discontinuity retries.
             WarnOnce("compositor init failed: " + err);
@@ -420,14 +475,17 @@ struct PreviewEngine::Impl {
 
     // ---- render / pump (worker thread) --------------------------------
 
-    void RenderAndDeliver(double t, float quality) {
+    void RenderAndDeliver(double t) {
         if (!comp_open_) {
             return;
         }
-        // Preview-quality hint: <1.0 runs the heavy clip effects on a
-        // downscaled frame inside the compositor (export/screenshot
-        // compositors never set this — full quality stays bit-exact).
-        comp_.SetPreviewQuality(quality);
+        // Heavy-effect quality hint: <1.0 runs the expensive spatial
+        // kernels on a downscaled frame inside the compositor. This
+        // rides on top of the canvas scaling (render_project_) — the
+        // tier matches what the AutoCacher renders at so the shared
+        // cache keys line up. Export/screenshot compositors never set
+        // either — full quality stays bit-exact.
+        comp_.SetPreviewQuality(render_scale_);
         // Frame-snapped render time: the cache key quantizes the
         // request to microseconds, so a raw wall-clock t would make
         // every tick a distinct key — nothing could ever hit, and the
@@ -439,36 +497,28 @@ struct PreviewEngine::Impl {
         const double tr = std::clamp(
             std::floor(t / frame_dt_ + 1e-9) * frame_dt_, 0.0,
             duration_);
+        // Perf timing uses the REAL steady clock — the injected
+        // FrameClock is virtual (tests advance it through sleeps) and
+        // would report ~0 ms of work per tick.
+        const auto t0 = std::chrono::steady_clock::now();
         std::string err;
         if (!comp_.RenderFrameAt(tr, &bgra_, &err)) {
             WarnOnce("preview render failed at t=" +
                      std::to_string(t) + ": " + err);
             return;
         }
+        const auto t1 = std::chrono::steady_clock::now();
         const int sw = comp_.CanvasWidth();
         const int sh = comp_.CanvasHeight();
-        const float q = (std::isfinite(quality) && quality > 0.0f &&
-                         quality < 1.0f)
-                            ? quality
-                            : 1.0f;
-        const int tw =
-            std::max(1, static_cast<int>(std::lround(sw * q)));
-        const int th =
-            std::max(1, static_cast<int>(std::lround(sh * q)));
-        if (!out_frame_.IsValid() || out_frame_.Width() != tw ||
-            out_frame_.Height() != th ||
-            out_frame_.Format() != video::PixelFormat::BGRA8) {
-            out_frame_.Release();
-            if (!out_frame_.Allocate(tw, th, video::PixelFormat::BGRA8)) {
-                WarnOnce("preview output frame allocation failed");
-                return;
-            }
-        }
-        if (tw == sw && th == sh) {
-            std::memcpy(out_frame_.Data(), bgra_.data(), bgra_.size());
-        } else {
-            DownsampleNearestBGRA(bgra_.data(), sw, sh,
-                                  out_frame_.Data(), tw, th);
+        // The render canvas IS the delivery size — quality scaling
+        // already happened upstream (the compositor rendered at the
+        // reduced canvas). Adopting the buffer avoids the extra
+        // full-frame memcpy into out_frame_; bgra_ refills on the
+        // next RenderFrameAt.
+        if (!out_frame_.Adopt(sw, sh, video::PixelFormat::BGRA8,
+                              std::move(bgra_))) {
+            WarnOnce("preview output frame wrap failed");
+            return;
         }
         // pts reports the rendered frame's timeline position (tr —
         // the snapped frame time), not the raw wall-clock estimate.
@@ -477,8 +527,20 @@ struct PreviewEngine::Impl {
         out_frame_.Meta().fps =
             static_cast<double>(project_.fps_num) / project_.fps_den;
         sink_->OnVideoFrame(out_frame_);
+        const auto t2 = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            ++perf_.renders;
+            perf_.render_ms +=
+                std::chrono::duration<double, std::milli>(t1 - t0)
+                    .count();
+            perf_.deliver_ms +=
+                std::chrono::duration<double, std::milli>(t2 - t1)
+                    .count();
+        }
         ++frames_presented_;
         last_render_t_ = t;
+        last_render_tr_ = tr;
     }
 
     // Drains every mixer chunk index crossed by the playhead (each
@@ -629,6 +691,22 @@ struct PreviewEngine::Impl {
                 present_pending_ = false;
             }
 
+            const auto tick_wall0 = std::chrono::steady_clock::now();
+            const double tick_begin = clock_->NowSeconds();
+
+            // Quality-tier flip: rebuild the scaled render snapshot and
+            // rebind both renderers — canvas dims are folded into the
+            // shared effect-cache state hash, so the AutoCacher must
+            // re-Init or it would keep filling keys playback can never
+            // request.
+            const bool quality_changed = (quality != render_scale_);
+            if (quality_changed) {
+                render_scale_ = quality;
+                render_project_ =
+                    ScaledRenderProject(project_, render_scale_);
+                autocache_reset_pending_ = true;
+            }
+
             const double now = clock_->NowSeconds();
             double t = anchor_t_;
             if (playing && applied_rate != 0.0) {
@@ -664,7 +742,7 @@ struct PreviewEngine::Impl {
             t = std::clamp(t, 0.0, duration_);
 
             // Session continuity — see preview_engine.h for the rule.
-            bool need_reopen = !comp_open_;
+            bool need_reopen = !comp_open_ || quality_changed;
             if (!need_reopen && last_render_t_ >= 0.0) {
                 const double dt = t - last_render_t_;
                 if (dt < -kTimeEpsilon ||
@@ -675,17 +753,43 @@ struct PreviewEngine::Impl {
             if (need_reopen) {
                 ReopenCompositor();
                 last_render_t_ = -1.0;
+                last_render_tr_ = -1.0;
+            }
+            if (autocache_reset_pending_) {
+                autocache_reset_pending_ = false;
+                if (autocache_) {
+                    std::string ac_err;
+                    if (!autocache_->Init(render_project_,
+                                          AutoCacheOptions(),
+                                          &ac_err)) {
+                        WarnOnce("autocache re-init failed: " + ac_err);
+                        autocache_.reset();
+                    }
+                }
             }
 
             if (playing || present) {
+                // Skip ticks whose frame index is unchanged — the
+                // snapped render time equals the previous one, so the
+                // compositor would produce a byte-identical frame (its
+                // per-clip memo already covers the chain, but the
+                // blend + canvas copy still cost a full pass).
+                const double tr = std::clamp(
+                    std::floor(t / frame_dt_ + 1e-9) * frame_dt_, 0.0,
+                    duration_);
+                const bool same_frame =
+                    playing && !present && tr == last_render_tr_;
                 // rate == 0 (frozen shuttle) still presents on seeks —
                 // plain playing ticks skip the redundant re-render.
-                if (!(playing && applied_rate == 0.0 &&
+                if (!same_frame &&
+                    !(playing && applied_rate == 0.0 &&
                       last_render_t_ == t)) {
-                    RenderAndDeliver(t, quality);
+                    RenderAndDeliver(t);
                 }
             }
+            const auto audio_t0 = std::chrono::steady_clock::now();
             PumpAudio(playing, applied_rate, t, master_gain_db);
+            const auto audio_t1 = std::chrono::steady_clock::now();
             HarvestEngineWarnings();
 
             // Playhead callback AFTER the frame so the UI sees a
@@ -718,7 +822,35 @@ struct PreviewEngine::Impl {
                 const double wall_dt = abs_rate > 1e-9
                                            ? frame_dt_ / abs_rate
                                            : frame_dt_;
-                clock_->SleepSeconds(std::clamp(wall_dt, 0.001, 0.25));
+                // Budget the WHOLE tick — render + pump + marshal have
+                // already consumed part of the frame interval, so
+                // sleeping the full wall_dt on top stretched every
+                // tick to work+frame_dt and cut the delivered frame
+                // rate accordingly.
+                const double spent = clock_->NowSeconds() - tick_begin;
+                const double remain = wall_dt - spent;
+                if (remain > 0.0) {
+                    const auto s0 = std::chrono::steady_clock::now();
+                    clock_->SleepSeconds(std::min(remain, 0.25));
+                    const auto s1 = std::chrono::steady_clock::now();
+                    std::lock_guard<std::mutex> lk(mutex_);
+                    perf_.sleep_ms +=
+                        std::chrono::duration<double, std::milli>(
+                            s1 - s0)
+                            .count();
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lk(mutex_);
+                ++perf_.ticks;
+                perf_.tick_ms +=
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - tick_wall0)
+                        .count();
+                perf_.audio_ms +=
+                    std::chrono::duration<double, std::milli>(
+                        audio_t1 - audio_t0)
+                        .count();
             }
             // Paused: next iteration blocks on the CV until a command.
         }
@@ -779,6 +911,14 @@ EffectFrameCache::Stats PreviewEngine::FrameCacheStats() const {
 AutoCacher::Stats PreviewEngine::AutoCacheStats() const {
     return impl_->autocache_ ? impl_->autocache_->GetStats()
                              : AutoCacher::Stats{};
+}
+PreviewEngine::PerfStats PreviewEngine::GetPerfStats() const {
+    std::lock_guard<std::mutex> lk(impl_->mutex_);
+    return impl_->perf_;
+}
+void PreviewEngine::ResetPerfStats() {
+    std::lock_guard<std::mutex> lk(impl_->mutex_);
+    impl_->perf_ = PerfStats{};
 }
 bool PreviewEngine::WaitAutoCacheIdle(int timeout_ms) {
     // Disabled -> trivially idle (the check is "no pending work").

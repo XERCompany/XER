@@ -1649,6 +1649,16 @@ void TimelineSurface::Render(
         renderer.StrokeRect(band, tokens.accent, 1.0f, 0.0f);
     }
 
+    // Snap guide: while a drag's SnapCandidate resolved to a
+    // different time, a full-height accent line marks the target
+    // (Premiere's snap indicator).
+    if (snap_indicator_t_ >= 0.0) {
+        const float sx = XAtTime(snap_indicator_t_);
+        renderer.DrawLine({sx, ruler_bottom},
+                          {sx, bounds.y + bounds.height},
+                          kAccentCyan, 1.5f);
+    }
+
     // Playhead: bright cyan line with a pill-shaped cap handle in
     // the ruler/marker band (reference NLE style).
     const float play_x = XAtTime(playhead_);
@@ -2297,6 +2307,12 @@ bool TimelineSurface::HandleEvent(
 
     if (event.type == Event::Type::MouseUp &&
         event.mouse_button == MouseButton::Left) {
+        // Any release ends whatever drag was snapping — hide the
+        // guide line before the drag branches below run.
+        if (snap_indicator_t_ >= 0.0) {
+            snap_indicator_t_ = -1.0;
+            Invalidate();
+        }
         if (ruler_scrub_) {
             ruler_scrub_ = false;
             return true;
@@ -2396,12 +2412,22 @@ void TimelineSurface::SelectClip(const std::string& clip_id) {
 
 double TimelineSurface::SnapCandidate(double seconds,
                                       int track) const {
-    if (!snap_enabled_ || project_ == nullptr) return seconds;
+    if (!snap_enabled_ || project_ == nullptr) {
+        snap_indicator_t_ = -1.0;
+        return seconds;
+    }
     // CollectSnapPoints already feeds clip edges on the track (all
     // tracks when < 0), marker times, work-area edges and the
     // playhead.
-    return SnapTime(*project_, track, seconds, 8.0 / px_per_second_,
-                    playhead_);
+    const double snapped =
+        SnapTime(*project_, track, seconds, 8.0 / px_per_second_,
+                 playhead_);
+    // Snap indicator: a resolved-different result marks the guide
+    // line's time; an unsnapped call hides it (the drag moved off
+    // the target). MouseUp clears — see the release path.
+    snap_indicator_t_ =
+        std::fabs(snapped - seconds) > 1e-9 ? snapped : -1.0;
+    return snapped;
 }
 
 void TimelineSurface::SetClipPreview(const std::string& clip_id,
@@ -2872,6 +2898,41 @@ bool TimelineSurface::ShowContextMenu(
                     }
                 };
                 items.push_back(std::move(fb));
+            }
+
+            // Track Mask (AI): the shell arms the monitor click seam
+            // — the next frame click is the SAM2 prompt — then an
+            // async per-frame re-prompt scan lands Clip::mask_track
+            // + xer.fx.track_mask (docs/wiki/research/
+            // 2026-11-23-hf-org-scan.md §1). Same gate shape as
+            // face-blur.
+            if (hooks_.on_track_mask != nullptr ||
+                hooks_.on_clear_mask != nullptr) {
+                const bool scannable =
+                    clip.source.kind == SourceKind::Media &&
+                    !clip.source_path.empty() && !clip.is_adjustment;
+                Widgets::ContextMenu::Item tm;
+                tm.label = "Track Mask (AI)\xe2\x80\xa6";
+                tm.enabled = scannable &&
+                             hooks_.on_track_mask != nullptr;
+                tm.action = [this, id] {
+                    if (hooks_.on_track_mask) {
+                        hooks_.on_track_mask(id);
+                    }
+                };
+                items.push_back(std::move(tm));
+                if (!clip.mask_track.samples.empty()) {
+                    Widgets::ContextMenu::Item cm;
+                    cm.label = "Clear Mask Track";
+                    cm.enabled =
+                        hooks_.on_clear_mask != nullptr;
+                    cm.action = [this, id] {
+                        if (hooks_.on_clear_mask) {
+                            hooks_.on_clear_mask(id);
+                        }
+                    };
+                    items.push_back(std::move(cm));
+                }
             }
 
             // Smooth slow-mo (AI): RIFE bounce of the consumed span,
