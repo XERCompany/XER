@@ -27,6 +27,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "audio/effects_rack/fx_distortion_tube.h"
@@ -58,6 +59,13 @@ bool AudioValid(const XER_AudioBuffer* b) {
 uint8_t Clamp8f(float v) {
     return static_cast<uint8_t>(std::clamp(v, 0.f, 255.f));
 }
+
+// ── film look — forward decls ─────────────────────────────────────
+// Time-aware kernels defined in the "film look" section below; the
+// ABI fns wrap them at t=0/seed=0 while the compositor calls them
+// through ApplyFilmEffect with the clip's media time + id hash.
+int film_grain_kernel(XER_VideoFrame* f, const float* p, int32_t n,
+                      double media_time_s, std::uint64_t clip_seed);
 
 // ── BGRA8 (strided) ↔ Skia bridge uint32 (0xRRGGBBAA, packed) ───────
 
@@ -636,17 +644,13 @@ int twirl(XER_VideoFrame* f, const float* p, int32_t n) {
 }
 
 // ── overlay ─────────────────────────────────────────────────────────
-// p0 amount 0..100, p1 monochrome 0/1 → FilterAddNoise uniform
-// (DLL scale was ±amount*0.5).
+// p0 amount 0..100, p1 monochrome 0/1, p2 block px 1..8, p3 seed —
+// v2 kernel (luma-weighted, block-sized, deterministic per
+// (clip,time)). The ABI form renders the static t=0/seed=0 variant
+// for generic apply paths; the compositor dispatches the animated
+// one via ApplyFilmEffect (see the film-look section).
 int film_grain(XER_VideoFrame* f, const float* p, int32_t n) {
-    const int amount = static_cast<int>(std::lround(
-        std::clamp(Param(p, n, 0, 20.f), 0.f, 100.f) * 0.5f));
-    const bool mono = Param(p, n, 1, 1.f) >= 0.5f;
-    if (amount <= 0) return 0;
-    return ApplySkia(f, [&](std::vector<uint32_t>* px, int w, int h) {
-        return Skia::FilterAddNoise(px, w, h, amount,
-                                    /*gaussian=*/false, mono);
-    });
+    return film_grain_kernel(f, p, n, 0.0, 0);
 }
 
 // p0 bar fraction 0..0.45 — ported (draw op).
@@ -1024,6 +1028,591 @@ int tone_split(XER_VideoFrame* f, const float* p, int32_t n) {
     return 0;
 }
 
+// ── film look ─────────────────────────────────────────────────────
+// Signature-analog kit (docs/wiki/research/2026-11-24 §1.1): luma-
+// weighted grain, halation, gate weave, light leak, exposure
+// flicker, dust/scratch — plus an upgraded vignette. The animated
+// members are deterministic functions of (clip_seed, media_time,
+// params): the compositor calls them via BuiltinFx::ApplyFilmEffect
+// with the resolved media time, so each frame gets a fresh field
+// WITHOUT strobing and the result stays a pure input to the
+// effect-frame cache (media time is already the cache key's time
+// component). The registered ABI fns run the same kernels at
+// t=0/seed=0 — a static variant for generic PluginHost::ApplyVideo
+// paths. No scratch allocations in the hot loops: noise/motion
+// fields are procedural (per-block hash), and the one resample
+// kernel reuses the shared Snapshot() idiom.
+
+// splitmix64 finalizer → decorrelated uint32/uint64 streams. All
+// film-kit randomness flows through this so results are stable
+// across runs, platforms and compositor threads.
+std::uint64_t Sm64Next(std::uint64_t* s) {
+    *s += 0x9E3779B97F4A7C15ull;
+    std::uint64_t z = *s;
+    z ^= z >> 30;
+    z *= 0xBF58476D1CE4E5B9ull;
+    z ^= z >> 27;
+    z *= 0x94D049BB133111EBull;
+    z ^= z >> 31;
+    return z;
+}
+
+std::uint32_t HashBits(std::uint64_t x) {
+    x ^= x >> 33;
+    x *= 0xff51afd7ed558ccdull;
+    x ^= x >> 33;
+    x *= 0xc4ceb9fe1a85ec53ull;
+    x ^= x >> 33;
+    return static_cast<std::uint32_t>(x);
+}
+
+float HashToUnit(std::uint32_t h) {  // (h>>8) in [0,2^24) → [-1,1)
+    return static_cast<float>(h >> 8) * (1.f / 8388608.f) - 1.f;
+}
+
+// Per-(clip, quantized time, user seed) noise seed. Time quantizes
+// at 1/240 s — finer than any delivery rate, so every displayed
+// frame gets its own deterministic field and re-rendering the same
+// instant bit-matches (the strobing-free contract).
+std::uint32_t FilmSeed(double media_time_s, std::uint64_t clip_seed,
+                       float user_seed) {
+    const std::int64_t tq = static_cast<std::int64_t>(
+        std::llround(media_time_s * 240.0));
+    return HashBits(
+        clip_seed ^ static_cast<std::uint64_t>(tq) *
+                        0x9E3779B97F4A7C15ull ^
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                                       std::lround(user_seed))) *
+            0xD1B54A32D192ED03ull);
+}
+
+// Triangular (grain-ish) block noise in [-1,1) — two hashed
+// uniforms summed. `block` is the linear block index, `channel`
+// decorrelates the B/G/R planes in color mode.
+float GrainNoise(std::uint32_t seed, std::uint32_t block,
+                 std::uint32_t channel) {
+    const std::uint64_t x =
+        (static_cast<std::uint64_t>(seed) << 32) ^ block ^
+        static_cast<std::uint64_t>(channel) * 0x9E3779B1ull;
+    return (HashToUnit(HashBits(x)) +
+            HashToUnit(HashBits(x ^ 0xA511E9B3u))) *
+           0.5f;
+}
+
+// Proper film grain v2 — p0 amount 0..100, p1 mono 0/1, p2 block px
+// 1..8 (nearest-upsampled noise cells), p3 seed. Per-frame animated:
+// the field is a pure function of (clip, media time) so it
+// regenerates deterministically — no boiling sync between adjacent
+// frames, identical output on re-render of the same instant.
+// Amplitude is shadow-weighted (sqrt(1-luma)): strong in shadows and
+// mids, fading to none at white, like real stock.
+int film_grain_kernel(XER_VideoFrame* f, const float* p, int32_t n,
+                      double media_time_s, std::uint64_t clip_seed) {
+    if (!VideoValid(f)) return 1;
+    const float amount = std::clamp(Param(p, n, 0, 20.f), 0.f, 100.f);
+    const bool mono = Param(p, n, 1, 1.f) >= 0.5f;
+    const int32_t size = std::clamp(
+        static_cast<int32_t>(std::lround(Param(p, n, 2, 1.f))), 1, 8);
+    if (amount <= 0.f) return 0;
+    const int32_t w = f->width, h = f->height, st = f->stride;
+    const int32_t fw = (w + size - 1) / size;
+    const std::uint32_t seed =
+        FilmSeed(media_time_s, clip_seed, Param(p, n, 3, 0.f));
+    const float scale = amount * 0.5f;
+    for (int32_t y = 0; y < h; ++y) {
+        uint8_t* row = f->data + static_cast<size_t>(y) * st;
+        const int32_t by = y / size;
+        for (int32_t bx = 0; bx < fw; ++bx) {
+            const std::uint32_t block =
+                static_cast<std::uint32_t>(by) *
+                    static_cast<std::uint32_t>(fw) +
+                static_cast<std::uint32_t>(bx);
+            const float n0 = GrainNoise(seed, block, 0);
+            const float n1 = mono ? 0.f : GrainNoise(seed, block, 1);
+            const float n2 = mono ? 0.f : GrainNoise(seed, block, 2);
+            const int32_t x1 = std::min(w, (bx + 1) * size);
+            for (int32_t x = bx * size; x < x1; ++x) {
+                uint8_t* px = row + static_cast<size_t>(x) * 4;
+                const float luma =
+                    (0.114f * px[0] + 0.587f * px[1] + 0.299f * px[2]) *
+                    (1.f / 255.f);
+                const float k =
+                    scale * std::sqrt(std::max(0.f, 1.f - luma));
+                if (mono) {
+                    const float g = n0 * k;
+                    px[0] = Clamp8f(px[0] + g);
+                    px[1] = Clamp8f(px[1] + g);
+                    px[2] = Clamp8f(px[2] + g);
+                } else {
+                    px[0] = Clamp8f(px[0] + n0 * k);
+                    px[1] = Clamp8f(px[1] + n1 * k);
+                    px[2] = Clamp8f(px[2] + n2 * k);
+                }
+            }
+        }
+    }
+    return 0;
+}
+
+// Halation — p0 threshold 0..255, p1 spread px 1..64, p2 strength
+// 0..1, p3 hue deg. Highlights (soft-knee luma mask × source color)
+// are extracted into a half-res scratch, heavily blurred there
+// (4× cheaper — halos are low-frequency anyway), multiplied toward
+// the warm tint (the film red layer scatters most), then screen-
+// blended back with bilinear upsample. Pure per-frame kernel.
+int halation(XER_VideoFrame* f, const float* p, int32_t n) {
+    if (!VideoValid(f)) return 1;
+    const float th = std::clamp(Param(p, n, 0, 200.f), 0.f, 255.f);
+    const float spread = std::clamp(Param(p, n, 1, 14.f), 1.f, 64.f);
+    const float strength = std::clamp(Param(p, n, 2, 0.5f), 0.f, 1.f);
+    if (strength <= 0.f) return 0;
+    uint8_t tint[3];
+    HueToBgr(std::clamp(Param(p, n, 3, 25.f), 0.f, 360.f), tint);
+    const int32_t w = f->width, h = f->height, st = f->stride;
+    const int32_t w2 = std::max<int32_t>(1, w / 2);
+    const int32_t h2 = std::max<int32_t>(1, h / 2);
+    std::vector<uint32_t> glow(static_cast<size_t>(w2) *
+                                   static_cast<size_t>(h2),
+                               0u);
+    const float knee = std::max(1.f, 255.f - th);
+    for (int32_t y = 0; y < h2; ++y) {
+        for (int32_t x = 0; x < w2; ++x) {
+            float b = 0.f, g = 0.f, r = 0.f;
+            for (int32_t dy = 0; dy < 2; ++dy) {
+                const int32_t sy = std::min(y * 2 + dy, h - 1);
+                const uint8_t* srow =
+                    f->data + static_cast<size_t>(sy) * st;
+                for (int32_t dx = 0; dx < 2; ++dx) {
+                    const int32_t sx = std::min(x * 2 + dx, w - 1);
+                    const uint8_t* px =
+                        srow + static_cast<size_t>(sx) * 4;
+                    const float t = std::clamp(
+                        (Luma(px) - th) / knee, 0.f, 1.f);
+                    const float m = t * t * (3.f - 2.f * t);
+                    b += px[0] * m;
+                    g += px[1] * m;
+                    r += px[2] * m;
+                }
+            }
+            glow[static_cast<size_t>(y) * w2 + x] =
+                Skia::MakeColorRGBA(static_cast<int>(r * 0.25f + 0.5f),
+                                    static_cast<int>(g * 0.25f + 0.5f),
+                                    static_cast<int>(b * 0.25f + 0.5f),
+                                    255);
+        }
+    }
+    // Half-res gaussian: sigma halves with the image so the
+    // full-res halo radius stays ≈ `spread`.
+    const double sigma =
+        std::max(0.5, static_cast<double>(spread) * 0.5);
+    if (!Skia::FilterGaussianBlur(&glow, w2, h2, sigma, sigma)) {
+        return 1;
+    }
+    const auto glow_at = [&](int32_t x, int32_t y) -> uint32_t {
+        return glow[static_cast<size_t>(
+                        std::clamp(y, 0, h2 - 1)) * w2 +
+                    std::clamp(x, 0, w2 - 1)];
+    };
+    for (int32_t y = 0; y < h; ++y) {
+        uint8_t* row = f->data + static_cast<size_t>(y) * st;
+        const float gy = (y + 0.5f) * 0.5f - 0.5f;
+        const int32_t y0 = std::clamp(static_cast<int32_t>(gy), 0,
+                                      h2 - 1);
+        const int32_t y1 = std::min(y0 + 1, h2 - 1);
+        const float fy = gy - static_cast<float>(y0);
+        for (int32_t x = 0; x < w; ++x) {
+            const float gx = (x + 0.5f) * 0.5f - 0.5f;
+            const int32_t x0 =
+                std::clamp(static_cast<int32_t>(gx), 0, w2 - 1);
+            const int32_t x1 = std::min(x0 + 1, w2 - 1);
+            const float fx = gx - static_cast<float>(x0);
+            const uint32_t c00 = glow_at(x0, y0);
+            const uint32_t c10 = glow_at(x1, y0);
+            const uint32_t c01 = glow_at(x0, y1);
+            const uint32_t c11 = glow_at(x1, y1);
+            uint8_t* px = row + static_cast<size_t>(x) * 4;
+            for (int32_t c = 0; c < 3; ++c) {
+                // Bridge packing is R<<24|G<<16|B<<8|A; memory order
+                // here is B,G,R → channel c reads shift 8*(c+1).
+                const int32_t sh = 8 * (c + 1);
+                const float top =
+                    static_cast<float>((c00 >> sh) & 0xFF) * (1.f - fx) +
+                    static_cast<float>((c10 >> sh) & 0xFF) * fx;
+                const float bot =
+                    static_cast<float>((c01 >> sh) & 0xFF) * (1.f - fx) +
+                    static_cast<float>((c11 >> sh) & 0xFF) * fx;
+                const float blurred = top + (bot - top) * fy;
+                // Warm multiply keeps the halo hue; screen blend adds
+                // it without crushing mids.
+                const float leak =
+                    blurred * (tint[c] * (1.f / 255.f)) * strength;
+                px[c] = Clamp8f(
+                    px[c] + (255.f - px[c]) * (leak / 255.f));
+            }
+        }
+    }
+    return 0;
+}
+
+// Bilinear sample on a strided BGRA source, edge-replicated.
+void BilinearBGRA(const std::vector<uint8_t>& src, int32_t w,
+                  int32_t h, int32_t stride, float sx, float sy,
+                  uint8_t* out) {
+    sx = std::clamp(sx, 0.f, static_cast<float>(w - 1));
+    sy = std::clamp(sy, 0.f, static_cast<float>(h - 1));
+    const int32_t x0 = static_cast<int32_t>(sx);
+    const int32_t y0 = static_cast<int32_t>(sy);
+    const int32_t x1 = std::min(x0 + 1, w - 1);
+    const int32_t y1 = std::min(y0 + 1, h - 1);
+    const float fx = sx - static_cast<float>(x0);
+    const float fy = sy - static_cast<float>(y0);
+    const uint8_t* p00 =
+        src.data() + static_cast<size_t>(y0) * stride +
+        static_cast<size_t>(x0) * 4;
+    const uint8_t* p10 =
+        src.data() + static_cast<size_t>(y0) * stride +
+        static_cast<size_t>(x1) * 4;
+    const uint8_t* p01 =
+        src.data() + static_cast<size_t>(y1) * stride +
+        static_cast<size_t>(x0) * 4;
+    const uint8_t* p11 =
+        src.data() + static_cast<size_t>(y1) * stride +
+        static_cast<size_t>(x1) * 4;
+    for (int32_t c = 0; c < 4; ++c) {
+        const float top = p00[c] + (p10[c] - p00[c]) * fx;
+        const float bot = p01[c] + (p11[c] - p01[c]) * fx;
+        out[c] = Clamp8f(top + (bot - top) * fy + 0.5f);
+    }
+}
+
+// Gate weave — p0 amplitude px 0..16, p1 speed Hz 0.01..8, p2 seed.
+// Projector-gate jitter: a slow dominant sine per axis plus a faster
+// incommensurate rattle (phases seeded per clip) — smooth wander,
+// no per-frame jumps. Whole-frame subpixel shift, edge-replicated.
+int gate_weave_kernel(XER_VideoFrame* f, const float* p, int32_t n,
+                      double media_time_s, std::uint64_t clip_seed) {
+    if (!VideoValid(f)) return 1;
+    const float amp = std::clamp(Param(p, n, 0, 1.5f), 0.f, 16.f);
+    const float speed =
+        std::clamp(Param(p, n, 1, 0.6f), 0.01f, 8.f);
+    if (amp <= 0.f) return 0;
+    std::uint64_t rs = clip_seed ^
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                                       std::lround(Param(p, n, 2, 0.f)))) *
+            0xBF58476D1CE4E5B9ull ^ 0x67617465776176ull;
+    float ph[4];
+    for (float& v : ph) {
+        v = static_cast<float>(Sm64Next(&rs) >> 40) *
+            (kTwoPi / 16777216.f);
+    }
+    const float t = static_cast<float>(media_time_s);
+    const float dx =
+        amp * (0.62f * std::sin(kTwoPi * speed * t + ph[0]) +
+               0.38f * std::sin(kTwoPi * speed * 2.71f * t + ph[1]));
+    const float dy =
+        amp * (0.62f * std::sin(kTwoPi * speed * 0.87f * t + ph[2]) +
+               0.38f * std::sin(kTwoPi * speed * 3.13f * t + ph[3]));
+    const std::vector<uint8_t> src = Snapshot(f);
+    for (int32_t y = 0; y < f->height; ++y) {
+        uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
+        for (int32_t x = 0; x < f->width; ++x) {
+            BilinearBGRA(src, f->width, f->height, f->stride,
+                         static_cast<float>(x) - dx,
+                         static_cast<float>(y) - dy,
+                         row + static_cast<size_t>(x) * 4);
+        }
+    }
+    return 0;
+}
+
+int gate_weave(XER_VideoFrame* f, const float* p, int32_t n) {
+    return gate_weave_kernel(f, p, n, 0.0, 0);
+}
+
+// Light leak — p0 intensity 0..1, p1 hue deg, p2 seed, p3 animated
+// 0/1. Three warm radial blobs pinned to seeded frame edges, centers
+// sitting half off-frame so the visible part is a crescent bleeding
+// inward; `animated` drifts them along the edge on slow seeded
+// sines. Screen blend — leaks add light, never darken.
+int light_leak_kernel(XER_VideoFrame* f, const float* p, int32_t n,
+                      double media_time_s, std::uint64_t clip_seed) {
+    if (!VideoValid(f)) return 1;
+    const float intensity =
+        std::clamp(Param(p, n, 0, 0.45f), 0.f, 1.f);
+    if (intensity <= 0.f) return 0;
+    uint8_t warm[3];
+    HueToBgr(std::clamp(Param(p, n, 1, 30.f), 0.f, 360.f), warm);
+    const bool animated = Param(p, n, 3, 1.f) >= 0.5f;
+    const int32_t w = f->width, h = f->height, st = f->stride;
+    const float dim = static_cast<float>(std::min(w, h));
+    const float t = static_cast<float>(media_time_s);
+    struct Blob {
+        float cx, cy, r2, gain;
+    };
+    Blob blobs[3];
+    std::uint64_t rs = clip_seed ^
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                                       std::lround(Param(p, n, 2, 0.f)))) *
+            0x94D049BB133111EBull ^ 0x6C696B656C6Bull;
+    for (Blob& b : blobs) {
+        const int32_t edge =
+            static_cast<int32_t>(Sm64Next(&rs) & 3u);
+        const float u = 0.1f + 0.8f *
+            (static_cast<float>(Sm64Next(&rs) >> 40) *
+             (1.f / 16777216.f));
+        const float out = 0.1f + 0.8f *
+            (static_cast<float>(Sm64Next(&rs) >> 40) *
+             (1.f / 16777216.f));
+        const float r = (0.30f + 0.45f *
+            (static_cast<float>(Sm64Next(&rs) >> 40) *
+             (1.f / 16777216.f))) * dim;
+        const float drift_hz = 0.03f + 0.09f *
+            (static_cast<float>(Sm64Next(&rs) >> 40) *
+             (1.f / 16777216.f));
+        const float drift_ph =
+            static_cast<float>(Sm64Next(&rs) >> 40) *
+            (kTwoPi / 16777216.f);
+        b.gain = 0.7f + 0.3f *
+            (static_cast<float>(Sm64Next(&rs) >> 40) *
+             (1.f / 16777216.f));
+        float pos = u;
+        if (animated) {
+            pos += 0.18f * std::sin(kTwoPi * drift_hz * t + drift_ph);
+        }
+        pos = std::clamp(pos, 0.f, 1.f);
+        switch (edge) {
+            case 0:  b.cx = -r * out;       b.cy = pos * h; break;
+            case 1:  b.cx = w + r * out;    b.cy = pos * h; break;
+            case 2:  b.cx = pos * w;        b.cy = -r * out; break;
+            default: b.cx = pos * w;        b.cy = h + r * out; break;
+        }
+        b.r2 = r * r;
+    }
+    for (int32_t y = 0; y < h; ++y) {
+        uint8_t* row = f->data + static_cast<size_t>(y) * st;
+        for (int32_t x = 0; x < w; ++x) {
+            float k = 0.f;
+            for (const Blob& b : blobs) {
+                const float dx = x + 0.5f - b.cx;
+                const float dy = y + 0.5f - b.cy;
+                const float q =
+                    1.f - (dx * dx + dy * dy) / b.r2;
+                if (q > 0.f) k += q * q * b.gain;
+            }
+            if (k <= 0.f) continue;
+            const float s = std::min(k, 1.f) * intensity;
+            uint8_t* px = row + static_cast<size_t>(x) * 4;
+            px[0] = Clamp8f(px[0] + (255.f - px[0]) *
+                                        (warm[0] * s / 255.f));
+            px[1] = Clamp8f(px[1] + (255.f - px[1]) *
+                                        (warm[1] * s / 255.f));
+            px[2] = Clamp8f(px[2] + (255.f - px[2]) *
+                                        (warm[2] * s / 255.f));
+        }
+    }
+    return 0;
+}
+
+int light_leak(XER_VideoFrame* f, const float* p, int32_t n) {
+    return light_leak_kernel(f, p, n, 0.0, 0);
+}
+
+// Film flicker — p0 amount 0..1, p1 rate Hz 0.5..24, p2 seed.
+// Subtle whole-frame exposure modulation: a dominant sine at `rate`
+// plus two incommensurate partials (seeded phases) ≈ the perlin-ish
+// wander of a real gate/lamp. LUT-applied to RGB.
+int film_flicker_kernel(XER_VideoFrame* f, const float* p, int32_t n,
+                        double media_time_s, std::uint64_t clip_seed) {
+    if (!VideoValid(f)) return 1;
+    const float amount =
+        std::clamp(Param(p, n, 0, 0.18f), 0.f, 1.f);
+    if (amount <= 0.f) return 0;
+    const float rate = std::clamp(Param(p, n, 1, 6.f), 0.5f, 24.f);
+    std::uint64_t rs = clip_seed ^
+        static_cast<std::uint64_t>(static_cast<std::uint32_t>(
+                                       std::lround(Param(p, n, 2, 0.f)))) *
+            0xBF58476D1CE4E5B9ull ^ 0x666C69636B72ull;
+    float ph[3];
+    for (float& v : ph) {
+        v = static_cast<float>(Sm64Next(&rs) >> 40) *
+            (kTwoPi / 16777216.f);
+    }
+    const float t = static_cast<float>(media_time_s);
+    const float gain =
+        1.f + amount * 0.55f *
+                  (0.5f * std::sin(kTwoPi * rate * t + ph[0]) +
+                   0.3f * std::sin(kTwoPi * rate * 0.37f * t + ph[1]) +
+                   0.2f * std::sin(kTwoPi * rate * 2.61f * t + ph[2]));
+    std::array<uint8_t, 256> lut{};
+    for (int32_t i = 0; i < 256; ++i) {
+        lut[static_cast<size_t>(i)] = Clamp8f(i * gain);
+    }
+    for (int32_t y = 0; y < f->height; ++y) {
+        uint8_t* px = f->data + static_cast<size_t>(y) * f->stride;
+        for (int32_t x = 0; x < f->width; ++x, px += 4) {
+            px[0] = lut[px[0]];
+            px[1] = lut[px[1]];
+            px[2] = lut[px[2]];
+        }
+    }
+    return 0;
+}
+
+int film_flicker(XER_VideoFrame* f, const float* p, int32_t n) {
+    return film_flicker_kernel(f, p, n, 0.0, 0);
+}
+
+// Dust & scratch — p0 density 0..1, p1 seed. Dust specks are fixed
+// to the print (same every frame — static per seed, that's what
+// makes them read as dust rather than noise). Vertical scratches
+// live for a ~0.4 s "reel" window each — occasional, not constant —
+// with a per-row ±1 px wobble.
+int dust_scratch_kernel(XER_VideoFrame* f, const float* p, int32_t n,
+                        double media_time_s,
+                        std::uint64_t clip_seed) {
+    if (!VideoValid(f)) return 1;
+    const float density =
+        std::clamp(Param(p, n, 0, 0.35f), 0.f, 1.f);
+    if (density <= 0.f) return 0;
+    const int32_t w = f->width, h = f->height;
+    const std::uint64_t base =
+        clip_seed ^ static_cast<std::uint64_t>(
+                        static_cast<std::uint32_t>(
+                            std::lround(Param(p, n, 1, 0.f)))) *
+                        0x94D049BB133111EBull ^ 0x647573747263ull;
+    std::uint64_t rs = base;
+    const auto f01 = [&] {
+        return static_cast<float>(Sm64Next(&rs) >> 40) *
+               (1.f / 16777216.f);
+    };
+    const int32_t specks = static_cast<int32_t>(
+        std::lround(density * 180.0));
+    for (int32_t i = 0; i < specks; ++i) {
+        const int32_t x = static_cast<int32_t>(f01() * w);
+        const int32_t y = static_cast<int32_t>(f01() * h);
+        const int32_t r = 1 + static_cast<int32_t>(f01() * 2.99f);
+        const uint8_t v = (Sm64Next(&rs) & 1u) ? 235 : 25;
+        const float a = 0.2f + 0.55f * f01();
+        FillRect(f, x - r / 2, y - r / 2, r, r, v, a);
+    }
+    // Occasional vertical scratches — each candidate is live for one
+    // ~0.36 s reel bucket, so they appear and clear instead of
+    // strobing per frame.
+    const int32_t candidates =
+        1 + static_cast<int32_t>(density * 5.99f);
+    const std::int64_t reel =
+        static_cast<std::int64_t>(std::floor(media_time_s * 2.8));
+    for (int32_t i = 0; i < candidates; ++i) {
+        std::uint64_t sr = base ^
+            static_cast<std::uint64_t>(i) * 0x2545F4914F6CDD1Dull ^
+            static_cast<std::uint64_t>(reel) * 0x9E3779B97F4A7C15ull;
+        if (static_cast<float>(Sm64Next(&sr) >> 40) *
+                (1.f / 16777216.f) >= density * 0.55f) {
+            continue;
+        }
+        const float x0 =
+            static_cast<float>(Sm64Next(&sr) >> 40) *
+            (1.f / 16777216.f) * w;
+        const uint8_t v =
+            (static_cast<float>(Sm64Next(&sr) >> 40) *
+                 (1.f / 16777216.f) < 0.75f)
+                ? 255
+                : 0;
+        const float a = 0.15f + 0.4f *
+            (static_cast<float>(Sm64Next(&sr) >> 40) *
+             (1.f / 16777216.f));
+        const std::uint64_t wob = Sm64Next(&sr);
+        for (int32_t y = 0; y < h; ++y) {
+            const int32_t jitter = static_cast<int32_t>(
+                HashBits(wob ^ static_cast<std::uint64_t>(y) *
+                                   0x9E3779B1ull) & 3u) - 1;
+            const int32_t x = std::clamp(
+                static_cast<int32_t>(x0) + jitter, 0, w - 1);
+            BlendTo(f->data + static_cast<size_t>(y) * f->stride +
+                        static_cast<size_t>(x) * 4,
+                    v, a);
+        }
+    }
+    return 0;
+}
+
+int dust_scratch(XER_VideoFrame* f, const float* p, int32_t n) {
+    return dust_scratch_kernel(f, p, n, 0.0, 0);
+}
+
+// Vignette 2 — p0 strength 0..1, p1 radius 0..1, p2 feather 0..1
+// (falloff band width; vignette_soft's is fixed to the frame edge),
+// p3 aspect 0.5..2 (>1 compresses vertically — anamorphic-style
+// elliptical falloff). Pure per-frame kernel.
+int vignette2(XER_VideoFrame* f, const float* p, int32_t n) {
+    if (!VideoValid(f)) return 1;
+    const float strength =
+        std::clamp(Param(p, n, 0, 0.55f), 0.f, 1.f);
+    const float radius = std::clamp(Param(p, n, 1, 0.55f), 0.f, 1.f);
+    const float feather =
+        std::clamp(Param(p, n, 2, 0.45f), 0.01f, 1.f);
+    const float aspect =
+        std::clamp(Param(p, n, 3, 1.f), 0.5f, 2.f);
+    if (strength <= 0.f) return 0;
+    const float cx = f->width * 0.5f;
+    const float cy = f->height * 0.5f;
+    const float max_d = std::sqrt(cx * cx + cy * cy);
+    if (max_d <= 0.f) return 0;
+    const float outer = std::min(1.f, radius + feather);
+    const auto smoothstep = [](float e0, float e1, float x) {
+        const float d = e1 - e0;
+        const float t = d != 0.f
+                            ? std::clamp((x - e0) / d, 0.f, 1.f)
+                            : (x < e0 ? 0.f : 1.f);
+        return t * t * (3.f - 2.f * t);
+    };
+    for (int32_t y = 0; y < f->height; ++y) {
+        uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
+        const float dy = ((y + 0.5f) - cy) * aspect;
+        for (int32_t x = 0; x < f->width; ++x) {
+            const float dx = (x + 0.5f) - cx;
+            const float nd = std::sqrt(dx * dx + dy * dy) / max_d;
+            const float factor =
+                1.f - strength * smoothstep(radius, outer, nd);
+            uint8_t* px = row + static_cast<size_t>(x) * 4;
+            for (int32_t c = 0; c < 3; ++c) {
+                px[c] = Clamp8f(px[c] * factor);
+            }
+        }
+    }
+    return 0;
+}
+
+// Compositor dispatch surface (builtin_fx.h): the ids that take
+// (media_time, clip_seed). halation/vignette2 are pure per-frame
+// kernels — they route through the normal ABI path instead.
+bool FilmEffectAppliesTo(const std::string& id) {
+    return id == "xer.fx.film_grain" || id == "xer.fx.gate_weave" ||
+           id == "xer.fx.light_leak" || id == "xer.fx.film_flicker" ||
+           id == "xer.fx.dust_scratch";
+}
+
+int ApplyFilmKernel(const std::string& id, XER_VideoFrame* f,
+                    const float* p, int32_t n, double media_time_s,
+                    std::uint64_t clip_seed) {
+    if (id == "xer.fx.film_grain") {
+        return film_grain_kernel(f, p, n, media_time_s, clip_seed);
+    }
+    if (id == "xer.fx.gate_weave") {
+        return gate_weave_kernel(f, p, n, media_time_s, clip_seed);
+    }
+    if (id == "xer.fx.light_leak") {
+        return light_leak_kernel(f, p, n, media_time_s, clip_seed);
+    }
+    if (id == "xer.fx.film_flicker") {
+        return film_flicker_kernel(f, p, n, media_time_s, clip_seed);
+    }
+    if (id == "xer.fx.dust_scratch") {
+        return dust_scratch_kernel(f, p, n, media_time_s, clip_seed);
+    }
+    return 1;
+}
+
 // ── audio ───────────────────────────────────────────────────────────
 // p0 delay ms 1..2000, p1 feedback 0..0.95, p2 mix 0..1 — ported
 // (CircularDelayLine's read-then-write API can't express the feedback
@@ -1264,8 +1853,24 @@ const std::vector<PluginDesc>& Effects() {
         Desc("xer.fx.twirl", "Twirl", XER_PLUGIN_VIDEO_FX, &twirl,
              nullptr),
         // ── video (former xer_fx_overlay) ──
-        Desc("xer.fx.film_grain", "Film Grain", XER_PLUGIN_VIDEO_FX,
-             &film_grain, nullptr),
+        // Film Grain v2 — same id/leading params as the retired DLL
+        // (amount 0..100, mono 0/1) so serialized effects keep their
+        // meaning; size/seed extend positionally. Compositor-
+        // dispatched for the animated (clip,time)-seeded field — the
+        // ABI fn renders the static t=0 variant.
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.film_grain", "Film Grain",
+                     XER_PLUGIN_VIDEO_FX, &film_grain, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"amount", 0.0f, 100.0f, 20.0f},
+                {"mono", 0.0f, 1.0f, 1.0f},
+                {"size", 1.0f, 8.0f, 1.0f},
+                {"seed", 0.0f, 999.0f, 0.0f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
         Desc("xer.fx.letterbox", "Letterbox", XER_PLUGIN_VIDEO_FX,
              &letterbox, nullptr),
         Desc("xer.fx.vignette_soft", "Vignette Soft",
@@ -1293,6 +1898,86 @@ const std::vector<PluginDesc>& Effects() {
              &edge_glow, nullptr),
         Desc("xer.fx.tone_split", "Tone Split", XER_PLUGIN_VIDEO_FX,
              &tone_split, nullptr),
+        // ── video (film look — research 2026-11-24 §1.1) ──
+        // Halation and Vignette 2 are pure per-frame kernels (same
+        // contract as the rest of this table). The other four are
+        // time-aware like film_grain: compositor-dispatched via
+        // BuiltinFx::ApplyFilmEffect, ABI fn renders the static
+        // variant.
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.halation", "Halation",
+                     XER_PLUGIN_VIDEO_FX, &halation, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"threshold", 0.0f, 255.0f, 200.0f},
+                {"spread", 1.0f, 64.0f, 14.0f},
+                {"strength", 0.0f, 1.0f, 0.5f},
+                {"hue", 0.0f, 360.0f, 25.0f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.gate_weave", "Gate Weave",
+                     XER_PLUGIN_VIDEO_FX, &gate_weave, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"amplitude", 0.0f, 16.0f, 1.5f},
+                {"speed", 0.01f, 8.0f, 0.6f},
+                {"seed", 0.0f, 999.0f, 0.0f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.light_leak", "Light Leak",
+                     XER_PLUGIN_VIDEO_FX, &light_leak, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"intensity", 0.0f, 1.0f, 0.45f},
+                {"hue", 0.0f, 360.0f, 30.0f},
+                {"seed", 0.0f, 999.0f, 0.0f},
+                {"animated", 0.0f, 1.0f, 1.0f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.film_flicker", "Film Flicker",
+                     XER_PLUGIN_VIDEO_FX, &film_flicker, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"amount", 0.0f, 1.0f, 0.18f},
+                {"rate", 0.5f, 24.0f, 6.0f},
+                {"seed", 0.0f, 999.0f, 0.0f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.dust_scratch", "Dust & Scratch",
+                     XER_PLUGIN_VIDEO_FX, &dust_scratch, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"density", 0.0f, 1.0f, 0.35f},
+                {"seed", 0.0f, 999.0f, 0.0f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
+        [] {
+            PluginDesc d =
+                Desc("xer.fx.vignette2", "Vignette 2",
+                     XER_PLUGIN_VIDEO_FX, &vignette2, nullptr);
+            static const XER_ParamDesc kParams[] = {
+                {"strength", 0.0f, 1.0f, 0.55f},
+                {"radius", 0.0f, 1.0f, 0.55f},
+                {"feather", 0.01f, 1.0f, 0.45f},
+                {"aspect", 0.5f, 2.0f, 1.0f},
+            };
+            d.params.assign(std::begin(kParams), std::end(kParams));
+            return d;
+        }(),
         // ── video (Smart Reframe — geometric, compositor-driven) ──
         // The descriptor registers the canonical id, params and picker
         // entry; actual cropping is NOT a pixel op — it needs the
@@ -1406,6 +2091,22 @@ std::vector<std::string> Ids() {
         out.push_back(d.id);
     }
     return out;
+}
+
+bool IsFilmEffectId(const std::string& id) {
+    return FilmEffectAppliesTo(id);
+}
+
+bool ApplyFilmEffect(const std::string& id, void* bgra, int width,
+                     int height, int stride,
+                     const std::vector<float>& params,
+                     double media_time_s, std::uint64_t clip_seed) {
+    if (bgra == nullptr) return false;
+    XER_VideoFrame frame{static_cast<std::uint8_t*>(bgra), width,
+                         height, stride};
+    return ApplyFilmKernel(id, &frame, params.data(),
+                           static_cast<std::int32_t>(params.size()),
+                           media_time_s, clip_seed) == 0;
 }
 
 }  // namespace XER::VideoEditor::BuiltinFx

@@ -2446,8 +2446,11 @@ std::string CheckBuiltinFx() {
     // 49 migrated effects + xer.fx.smart_reframe + xer.fx.track_mosaic
     // + xer.fx.face_blur + xer.fx.track_mask (all four geometric/
     // track-driven — their ABI fns are identities; the compositor
-    // applies them at the warp/mask pass).
-    if (ids.size() != 53) {
+    // applies them at the warp/mask pass) + the film-look kit
+    // (xer.fx.halation/gate_weave/light_leak/film_flicker/
+    // dust_scratch/vignette2 — film_grain was already migrated and
+    // is upgraded in place, not added).
+    if (ids.size() != 59) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -2600,6 +2603,299 @@ std::string CheckBuiltinFx() {
         }
         if (sig_after <= sig_before * 0.3) {
             return "voice_isolate destroyed the harmonic region";
+        }
+    }
+    return {};
+}
+
+// The film-look kit (docs/wiki/research/2026-11-24 §1.1): film_grain
+// v2, halation, gate_weave, light_leak, film_flicker, dust_scratch
+// and vignette2. The time-aware ids dispatch through the compositor
+// with (media_time, clip_seed) — identical inputs must bit-match
+// while the output animates across time. Each kernel's signature is
+// verified on synthetic BGRA frames, plus one generated-source
+// project through the real compositor path.
+std::string CheckFilmFx() {
+    namespace BF = BuiltinFx;
+    constexpr int kW = 64, kH = 36, kStride = kW * 4;
+    const char* kAll[] = {
+        "xer.fx.film_grain",   "xer.fx.halation",
+        "xer.fx.gate_weave",   "xer.fx.light_leak",
+        "xer.fx.film_flicker", "xer.fx.dust_scratch",
+        "xer.fx.vignette2",
+    };
+    for (const char* id : kAll) {
+        const PluginDesc* d =
+            PluginHost::ForEffectType(std::string("builtin:") + id);
+        if (d == nullptr || !d->builtin || d->video_fn == nullptr) {
+            return std::string("builtin:") + id + " is not registered";
+        }
+    }
+    const char* kTimed[] = {
+        "xer.fx.film_grain", "xer.fx.gate_weave", "xer.fx.light_leak",
+        "xer.fx.film_flicker", "xer.fx.dust_scratch",
+    };
+    for (const char* id : kTimed) {
+        if (!BF::IsFilmEffectId(id)) {
+            return std::string(id) + " missing from the film set";
+        }
+    }
+    // halation/vignette2 are pure per-frame kernels — the normal ABI
+    // path applies them; they must NOT sit in the time-aware set.
+    if (BF::IsFilmEffectId("xer.fx.halation") ||
+        BF::IsFilmEffectId("xer.fx.vignette2")) {
+        return "a pure per-frame kernel leaked into the film set";
+    }
+
+    const auto flat = [](std::uint8_t v) {
+        std::vector<std::uint8_t> f(static_cast<size_t>(kW) * kH * 4);
+        for (std::size_t i = 0; i + 3 < f.size(); i += 4) {
+            f[i] = f[i + 1] = f[i + 2] = v;
+            f[i + 3] = 255;
+        }
+        return f;
+    };
+    const auto film = [](const char* id, std::vector<std::uint8_t>* f,
+                         const std::vector<float>& params, double t,
+                         std::uint64_t seed) {
+        return BF::ApplyFilmEffect(id, f->data(), kW, kH, kStride,
+                                   params, t, seed);
+    };
+    const auto variance = [](const std::vector<std::uint8_t>& f) {
+        const double npx = static_cast<double>(f.size()) / 4.0;
+        double mean = 0.0;
+        for (std::size_t i = 0; i < f.size(); i += 4) mean += f[i];
+        mean /= npx;
+        double var = 0.0;
+        for (std::size_t i = 0; i < f.size(); i += 4) {
+            const double d = f[i] - mean;
+            var += d * d;
+        }
+        return var / npx;
+    };
+    const auto mean_luma = [](const std::vector<std::uint8_t>& f) {
+        double m = 0.0;
+        for (std::size_t i = 0; i < f.size(); i += 4) {
+            m += 0.114 * f[i] + 0.587 * f[i + 1] + 0.299 * f[i + 2];
+        }
+        return m / (static_cast<double>(f.size()) / 4.0);
+    };
+
+    // film_grain: deterministic at fixed (seed,time), adds variance
+    // to a flat field, regenerates across time, shadow-weighted.
+    {
+        std::vector<std::uint8_t> a = flat(90), b = flat(90);
+        if (!film("xer.fx.film_grain", &a, {40.f, 1.f, 2.f, 7.f}, 0.5,
+                  42) ||
+            !film("xer.fx.film_grain", &b, {40.f, 1.f, 2.f, 7.f}, 0.5,
+                  42)) {
+            return "film_grain apply failed";
+        }
+        if (a != b) {
+            return "film_grain is not deterministic at fixed time";
+        }
+        if (variance(a) < 4.0) {
+            return "film_grain added no measurable variance";
+        }
+        std::vector<std::uint8_t> c = flat(90);
+        film("xer.fx.film_grain", &c, {40.f, 1.f, 2.f, 7.f}, 0.6, 42);
+        if (a == c) {
+            return "film_grain did not regenerate across time";
+        }
+        std::vector<std::uint8_t> dark = flat(40), bright = flat(215);
+        film("xer.fx.film_grain", &dark, {60.f, 1.f, 1.f, 3.f}, 0.5,
+             42);
+        film("xer.fx.film_grain", &bright, {60.f, 1.f, 1.f, 3.f}, 0.5,
+             42);
+        if (variance(dark) <= variance(bright) * 2.0) {
+            return "film_grain is not shadow-weighted";
+        }
+    }
+
+    // halation (pure ABI): the bright core must bleed warm light
+    // outward — pixels beside it gain red over blue — while the far
+    // corner stays dark.
+    {
+        std::vector<std::uint8_t> f = flat(0);
+        for (int y = 14; y < 22; ++y) {
+            for (int x = 28; x < 36; ++x) {
+                std::uint8_t* px =
+                    f.data() + (static_cast<size_t>(y) * kW + x) * 4;
+                px[0] = px[1] = px[2] = 255;
+            }
+        }
+        const PluginDesc* d =
+            PluginHost::ForEffectType("builtin:xer.fx.halation");
+        if (!PluginHost::ApplyVideo(*d, f.data(), kW, kH, kStride,
+                                    {200.f, 10.f, 0.9f, 25.f})) {
+            return "halation apply failed";
+        }
+        const std::uint8_t* near_px =
+            f.data() + (static_cast<size_t>(18) * kW + 22) * 4;
+        const std::uint8_t* far_px =
+            f.data() + (static_cast<size_t>(2) * kW + 2) * 4;
+        if (near_px[2] <= near_px[0] || near_px[2] < 8) {
+            return "halation did not bleed warm light";
+        }
+        if (far_px[2] >= near_px[2]) {
+            return "halation bloomed the shadows";
+        }
+    }
+
+    // gate_weave: same-time bit-match plus a measurable translation
+    // somewhere along the seeded wander curve.
+    {
+        std::vector<std::uint8_t> f = flat(0);
+        for (int y = 0; y < kH; ++y) {
+            std::uint8_t* px =
+                f.data() + (static_cast<size_t>(y) * kW + 32) * 4;
+            px[0] = px[1] = px[2] = 255;
+        }
+        std::vector<std::uint8_t> a = f, b = f;
+        film("xer.fx.gate_weave", &a, {4.f, 1.0f, 3.f}, 0.5, 9);
+        film("xer.fx.gate_weave", &b, {4.f, 1.0f, 3.f}, 0.5, 9);
+        if (a != b) {
+            return "gate_weave is not deterministic at fixed time";
+        }
+        double best = 0.0;
+        for (double t = 0.05; t < 3.0; t += 0.1) {
+            std::vector<std::uint8_t> g = f;
+            film("xer.fx.gate_weave", &g, {4.f, 1.0f, 3.f}, t, 9);
+            double cx = 0.0, mass = 0.0;
+            for (int y = 0; y < kH; ++y) {
+                for (int x = 0; x < kW; ++x) {
+                    const double v =
+                        g[(static_cast<size_t>(y) * kW + x) * 4 + 2];
+                    cx += v * x;
+                    mass += v;
+                }
+            }
+            if (mass > 0.0) {
+                best = std::max(best, std::fabs(cx / mass - 32.0));
+            }
+        }
+        if (best < 0.5) {
+            return "gate_weave never displaced the frame";
+        }
+    }
+
+    // light_leak: the edge band must warm up more than the center.
+    {
+        std::vector<std::uint8_t> g = flat(60), g2 = flat(60);
+        film("xer.fx.light_leak", &g, {1.0f, 30.f, 5.f, 0.f}, 0.5, 77);
+        film("xer.fx.light_leak", &g2, {1.0f, 30.f, 5.f, 0.f}, 0.5, 77);
+        if (g != g2) {
+            return "light_leak is not deterministic at fixed time";
+        }
+        if (g == flat(60)) {
+            return "light_leak changed nothing";
+        }
+        const auto warm_delta = [&](bool edge_band) {
+            double sum = 0.0;
+            int cnt = 0;
+            for (int y = 0; y < kH; ++y) {
+                for (int x = 0; x < kW; ++x) {
+                    const bool edge = x < 6 || x >= kW - 6 || y < 6 ||
+                                      y >= kH - 6;
+                    if (edge != edge_band) continue;
+                    const std::size_t i =
+                        (static_cast<size_t>(y) * kW + x) * 4;
+                    sum += static_cast<int>(g[i + 2]) -
+                           static_cast<int>(g[i]);
+                    ++cnt;
+                }
+            }
+            return cnt > 0 ? sum / cnt : 0.0;
+        };
+        if (warm_delta(true) <= warm_delta(false)) {
+            return "light_leak did not warm the frame edges";
+        }
+    }
+
+    // film_flicker: mean luma must wander over time, deterministically.
+    {
+        double lo = 1e9, hi = -1e9;
+        for (double t = 0.0; t < 2.0; t += 0.05) {
+            std::vector<std::uint8_t> f = flat(120);
+            film("xer.fx.film_flicker", &f, {0.5f, 6.f, 3.f}, t, 11);
+            const double m = mean_luma(f);
+            lo = std::min(lo, m);
+            hi = std::max(hi, m);
+        }
+        if (hi - lo < 5.0) {
+            return "film_flicker did not modulate luma";
+        }
+        std::vector<std::uint8_t> a = flat(120), b = flat(120);
+        film("xer.fx.film_flicker", &a, {0.5f, 6.f, 3.f}, 0.31, 11);
+        film("xer.fx.film_flicker", &b, {0.5f, 6.f, 3.f}, 0.31, 11);
+        if (a != b) {
+            return "film_flicker is not deterministic at fixed time";
+        }
+    }
+
+    // dust_scratch: sparse deterministic specks on a flat field.
+    {
+        std::vector<std::uint8_t> g = flat(80), g2 = flat(80);
+        film("xer.fx.dust_scratch", &g, {0.9f, 11.f}, 0.5, 3);
+        film("xer.fx.dust_scratch", &g2, {0.9f, 11.f}, 0.5, 3);
+        if (g != g2) {
+            return "dust_scratch is not deterministic at fixed time";
+        }
+        int changed = 0;
+        for (std::size_t i = 0; i < g.size(); i += 4) {
+            if (std::abs(static_cast<int>(g[i]) - 80) > 15) ++changed;
+        }
+        const int npx = kW * kH;
+        if (changed < 10) {
+            return "dust_scratch produced no specks";
+        }
+        if (changed > static_cast<int>(npx * 0.9)) {
+            return "dust_scratch is not sparse";
+        }
+    }
+
+    // vignette2 (pure ABI): corners darken, center is preserved.
+    {
+        std::vector<std::uint8_t> f = flat(200);
+        const PluginDesc* d =
+            PluginHost::ForEffectType("builtin:xer.fx.vignette2");
+        if (!PluginHost::ApplyVideo(*d, f.data(), kW, kH, kStride,
+                                    {1.0f, 0.5f, 0.4f, 1.0f})) {
+            return "vignette2 apply failed";
+        }
+        const std::uint8_t center =
+            f[(static_cast<size_t>(18) * kW + 32) * 4];
+        const std::uint8_t corner = f[0];
+        if (center < 190 || corner > 60 || corner >= center) {
+            return "vignette2 falloff is wrong";
+        }
+    }
+
+    // End-to-end through the real compositor path: a generated clip
+    // carrying film_grain renders bit-identically across sessions at
+    // the same t (deterministic dispatch) and animates across t.
+    {
+        const auto render = [](double t,
+                               std::vector<std::uint8_t>* out) {
+            Project project = MakeRenderProject(kW, kH, 15);
+            project.clips[0].effects.push_back(
+                {"builtin:xer.fx.film_grain", {30.f, 1.f, 2.f, 5.f}});
+            Compositor compositor;
+            std::string err;
+            if (!compositor.Init(project, {}, &err)) return false;
+            const bool ok = compositor.RenderFrameAt(t, out, &err);
+            compositor.Shutdown();
+            return ok;
+        };
+        std::vector<std::uint8_t> a, b, c;
+        if (!render(0.5, &a) || !render(0.5, &b) || !render(0.6, &c)) {
+            return "film_fx compositor render failed";
+        }
+        if (a != b) {
+            return "film_grain render is not deterministic";
+        }
+        if (a == c) {
+            return "film_grain did not animate through the compositor";
         }
     }
     return {};
@@ -9073,6 +9369,7 @@ constexpr CheckEntry kChecks[] = {
     {"preview_perf", &CheckPreviewPerf},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},
+    {"film_fx", &CheckFilmFx},
     {"audio_mixer", &CheckAudioMixer},
     {"audio_sync", &CheckAudioSync},
     {"project_store", &CheckProjectStore},

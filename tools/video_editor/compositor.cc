@@ -23,6 +23,7 @@
 #include "ai/sam2_track.h"
 #include "ai/smart_reframe.h"
 #include "app_runtime/app_runtime.h"
+#include "builtin_fx.h"
 #include "color/ocio_transform.h"
 #include "generated_source.h"
 #include "js_fx.h"
@@ -1773,6 +1774,36 @@ struct Compositor::Impl {
                 // masked" live reference).
                 if (desc != nullptr && desc->id == Ai::kTrackMaskId) {
                     ApplyTrackMask(s, effect, clip_time_s);
+                    continue;
+                }
+                // Film-look kit (film_grain, gate_weave, light_leak,
+                // film_flicker, dust_scratch): animated fields that
+                // must regenerate per frame yet stay deterministic
+                // per (clip, time) — the time-aware kernels take the
+                // resolved media time and a per-clip seed, exactly
+                // like track-driven effects take source time. Still
+                // cache-safe: media time is the fx-cache key's time
+                // component and clip id seeds it, so a cache hit is
+                // bit-identical to a fresh apply. The generic ABI
+                // path below renders their static t=0 variant.
+                if (desc != nullptr && desc->builtin &&
+                    BuiltinFx::IsFilmEffectId(desc->id) &&
+                    frame.Format() == video::PixelFormat::BGRA8) {
+                    const Clip& clip = *s.clip;
+                    double media_t = clip_time_s;
+                    if (!IsGeneratedSource(clip.source)) {
+                        const double rate =
+                            std::isfinite(clip.playback_rate) &&
+                                    clip.playback_rate > 0.0
+                                ? clip.playback_rate
+                                : 1.0;
+                        media_t =
+                            clip.in_point + clip_time_s * rate;
+                    }
+                    BuiltinFx::ApplyFilmEffect(
+                        desc->id, frame.Data(), frame.Width(),
+                        frame.Height(), frame.Stride(), effect.params,
+                        media_t, HashStr(kFnvOffset, clip.id));
                     continue;
                 }
                 if (desc != nullptr &&

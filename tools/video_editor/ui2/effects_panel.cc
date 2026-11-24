@@ -87,6 +87,9 @@ std::string CategoryForBuiltin(const std::string& id) {
         "xer.fx.scanlines",   "xer.fx.neon_edges",
         "xer.fx.halftone",    "xer.fx.emboss_color",
         "xer.fx.edge_glow",   "xer.fx.tone_split",
+        "xer.fx.halation",    "xer.fx.gate_weave",
+        "xer.fx.light_leak",  "xer.fx.film_flicker",
+        "xer.fx.dust_scratch", "xer.fx.vignette2",
     };
     if (id.rfind("xer.af.", 0) == 0) return "Audio Effects";
     if (id == "xer.fx.smart_reframe" || id == "xer.fx.track_mosaic" ||
@@ -190,7 +193,8 @@ const BuiltinDefaults* LegacyBuiltinDefaults(const std::string& id) {
             {"xer.fx.tile", {{3.0f}, "tile · count 2..8"}},
             {"xer.fx.twirl", {{90.0f}, "twirl · angle deg"}},
             {"xer.fx.film_grain",
-             {{20.0f, 1.0f}, "film grain · amount 0..100, mono 0/1"}},
+             {{20.0f, 1.0f, 1.0f, 0.0f},
+              "film grain · amount 0..100, mono 0/1, size px, seed"}},
             {"xer.fx.letterbox",
              {{0.12f}, "letterbox · bar fraction 0..0.45"}},
             {"xer.fx.vignette_soft",
