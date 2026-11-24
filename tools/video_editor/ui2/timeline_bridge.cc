@@ -449,8 +449,18 @@ void TimelineBridge::AddTransitionPair(
     const double applied =
         duration > 0.0 ? duration : transition_duration_;
     std::string error;
+    // `script` is type-scoped (surface_hooks.h): Script takes a JS
+    // transition id, Xfade takes the avfilter token, XerFx takes the
+    // "xer.tr.*" id — route it into the matching Transition field.
+    const std::string script_id =
+        type == Transition::Type::Script ? script : "";
+    const std::string xfade_name =
+        type == Transition::Type::Xfade ? script : "";
+    const std::string xer_id =
+        type == Transition::Type::XerFx ? script : "";
     if (!history_.AddTransition(from_id, to_id, type, applied,
-                                &error, script)) {
+                                &error, script_id, xfade_name, xer_id,
+                                "")) {
         SetStatus("Transition failed: " + error, true);
         return;
     }

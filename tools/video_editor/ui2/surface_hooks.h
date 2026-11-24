@@ -80,8 +80,10 @@ struct TimelineHooks {
     std::function<void(const std::string&, double)> on_rate_stretch;
     // Clip junction context menu: add a transition of `type` to the
     // next clip on the track. duration_seconds <= 0 asks the shell
-    // for its default transition duration. script_id is "" unless
-    // type == Script.
+    // for its default transition duration. The trailing string is a
+    // type-scoped variant id: script_id when type == Script, the
+    // avfilter transition token ("radial", ...) when type == Xfade,
+    // the "xer.tr.*" transition id when type == XerFx, "" otherwise.
     std::function<void(const std::string&, Transition::Type,
                        double, const std::string&)>
         on_add_transition;

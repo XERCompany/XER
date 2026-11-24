@@ -106,6 +106,11 @@ Goal started: 2026-11-15. Design doc:
   analysis + ranked tickets T1–T10 (dropped-frame counter, render
   bar, adaptive quality, priority autocache, disk preview tier,
   MFR export) (2026-11-24).
+- [2026-11-24-transitions.md](research/2026-11-24-transitions.md) —
+  XER-native `xer.tr.*` transition set: GL-transitions source/license
+  audit (MIT per-shader, HP BSD-3 page-curl excluded), NLE convention
+  targets (Resolve/Premiere signature list), the 15-transition table
+  with param schema + port provenance (2026-11-24).
 - [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
   pass-2 review of session's own changes: seqlock ordering bug in
   RenderStore, channel/worker leak in UiRenderHost, nested-transform

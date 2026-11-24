@@ -150,7 +150,10 @@ public:
     void SlideClipBy(const std::string& clip_id, double delta_tl);
     void SetClipRateBy(const std::string& clip_id, double rate);
     // Adds a transition from `clip_id` to the next clip on its track
-    // (duration <= 0 uses the re-armed default).
+    // (duration <= 0 uses the re-armed default). `script` is the
+    // type-scoped variant string: JS script id for Type::Script, the
+    // avfilter token ("radial", ...) for Type::Xfade, the "xer.tr.*"
+    // transition id for Type::XerFx, "" otherwise.
     void AddTransitionAfter(const std::string& clip_id,
                             Transition::Type type, double duration,
                             const std::string& script);

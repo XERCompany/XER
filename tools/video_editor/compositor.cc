@@ -29,6 +29,7 @@
 #include "js_fx.h"
 #include "mix_system.h"
 #include "plugin_host.h"
+#include "transitions_lib.h"
 #include "video_effects.h"
 #include "video_utils.h"
 #include "wrapper/skia/skia_engine_bridge.h"
@@ -2633,7 +2634,9 @@ struct Compositor::Impl {
                     if (!ApplyTransitionPixels(
                             pixel_type, weight,
                             from_session->layer, to_session->layer,
-                            &transition_scratch)) {
+                            &transition_scratch,
+                            transition->xfade, transition->xer_fx,
+                            transition->xer_params)) {
                         return Fail(error_out,
                                     "transition compositing failed");
                     }
@@ -2699,7 +2702,10 @@ double TransitionWeightAt(double t_seconds,
 bool ApplyTransitionPixels(Transition::Type type, double weight,
                            const video::Frame& under,
                            const video::Frame& over,
-                           video::Frame* out) {
+                           video::Frame* out,
+                           const std::string& xfade_name,
+                           const std::string& xer_fx,
+                           const std::string& xer_params) {
     if (out == nullptr) {
         return false;
     }

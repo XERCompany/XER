@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <deque>
 #include <iterator>
 #include <limits>
@@ -34,6 +35,7 @@
 #include "media_catalog.h"
 #include "rendering/renderer.h"
 #include "theme/tokens.h"
+#include "transitions_lib.h"
 #include "ve_theme.h"
 #include "widgets/context_menu.h"
 
@@ -2745,8 +2747,10 @@ bool TimelineSurface::ShowContextMenu(
                 bool first = true;
                 for (const Transition::Type type :
                      AllTransitionTypes()) {
-                    if (type == Transition::Type::Script) {
-                        continue;   // JS entries are shell-listed
+                    if (type == Transition::Type::Script ||
+                        type == Transition::Type::Xfade ||
+                        type == Transition::Type::XerFx) {
+                        continue;   // JS + xfade + xer.tr list below
                     }
                     Widgets::ContextMenu::Item trans;
                     trans.label = std::string("Transition: ") +
@@ -2760,6 +2764,39 @@ bool TimelineSurface::ShowContextMenu(
                     };
                     items.push_back(std::move(trans));
                     first = false;
+                }
+                // XER-native hand-written transitions
+                // (transitions_lib.h) — always available, listed
+                // ahead of the FFmpeg set. Same flat-menu header-row
+                // convention as xfade below; the variant string is
+                // the "xer.tr.*" id.
+                {
+                    const char* last_group = nullptr;
+                    for (const XerTransitionInfo& xt :
+                         XerTransitions()) {
+                        if (last_group == nullptr ||
+                            std::strcmp(last_group, xt.group) != 0) {
+                            Widgets::ContextMenu::Item header;
+                            header.label =
+                                std::string("── XER ") + xt.group +
+                                " ──";
+                            header.enabled = false;
+                            header.separator_before = true;
+                            items.push_back(std::move(header));
+                            last_group = xt.group;
+                        }
+                        Widgets::ContextMenu::Item trans;
+                        trans.label = std::string("XER: ") + xt.label;
+                        trans.action =
+                            [this, id, tid = xt.id] {
+                                if (hooks_.on_add_transition) {
+                                    hooks_.on_add_transition(
+                                        id, Transition::Type::XerFx,
+                                        -1.0, tid);
+                                }
+                            };
+                        items.push_back(std::move(trans));
+                    }
                 }
             }
 

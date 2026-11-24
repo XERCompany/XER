@@ -73,11 +73,23 @@ double TransitionWeightAt(double t_seconds, const Transition& transition,
 //     over_px  = bilinear(over,  x+0.5-odx, y+0.5-ody) with outside
 //     sampling -> transparent, result = AlphaOver(under_px, over_px).
 //     At w=0 -> under only; w=1 -> over only.
+//   Xfade: delegated to xer_transition_bridge (libavfilter xfade) —
+//     `xfade_name` carries the avfilter token ("radial", ...); on an
+//     unknown name, a missing filter, or a graph failure the caller
+//     falls back to Crossfade so a render never dies on an absent
+//     optional dep.
+//   XerFx: delegated to transitions_lib (hand-written xer.tr.* set) —
+//     `xer_fx` carries the id ("xer.tr.whip_pan", ...) and
+//     `xer_params` the optional "k=v;k=v" knob string; an unknown id
+//     falls back to Crossfade, same contract as a bad xfade token.
 // Returns false on size/format mismatch or allocation failure.
 bool ApplyTransitionPixels(Transition::Type type, double weight,
                            const video::Frame& under,
                            const video::Frame& over,
-                           video::Frame* out);
+                           video::Frame* out,
+                           const std::string& xfade_name = "",
+                           const std::string& xer_fx = "",
+                           const std::string& xer_params = "");
 
 // Renders `src` (packed BGRA8, any dims) into a canvas-sized
 // transparent-black layer applying `tr`: the scaled rect

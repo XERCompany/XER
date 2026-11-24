@@ -1016,16 +1016,21 @@ class AddTransitionCommand : public Command {
 public:
     AddTransitionCommand(std::string from, std::string to,
                          Transition::Type type, double duration,
-                         std::string script)
+                         std::string script, std::string xfade,
+                         std::string xer_fx, std::string xer_params)
         : from_(std::move(from)),
           to_(std::move(to)),
           type_(type),
           duration_(duration),
-          script_(std::move(script)) {}
+          script_(std::move(script)),
+          xfade_(std::move(xfade)),
+          xer_fx_(std::move(xer_fx)),
+          xer_params_(std::move(xer_params)) {}
     bool Apply(Project& project) override {
         last_error_.clear();
         return AddTransition(project, from_, to_, type_, duration_,
-                             &last_error_, script_);
+                             &last_error_, script_, xfade_, xer_fx_,
+                             xer_params_);
     }
     bool Revert(Project& project) override {
         return RemoveTransition(project, from_, to_);
@@ -1039,6 +1044,9 @@ private:
     Transition::Type type_;
     double duration_;
     std::string script_;
+    std::string xfade_;
+    std::string xer_fx_;
+    std::string xer_params_;
     std::string last_error_;
 };
 
@@ -1395,10 +1403,13 @@ bool TimelineHistory::AddTransition(const std::string& from_clip,
                                     const std::string& to_clip,
                                     Transition::Type type, double duration,
                                     std::string* error_out,
-                                    const std::string& script) {
-    auto cmd = std::make_unique<AddTransitionCommand>(from_clip, to_clip,
-                                                    type, duration,
-                                                    script);
+                                    const std::string& script,
+                                    const std::string& xfade,
+                                    const std::string& xer_fx,
+                                    const std::string& xer_params) {
+    auto cmd = std::make_unique<AddTransitionCommand>(
+        from_clip, to_clip, type, duration, script, xfade, xer_fx,
+        xer_params);
     auto* raw = cmd.get();
     if (!cmd->Apply(project_)) {
         if (error_out) {

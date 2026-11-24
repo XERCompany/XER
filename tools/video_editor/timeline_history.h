@@ -87,7 +87,10 @@ public:
     bool AddTransition(const std::string& from_clip,
                        const std::string& to_clip, Transition::Type type,
                        double duration, std::string* error_out = nullptr,
-                       const std::string& script = "");
+                       const std::string& script = "",
+                       const std::string& xfade = "",
+                       const std::string& xer_fx = "",
+                       const std::string& xer_params = "");
     bool RemoveTransition(const std::string& from_clip,
                           const std::string& to_clip);
     // Junction-handle drag commit: retargets an existing transition's

@@ -103,6 +103,7 @@
 #include "timeline_history.h"
 #include "timeline_model.h"
 #include "transcript_edit.h"
+#include "transitions_lib.h"
 #include "tz/tz.h"
 #include "url_import.h"
 #include "worker_pipe.h"
@@ -2603,6 +2604,188 @@ std::string CheckBuiltinFx() {
         }
         if (sig_after <= sig_before * 0.3) {
             return "voice_isolate destroyed the harmonic region";
+        }
+    }
+    return {};
+}
+
+// XER-native xer.tr.* transitions (docs/wiki/research/2026-11-24-
+// transitions.md): synthetic A/B frames through every registered
+// kernel — endpoints must pin exactly to A/B (dispatcher memcpy
+// short-circuit), mid-progress must be valid AND distinct from a
+// plain crossfade (a transition that degenerates to the reference
+// blend has no reason to exist), evals must be deterministic
+// (same inputs -> identical output), the param schema must
+// parse/format round-trip, and an unknown id must fail at the lib
+// boundary while the compositor dispatch falls back to crossfade.
+std::string CheckXerTransitions() {
+    constexpr int kW = 64, kH = 48;
+    video::Frame A, B;
+    if (!A.Allocate(kW, kH, video::PixelFormat::BGRA8) ||
+        !B.Allocate(kW, kH, video::PixelFormat::BGRA8)) {
+        return "xer.tr test frames failed to allocate";
+    }
+    // A = warm left/right split; B = cool gradient — both spatial and
+    // color differences so reveal/blend kernels are distinguishable.
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            std::uint8_t* a =
+                A.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            std::uint8_t* b =
+                B.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            const bool left = x < kW / 2;
+            a[0] = 20;  a[1] = 40;  a[2] = left ? 235 : 60;
+            a[3] = 255;
+            b[0] = static_cast<std::uint8_t>(60 + x * 2);
+            b[1] = static_cast<std::uint8_t>(40 + y * 3);
+            b[2] = 30;
+            b[3] = 255;
+        }
+    }
+    const auto same = [](const video::Frame& x, const video::Frame& y) {
+        return x.DataSize() == y.DataSize() &&
+               std::memcmp(x.Data(), y.Data(), x.DataSize()) == 0;
+    };
+    // The registry must be populated and probeable.
+    if (XerTransitions().size() < 12 ||
+        !XerTransitionKnown("xer.tr.whip_pan") ||
+        XerTransitionKnown("xer.tr.not_real")) {
+        return "xer.tr registry / probe is wrong";
+    }
+    // Param schema: parse honors overrides + clamps, format emits
+    // only non-defaults, round-trips.
+    {
+        const XerTransitionParams p =
+            ParseXerTransitionParams("dir=3;soft=0.4;int=0.5;seed=9");
+        if (p.direction != 3 || std::fabs(p.softness - 0.4) > 1e-9 ||
+            std::fabs(p.intensity - 0.5) > 1e-9 || p.seed != 9) {
+            return "xer.tr params did not parse";
+        }
+        const XerTransitionParams clamped =
+            ParseXerTransitionParams("soft=9;int=-2;bogus=1");
+        if (clamped.softness != 1.0 || clamped.intensity != 0.0) {
+            return "xer.tr params did not clamp";
+        }
+        const XerTransitionParams round =
+            ParseXerTransitionParams(FormatXerTransitionParams(p));
+        if (round.direction != p.direction ||
+            std::fabs(round.softness - p.softness) > 1e-9 ||
+            std::fabs(round.intensity - p.intensity) > 1e-9 ||
+            round.seed != p.seed) {
+            return "xer.tr params format/parse did not round-trip";
+        }
+        if (!FormatXerTransitionParams(XerTransitionParams{}).empty()) {
+            return "xer.tr default params should serialize empty";
+        }
+    }
+    // Crossfade reference for distinctness checks.
+    video::Frame xf;
+    if (!ApplyTransitionPixels(Transition::Type::Crossfade, 0.5,
+                               A, B, &xf, "")) {
+        return "crossfade reference eval failed";
+    }
+    // Every registered id: endpoints exact, mid valid + distinct
+    // from crossfade, deterministic across two evals.
+    video::Frame out, out2;
+    for (const XerTransitionInfo& info : XerTransitions()) {
+        const std::string id = info.id;
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 0.0,
+                                A, B, &out) ||
+            !same(out, A)) {
+            return id + ": w=0 did not reproduce the outgoing frame";
+        }
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 1.0,
+                                A, B, &out) ||
+            !same(out, B)) {
+            return id + ": w=1 did not reproduce the incoming frame";
+        }
+        bool any_mid_content = false;
+        for (double w : {0.25, 0.5, 0.75}) {
+            if (!ApplyXerTransition(id, XerTransitionParams{}, w,
+                                    A, B, &out)) {
+                return id + ": mid-progress eval failed";
+            }
+            bool all_zero = true, all_255 = true;
+            for (size_t i = 0; i < out.DataSize(); ++i) {
+                if (out.Data()[i] != 0) all_zero = false;
+                if (out.Data()[i] != 255) all_255 = false;
+            }
+            // Kernels whose mid point is a legit full-field state
+            // (flash blows out to white at w=0.5) still have to carry
+            // real content somewhere inside the window.
+            if (!all_zero && !all_255) {
+                any_mid_content = true;
+            }
+        }
+        if (!any_mid_content) {
+            return id + ": degenerate at every mid-progress point";
+        }
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 0.5,
+                                A, B, &out)) {
+            return id + ": w=0.5 eval failed";
+        }
+        if (same(out, xf)) {
+            return id + ": indistinguishable from crossfade at w=0.5";
+        }
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 0.5,
+                                A, B, &out2) ||
+            !same(out, out2)) {
+            return id + ": not deterministic across evals";
+        }
+        // Non-default params must still evaluate (and for seeded
+        // kernels a different seed is a different frame).
+        XerTransitionParams alt;
+        alt.direction = 2;
+        alt.softness = 0.5;
+        alt.intensity = 0.6;
+        alt.seed = 12345;
+        if (!ApplyXerTransition(id, alt, 0.5, A, B, &out2)) {
+            return id + ": non-default params eval failed";
+        }
+    }
+    // Unknown id: lib returns false; the compositor dispatch falls
+    // back to a true crossfade (same contract as a bad xfade token).
+    if (ApplyXerTransition("xer.tr.not_real", XerTransitionParams{},
+                          0.5, A, B, &out)) {
+        return "unknown xer.tr id did not fail at the lib boundary";
+    }
+    if (!ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &out, "", "xer.tr.whip_pan",
+                               "")) {
+        return "Type::XerFx compositor dispatch failed";
+    }
+    video::Frame via_lib;
+    if (!ApplyXerTransition("xer.tr.whip_pan", XerTransitionParams{},
+                            0.5, A, B, &via_lib) ||
+        !same(out, via_lib)) {
+        return "Type::XerFx dispatch diverged from the lib";
+    }
+    if (!ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &out, "", "xer.tr.not_real",
+                               "") ||
+        !same(out, xf)) {
+        return "unknown xer.tr id did not fall back to crossfade";
+    }
+    // Params reach the kernel through the compositor: seeded glitch
+    // with two seeds must differ.
+    video::Frame g1, g2;
+    if (!ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &g1, "", "xer.tr.glitch",
+                               "seed=1") ||
+        !ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &g2, "", "xer.tr.glitch",
+                               "seed=2") ||
+        same(g1, g2)) {
+        return "xer.tr params did not reach the kernel";
+    }
+    // Wire-name round trip covers the new enum.
+    {
+        Transition::Type back = Transition::Type::Crossfade;
+        if (!TransitionTypeFromString(
+                TransitionTypeToString(Transition::Type::XerFx),
+                &back) ||
+            back != Transition::Type::XerFx) {
+            return "XerFx wire-name round trip failed";
         }
     }
     return {};
@@ -5490,7 +5673,8 @@ std::string CheckVeCoreV3() {
                                Transition::Type::SlideDown,
                                Transition::Type::DipToBlack,
                                Transition::Type::AdditiveDissolve,
-                               Transition::Type::Script}) {
+                               Transition::Type::Script,
+                               Transition::Type::Xfade}) {
         Transition::Type back = Transition::Type::Crossfade;
         const char* text = TransitionTypeToString(t);
         if (text == nullptr || *text == '\0' ||
@@ -9369,6 +9553,7 @@ constexpr CheckEntry kChecks[] = {
     {"preview_perf", &CheckPreviewPerf},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},
+    {"xer_transitions", &CheckXerTransitions},
     {"film_fx", &CheckFilmFx},
     {"audio_mixer", &CheckAudioMixer},
     {"audio_sync", &CheckAudioSync},

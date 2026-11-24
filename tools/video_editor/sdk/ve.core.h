@@ -91,7 +91,8 @@
  *                                locked,gain_db,pan,clips}]
  *     timeline.clips           → flat clip list (+ project.clips
  *                                stays a v2 alias)
- *     timeline.transitions     → [{from,to,type,duration,script?}]
+ *     timeline.transitions     → [{from,to,type,duration,script?,
+ *                                xfade?,xer_fx?,xer_params?}]
  *     timeline.add_track {kind:"video"|"audio",name?} → {"index"}
  *     timeline.remove_track {index}
  *     timeline.rename_track {index,name}
@@ -111,9 +112,10 @@
  *     timeline.select_clip {id|""}               — selection.set alias
  *     timeline.add_transition {from,to?,after?,type,duration?,
  *                              script?}   type: the .xerproj names
- *                              (crossfade, wipe_left, ..., script);
- *                              "after" picks the next clip on the
- *                              track when "to" is omitted
+ *                              (crossfade, wipe_left, ..., xfade,
+ *                              xer_fx, script); "after" picks the
+ *                              next clip on the track when "to" is
+ *                              omitted
  *     timeline.remove_transition {from,to}
  *     timeline.set_clip {id?,name?,muted?,gain_db?,pan?,fade_in?,
  *                        fade_out?,in_point?,param?|text?} — generic

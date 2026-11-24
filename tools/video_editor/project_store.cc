@@ -1227,6 +1227,15 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             // endpoints; a missing/unknown id falls back to a linear
             // crossfade at render time.
             r.GetStr("script", "", &transition.script);
+            // Xfade token for Type::Xfade ("radial", "circleopen",
+            // ...) — same lenient contract: an unknown name falls
+            // back to the native crossfade at render time.
+            r.GetStr("xfade", "", &transition.xfade);
+            // XER-native id + params for Type::XerFx
+            // ("xer.tr.whip_pan", ...; "dir=3;soft=0.2" knobs) —
+            // same lenient contract via transitions_lib.
+            r.GetStr("xer_fx", "", &transition.xer_fx);
+            r.GetStr("xer_params", "", &transition.xer_params);
             // Non-positive/non-finite duration → invalid transition:
             // drop it (self-heal, same class as missing endpoints —
             // AddTransition requires duration > 0). Unknown `type`
@@ -1586,6 +1595,15 @@ Json::Value TransitionToJson(const Transition& transition) {
     if (transition.type == Transition::Type::Script) {
         out["script"] = transition.script;
     }
+    if (transition.type == Transition::Type::Xfade) {
+        out["xfade"] = transition.xfade;
+    }
+    if (transition.type == Transition::Type::XerFx) {
+        out["xer_fx"] = transition.xer_fx;
+        if (!transition.xer_params.empty()) {
+            out["xer_params"] = transition.xer_params;
+        }
+    }
     return out;
 }
 
@@ -1686,6 +1704,10 @@ const char* TransitionTypeToString(Transition::Type type) {
             return "dip_to_white";
         case Transition::Type::AdditiveDissolve:
             return "additive_dissolve";
+        case Transition::Type::Xfade:
+            return "xfade";
+        case Transition::Type::XerFx:
+            return "xer_fx";
         case Transition::Type::Script:
             return "script";
     }
@@ -1710,6 +1732,8 @@ bool TransitionTypeFromString(const std::string& text,
         {"dip_to_black", Transition::Type::DipToBlack},
         {"dip_to_white", Transition::Type::DipToWhite},
         {"additive_dissolve", Transition::Type::AdditiveDissolve},
+        {"xfade", Transition::Type::Xfade},
+        {"xer_fx", Transition::Type::XerFx},
         {"script", Transition::Type::Script},
     };
     for (const auto& entry : kTypes) {
@@ -1933,6 +1957,9 @@ Json::Value VeDescribeTransitions(const Project& project) {
         j["type"] = TransitionTypeToString(t.type);
         j["duration"] = t.duration;
         if (!t.script.empty()) j["script"] = t.script;
+        if (!t.xfade.empty()) j["xfade"] = t.xfade;
+        if (!t.xer_fx.empty()) j["xer_fx"] = t.xer_fx;
+        if (!t.xer_params.empty()) j["xer_params"] = t.xer_params;
         transitions.append(std::move(j));
     }
     Json::Value v(Json::objectValue);

@@ -1000,7 +1000,9 @@ bool ReplaceClip(Project& project, const std::string& clip_id,
 bool AddTransition(Project& project, const std::string& from_clip,
                    const std::string& to_clip, Transition::Type type,
                    double duration, std::string* error_out,
-                   const std::string& script) {
+                   const std::string& script, const std::string& xfade,
+                   const std::string& xer_fx,
+                   const std::string& xer_params) {
     if (from_clip == to_clip) {
         return Fail(error_out, "transition endpoints must differ");
     }
@@ -1040,7 +1042,8 @@ bool AddTransition(Project& project, const std::string& from_clip,
         }
     }
     project.transitions.push_back(
-        Transition{from_clip, to_clip, type, duration, script});
+        Transition{from_clip, to_clip, type, duration, script, xfade,
+                   xer_fx, xer_params});
     return true;
 }
 
@@ -1053,6 +1056,8 @@ const std::vector<Transition::Type>& AllTransitionTypes() {
         Transition::Type::SlideUp,    Transition::Type::SlideDown,
         Transition::Type::DipToBlack, Transition::Type::DipToWhite,
         Transition::Type::AdditiveDissolve,
+        Transition::Type::Xfade,
+        Transition::Type::XerFx,
         Transition::Type::Script,
     };
     return kAll;
@@ -1084,6 +1089,10 @@ const char* TransitionTypeLabel(Transition::Type type) {
             return "Dip to White";
         case Transition::Type::AdditiveDissolve:
             return "Additive Dissolve";
+        case Transition::Type::Xfade:
+            return "XFade";
+        case Transition::Type::XerFx:
+            return "XER";
         case Transition::Type::Script:
             return "Script";
     }

@@ -250,13 +250,29 @@ struct Transition {
         Crossfade, WipeLeft, WipeRight, WipeUp, WipeDown,
         SlideLeft, SlideRight, SlideUp, SlideDown,
         DipToBlack, DipToWhite, AdditiveDissolve,
-        Script              // blend weight comes from a JS fx script
+        Script,             // blend weight comes from a JS fx script
+        Xfade,              // FFmpeg libavfilter xfade (`xfade` names it)
+        XerFx               // hand-written XER transition (`xer_fx` ids it)
     } type = Type::Crossfade;
     double duration = 1.0;              // seconds, centered on the cut
     // type == Script: transition id from scripts/fx/fx.json —
     // weight(progress) is called per frame; renders as a crossfade
     // with the script-supplied easing curve.
     std::string script;
+    // type == Xfade: the avfilter transition token
+    // (xer_transition_bridge.h — "radial", "circleopen", ...). An
+    // unknown/absent-filter name falls back to the native crossfade
+    // at render time (and on builds without libavfilter).
+    std::string xfade;
+    // type == XerFx: the XER-native transition id
+    // (transitions_lib.h — "xer.tr.whip_pan", "xer.tr.glitch", ...).
+    // Same lenient contract: an unknown id falls back to the native
+    // crossfade at render time.
+    std::string xer_fx;
+    // type == XerFx: optional "k=v;k=v" knob overrides parsed by
+    // transitions_lib (dir/soft/int/seed). Empty = the transition's
+    // compiled defaults.
+    std::string xer_params;
 };
 struct Track {
     TrackKind kind = TrackKind::Video;
@@ -472,7 +488,10 @@ bool ReplaceClip(Project&, const std::string& clip_id, const Clip& replacement,
 bool AddTransition(Project&, const std::string& from_clip,
                    const std::string& to_clip, Transition::Type type,
                    double duration, std::string* error_out,
-                   const std::string& script = "");
+                   const std::string& script = "",
+                   const std::string& xfade = "",
+                   const std::string& xer_fx = "",
+                   const std::string& xer_params = "");
 bool RemoveTransition(Project&, const std::string& from_clip,
                       const std::string& to_clip);
 // Retargets an existing transition's duration (junction-handle drag).
