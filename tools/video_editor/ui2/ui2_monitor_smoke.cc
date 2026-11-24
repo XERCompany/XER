@@ -14,6 +14,7 @@
 #include "monitor_surface.h"
 #include "rendering/renderer.h"
 #include "shortcut_router.h"
+#include "timeline_bridge.h"
 #include "timeline_model.h"
 #include "ve_app.h"
 #include "ve_theme.h"
@@ -63,7 +64,21 @@ public:
         return false;
     }
     void DrawLine(Layout::Point, Layout::Point,
-                  XER::UI::Theme::Color, float) override {}
+                  XER::UI::Theme::Color color, float) override {
+        ++line_calls;
+        line_colors.push_back(color);
+    }
+    int line_calls = 0;
+    std::vector<XER::UI::Theme::Color> line_colors;
+    bool DrewLine(XER::UI::Theme::Color color) const {
+        for (const auto& c : line_colors) {
+            if (c.a == color.a && c.r == color.r && c.g == color.g &&
+                c.b == color.b) {
+                return true;
+            }
+        }
+        return false;
+    }
     void DrawText(std::string_view text, Layout::Rect,
                   TextStyle) override {
         ++text_calls;
@@ -510,6 +525,350 @@ std::string CheckShellWiring() {
         return "program press did not move the scope border back";
     }
 
+    // Transform gizmo end-to-end: a generated ColorMatte clip on the
+    // video track (no decoder needed — the live-preview compositor
+    // renders it headless) selects via the bridge, the program
+    // surface boxes it, a synthetic center drag lands ONE
+    // ReplaceClip commit, and a single Undo restores the offset.
+    {
+        Project gp;
+        gp.width = 640;
+        gp.height = 360;
+        Track gv;
+        gv.kind = TrackKind::Video;
+        gp.tracks.push_back(gv);
+        Clip gclip;
+        gclip.id = "gizmo-matte";
+        gclip.source.kind = SourceKind::ColorMatte;
+        gclip.source.param = "#204060";
+        gclip.track = 0;
+        gclip.timeline_start = 0.0;
+        gclip.duration = 10.0;
+        gp.clips.push_back(gclip);
+        app->SetProject(gp);
+        app->Bridge()->SelectClip("gizmo-matte");
+        app->ProgramMonitor()->SetFrame(FakeBgra(640, 360), 640, 360);
+        MonitorSurface& gsurf =
+            app->ProgramMonitor()->VideoSurface();
+        if (!gsurf.GizmoVisible()) {
+            return "gizmo did not box the selected matte clip";
+        }
+        const Layout::Rect gbox = gsurf.GizmoBounds();
+        if (gbox.width <= 0.0f || gbox.height <= 0.0f) {
+            return "gizmo bounds empty for the matte clip";
+        }
+        const float gcx = gbox.x + gbox.width * 0.5f;
+        const float gcy = gbox.y + gbox.height * 0.5f;
+        tree.HandleEvent(MouseDown(gcx, gcy));
+        W::Event mv{};
+        mv.type = W::Event::Type::MouseMove;
+        mv.position = {gcx + 64.0f, gcy};
+        tree.HandleEvent(mv);
+        tree.HandleEvent(MouseUp(gcx + 64.0f, gcy));
+        const Clip* after = FindClip(*app->Document(), "gizmo-matte");
+        if (after == nullptr) {
+            return "gizmo clip vanished mid-gesture";
+        }
+        // The matte's source IS the canvas — a +64 client-px move is
+        // +64/dest_width normalized offset.
+        const float expect =
+            64.0f / gsurf.FittedFrameRect().width;
+        if (!Near(after->transform.offset_x, expect, 0.01f)) {
+            return "gizmo drag did not move the clip (got " +
+                   std::to_string(after->transform.offset_x) + ")";
+        }
+        app->Undo();
+        const Clip* undone =
+            FindClip(*app->Document(), "gizmo-matte");
+        if (undone == nullptr ||
+            !Near(undone->transform.offset_x, 0.0f, 0.001f)) {
+            return "gizmo drag was not one undo step";
+        }
+    }
+
+    tree.SetRoot(nullptr);
+    return {};
+}
+
+// ---- transform gizmo ---------------------------------------------
+//
+// Surface-level gesture contract: a fake shell binds the gizmo
+// members on MonitorHooks and the checks drive real
+// press/drag/release sequences through the WidgetTree — box
+// geometry, move/scale/rotate math, snap guides, press-to-select,
+// double-click reset, Esc cancel, armed-click-points priority.
+// Coordinates are canvas-normalized * the pushed frame's fitted
+// rect (frame 640x360 == the target canvas dims, so client and
+// canvas px coincide modulo the 13 px letterbox).
+
+std::string CheckTransformGizmo() {
+    auto surface = MonitorSurface::Create(MonitorSurface::Id::Program);
+    W::WidgetTree tree;
+    tree.SetRoot(surface);
+    const auto tokens = Theme::DarkTokens();
+    tree.Layout({0.0f, 0.0f, 640.0f, 400.0f}, tokens);
+    surface->SetDuration(10.0);
+    surface->SetFrame(FakeBgra(640, 360), 640, 360);
+    const Layout::Rect dest = surface->FittedFrameRect();
+    if (!Near(dest.width, 640.0f) || !Near(dest.height, 360.0f)) {
+        return "unexpected fitted rect for the gizmo check";
+    }
+
+    // src 320x180 at {.31,.33,scale .5} -> dest 160x90 with the
+    // transform center at canvas (278.4, 163.8) -> client
+    // (278.4, 176.8). Box aabb {198.4,131.8,160,90}.
+    MonitorGizmoTarget current;
+    current.clip_id = "c1";
+    current.transform = Transform{0.31f, 0.33f, 0.5f, 0.0f, 1.0f};
+    current.src_w = 320;
+    current.src_h = 180;
+    current.canvas_w = 640;
+    current.canvas_h = 360;
+    MonitorGizmoTarget c2 = current;
+    c2.clip_id = "c2";
+    c2.transform = Transform{0.02f, 0.02f, 0.5f, 0.0f, 1.0f};
+
+    int begins = 0, ends = 0, commits = 0, previews = 0,
+        selects = 0, resets = 0;
+    Transform last_preview{}, last_commit{};
+    std::string committed_id, selected_id, reset_id;
+    bool snap_on = false;
+    int toggled = 0;
+    float picked_x = -1.0f;
+
+    MonitorHooks hooks;
+    hooks.gizmo_target = [&] { return current; };
+    hooks.gizmo_pick = [&](float nx, float ny) -> std::string {
+        picked_x = nx;
+        // A pick hit only inside a 10% square at the frame's top-left
+        // corner — everywhere else reports "no clip" so empty-frame
+        // presses keep their classic behavior.
+        return (nx < 0.10f && ny < 0.10f) ? c2.clip_id
+                                          : std::string{};
+    };
+    hooks.on_gizmo_select = [&](const std::string& id) {
+        ++selects;
+        selected_id = id;
+        if (id == c2.clip_id) current = c2;   // selection round-trip
+    };
+    hooks.on_gizmo_begin = [&](const char*) { ++begins; };
+    hooks.on_gizmo_end = [&] { ++ends; };
+    hooks.on_gizmo_preview =
+        [&](const std::string&, const Transform& t) {
+            ++previews;
+            last_preview = t;
+        };
+    hooks.on_gizmo_commit =
+        [&](const std::string& id, const Transform& t) {
+            ++commits;
+            committed_id = id;
+            last_commit = t;
+        };
+    hooks.on_gizmo_reset = [&](const std::string& id) {
+        ++resets;
+        reset_id = id;
+    };
+    hooks.gizmo_snap_enabled = [&] { return snap_on; };
+    hooks.on_toggle_play = [&] { ++toggled; };
+    surface->SetHooks(std::move(hooks));
+
+    // ---- box geometry ----
+    if (!surface->GizmoVisible()) return "gizmo not visible";
+    const Layout::Rect box = surface->GizmoBounds();
+    if (!Near(box.x, 198.4f, 0.2f) || !Near(box.y, 131.8f, 0.2f) ||
+        !Near(box.width, 160.0f, 0.2f) ||
+        !Near(box.height, 90.0f, 0.2f)) {
+        return "gizmo bounds mismatch vs the warped rect";
+    }
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (r.line_calls < 7) {
+            return "gizmo did not paint its box/stem/anchor lines";
+        }
+    }
+    const float cx = box.x + box.width * 0.5f;    // 278.4
+    const float cy = box.y + box.height * 0.5f;   // 176.8
+    const auto mouse_move = [&](float x, float y) {
+        W::Event ev{};
+        ev.type = W::Event::Type::MouseMove;
+        ev.position = {x, y};
+        tree.HandleEvent(ev);
+    };
+    const auto key = [&](W::KeyCode k) {
+        W::Event ev{};
+        ev.type = W::Event::Type::KeyDown;
+        ev.key = k;
+        tree.HandleEvent(ev);
+    };
+
+    // ---- move drag: +40,+20 client px -> normalized delta ----
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 40.0f, cy + 20.0f);
+    if (!surface->GizmoDragging()) return "move drag did not arm";
+    tree.HandleEvent(MouseUp(cx + 40.0f, cy + 20.0f));
+    if (begins != 1 || ends != 1) {
+        return "move drag did not bracket exactly one gesture";
+    }
+    if (commits != 1 || committed_id != "c1") {
+        return "move drag did not commit once";
+    }
+    if (!Near(last_commit.offset_x, 0.31f + 40.0f / 640.0f, 0.002f) ||
+        !Near(last_commit.offset_y, 0.33f + 20.0f / 360.0f, 0.002f)) {
+        return "move commit drifted from the pointer delta";
+    }
+    if (previews == 0) return "move drag produced no previews";
+    if (last_commit.scale != 0.5f ||
+        last_commit.rotation_deg != 0.0f ||
+        last_commit.opacity != 1.0f) {
+        return "move drag touched non-position transform fields";
+    }
+
+    // ---- click on the box (no drag): no gesture, no toggle ----
+    tree.HandleEvent(MouseDown(cx, cy));
+    tree.HandleEvent(MouseUp(cx, cy));
+    if (begins != 1 || ends != 1) {
+        return "plain click on the box opened a gesture";
+    }
+    if (toggled != 0) return "click inside the box toggled playback";
+
+    // ---- rotate stem: tip sits 22 px above top-edge midpoint ----
+    const float tip_x = box.x + box.width * 0.5f;   // top-mid x
+    const float tip_y = box.y - 22.0f;
+    tree.HandleEvent(MouseDown(tip_x, tip_y));
+    mouse_move(cx + 50.0f, cy);   // -90deg start -> 0deg now = +90
+    tree.HandleEvent(MouseUp(cx + 50.0f, cy));
+    if (commits != 2) return "rotate drag did not commit";
+    if (!Near(last_commit.rotation_deg, 90.0f, 1.0f)) {
+        return "rotate commit is not +90 degrees";
+    }
+
+    // ---- corner scale: SE handle out to 2x radial distance ----
+    const float se_x = box.x + box.width;          // 358.4
+    const float se_y = box.y + box.height;         // 221.8
+    tree.HandleEvent(MouseDown(se_x, se_y));
+    mouse_move(cx + 160.0f, cy + 90.0f);           // dist *2
+    tree.HandleEvent(MouseUp(cx + 160.0f, cy + 90.0f));
+    if (commits != 3) return "corner scale drag did not commit";
+    if (!Near(last_commit.scale, 1.0f, 0.02f)) {
+        return "corner drag did not double the uniform scale";
+    }
+    // Anchor (transform center) holds: canvas c=(278.4,163.8) ->
+    // offset = c_norm - dw/2 (dw = 320*1.0).
+    if (!Near(last_commit.offset_x, 278.4f / 640.0f - 0.25f,
+              0.01f) ||
+        !Near(last_commit.offset_y, 163.8f / 360.0f - 0.25f,
+              0.01f)) {
+        return "corner scale moved the anchor point";
+    }
+
+    // ---- edge scale: E midpoint — axis ratio into the uniform
+    // scale (the model has no per-axis scale) ----
+    const float e_x = box.x + box.width;           // right-mid
+    tree.HandleEvent(MouseDown(e_x, cy));
+    mouse_move(e_x + 80.0f, cy);                   // lx: 80 -> 160
+    tree.HandleEvent(MouseUp(e_x + 80.0f, cy));
+    if (commits != 4) return "edge scale drag did not commit";
+    if (!Near(last_commit.scale, 1.0f, 0.02f)) {
+        return "edge drag did not double the uniform scale";
+    }
+
+    // ---- Esc cancels: preview(orig) restores, nothing commits ----
+    const Transform pre_esc{};
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 30.0f, cy);
+    key(W::KeyCode::Escape);
+    tree.HandleEvent(MouseUp(cx + 30.0f, cy));
+    if (commits != 4) return "Esc-cancelled drag still committed";
+    if (ends != begins || ends != 5) {
+        return "Esc did not close the gesture macro";
+    }
+    if (!Near(last_preview.offset_x, current.transform.offset_x) ||
+        !Near(last_preview.offset_y, current.transform.offset_y)) {
+        return "Esc did not restore the original preview";
+    }
+
+    // ---- double-click inside the box resets (hook-out) ----
+    tree.HandleEvent(MouseDown(cx, cy));
+    tree.HandleEvent(MouseUp(cx, cy));
+    tree.HandleEvent(MouseDown(cx, cy));
+    tree.HandleEvent(MouseUp(cx, cy));
+    if (resets != 1 || reset_id != "c1") {
+        return "double-click inside the box did not reset once";
+    }
+
+    // ---- snap: center candidate crosses the 0.5 line ----
+    snap_on = true;
+    // cx cand at +40 px -> .4975, inside the 6 px threshold -> the
+    // offset lands so the box center sits exactly on the line.
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 40.0f, cy);
+    if (!Near(last_preview.offset_x, 0.375f, 0.002f)) {
+        return "move snap did not land the center on the 0.5 line";
+    }
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        // kGizmoSnapColor — the timeline's accent-cyan guide token.
+        if (!r.DrewLine({0.13f, 0.83f, 0.93f, 1.0f})) {
+            return "snapped drag did not paint the accent guide";
+        }
+    }
+    tree.HandleEvent(MouseUp(cx + 40.0f, cy));
+    if (!Near(last_commit.offset_x, 0.375f, 0.002f)) {
+        return "snap commit drifted from the snapped offset";
+    }
+    snap_on = false;
+
+    // ---- press-to-select + promote to move ----
+    const int selects_before = selects;
+    const float pick_x = dest.x + dest.width * 0.05f;
+    const float pick_y = dest.y + dest.height * 0.05f;
+    tree.HandleEvent(MouseDown(pick_x, pick_y));
+    if (selects != selects_before + 1 || selected_id != "c2") {
+        return "press on a clip did not select it";
+    }
+    mouse_move(pick_x + 20.0f, pick_y);
+    tree.HandleEvent(MouseUp(pick_x + 20.0f, pick_y));
+    if (committed_id != "c2" || commits != 6) {
+        return "post-select drag did not move the picked clip";
+    }
+    if (!Near(last_commit.offset_x, 0.02f + 20.0f / 640.0f, 0.003f)) {
+        return "picked-clip move drifted from the pointer delta";
+    }
+    current = c2;   // keep the pull consistent with selection
+
+    // ---- empty-frame click still toggles playback ----
+    const float empty_x = dest.x + dest.width * 0.6f;
+    const float empty_y = dest.y + dest.height * 0.9f;
+    tree.HandleEvent(MouseDown(empty_x, empty_y));
+    tree.HandleEvent(MouseUp(empty_x, empty_y));
+    if (toggled != 1) {
+        return "empty-frame click did not toggle playback";
+    }
+
+    // ---- armed click points keep priority over the gizmo ----
+    surface->SetClickPointsArmed(true);
+    float click_nx = -1.0f;
+    MonitorHooks& mh = surface->MutableHooks();
+    mh.on_click_point = [&](float nx, float) { click_nx = nx; };
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 10.0f, cy);
+    tree.HandleEvent(MouseUp(cx + 10.0f, cy));
+    if (begins != 7 || commits != 6) {
+        return "armed click points did not beat the gizmo";
+    }
+    surface->SetClickPointsArmed(false);
+    (void)picked_x;
+    (void)click_nx;
+    (void)pre_esc;
+
+    // ---- no selection -> no box ----
+    current.clip_id.clear();
+    if (surface->GizmoVisible()) {
+        return "gizmo stayed visible with an empty target";
+    }
+
     tree.SetRoot(nullptr);
     return {};
 }
@@ -526,6 +885,9 @@ std::string Ui2MonitorSmoke() {
     }
     if (const std::string err = CheckPanelChrome(); !err.empty()) {
         return "panel: " + err;
+    }
+    if (const std::string err = CheckTransformGizmo(); !err.empty()) {
+        return "gizmo: " + err;
     }
     if (const std::string err = CheckShellWiring(); !err.empty()) {
         return "shell: " + err;

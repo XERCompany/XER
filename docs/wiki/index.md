@@ -166,6 +166,15 @@ Goal started: 2026-11-15. Design doc:
   focus), adopt/keep lists, and ranked port tickets T1–T16 with
   effort estimates + "don't port the compositor" verdict
   (2026-11-23).
+- [chromium-render-port-plan.md](architecture/chromium-render-port-plan.md)
+  — Chromium render/media pipeline ↔ VE render path mapping
+  (VideoFrame↔video::Frame, BeginFrame↔WM_TIMER pump, VRA↔none,
+  SharedImage↔RenderStore/keyed-mutex), binary-verified facts
+  (libskia=Ganesh-GL-only, libEGL=real ANGLE-D3D11, FFmpeg has
+  d3d11va), per-frame CPU-copy cost audit, single-process zero-copy
+  design (d3d11va→VideoProcessor→GPU compositor→keyed-mutex present),
+  and ranked tickets R1–R9 + not-portable list (command_buffer/Mojo/
+  GPU-process) (2026-11-24).
 - [builder-check-2026-11-15.md](reviews/builder-check-2026-11-15.md) —
   independent design-doc review findings and how each was resolved.
 

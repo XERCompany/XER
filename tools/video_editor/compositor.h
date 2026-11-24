@@ -203,6 +203,18 @@ public:
     bool RenderFrameAt(double t, std::vector<std::uint8_t>* out_bgra,
                        std::string* error_out = nullptr);
 
+    // ui2 monitor-gizmo seam: replaces one clip's STATIC transform in
+    // the bound project snapshot. Sessions stay open and the
+    // per-layer memo/effect caches re-key on the transform hash, so a
+    // direct-manipulation preview (monitor drag) re-renders through a
+    // plain RenderFrameAt — no re-Init, no decoder re-open.
+    // Keyframed props still evaluate over the static value via
+    // EffectiveTransformAt, matching the inspector's static-field
+    // edits. Returns false when the id isn't bound or the compositor
+    // isn't initialized. Single-consumer-thread like RenderFrameAt.
+    bool UpdateClipTransform(const std::string& clip_id,
+                             const Transform& transform);
+
     // Preview-quality hint in (0,1]: below 1.0 the expensive spatial
     // clip effects (lens sphere / magnifier / ribbed glass / bokeh)
     // run on a bilinear-downscaled copy of the clip frame — with

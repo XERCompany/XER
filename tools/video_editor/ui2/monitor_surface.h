@@ -82,6 +82,10 @@ public:
     // ---- hooks (MonitorHooks contract — surface_hooks.h) ----
     void SetHooks(MonitorHooks hooks);
     const MonitorHooks& Hooks() const { return hooks_; }
+    // Mutable access for seam-by-seam wiring (the panel binds the
+    // transport members via the SetOn* setters at construction; the
+    // shell binds the gizmo members on top).
+    MonitorHooks& MutableHooks() { return hooks_; }
     void SetOnActivate(std::function<void()> cb);
     void SetOnTimeChanged(std::function<void(double)> cb);
     void SetOnClickPoint(std::function<void(float, float)> cb);
@@ -319,13 +323,22 @@ private:
     // next effective transform (offset/scale/rotation only —
     // opacity untouched).
     Transform GizmoApplyDrag(XER::UI::Layout::Point p,
-                             const XER::UI::Widgets::Event& e) const;
-    // Frame-normalized snap for the current candidate transform;
-    // mutates the offset to land on a snap line and records the
-    // winning vertical/horizontal client-x/y guides for paint.
-    void GizmoSnapMove(Transform* t) const;
+                             const XER::UI::Widgets::Event& e);
+    // Move snap: the candidate's rotated-AABB edges+center snap to
+    // frame edges/center/safe-margin lines; mutates the offset and
+    // records the winning client-x/y guides for paint.
+    void GizmoSnapMove(Transform* t);
+    // Edge-drag snap: one AABB edge on one axis snaps to the same
+    // line set; adjusts only that axis's offset (scale untouched).
+    void GizmoSnapEdge(Transform* t, bool x_axis);
     void GizmoCancel();
     void GizmoFinish(bool commit);
+    // Arms gizmo_mode_ = Move for clip `clip_id` after a
+    // press-to-select; the target transform comes from a fresh
+    // gizmo_target pull (selection round-trip). False when the pull
+    // no longer resolves the clip.
+    bool GizmoArmMove(const std::string& clip_id,
+                      XER::UI::Layout::Point grab);
 
     // The gizmo target the last paint/drag resolved (kept so a drag
     // survives one dropped hook pull).
@@ -336,9 +349,22 @@ private:
     // Center<->pointer grab delta at drag start (frame-normalized)
     // so a move tracks by the grabbed point, not the box center.
     float gizmo_grab_dx_ = 0.0f, gizmo_grab_dy_ = 0.0f;
-    // Down-press position that only armed selection (press-to-select
-    // promotes to Move once the drag threshold is crossed).
+    // Rotate drags reuse the grab slot for the pointer's start angle
+    // about the anchor (radians).
+    // Gesture latching: gizmo_mode_ arms at press, but
+    // on_gizmo_begin (the shell's macro + preview-compositor init)
+    // only fires once the drag threshold is crossed — a plain click
+    // on the box stays a click, never an empty gesture.
+    bool gizmo_gesture_started_ = false;
+    // Down-press that only claimed a gizmo hit/pick (no motion yet):
+    // promotes to Move once the drag threshold is crossed.
     bool gizmo_pending_select_ = false;
+    std::string gizmo_pending_clip_id_;
+    // True while the current press was claimed by the gizmo path —
+    // suppresses the synthesized Click's play toggle and feeds the
+    // gizmo's own double-click-reset window.
+    bool gizmo_click_ = false;
+    double last_gizmo_click_at_ = -10.0;
     // Snap guides from the last move preview (client coords, -1 = none).
     float gizmo_snap_x_ = -1.0f, gizmo_snap_y_ = -1.0f;
     bool gizmo_dirty_commit_ = false;  // live != orig at release

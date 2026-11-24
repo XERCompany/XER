@@ -52,6 +52,7 @@
 #include "shell_prefs.h"
 #include "shortcut_router.h"
 #include "source_edit.h"          // SourceMarks — per-path mark storage
+#include "surface_hooks.h"        // MonitorGizmoTarget — gizmo seam
 #include "timeline_model.h"
 #include "workspace_layout.h"
 #include "widgets/widget.h"
@@ -76,6 +77,7 @@ class MediaCatalog;
 class MediaPrep;
 class ProxyManager;
 class ExportEngine;      // export_engine.h — single-job async worker
+class Compositor;        // compositor.h — gizmo live-preview renderer
 struct CatalogEntry;     // media_catalog.h — bin row
 }
 
@@ -588,6 +590,25 @@ private:
     void ApplyProgramPlayhead(double seconds);
     void ApplySourcePlayhead(double seconds);
 
+    // ── program-monitor transform gizmo (WireMonitorPanels) ──
+    // The surface pulls the selection's gizmo target per paint;
+    // presses that miss the box hit-test the topmost clip under the
+    // cursor; gesture hooks bracket live previews (in-memory only —
+    // rendered through gizmo_preview_comp_, never history) with ONE
+    // ReplaceClip commit inside a BeginMacro/EndMacro pair.
+    MonitorGizmoTarget GizmoTargetForSelection() const;
+    // Topmost clip whose warped rect contains the frame-normalized
+    // point at the playhead ("" = none). Video tracks top→bottom;
+    // hidden tracks skipped.
+    std::string GizmoPickClip(float nx, float ny) const;
+    // clip source px for the gizmo rect — catalog dims for media,
+    // canvas dims for generated/compound/adjustment sources.
+    bool GizmoClipSourceSize(const Clip& clip, int* w, int* h) const;
+    void GizmoPreviewTransform(const std::string& clip_id,
+                               const Transform& transform);
+    void CommitGizmoTransform(const std::string& clip_id,
+                              const Transform& transform);
+
     std::string project_path_;
     std::filesystem::path prefs_path_;
     ShellPrefs prefs_;
@@ -644,6 +665,13 @@ private:
     // on_up path ends it when K or the direction key releases.
     int held_shuttle_dir_ = 0;
     bool held_shuttle_source_ = false;
+    // Program-monitor gizmo live-preview renderer — one Compositor
+    // per gesture (Init at on_gizmo_begin, Shutdown at end). Its
+    // bound project snapshot is mutated through UpdateClipTransform
+    // so preview frames render with warm decoders; project_ itself
+    // is untouched until the single commit lands.
+    std::unique_ptr<Compositor> gizmo_preview_comp_;
+    bool gizmo_preview_ok_ = false;
     // Shift+K play-around: the post-roll time the Tick pump pauses
     // at (-1 = idle) and which binding owns the gesture.
     double playaround_until_ = -1.0;

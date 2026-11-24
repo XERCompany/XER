@@ -16,9 +16,9 @@
 #include "ai/upscale_x4v3.h"
 #include "ai/whisper_transcribe.h"
 #include "app_runtime/app_runtime.h"
-#include "builtin_fx.h"
 #include "captions.h"
 #include "cef/cef_ext_scheme.h"
+#include "compositor.h"
 #include "color_panel.h"
 #include "effects_panel.h"
 #include "export_dialog.h"
@@ -656,6 +656,13 @@ void VeApp::WireTimelineBridge() {
         if (const auto& s = timeline_->Surface()) {
             s->SetSelectedClip(clip_id);
         }
+        // The program gizmo re-pulls its target per paint — a
+        // selection change must schedule one or the box lags a
+        // frame behind the timeline's selection chrome.
+        if (program_monitor_ != nullptr) {
+            auto& surf = program_monitor_->VideoSurface();
+            surf.Invalidate(surf.VideoAreaRect());
+        }
         RefreshInspector();   // M3: selection provider re-pull
         RefreshTranscriptSubject();   // wave-3: selection rebinds the subject
     };
@@ -947,6 +954,76 @@ void VeApp::WireMonitorPanels() {
     };
     ph.on_status = status;
     program_monitor_->SetHooks(std::move(ph));
+
+    // Transform gizmo — program monitor only (the source monitor
+    // never binds gizmo_target, so its surface draws no box). The
+    // surface stays document-blind: it pulls the selection's
+    // effective transform per paint, emits hook calls for pick /
+    // select / preview / commit / reset, and the shell does the
+    // document work here.
+    {
+        MonitorHooks& gh =
+            program_monitor_->VideoSurface().MutableHooks();
+        gh.gizmo_target = [this] {
+            return GizmoTargetForSelection();
+        };
+        gh.gizmo_pick = [this](float nx, float ny) {
+            return GizmoPickClip(nx, ny);
+        };
+        gh.on_gizmo_select = [this](const std::string& clip_id) {
+            if (bridge_ != nullptr) bridge_->SelectClip(clip_id);
+        };
+        gh.on_gizmo_begin = [this](const char*) {
+            // One undo step per gesture — the single ReplaceClip
+            // commit lands inside this macro. The preview
+            // compositor renders live frames off ITS bound
+            // snapshot; project_ stays untouched until the commit.
+            if (history_ != nullptr) {
+                history_->BeginMacro("Monitor transform");
+            }
+            gizmo_preview_comp_ = std::make_unique<Compositor>();
+            CompositorOptions options;
+            if (proxies_ != nullptr && project_.use_proxies) {
+                options.media_resolver =
+                    [this](const std::string& path) {
+                        return proxies_->ResolveDecodePath(path);
+                    };
+            }
+            std::string error;
+            gizmo_preview_ok_ =
+                gizmo_preview_comp_->Init(project_, options, &error);
+        };
+        gh.on_gizmo_end = [this] {
+            if (history_ != nullptr) history_->EndMacro();
+            gizmo_preview_ok_ = false;
+            if (gizmo_preview_comp_ != nullptr) {
+                gizmo_preview_comp_->Shutdown();
+                gizmo_preview_comp_.reset();
+            }
+        };
+        gh.on_gizmo_preview =
+            [this](const std::string& clip_id, const Transform& t) {
+                GizmoPreviewTransform(clip_id, t);
+            };
+        gh.on_gizmo_commit =
+            [this](const std::string& clip_id, const Transform& t) {
+                CommitGizmoTransform(clip_id, t);
+            };
+        gh.on_gizmo_reset = [this](const std::string& clip_id) {
+            const Clip* clip = FindClip(project_, clip_id);
+            if (clip == nullptr) return;
+            int w = 0, h = 0;
+            if (!GizmoClipSourceSize(*clip, &w, &h)) return;
+            // Restore the imported placement — the same letterbox
+            // fit a fresh insert uses.
+            CommitGizmoTransform(
+                clip_id, FitTransformToCanvas(
+                             w, h, project_.width, project_.height));
+        };
+        gh.gizmo_snap_enabled = [this] {
+            return timeline_ != nullptr && timeline_->SnapEnabled();
+        };
+    }
 
     MonitorPanel::Hooks sh;
     sh.on_activate = [this] {
@@ -2722,6 +2799,145 @@ void VeApp::CommitInspectorClips(const std::vector<Clip>& clips) {
     }
     if (macro) history_->EndMacro();
     if (any) NotifyTimelineChanged();
+}
+
+// ---- program-monitor transform gizmo ------------------------------------
+//
+// The surface is document-blind: these hooks resolve the bridge
+// selection into a gizmo target (effective transform at the
+// playhead — the box tracks what the user actually sees), map
+// presses onto the topmost clip under the cursor, and funnel the
+// gesture through the inspector's ReplaceClip seam so a drag lands
+// as exactly one undo step.
+//
+// Live preview renders through gizmo_preview_comp_ (one Compositor
+// per gesture, Init'd at on_gizmo_begin): UpdateClipTransform
+// mutates ITS bound snapshot — project_ stays untouched until the
+// commit, so an Esc cancel needs no document rollback at all.
+
+bool VeApp::GizmoClipSourceSize(const Clip& clip, int* w,
+                                int* h) const {
+    if (w == nullptr || h == nullptr) return false;
+    if (!clip.source_path.empty()) {
+        if (const CatalogEntry* e = FindCatalogEntry(clip.source_path);
+            e != nullptr && e->width > 0 && e->height > 0) {
+            *w = e->width;
+            *h = e->height;
+            return true;
+        }
+        return false;   // media clip, dims unknown — no box
+    }
+    // Generated/compound/adjustment sources composite at canvas
+    // scale (matte/bars adopt the canvas as their natural size; the
+    // box is a touch generous for small Text clips — cosmetic).
+    if (project_.width > 0 && project_.height > 0) {
+        *w = project_.width;
+        *h = project_.height;
+        return true;
+    }
+    return false;
+}
+
+MonitorGizmoTarget VeApp::GizmoTargetForSelection() const {
+    MonitorGizmoTarget t;
+    if (bridge_ == nullptr) return t;
+    const std::string& id = bridge_->SelectedClipId();
+    if (id.empty()) return t;
+    const Clip* clip = FindClip(project_, id);
+    if (clip == nullptr) return t;
+    const Track* track = FindTrack(project_, clip->track);
+    if (track == nullptr || track->kind != TrackKind::Video ||
+        track->hidden || track->locked) {
+        return t;   // audio/hidden/locked clips get no gizmo
+    }
+    if (!(playhead_ >= clip->timeline_start &&
+          playhead_ < ClipEndSeconds(*clip))) {
+        return t;   // selected clip isn't under the playhead
+    }
+    if (!GizmoClipSourceSize(*clip, &t.src_w, &t.src_h)) return t;
+    const double u = std::clamp(playhead_ - clip->timeline_start,
+                                0.0, clip->duration);
+    t.clip_id = id;
+    t.transform = EffectiveTransformAt(*clip, u);
+    t.canvas_w = project_.width;
+    t.canvas_h = project_.height;
+    return t;
+}
+
+std::string VeApp::GizmoPickClip(float nx, float ny) const {
+    if (nx < 0.0f || nx > 1.0f || ny < 0.0f || ny > 1.0f ||
+        project_.width <= 0 || project_.height <= 0) {
+        return {};
+    }
+    // Topmost-first: the compositor paints video tracks bottom→top
+    // in index order, so the LAST video track owns the topmost
+    // pixels. Hidden tracks contribute nothing to pick against.
+    for (int ti = static_cast<int>(project_.tracks.size()) - 1;
+         ti >= 0; --ti) {
+        const Track& track =
+            project_.tracks[static_cast<std::size_t>(ti)];
+        if (track.kind != TrackKind::Video || track.hidden) {
+            continue;
+        }
+        for (const Clip& clip : project_.clips) {
+            if (clip.track != ti ||
+                !(playhead_ >= clip.timeline_start &&
+                  playhead_ < ClipEndSeconds(clip))) {
+                continue;
+            }
+            int w = 0, h = 0;
+            if (!GizmoClipSourceSize(clip, &w, &h)) continue;
+            const double u = std::clamp(
+                playhead_ - clip.timeline_start, 0.0, clip.duration);
+            float fx = 0.0f, fy = 0.0f;
+            // Exact inverse of the warp map — true only when the
+            // canvas point lands inside the clip's warped rect.
+            if (Ai::CanvasPointToSourceFraction(
+                    clip, u, project_.width, project_.height, w, h,
+                    nx, ny, &fx, &fy)) {
+                return clip.id;
+            }
+        }
+    }
+    return {};
+}
+
+void VeApp::GizmoPreviewTransform(const std::string& clip_id,
+                                  const Transform& transform) {
+    if (!gizmo_preview_ok_ || gizmo_preview_comp_ == nullptr ||
+        program_monitor_ == nullptr) {
+        return;
+    }
+    if (!gizmo_preview_comp_->UpdateClipTransform(clip_id,
+                                                  transform)) {
+        return;
+    }
+    std::vector<std::uint8_t> bgra;
+    std::string error;
+    if (!gizmo_preview_comp_->RenderFrameAt(playhead_, &bgra,
+                                            &error)) {
+        return;   // decode hiccup — the box still tracks the drag
+    }
+    program_monitor_->SetFrame(bgra, project_.width,
+                               project_.height);
+}
+
+void VeApp::CommitGizmoTransform(const std::string& clip_id,
+                                 const Transform& transform) {
+    if (history_ == nullptr) return;
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) return;
+    Clip updated = *clip;
+    // The surface commits the effective-at-playhead transform back
+    // through the static fields — the inspector's semantics
+    // (keyframed props keep animating over the new base value).
+    updated.transform = transform;
+    CommitInspectorClips({updated});
+    // Repaint the paused monitor through the still-warm preview
+    // compositor (the engine binding re-inits on its next transport
+    // action — the same rule inspector edits live under).
+    GizmoPreviewTransform(clip_id, transform);
+    RefreshInspector();
 }
 
 // ---- effects metadata + apply ------------------------------------------

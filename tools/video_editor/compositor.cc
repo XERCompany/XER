@@ -3006,6 +3006,20 @@ bool Compositor::RenderFrameAt(double t,
     return impl_->RenderFrameAt(t, out_bgra, error_out);
 }
 
+bool Compositor::UpdateClipTransform(const std::string& clip_id,
+                                     const Transform& transform) {
+    if (!impl_->initialized) return false;
+    // In-place write into the bound snapshot — ClipSession::clip
+    // pointers index project_.clips and stay valid because no
+    // structural edit happens here. Keyframed props still evaluate
+    // over the static value (EffectiveTransformAt parity with the
+    // inspector's field edits).
+    Clip* clip = FindClip(impl_->project_, clip_id);
+    if (clip == nullptr) return false;
+    clip->transform = transform;
+    return true;
+}
+
 void Compositor::SetPreviewQuality(float scale) {
     impl_->preview_quality_ =
         (std::isfinite(scale) && scale > 0.0f && scale < 1.0f)

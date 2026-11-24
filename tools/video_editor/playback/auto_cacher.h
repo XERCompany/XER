@@ -197,6 +197,10 @@ private:
     bool stop_ = false;
     bool busy_ = false;                 // a render is in flight
     bool dirty_ = false;                // a window is owed (seek/edit)
+    // True across the Shutdown→spawn window inside Init: stop_ is
+    // transiently set there and must not read as "idle" to WaitIdle
+    // (a quality-tier re-bind would look like a settled worker).
+    bool initializing_ = false;
     std::int64_t anchor_ = -1;          // frame idx the queue was built around
     std::chrono::steady_clock::time_point settle_at_;
     std::deque<std::int64_t> queue_;    // frame indices, increasing

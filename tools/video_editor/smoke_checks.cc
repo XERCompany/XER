@@ -2023,6 +2023,263 @@ std::string CheckAutoCache() {
     return {};
 }
 
+// ---- preview_perf ---------------------------------------------------
+// End-to-end monitor-preview throughput harness — the check that
+// answers "время рендера кадров". A deterministic fake decoder at the
+// canvas size isolates the PIPELINE cost (decode ~0 ms) so the
+// reported per-stage table splits render vs deliver honestly, and a
+// manual FrameClock makes every tick land on a fresh frame — the
+// measured number is pure render+deliver throughput, not wall-clock
+// luck. Bound: a basic 640x360 timeline must present faster than
+// realtime (>30 fps of engine work per frame).
+
+// Deterministic decoder: endless WxH frames at a fixed fps. Each
+// NextFrame writes a cheap moving gradient so the warp path sees
+// realistic (non-uniform) pixels; decode time is counted so the
+// report can separate "decode" from "composite" inside render_ms.
+class PerfDecoder final : public IMediaDecoder {
+public:
+    PerfDecoder(int w, int h, double fps)
+        : w_(w), h_(h), fps_(fps) {}
+    bool Open(const std::string& utf8_path,
+              std::string* /*error_out*/) override {
+        opened_path_ = utf8_path;
+        pos_ = 0.0;
+        return true;
+    }
+    void Close() override {}
+    bool IsOpen() const override { return !opened_path_.empty(); }
+    bool NextFrame(std::vector<std::uint8_t>* bgra, int* width,
+                   int* height) override {
+        const auto d0 = std::chrono::steady_clock::now();
+        bgra->resize(static_cast<std::size_t>(w_) * h_ * 4u);
+        // Moving 16px block pattern — compressible in cost terms but
+        // not uniform, so resample/blend loops can't early-out.
+        const int shift = static_cast<int>(pos_ * fps_) & 15;
+        std::uint8_t* px = bgra->data();
+        for (int y = 0; y < h_; ++y) {
+            std::uint8_t* row = px + static_cast<std::size_t>(y) * w_ * 4u;
+            for (int x = 0; x < w_; ++x) {
+                const bool on = (((x + shift) >> 4) + (y >> 4)) & 1;
+                row[x * 4 + 0] = on ? 200 : 30;
+                row[x * 4 + 1] = on ? 160 : 30;
+                row[x * 4 + 2] = on ? 90 : 30;
+                row[x * 4 + 3] = 255;
+            }
+        }
+        *width = w_;
+        *height = h_;
+        pos_ += 1.0 / fps_;
+        decode_ns_.fetch_add(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - d0)
+                .count()));
+        decode_calls_.fetch_add(1);
+        return true;
+    }
+    bool Seek(double seconds) override {
+        pos_ = std::max(0.0, seconds);
+        return true;
+    }
+    double GetPositionSeconds() const override { return pos_; }
+    double GetFps() const override { return fps_; }
+    double GetDurationSeconds() const override { return 60.0; }
+    int GetWidth() const override { return w_; }
+    int GetHeight() const override { return h_; }
+    void EnableAudioTap(bool) override {}
+    bool HasAudio() const override { return false; }
+    double GetAudioStartSeconds() const override { return 0.0; }
+    double GetAudioTimeBase() const override { return 0.0; }
+    bool ReadAudioFrames(
+        std::vector<XER::Bridge::FFmpeg::AudioFrameInfo>* /*out*/,
+        int /*max_frames*/) override {
+        return false;
+    }
+    bool AudioDrained() const override { return true; }
+    std::uint64_t GetAudioEpoch() const override { return 0; }
+
+    // Aggregate across every instance the factories hand out (the
+    // compositor opens one per clip session).
+    static std::atomic<std::uint64_t> decode_calls_;
+    static std::atomic<std::uint64_t> decode_ns_;
+
+private:
+    int w_;
+    int h_;
+    double fps_;
+    std::string opened_path_;
+    double pos_ = 0.0;
+};
+std::atomic<std::uint64_t> PerfDecoder::decode_calls_{0};
+std::atomic<std::uint64_t> PerfDecoder::decode_ns_{0};
+
+// Virtual-time clock for the engine: NowSeconds only advances through
+// SleepSeconds, so each playing tick lands exactly one project frame
+// ahead regardless of how long the render actually took.
+class PerfManualClock final : public FrameClock {
+public:
+    double NowSeconds() const override { return now_; }
+    void SleepSeconds(double seconds) override {
+        if (seconds > 0.0) {
+            now_ += seconds;
+        }
+        // Let the harness thread observe progress without burning the
+        // CPU the engine worker needs for the measurement.
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+
+private:
+    double now_ = 0.0;
+};
+
+std::string CheckPreviewPerf() {
+    constexpr int kW = 640;
+    constexpr int kH = 360;
+    constexpr int kFps = 30;
+    constexpr int kWarmupFrames = 15;
+    constexpr int kMeasureFrames = 60;
+    Project p;
+    p.width = kW;
+    p.height = kH;
+    p.fps_num = kFps;
+    p.fps_den = 1;
+    p.tracks.push_back(Track{TrackKind::Video, "V1"});
+    p.tracks.push_back(Track{TrackKind::Audio, "A1"});
+    Clip clip;
+    clip.id = "perf.mp4";
+    clip.track = 0;
+    clip.timeline_start = 0.0;
+    clip.duration = 30.0;
+    clip.source.kind = SourceKind::Media;
+    clip.source_path = "perf_synthetic.mp4";   // PerfDecoder ignores it
+    p.clips.push_back(clip);
+
+    auto factory = MediaDecoderFactory{[] {
+        return MediaDecoderPtr(new PerfDecoder(kW, kH, kFps));
+    }};
+
+    // ---- stage A: engine end-to-end at full quality ----------------
+    PreviewEngine::PerfStats full_stats;
+    std::uint64_t presented = 0;
+    {
+        struct CountSink : PreviewEngine::Sink {
+            void OnVideoFrame(const video::Frame& f) override {
+                ++frames;
+                last_w = f.Width();
+                last_h = f.Height();
+            }
+            void OnAudioPeakLevels(float, float) override {}
+            void OnPlayhead(double) override {}
+            std::atomic<int> frames{0};
+            std::atomic<int> last_w{0};
+            std::atomic<int> last_h{0};
+        } sink;
+        PreviewEngine engine;
+        PreviewOptions po;
+        po.decoder_factory = factory;
+        po.clock = std::make_shared<PerfManualClock>();
+        po.audio_enabled = false;
+        std::string err;
+        if (!engine.Init(p, po, &sink, &err)) {
+            return "perf engine init failed: " + err;
+        }
+        engine.SetPlaying(true);
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (sink.frames.load() < kWarmupFrames + kMeasureFrames &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (sink.frames.load() < kWarmupFrames + kMeasureFrames) {
+            return "perf playback stalled at " +
+                   std::to_string(sink.frames.load()) + " frames";
+        }
+        // fx-free timeline: the autocache gate must leave the worker
+        // off — no pre-render thread competing for the measured core.
+        // WaitAutoCacheIdle returns trivially-true when disabled, so
+        // this also flushes any settle delay if the gate regressed.
+        engine.WaitAutoCacheIdle(10000);
+        const AutoCacher::Stats ac = engine.AutoCacheStats();
+        if (ac.done != 0 || ac.queued != 0) {
+            return "autocache ran on an fx-free timeline (done=" +
+                   std::to_string(ac.done) + ")";
+        }
+        engine.ResetPerfStats();
+        const int warm_target = sink.frames.load() + kMeasureFrames;
+        while (sink.frames.load() < warm_target &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        full_stats = engine.GetPerfStats();
+        presented = static_cast<std::uint64_t>(sink.frames.load());
+        if (sink.last_w.load() != kW || sink.last_h.load() != kH) {
+            return "full-quality frame dims drifted";
+        }
+
+        // ---- stage B: quality tier 0.5 — canvas scaling --------------
+        engine.ResetPerfStats();
+        engine.SetQuality(0.5f);
+        const int half_target = sink.frames.load() + kMeasureFrames;
+        while (sink.frames.load() < half_target &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        const PreviewEngine::PerfStats half_stats =
+            engine.GetPerfStats();
+        const int exp_w = (kW + 1) / 2;
+        const int exp_h = kH / 2;
+        if (sink.last_w.load() != exp_w || sink.last_h.load() != exp_h) {
+            return "half-quality frame dims wrong: got " +
+                   std::to_string(sink.last_w.load()) + "x" +
+                   std::to_string(sink.last_h.load()) + " want " +
+                   std::to_string(exp_w) + "x" + std::to_string(exp_h);
+        }
+        engine.Shutdown();
+
+        const auto avg = [](double ms, std::uint64_t n) {
+            return n == 0 ? 0.0 : ms / static_cast<double>(n);
+        };
+        const double decode_ms =
+            static_cast<double>(PerfDecoder::decode_ns_.load()) / 1e6;
+        const std::uint64_t decode_n = PerfDecoder::decode_calls_.load();
+        const double full_frame = avg(
+            full_stats.render_ms + full_stats.deliver_ms,
+            full_stats.renders);
+        const double half_frame = avg(
+            half_stats.render_ms + half_stats.deliver_ms,
+            half_stats.renders);
+        std::fprintf(
+            stderr,
+            "  preview_perf: %llux%llu@%dfps media clip, %llu frames\n"
+            "    full q: render %.2f ms (decode %.2f ms inside) "
+            "deliver %.2f ms audio %.2f ms -> %.1f fps\n"
+            "    half q: render %.2f ms deliver %.2f ms -> %.1f fps "
+            "(%.0f%% of full-res cost)\n",
+            (unsigned long long)kW, (unsigned long long)kH, kFps,
+            (unsigned long long)presented,
+            avg(full_stats.render_ms, full_stats.renders),
+            avg(decode_ms, decode_n),
+            avg(full_stats.deliver_ms, full_stats.renders),
+            avg(full_stats.audio_ms, full_stats.ticks),
+            full_frame > 0.0 ? 1000.0 / full_frame : 0.0,
+            avg(half_stats.render_ms, half_stats.renders),
+            avg(half_stats.deliver_ms, half_stats.renders),
+            half_frame > 0.0 ? 1000.0 / half_frame : 0.0,
+            full_frame > 0.0 ? 100.0 * half_frame / full_frame : 0.0);
+        // The bound: >30fps of render+deliver on a basic timeline.
+        // (Half-quality is a report only — no bound, it must simply
+        // be faster and correctly sized.)
+        if (full_frame >= 1000.0 / 30.0) {
+            return "basic 640x360 timeline below realtime: " +
+                   std::to_string(full_frame) + " ms/frame";
+        }
+        if (half_stats.renders == 0) {
+            return "half-quality tier produced no frames";
+        }
+    }
+    return {};
+}
+
 // JS fx: the catalog must list our stock scripts, and — when V8 is
 // compiled in — a runtime must register + execute them. invert on a
 // black pixel yields 255; bitcrush quantizes; smoothstep(0.5) = 0.5.
@@ -8813,6 +9070,7 @@ constexpr CheckEntry kChecks[] = {
     {"preview_quality", &CheckPreviewQualityScale},
     {"fx_frame_cache", &CheckFxFrameCache},
     {"auto_cache", &CheckAutoCache},
+    {"preview_perf", &CheckPreviewPerf},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},
     {"audio_mixer", &CheckAudioMixer},
