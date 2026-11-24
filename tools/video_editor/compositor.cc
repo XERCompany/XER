@@ -33,6 +33,7 @@
 #include "video_effects.h"
 #include "video_utils.h"
 #include "wrapper/skia/skia_engine_bridge.h"
+#include "xer_transition_bridge.h"
 
 namespace XER::VideoEditor {
 namespace {
@@ -836,6 +837,50 @@ bool ChainCacheable(const std::vector<ClipEffect>& effects) {
     return true;
 }
 
+// The render-bar "accelerated" allowlist — Premiere's GPU-effect
+// badge analog. Cheap = single-pass per-pixel color/geometry ops
+// that cost O(w*h) once; everything else (multi-tap blurs/sharpens,
+// spatial distortion, motion blur, the AI track-driven ids, script/
+// ocio/real-plugin chains) is the red "probably can't keep up" class.
+bool EffectCheapForRealtime(const ClipEffect& e) {
+    static const std::set<std::string> kCheapKernels = {
+        "brightness_contrast", "grayscale",  "flip_h",
+        "flip_v",              "chroma_key", "color_balance",
+        "posterize",
+    };
+    static const std::set<std::string> kCheapBuiltinIds = {
+        "xer.fx.exposure",       "xer.fx.gamma",
+        "xer.fx.levels",         "xer.fx.auto_contrast",
+        "xer.fx.temperature",    "xer.fx.tint",
+        "xer.fx.vibrance",       "xer.fx.lift_gamma_gain",
+        "xer.fx.hue_rotate",     "xer.fx.sepia",
+        "xer.fx.duotone",        "xer.fx.channel_mixer",
+        "xer.fx.invert_lum",     "xer.fx.color_isolate",
+        "xer.fx.rgb_swap",       "xer.fx.saturation_boost",
+        "xer.fx.solarize",       "xer.fx.threshold_bw",
+        "xer.fx.letterbox",      "xer.fx.border_frame",
+        "xer.fx.corner_marks",   "xer.fx.mirror",
+    };
+    const std::string& ty = e.type;
+    if (ty.rfind(kScriptFxPrefix, 0) == 0 || ty.rfind("ocio:", 0) == 0) {
+        return false;
+    }
+    if (ty.rfind("plugin:", 0) == 0 || ty.rfind("builtin:", 0) == 0) {
+        const PluginDesc* desc = PluginHost::ForEffectType(ty);
+        // Unresolvable entries and real DLLs are the CPU-only class —
+        // one bad link reclasses the whole chain (Premiere parity).
+        return desc != nullptr && desc->builtin &&
+               kCheapBuiltinIds.count(desc->id) != 0;
+    }
+    // Named kernels: the allowlist is cheap; KNOWN-but-unlisted is
+    // heavy (blur/sharpen/spatial table); unknown names apply as
+    // no-ops — pixels untouched, realtime by definition.
+    if (KnownEffectTypes().count(ty) != 0) {
+        return kCheapKernels.count(ty) != 0;
+    }
+    return true;
+}
+
 // `decode_path` is the resolver output (empty when no resolver ran)
 // — hashed alongside source_path so a proxy toggle or a fresh proxy
 // landing invalidates memoized/cached layers instead of serving
@@ -948,6 +993,24 @@ std::uint64_t MemoHash(std::uint64_t state_hash, std::int64_t time_us,
 }
 
 }  // namespace
+
+// Static render-bar cost class (see compositor.h). An adjustment
+// clip is always red — its input is the composited canvas below, so
+// nothing upstream can be cached or predicted cheap. Otherwise one
+// non-allowlisted effect reclasses the whole chain (Premiere's
+// "one CPU-only effect pulls the chain" rule — a mid-chain resync
+// costs more than the chain saves).
+ClipCostClass ClipCostClassFor(const Clip& clip) {
+    if (clip.is_adjustment) {
+        return ClipCostClass::kNeedsRender;
+    }
+    for (const ClipEffect& e : clip.effects) {
+        if (!EffectCheapForRealtime(e)) {
+            return ClipCostClass::kNeedsRender;
+        }
+    }
+    return ClipCostClass::kRealtime;
+}
 
 // ------------------------------------------------------------------
 // Compositor::Impl — all state lives here so the header stays slim.
@@ -2734,6 +2797,31 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
     const std::uint8_t* o = over.Data();
     std::uint8_t* d = out->Data();
 
+    if (type == Transition::Type::Xfade) {
+        // libavfilter xfade (xer_transition_bridge.cc — cached
+        // per-(name,w,h) AVFilterGraph). A bridge failure drops to
+        // the native crossfade below so an unknown token, an
+        // avfilter-less build, or a graph hiccup never fails a
+        // render — it just looks like a plain dissolve.
+        std::string xerr;
+        if (ApplyXfadeTransition(xfade_name, w, under, over, out,
+                                 &xerr)) {
+            return true;
+        }
+        type = Transition::Type::Crossfade;   // graceful fallback
+    }
+    if (type == Transition::Type::XerFx) {
+        // XER-native transitions (transitions_lib.cc) — hand-written
+        // CPU kernels, no runtime dependency. An unknown id falls
+        // back to the native crossfade below, same contract as a
+        // bad xfade token.
+        if (ApplyXerTransition(
+                xer_fx, ParseXerTransitionParams(xer_params), w,
+                under, over, out)) {
+            return true;
+        }
+        type = Transition::Type::Crossfade;   // graceful fallback
+    }
     if (type == Transition::Type::Crossfade) {
         const int count = width * height;
         for (int i = 0; i < count; ++i) {

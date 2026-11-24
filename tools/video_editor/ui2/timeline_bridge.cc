@@ -172,6 +172,9 @@ void TimelineBridge::BuildHooks() {
     if (host_.edit_transcript) {
         hooks_.on_edit_transcript = host_.edit_transcript;
     }
+    if (host_.clip_cost_class) {
+        hooks_.get_clip_cost_class = host_.clip_cost_class;
+    }
 }
 
 MediaBounds TimelineBridge::BoundsForPath(

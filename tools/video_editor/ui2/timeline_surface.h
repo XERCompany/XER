@@ -65,6 +65,10 @@ public:
     const std::string& SelectedClipId() const {
         return selected_clip_id_;
     }
+    // Render-status strip (Premiere's green/yellow/red needs-render
+    // bar): the ClipCostClass ordinal the strip draws for clip_id,
+    // or -1 when the hook is unwired — smoke/debug seam.
+    int CostClassOf(const std::string& clip_id) const;
     void SetSnapEnabled(bool enabled);
     bool SnapEnabled() const { return snap_enabled_; }
     // Snap-indicator seam: while a drag resolves through
@@ -420,6 +424,15 @@ private:
     std::unordered_set<std::string> poster_missing_;  // "path@ms"
     std::deque<std::string> poster_missing_lru_;
     std::list<PosterKey> poster_lru_;   // front = LRU, back = MRU
+
+    // Render-status strip state — per-clip ClipCostClass ordinals
+    // pulled through TimelineHooks::get_clip_cost_class. Refreshed on
+    // SetProject and on a ~500 ms cadence in Tick: the AutoCacher
+    // keeps landing coverage without any document mutation, so
+    // SetProject alone can't drive it.
+    void RefreshCostClasses();
+    std::unordered_map<std::string, int> clip_cost_class_;
+    std::chrono::steady_clock::time_point cost_refresh_{};
 
     XER::UI::Layout::Rect timeline_area_{};
 };

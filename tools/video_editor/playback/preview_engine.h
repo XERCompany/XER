@@ -75,6 +75,14 @@ struct PreviewOptions {
     int sample_rate = 48000;          // mixer output rate (s16 stereo)
     int audio_chunk_samples = 1024;   // mixer/provider chunk size
     bool audio_enabled = true;        // false -> video-only pump
+    // Measured adaptive quality ladder (AE "Adaptive Resolution"
+    // parity): while playing, a rolling average of per-frame render
+    // ms is compared to the frame budget; sustained >90% drops the
+    // playback tier one step (x1 -> /2 -> /4 -> /8) and marks
+    // FrameStats::adaptive_level for the monitor badge; pausing
+    // restores the configured tier (paused frames always render at
+    // full res — Premiere's separate Paused Resolution). Default ON.
+    bool adaptive_quality = true;
     // Olive-style idle-time pre-render around the playhead into the
     // shared EffectFrameCache (playback/auto_cacher.h). Also gated by
     // the XER_VE_AUTOCACHE env var (=0 disables); effective enable is
@@ -151,6 +159,39 @@ public:
     double DurationSeconds() const;
     // Completed OnVideoFrame deliveries — tests/monitoring.
     std::uint64_t FramesPresented() const;
+    // Frame counters + timing for the monitor's dropped-frame
+    // indicator and the adaptive ladder (Premiere's Dropped Frame
+    // Indicator — the engine's wall-clock playhead already drops
+    // silently; these make it measurable):
+    //   rendered        == FramesPresented()
+    //   dropped         — project-frame indices the playhead skipped
+    //                     past without a render while playing. A skip
+    //                     only counts beyond the rate's expected step
+    //                     (|rate| = 2 legitimately renders every other
+    //                     frame); seeks/loop wraps/reopens never count.
+    //   last_render_ms  — wall time of the most recent RenderFrameAt.
+    //   effective_scale — the canvas tier bound RIGHT NOW: the
+    //                     configured tier x adaptive step while
+    //                     playing, 1.0 while paused (Premiere's
+    //                     separate Paused Resolution).
+    //   adaptive_level  — >0 while the measured auto-drop is active
+    //                     (the monitor's "adaptive" badge).
+    struct FrameStats {
+        std::uint64_t rendered = 0;
+        std::uint64_t dropped = 0;
+        double last_render_ms = 0.0;
+        float effective_scale = 1.0f;
+        int adaptive_level = 0;
+    };
+    FrameStats GetFrameStats() const;
+    // Zero the dropped-frame counter — Premiere resets the indicator
+    // on every playback start (PreviewBinding calls this on play).
+    void ResetDroppedFrames();
+    // Effect-cache coverage for one clip — how many entries the
+    // shared EffectFrameCache currently holds for clip_id (the
+    // timeline render-status bar's green "cached" tier). 0 when no
+    // cache is attached.
+    std::size_t ClipCachedFrames(const std::string& clip_id) const;
     // Accumulated non-fatal notes (compositor + mixer, dedup'd).
     std::vector<std::string> Warnings() const;
 

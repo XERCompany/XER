@@ -581,6 +581,13 @@ if(WIN32)
         "${CMAKE_CURRENT_SOURCE_DIR}/ui2/*.cc"
     )
     target_sources(video_editor PRIVATE ${VIDEO_EDITOR_UI2_SOURCES})
+    # gpu/ — GPU bring-up probes (chromium-render-port R1). Exe-side
+    # like ui2/; the probe LoadLibrary's the staged ANGLE DLLs from
+    # bin/ at runtime — no import libs or EGL headers required.
+    file(GLOB VIDEO_EDITOR_GPU_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/gpu/*.cc"
+    )
+    target_sources(video_editor PRIVATE ${VIDEO_EDITOR_GPU_SOURCES})
     target_link_libraries(video_editor PRIVATE XER_UI_Core)
     # CEF browser embedding — stub lib when the distribution is absent.
     if(TARGET XER_Cef)
@@ -828,3 +835,22 @@ endforeach()
 # gracefully when one is absent).
 add_dependencies(video_editor XERVideoLoader XERSyncMedia XERFxScript
     VE.ExtensionsRuntime)
+
+# ---------------------------------------------------------------------------
+# Chromium render port — slice 1 (tools/video_editor/render/). New files
+# only; intentionally NOT wired into the preview pipeline yet — the
+# compositor/monitor_surface/ve_app integration is a later ticket.
+# video_frame.cc + frame_scheduler.cc + probe_render.cc are UI-free and
+# build on every platform (probe_render.cc backs `video_editor
+# --probe-render`). d2d_presenter.cc is the Windows D2D/D3D11 presenter
+# skeleton — it needs the XER_UI_Core include path the WIN32 block
+# above provides.
+# ---------------------------------------------------------------------------
+target_sources(video_editor PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/video_frame.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/frame_scheduler.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/probe_render.cc)
+if(WIN32)
+    target_sources(video_editor PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/render/d2d_presenter.cc)
+endif()

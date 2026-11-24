@@ -121,6 +121,13 @@ struct TimelineHooks {
     std::function<bool(const std::string&, MediaBounds*)>
         get_media_bounds;
     std::function<void(const std::string&, bool)> on_status;
+    // Render-status bar (Premiere's green/yellow/red needs-render
+    // strip painted above each clip): the shell classifies a clip's
+    // render cost — the return value is a ClipCostClass ordinal
+    // (0 kRealtime / 1 kCached / 2 kNeedsRender, compositor.h).
+    // Unset -> no strip. Must stay O(1)-cheap: the surface calls it
+    // per clip when it refreshes the cached classes.
+    std::function<int(const Clip&)> get_clip_cost_class;
     // Empty-lane context menu "Add … Here" items: create a
     // generated clip of `kind` (matte/bars/text) on `track` at
     // `at_seconds` timeline time. The shell owns any config

@@ -144,6 +144,27 @@ bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
 
 // ---- the compositor ----
 
+// Premiere render-bar cost class for a clip (the green/yellow/red
+// strip above timeline clips — a STATIC "which-processor" estimate,
+// not a measurement):
+//   kRealtime    — no fx chain, or every effect on the accelerated
+//                  allowlist: probably keeps up (yellow bar).
+//   kCached      — frames already sit in the shared effect cache:
+//                  realtime guaranteed (green bar). Never returned by
+//                  ClipCostClassFor — the shell upgrades to this when
+//                  PreviewEngine::ClipCachedFrames reports coverage.
+//   kNeedsRender — a heavy/uncached chain: spatial distortion and
+//                  multi-tap kernels (blur/warp/twirl...), the AI
+//                  track-driven effects (track_mosaic/track_mask/
+//                  face_blur/smart_reframe), script:/ocio: and real
+//                  plugin DLLs, and adjustment clips (red bar).
+enum class ClipCostClass { kRealtime = 0, kCached = 1, kNeedsRender = 2 };
+
+// Static half of the render-bar classification — pure, next to
+// ChainCacheable in compositor.cc. Returns kNeedsRender or
+// kRealtime; callers layer cache coverage on top (-> kCached).
+ClipCostClass ClipCostClassFor(const Clip& clip);
+
 struct CompositorOptions {
     // Empty -> DefaultDecoderFactory() (real FFmpeg bridge). Tests
     // inject fakes.

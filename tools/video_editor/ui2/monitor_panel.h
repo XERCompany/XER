@@ -20,6 +20,8 @@
 // gesture is inert, never a silent mutation).
 #pragma once
 
+#include <chrono>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <string>
@@ -28,10 +30,10 @@
 
 #include "monitor_surface.h"
 #include "timeline_model.h"   // Marker
+#include "widgets/badge.h"   // complete type — AdaptiveBadgeVisible is inline
 #include "widgets/widget.h"
 
 namespace XER::UI::Widgets {
-class Badge;
 class Button;
 class Label;
 class LevelMeter;
@@ -57,6 +59,7 @@ public:
         SafeMargins, Grid, Loop,
         QualitySelect, ZoomSlider,
         Timecode, Title, Meters,
+        DropLight,   // dropped-frame stoplight dot (transport row)
     };
 
     struct Hooks {
@@ -119,6 +122,19 @@ public:
     // Preview-scale pick sync (1.0/0.5/0.25 → select index + badge).
     void SetQualityScale(float scale);
     float QualityScale() const { return quality_scale_; }
+    // Dropped-frame indicator feed (PreviewBinding::DrainPending):
+    // the stoplight dot next to the timecode goes green→amber→red on
+    // the RECENT drop rate (last ~3 s window), the tooltip carries
+    // the totals, and adaptive_level > 0 shows the "adapt" badge
+    // with the effective render tier.
+    void SetDropStats(std::uint64_t dropped, std::uint64_t rendered,
+                      double last_render_ms, int adaptive_level,
+                      float effective_scale);
+    int DropLevel() const { return drop_level_; }
+    // True while the "adaptive" badge is shown (engine ladder
+    // active) — smoke seam. Defined in the .cc: Badge is only
+    // forward-declared here.
+    bool AdaptiveBadgeVisible() const;
     // Free-form chip override ("PRX", "1/2"…); empty hides.
     void SetProxyBadge(std::string text);
     // Shuttle-rate overlay chip on the surface (PreviewBinding pushes
@@ -193,7 +209,9 @@ private:
     std::shared_ptr<XER::UI::Widgets::Label> title_label_;
     std::shared_ptr<XER::UI::Widgets::Badge> proxy_badge_;
     std::shared_ptr<XER::UI::Widgets::Badge> quality_badge_;
+    std::shared_ptr<XER::UI::Widgets::Badge> adaptive_badge_;
     std::shared_ptr<XER::UI::Widgets::Widget> timecode_;
+    std::shared_ptr<XER::UI::Widgets::Widget> drop_light_;
 
     std::shared_ptr<XER::UI::Widgets::Button> to_start_btn_;
     std::shared_ptr<XER::UI::Widgets::Button> prev_btn_;
@@ -221,6 +239,17 @@ private:
     bool syncing_zoom_ = false;
     int fps_num_ = 30, fps_den_ = 1;
     double timecode_seconds_ = 0.0;
+
+    // Dropped-frame indicator state — level 0 green / 1 amber /
+    // 2 red; the deque holds (time, cumulative counters) for the
+    // trailing ~3 s rate window.
+    int drop_level_ = 0;
+    struct DropSample {
+        std::chrono::steady_clock::time_point t;
+        std::uint64_t dropped;
+        std::uint64_t rendered;
+    };
+    std::deque<DropSample> drop_history_;
 };
 
 }  // namespace XER::VideoEditor::Ui2

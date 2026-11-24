@@ -736,6 +736,17 @@ void VeApp::WireTimelineBridge() {
     host.ai_slowmo = [this](const std::string& clip_id) {
         StartAiSlowmo(clip_id);
     };
+    // Render-status bar (Premiere's green/yellow/red strip): the
+    // static cost class from the compositor's allowlist classifier,
+    // upgraded to green (kCached) when the shared effect cache
+    // already holds frames for the clip — i.e. the AutoCacher's
+    // landed coverage answers "will this play?".
+    host.clip_cost_class = [this](const Clip& clip) -> int {
+        if (program_engine_.ClipCached(clip.id)) {
+            return static_cast<int>(ClipCostClass::kCached);
+        }
+        return static_cast<int>(ClipCostClassFor(clip));
+    };
     bridge_->SetHost(std::move(host));
 
     surface->SetHooks(bridge_->Hooks());

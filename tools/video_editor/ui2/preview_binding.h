@@ -39,6 +39,7 @@ namespace XER::VideoEditor {
 class PreviewEngine;
 struct PreviewOptions;
 class IAudioSink;
+class FrameClock;
 }
 
 namespace XER::VideoEditor::Ui2 {
@@ -68,6 +69,9 @@ public:
     // null factory keeps the production decoder path.
     void SetDecoderFactory(MediaDecoderFactory factory);
     void SetAutocache(bool enabled);
+    // Test/headless seam — a manual FrameClock makes playhead advance
+    // deterministic (PreviewOptions::clock parity). Set before Ensure.
+    void SetClock(std::shared_ptr<FrameClock> clock);
 
     // ---- document state ----
     // Rebinds the playback snapshot; the next Ensure() re-inits the
@@ -144,6 +148,20 @@ public:
     // mixer's master strip) pull the same values. Zeros until the
     // engine reports.
     std::pair<float, float> PeakLevels() const;
+    // Mirror of PreviewEngine::FrameStats (dropped-frame indicator +
+    // adaptive badge data), refreshed by DrainPending — the shell's
+    // read of the engine counters without an engine include.
+    struct FrameStats {
+        std::uint64_t rendered = 0;
+        std::uint64_t dropped = 0;
+        double last_render_ms = 0.0;
+        float effective_scale = 1.0f;
+        int adaptive_level = 0;
+    };
+    const FrameStats& LastFrameStats() const { return last_stats_; }
+    // True when the shared effect cache already holds frames for
+    // clip_id — the timeline render-status bar's green tier.
+    bool ClipCached(const std::string& clip_id) const;
 
 private:
     // Forwarding audio sink — engines capture the audio_sink pointer
@@ -166,6 +184,7 @@ private:
     std::function<void(const std::string&, bool)> on_status_;
     std::function<std::string(const std::string&)> media_resolver_;
     MediaDecoderFactory decoder_factory_;
+    std::shared_ptr<FrameClock> clock_;
     bool autocache_ = true;
 
     Project snapshot_;
@@ -198,6 +217,11 @@ private:
     float pending_peak_l_ = 0.0f, pending_peak_r_ = 0.0f;
     bool has_peaks_ = false;
     double pending_playhead_ = -1.0;
+
+    // Last drained FrameStats + drop-report throttle state.
+    FrameStats last_stats_;
+    std::uint64_t last_reported_dropped_ = 0;
+    std::chrono::steady_clock::time_point last_drop_report_{};
 };
 
 }  // namespace XER::VideoEditor::Ui2

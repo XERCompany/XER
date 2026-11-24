@@ -118,6 +118,10 @@ public:
     // Convenience: hits as a fraction of lookups in [0,1] (0 when no
     // lookups yet) — for a HUD/quality readout.
     double HitRate() const;
+    // Entries currently held for one clip_id — the timeline
+    // render-status bar's green "cached" coverage check (any cached
+    // frame for the clip => it plays from cache). O(1).
+    std::size_t ClipEntryCount(const std::string& clip_id) const;
 
 private:
     struct KeyHash {
@@ -141,6 +145,9 @@ private:
     std::size_t bytes_ = 0;
     std::list<Key> lru_;   // front = MRU
     std::unordered_map<Key, Entry, KeyHash> map_;
+    // Per-clip_id live entry counts (ClipEntryCount) — maintained
+    // alongside map_ inserts/erases.
+    std::unordered_map<std::string, std::size_t> clip_counts_;
 
     std::uint64_t hits_ = 0;
     std::uint64_t misses_ = 0;

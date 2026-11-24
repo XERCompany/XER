@@ -58,6 +58,10 @@ bool EffectFrameCache::Lookup(const Key& key, video::Frame* out) {
         // Corrupt entry — drop it rather than serve a bad frame.
         lru_.erase(entry.lru_it);
         bytes_ -= entry.pixels.size();
+        if (auto c = clip_counts_.find(key.clip_id);
+            c != clip_counts_.end() && --c->second == 0) {
+            clip_counts_.erase(c);
+        }
         map_.erase(it);
         ++misses_;
         return false;
@@ -114,6 +118,7 @@ void EffectFrameCache::Store(const Key& key, const video::Frame& frame) {
     entry.height = frame.Height();
     entry.lru_it = lru_.begin();
     map_.emplace(key, std::move(entry));
+    ++clip_counts_[key.clip_id];
     bytes_ += size;
     ++stores_;
 }
@@ -131,6 +136,10 @@ void EffectFrameCache::EvictLocked(std::size_t need_bytes) {
         const auto it = map_.find(oldest);
         if (it != map_.end()) {
             bytes_ -= it->second.pixels.size();
+            if (auto c = clip_counts_.find(oldest.clip_id);
+                c != clip_counts_.end() && --c->second == 0) {
+                clip_counts_.erase(c);
+            }
             map_.erase(it);
         }
         lru_.pop_back();
@@ -142,6 +151,7 @@ void EffectFrameCache::Clear() {
     std::lock_guard<std::mutex> lk(mutex_);
     map_.clear();
     lru_.clear();
+    clip_counts_.clear();
     bytes_ = 0;
 }
 
@@ -175,6 +185,13 @@ double EffectFrameCache::HitRate() const {
     return total == 0
                ? 0.0
                : static_cast<double>(hits_) / static_cast<double>(total);
+}
+
+std::size_t EffectFrameCache::ClipEntryCount(
+    const std::string& clip_id) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    const auto it = clip_counts_.find(clip_id);
+    return it != clip_counts_.end() ? it->second : 0;
 }
 
 }  // namespace XER::VideoEditor

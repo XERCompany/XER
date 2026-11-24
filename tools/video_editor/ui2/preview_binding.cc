@@ -107,6 +107,9 @@ void PreviewBinding::SetDecoderFactory(MediaDecoderFactory factory) {
 void PreviewBinding::SetAutocache(bool enabled) {
     autocache_ = enabled;
 }
+void PreviewBinding::SetClock(std::shared_ptr<FrameClock> clock) {
+    clock_ = std::move(clock);
+}
 void PreviewBinding::SetFps(int num, int den) {
     fps_num_ = num > 0 ? num : 30;
     fps_den_ = den > 0 ? den : 1;
@@ -172,6 +175,7 @@ bool PreviewBinding::Ensure() {
     options.audio_sink = sink_binding_.get();
     options.autocache = autocache_;
     if (decoder_factory_) options.decoder_factory = decoder_factory_;
+    if (clock_) options.clock = clock_;
     if (media_resolver_) options.media_resolver = media_resolver_;
     std::string error;
     ready_ = engine_->Init(snapshot_, options, sink_.get(), &error);
@@ -228,6 +232,8 @@ void PreviewBinding::StartPlayback(double rate) {
     ApplyLoopCommand();
     engine_->SetRate(rate);
     engine_->SetPlaying(true);
+    // Premiere resets the dropped-frame indicator on every play.
+    engine_->ResetDroppedFrames();
     ui_playing_ = true;
     SetShuttleRate(rate);
     if (panel_ != nullptr) panel_->SetPlaying(true);
@@ -400,6 +406,31 @@ void PreviewBinding::DrainPending() {
             pending_playhead_ = -1.0;
         }
     }
+    // Frame stats -> the monitor's drop stoplight + adaptive badge
+    // (Premiere's indicator drains per UI tick like the frame pull).
+    if (ready_) {
+        const PreviewEngine::FrameStats s = engine_->GetFrameStats();
+        last_stats_.rendered = s.rendered;
+        last_stats_.dropped = s.dropped;
+        last_stats_.last_render_ms = s.last_render_ms;
+        last_stats_.effective_scale = s.effective_scale;
+        last_stats_.adaptive_level = s.adaptive_level;
+        if (panel_ != nullptr) {
+            panel_->SetDropStats(s.dropped, s.rendered,
+                                 s.last_render_ms, s.adaptive_level,
+                                 s.effective_scale);
+        }
+        // Status-strip mirror ("dropped N") — throttled: the count
+        // can grow every tick under sustained overload.
+        const auto now = std::chrono::steady_clock::now();
+        if (s.dropped > 0 && s.dropped != last_reported_dropped_ &&
+            now - last_drop_report_ >= std::chrono::seconds(1)) {
+            last_reported_dropped_ = s.dropped;
+            last_drop_report_ = now;
+            Report("dropped " + std::to_string(s.dropped) +
+                   " frame" + (s.dropped == 1 ? "" : "s"));
+        }
+    }
     if (panel_ == nullptr) {
         if (playhead >= 0.0) {
             playhead_ =
@@ -433,6 +464,11 @@ std::pair<float, float> PreviewBinding::PeakLevels() const {
     // has_peaks_ is consumed by DrainPending but the slots keep the
     // last-reported values — exactly what a meter pull wants.
     return {pending_peak_l_, pending_peak_r_};
+}
+
+bool PreviewBinding::ClipCached(const std::string& clip_id) const {
+    return ready_ && engine_ != nullptr &&
+           engine_->ClipCachedFrames(clip_id) > 0;
 }
 
 }  // namespace XER::VideoEditor::Ui2

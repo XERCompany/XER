@@ -268,6 +268,9 @@ void ApplyColorKey(Tokens* t, const std::string& key,
             {"pressed", &Tokens::pressed},
             {"disabled", &Tokens::disabled},
             {"selection", &Tokens::selection},
+            {"status_ok", &Tokens::status_ok},
+            {"status_warn", &Tokens::status_warn},
+            {"status_bad", &Tokens::status_bad},
         };
     const auto it = kColorKeys.find(key);
     if (it != kColorKeys.end()) {

@@ -109,6 +109,11 @@ public:
         // shell-side.
         std::function<void(const std::string&)> ai_slowmo;
         std::function<void(const std::string&)> edit_transcript;
+        // Render-status bar feed (Premiere's green/yellow/red strip):
+        // classifies one clip's render cost — ClipCostClass ordinal
+        // (0 realtime / 1 cached / 2 needs-render). Unset -> the
+        // surface draws no strip.
+        std::function<int(const Clip&)> clip_cost_class;
     };
 
     // Borrows both — the shell outlives the bridge. `host` copies;

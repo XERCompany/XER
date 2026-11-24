@@ -38,6 +38,7 @@
 #include "transitions_lib.h"
 #include "ve_theme.h"
 #include "widgets/context_menu.h"
+#include "xer_transition_bridge.h"
 
 namespace XER::VideoEditor::Ui2 {
 namespace {
@@ -358,7 +359,26 @@ void TimelineSurface::SetProject(const Project* project) {
     // The project object may have been rebuilt by a commit — drop any
     // stale tool previews keyed by old clip ids.
     clip_previews_.clear();
+    // Edit changed the cost domain — reclassify the render-status
+    // strip immediately rather than on the next Tick cadence.
+    RefreshCostClasses();
     Invalidate();
+}
+
+void TimelineSurface::RefreshCostClasses() {
+    cost_refresh_ = std::chrono::steady_clock::now();
+    if (!hooks_.get_clip_cost_class || project_ == nullptr) {
+        clip_cost_class_.clear();
+        return;
+    }
+    for (const Clip& clip : project_->clips) {
+        clip_cost_class_[clip.id] = hooks_.get_clip_cost_class(clip);
+    }
+}
+
+int TimelineSurface::CostClassOf(const std::string& clip_id) const {
+    const auto it = clip_cost_class_.find(clip_id);
+    return it != clip_cost_class_.end() ? it->second : -1;
 }
 
 void TimelineSurface::SetPlayheadSeconds(double seconds) {
@@ -1068,6 +1088,11 @@ void TimelineSurface::Render(
     XER::UI::Rendering::Renderer& renderer,
     const XER::UI::Theme::Tokens& tokens) {
     const Rect bounds = GetBounds();
+    // Parked (collapsed/orphaned) surface: the chrome below is drawn
+    // at bounds-origin + CONSTANT offsets (caption, tool chip,
+    // toolbar row, ruler labels), so a zero-size rect still paints
+    // over sibling widgets — bail before any of it lands.
+    if (bounds.width <= 0.0f || bounds.height <= 0.0f) return;
     renderer.FillRect(bounds, tokens.surface, tokens.radius_large);
     renderer.StrokeRect(bounds, tokens.border, 1.0f,
                         tokens.radius_large);
@@ -1329,6 +1354,23 @@ void TimelineSurface::Render(
         float alpha = clip.muted || track.hidden ? 0.30f : 1.0f;
         if (track.locked) alpha *= 0.5f;   // locked tracks dim
         renderer.FillRect(rect, WithAlpha(card, alpha), kClipRadius);
+        // Render-status strip — Premiere's green/yellow/red bar,
+        // painted in the 4px inset above the clip card on video
+        // tracks: green = cached coverage, yellow = realtime
+        // (no fx / allowlisted cheap chain), red = needs render.
+        if (track.kind == TrackKind::Video &&
+            hooks_.get_clip_cost_class) {
+            const auto it = clip_cost_class_.find(clip.id);
+            const int cls = it != clip_cost_class_.end()
+                                ? it->second
+                                : hooks_.get_clip_cost_class(clip);
+            const Color bar = cls == 2   ? tokens.status_bad
+                              : cls == 1 ? tokens.status_ok
+                                         : tokens.status_warn;
+            renderer.FillRect(
+                Rect{rect.x, rect.y - 3.5f, rect.width, 3.0f},
+                WithAlpha(bar, alpha), 1.0f);
+        }
         const Rect strip{rect.x, rect.y, rect.width,
                          std::min(kClipLabelHeight, rect.height)};
         renderer.FillRect(strip, WithAlpha(type, alpha), kClipRadius);
@@ -2531,7 +2573,19 @@ void TimelineSurface::ZoomToRange(double t0, double t1) {
     Invalidate();
 }
 
-void TimelineSurface::Tick(double dt_seconds) { (void)dt_seconds; }
+void TimelineSurface::Tick(double dt_seconds) {
+    (void)dt_seconds;
+    // Render-status strip: refresh the cached cost classes on a slow
+    // cadence — cache coverage (the green tier) moves without any
+    // document edit. A refresh repaints only when a class changed.
+    if (hooks_.get_clip_cost_class && project_ != nullptr &&
+        std::chrono::steady_clock::now() - cost_refresh_ >
+            std::chrono::milliseconds(500)) {
+        const auto before = clip_cost_class_;
+        RefreshCostClasses();
+        if (clip_cost_class_ != before) Invalidate();
+    }
+}
 
 // RAII gesture bracket — fires the optional
 // TimelineHooks::on_gesture_begin/on_gesture_end pair around a
@@ -2793,6 +2847,39 @@ bool TimelineSurface::ShowContextMenu(
                                     hooks_.on_add_transition(
                                         id, Transition::Type::XerFx,
                                         -1.0, tid);
+                                }
+                            };
+                        items.push_back(std::move(trans));
+                    }
+                }
+                // FFmpeg xfade set (xer_transition_bridge.h) — the
+                // flat context menu has no submenus, so each group
+                // gets a disabled header row and entries carry the
+                // group prefix. Hidden entirely when libavfilter
+                // lacks the filter (XfadeTypeAvailable gates the
+                // renderer too).
+                if (XfadeAvailable()) {
+                    const char* last_group = nullptr;
+                    for (const XfadeTransitionInfo& xf :
+                         XfadeTransitions()) {
+                        if (last_group == nullptr ||
+                            std::strcmp(last_group, xf.group) != 0) {
+                            Widgets::ContextMenu::Item header;
+                            header.label =
+                                std::string("── ") + xf.group + " ──";
+                            header.enabled = false;
+                            header.separator_before = true;
+                            items.push_back(std::move(header));
+                            last_group = xf.group;
+                        }
+                        Widgets::ContextMenu::Item trans;
+                        trans.label = std::string("XF: ") + xf.label;
+                        trans.action =
+                            [this, id, name = xf.name] {
+                                if (hooks_.on_add_transition) {
+                                    hooks_.on_add_transition(
+                                        id, Transition::Type::Xfade,
+                                        -1.0, name);
                                 }
                             };
                         items.push_back(std::move(trans));

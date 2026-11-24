@@ -67,6 +67,12 @@ struct Tokens {
     // Small rounded "fx"-style chip drawn on clips carrying applied
     // effects or warnings.
     Color warning_chip{};
+    // Stoplight status trio — render-status bars on the timeline
+    // (Premiere's green/yellow/red needs-render strip) and the
+    // monitor's dropped-frame indicator.
+    Color status_ok{};
+    Color status_warn{};
+    Color status_bad{};
 };
 
 } // namespace XER::UI::Theme

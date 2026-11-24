@@ -67,6 +67,7 @@
 #include "ui2/ui2_media_prep_smoke.h"  // Ui2MediaPrepSmoke hook
 #include "ui2/ui2_color_mixer_smoke.h" // Ui2ColorMixerSmoke hook
 #include "ui2/ui2_lifecycle_smoke.h"   // Ui2LifecycleSmoke hook
+#include "ui2/render_p0_smoke.h"       // RenderP0Smoke hook
 #include "ui2/photo_workspace.h"      // Ui2PhotoWorkspaceSmoke hook
 #include "ui2/ve_app.h"
 #include "ui2/ve_theme.h"
@@ -80,6 +81,7 @@
 #include "app_runtime/js_engine.h"  // complete type for BootResult dtor
 #include "cef/cef_host.h"           // --cef-check browser bring-up
 #include "cef/cef_runtime.h"        // CEF subprocess early-out
+#include "gpu/angle_probe.h"        // XER_VE_GPU_PROBE=1 ANGLE bring-up
 
 #include <atomic>
 #include <cmath>
@@ -647,6 +649,13 @@ int RunScreenshotUi(const std::string& project_path, double t,
     // The shell owns the document — push the project so the program
     // binding has a snapshot to decode.
     app->SetProject(project);
+    // XER_VE_WORKSPACE=<preset> captures a non-default workspace
+    // (the persisted-prefs workspace already loads; this env makes
+    // headless captures of e.g. "Photo" scriptable).
+    if (const char* ws = std::getenv("XER_VE_WORKSPACE");
+        ws != nullptr && ws[0] != '\0') {
+        app->ApplyWorkspaceByName(ws);
+    }
 
     const XER::UI::Theme::Tokens tokens =
         XER::VideoEditor::Ui2::Theme::DarkTokens(
@@ -1538,6 +1547,13 @@ static LONG WINAPI VeCrashTrace(EXCEPTION_POINTERS* e) {
 }
 #endif
 
+// render/probe_render.cc — `--probe-render` body (chromium render-port
+// slice-1 self-check). Forward-declared so this TU doesn't need the
+// render/ headers.
+namespace XER::VideoEditor::Render {
+int RunRenderProbe();
+}
+
 int main(int argc, char** argv) {
 #if defined(_WIN32)
     SetUnhandledExceptionFilter(VeCrashTrace);
@@ -1577,6 +1593,13 @@ int main(int argc, char** argv) {
         freopen_s(&f, "CONIN$", "r", stdin);
     }
     SetConsoleOutputCP(CP_UTF8);
+    // XER_VE_GPU_PROBE=1 — ANGLE/D3D11 bring-up probe (chromium-render-
+    // port R1); prints to stderr and continues normal startup.
+    if (const char* p = std::getenv("XER_VE_GPU_PROBE");
+        p && p[0] && std::strcmp(p, "0") != 0) {
+        const auto probe = XER::VideoEditor::Gpu::RunAngleProbe();
+        XER::VideoEditor::Gpu::PrintAngleProbeResult(probe, stderr);
+    }
     (void)argc;
     (void)argv;
 #else
@@ -1665,6 +1688,12 @@ int main(int argc, char** argv) {
         // Hidden dev flag: heavy-effect ms/frame micro-benchmark.
         return RunBenchEffects();
     }
+    if (arg == "--probe-render") {
+        // Hidden dev flag: chromium render-port slice-1 self-check
+        // (VideoFramePool recycling + TimeSource/FrameScheduler math).
+        // Headless — no UI, no GPU, no media files.
+        return XER::VideoEditor::Render::RunRenderProbe();
+    }
     if (arg == "--smoke") {
         // Headless, bounded self-check — see smoke_checks.h.
 #if defined(_WIN32)
@@ -1710,6 +1739,9 @@ int main(int argc, char** argv) {
             "ui2_lifecycle",
             &XER::VideoEditor::Ui2::Ui2LifecycleSmoke);
         XER::VideoEditor::Smoke::RegisterCheck(
+            "render_p0",
+            &XER::VideoEditor::Ui2::RenderP0Smoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);
 #endif
@@ -1753,6 +1785,9 @@ int main(int argc, char** argv) {
         XER::VideoEditor::Smoke::RegisterCheck(
             "ui2_lifecycle",
             &XER::VideoEditor::Ui2::Ui2LifecycleSmoke);
+        XER::VideoEditor::Smoke::RegisterCheck(
+            "render_p0",
+            &XER::VideoEditor::Ui2::RenderP0Smoke);
         XER::VideoEditor::Smoke::RegisterCheck(
             "photo_workspace",
             &XER::VideoEditor::Ui2::Ui2PhotoWorkspaceSmoke);
