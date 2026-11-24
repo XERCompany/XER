@@ -2933,10 +2933,30 @@ void VeApp::CommitGizmoTransform(const std::string& clip_id,
     // (keyframed props keep animating over the new base value).
     updated.transform = transform;
     CommitInspectorClips({updated});
-    // Repaint the paused monitor through the still-warm preview
-    // compositor (the engine binding re-inits on its next transport
-    // action — the same rule inspector edits live under).
-    GizmoPreviewTransform(clip_id, transform);
+    // Repaint the paused monitor: inside a gesture the preview
+    // compositor is still warm; outside one (double-click reset)
+    // open a one-shot so the commit is visible without a transport
+    // action (the engine binding re-inits on its next transport
+    // action either way — inspector-edit parity).
+    if (gizmo_preview_ok_) {
+        GizmoPreviewTransform(clip_id, transform);
+    } else if (program_monitor_ != nullptr) {
+        Compositor comp;
+        CompositorOptions options;
+        if (proxies_ != nullptr && project_.use_proxies) {
+            options.media_resolver =
+                [this](const std::string& path) {
+                    return proxies_->ResolveDecodePath(path);
+                };
+        }
+        std::string error;
+        std::vector<std::uint8_t> bgra;
+        if (comp.Init(project_, options, &error) &&
+            comp.RenderFrameAt(playhead_, &bgra, &error)) {
+            program_monitor_->SetFrame(bgra, project_.width,
+                                       project_.height);
+        }
+    }
     RefreshInspector();
 }
 

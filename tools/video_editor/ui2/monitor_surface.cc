@@ -474,13 +474,15 @@ MonitorSurface::GizmoState MonitorSurface::ResolveGizmo() const {
         !HasFrame()) {
         return s;
     }
-    if (gizmo_mode_ != GizmoMode::None ||
-        gizmo_pending_select_) {
+    if (gizmo_mode_ != GizmoMode::None) {
         // Mid-gesture: the box draws from the live preview transform
         // (a dropped hook pull can't flicker the box mid-drag).
         s.target = gizmo_target_;
         s.target.transform = gizmo_live_;
     } else {
+        // Idle and pending-select both pull fresh — the selection
+        // round-trip has already landed, so the picked clip's box
+        // appears under the cursor immediately.
         s.target = hooks_.gizmo_target();
     }
     s.valid = GizmoGeomValid(s.target);
