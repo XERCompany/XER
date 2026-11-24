@@ -6,8 +6,10 @@
 #include "ui2_shell_smoke.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "monitor_panel.h"
 #include "photo_workspace.h"
@@ -169,6 +171,59 @@ std::string CheckWorkspaceSwitchGeometry(
         !empty(app.Timeline()->GetBounds())) {
         return "Photo preset: timeline still owns span";
     }
+    // Zero bounds is not enough — a parked panel's children keep
+    // their Layout-assigned rects near the origin and paint over the
+    // band (the "TIMELINE"/Selection-chip/ruler chrome leaking into
+    // the photo top bar). Collapsed/orphaned shell chrome must be
+    // INVISIBLE: the only effectively-visible DockTabGroup inside the
+    // app is the photo band's own Layers/Adjust dock.
+    if (app.Timeline()->IsEffectivelyVisible() ||
+        app.MonitorSplit()->IsEffectivelyVisible() ||
+        app.LeftDock()->IsEffectivelyVisible() ||
+        app.RightDock()->IsEffectivelyVisible()) {
+        return "Photo preset: collapsed shell chrome is still "
+               "effectively visible (stray paint over the photo band)";
+    }
+    {
+        std::vector<std::string> stray;
+        const std::function<void(const W::Widget*)> walk =
+            [&](const W::Widget* node) {
+                if (node == nullptr ||
+                    !node->IsEffectivelyVisible()) {
+                    return;
+                }
+                // The band's own internals (incl. its right-dock tab
+                // group) are the allowed answer — don't descend.
+                if (node == app.PhotoWorkspaceView()) return;
+                if (dynamic_cast<const TimelineStrip*>(node) !=
+                    nullptr) {
+                    stray.push_back("TimelineStrip");
+                }
+                if (dynamic_cast<const TimelineSurface*>(node) !=
+                    nullptr) {
+                    stray.push_back("TimelineSurface");
+                }
+                if (dynamic_cast<const DockTabGroup*>(node) !=
+                    nullptr) {
+                    stray.push_back("DockTabGroup");
+                }
+                for (const auto& child : node->GetChildren()) {
+                    walk(child.get());
+                }
+            };
+        for (const auto& child : app.GetChildren()) {
+            walk(child.get());
+        }
+        if (!stray.empty()) {
+            std::string names;
+            for (const std::string& s : stray) {
+                if (!names.empty()) names += ", ";
+                names += s;
+            }
+            return "Photo preset: video chrome still effectively "
+                   "visible in the band region: " + names;
+        }
+    }
 
     // Photo -> Editing — THE regression: the photo band is orphaned by
     // the panel rebuild; it used to keep its stale full-width rect,
@@ -179,7 +234,8 @@ std::string CheckWorkspaceSwitchGeometry(
         return "rail click did not apply the Editing preset";
     }
     tree.Layout(frame, tokens);
-    if (!empty(app.PhotoWorkspaceView()->GetBounds())) {
+    if (!empty(app.PhotoWorkspaceView()->GetBounds()) ||
+        app.PhotoWorkspaceView()->IsEffectivelyVisible()) {
         return "Photo->Editing: photo workspace kept a stale rect — "
                "it paints over the video layout (stuck workspace)";
     }

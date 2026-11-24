@@ -68,6 +68,11 @@ void Resizable::SetCollapsed(int index, bool collapsed) {
         // not just the originally configured fraction.
         panels_[i].size = sizes_[i];
         collapsed_[i] = true;
+        // Hide eagerly — waiting for the Layout pass leaves a frame
+        // where the parked subtree still paints at the origin (the
+        // strip's children keep their Layout-assigned rects even at
+        // zero bounds; RenderSubtree only skips invisible widgets).
+        panels_[i].widget->SetVisible(false);
     } else {
         collapsed_[i] = false;
         // Give the panel its stashed share back and rescale the remaining
@@ -85,6 +90,10 @@ void Resizable::SetCollapsed(int index, bool collapsed) {
             }
         }
         sizes_[i] = restored;
+        // Mirror of the collapse hide: a panel that owns span again
+        // must render (a workspace switch may have hidden it as an
+        // orphan before re-adding it).
+        panels_[i].widget->SetVisible(true);
     }
     RequestLayout();
 }
@@ -191,11 +200,12 @@ void Resizable::Layout(const Layout::Rect& bounds) {
 
     // Children that are no longer registered panels — ClearPanels'd
     // and never re-added, or adopted without AddPanel — own no span.
-    // Park them on an empty rect: without this an orphan keeps its
-    // last bounds, keeps painting over the live panels (it's still a
-    // child, so RenderSubtree draws it) and keeps winning hit-tests
-    // (FindHitTarget walks children, not panels_). The ui2 shell hits
-    // this on every workspace switch that swaps the center widget.
+    // Park them on an empty rect AND hide them: RenderSubtree only
+    // skips invisible widgets, never zero-bounds ones, so a parked
+    // container's descendants keep their Layout-assigned rects near
+    // the origin and paint over the live panels (the ui2 shell's
+    // orphaned monitor pair + photo band did exactly this), and
+    // FindHitTarget still routes clicks into them.
     for (const auto& child : GetChildren()) {
         bool is_panel = false;
         for (const auto& panel : panels_) {
@@ -207,6 +217,7 @@ void Resizable::Layout(const Layout::Rect& bounds) {
         if (!is_panel) {
             child->Layout({}, CachedLayoutTokens());
             child->SetBounds({});
+            child->SetVisible(false);
         }
     }
 
@@ -234,8 +245,16 @@ void Resizable::Layout(const Layout::Rect& bounds) {
         if (collapsed_[static_cast<std::size_t>(i)]) {
             panels_[i].widget->Layout({}, CachedLayoutTokens());
             panels_[i].widget->SetBounds({});
+            // Hide the whole subtree — see the orphan park above. A
+            // collapsed strip's children (tool chips, surface chrome)
+            // otherwise paint their Layout rects over sibling panels.
+            panels_[i].widget->SetVisible(false);
             continue;
         }
+        // Re-show panels re-added after a collapse/orphan pass hid
+        // them (workspace switches swap children between these
+        // states). Panels owning span are always meant to render.
+        panels_[i].widget->SetVisible(true);
         const float px = usable * sizes_[i];
         Layout::Rect r;
         if (dir_ == Direction::Horizontal) {

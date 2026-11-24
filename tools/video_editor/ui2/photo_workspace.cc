@@ -19,6 +19,7 @@
 #include <commdlg.h>
 #endif
 
+#include "debug/debug_map_ui.h"
 #include "helper/path_utils.h"
 #include "icon_helpers.h"
 #include "lab/object_ops.h"
@@ -3652,6 +3653,38 @@ std::string Ui2PhotoWorkspaceSmoke() {
     }
     if (ws->Doc()->Root().Children().size() != 1) {
         return "fresh document should have one starter layer";
+    }
+
+    // Band isolation: the photo band's subtree is exactly its own
+    // chrome — no TimelineStrip/TimelineSurface, and exactly one
+    // DockTabGroup (its own Layers/Adjust right dock). Stray shell
+    // chrome inside the band is the "TIMELINE/Selection chip painted
+    // over the tool strip" regression.
+    {
+        int dock_groups = 0;
+        const std::function<void(const W::Widget*)> scan =
+            [&](const W::Widget* n) {
+                if (n == nullptr) return;
+                if (dynamic_cast<const DockTabGroup*>(n) != nullptr) {
+                    ++dock_groups;
+                }
+                for (const auto& c : n->GetChildren()) {
+                    scan(c.get());
+                }
+            };
+        scan(ws.get());
+        const std::string dump =
+            XER::UI::Debug::DebugMapUI::Dump(ws.get());
+        const bool video_chrome =
+            dump.find("TimelineStrip") != std::string::npos ||
+            dump.find("TimelineSurface") != std::string::npos;
+        if (dock_groups != 1 || video_chrome) {
+            return "photo band subtree contains foreign chrome "
+                   "(dock groups " +
+                   std::to_string(dock_groups) +
+                   ", video chrome " + std::to_string(video_chrome) +
+                   ")";
+        }
     }
 
     // Canvas paint: the composite must reach DrawFrameBgra.
