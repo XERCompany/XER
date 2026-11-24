@@ -1,0 +1,44 @@
+# Normalize text files to LF in the repository. Existing CRLF blobs
+# are untouched until next modified, then normalize on commit.
+* text=auto
+
+# Source & config
+*.cc    text
+*.h     text
+*.c     text
+*.cpp   text
+*.hpp   text
+*.md    text
+*.txt   text
+*.cmake text
+*.json  text
+*.yml   text
+*.yaml  text
+*.py    text
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.sh    text eol=lf
+
+# Binaries
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.ico   binary
+*.icns  binary
+*.ttf   binary
+*.otf   binary
+*.woff  binary
+*.woff2 binary
+*.dll   binary
+*.lib   binary
+*.a     binary
+*.so    binary
+*.dylib binary
+*.exe   binary
+*.onnx  binary
+*.zip   binary
+*.7z    binary
+*.mp4   binary
+*.mov   binary
+*.wav   binary
+*.mp3   binary
