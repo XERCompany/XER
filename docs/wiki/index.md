@@ -171,6 +171,11 @@ Goal started: 2026-11-15. Design doc:
   focus), adopt/keep lists, and ranked port tickets T1–T16 with
   effort estimates + "don't port the compositor" verdict
   (2026-11-23).
+- [packaging-module.md](architecture/packaging-module.md) —
+  `src/packaging` app bundler: in-process PE dep scan, staging tree +
+  xer-package/1 manifest, zip via XER_Archive, software-rendered
+  `xer_packager` GUI/CLI; archive_manager .xer-tmp format-detection
+  fix (2026-11-24).
 - [chromium-render-port-plan.md](architecture/chromium-render-port-plan.md)
   — Chromium render/media pipeline ↔ VE render path mapping
   (VideoFrame↔video::Frame, BeginFrame↔WM_TIMER pump, VRA↔none,
@@ -180,6 +185,11 @@ Goal started: 2026-11-15. Design doc:
   design (d3d11va→VideoProcessor→GPU compositor→keyed-mutex present),
   and ranked tickets R1–R9 + not-portable list (command_buffer/Mojo/
   GPU-process) (2026-11-24).
+- [content-opendialog.md](architecture/content-opendialog.md) —
+  `src/content/opendialog`: Windows common-item-dialog pickers
+  (open/save/dir read+write) with `IFileDialogCustomize` custom widgets
+  embedded in the system dialog, legacy comdlg32 fallback, HWND seam
+  for `src/ui`, and the headless/interactive test split (2026-11-24).
 - [builder-check-2026-11-15.md](reviews/builder-check-2026-11-15.md) —
   independent design-doc review findings and how each was resolved.
 

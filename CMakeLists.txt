@@ -523,6 +523,7 @@ add_subdirectory(src/error_handler)
 add_subdirectory(src/runtime_safety)
 add_subdirectory(src/content/platform)
 add_subdirectory(src/content/process)
+add_subdirectory(src/content/opendialog)
 add_subdirectory(src/content/archive)
 add_subdirectory(src/content/pdf)
 add_subdirectory(src/content/civitaimodels)
@@ -953,6 +954,11 @@ add_subdirectory(tools/video_editor)
 # video_editor; shells out to ztzmake/VE.ExtensionsRuntime siblings).
 add_subdirectory(tools/ide_xejso)
 
+# src/packaging — xer_packaging bundler core + xer_packager app-builder
+# tool (PE dep scan, staging tree, manifest, zip). Placed after
+# tools/pe_deps so xer_stage_runtime_dlls(TARGET ...) applies.
+add_subdirectory(src/packaging)
+
 include(CTest)
 if(BUILD_TESTING)
     add_subdirectory(tests)
@@ -1034,7 +1040,8 @@ endif()
 foreach(_t EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
         SecurityFlashService ControllAccountsWindows ServerAudio
         ArchiveManager sd HubCivitAIBrowser audioconvert
-        audioapplyeffect audioprobe audioplayer preview Editor IDEXEJSO)
+        audioapplyeffect audioprobe audioplayer preview Editor IDEXEJSO
+        xer_packager)
     if(TARGET ${_t})
         xer_link_msys2_static(${_t})
     endif()
@@ -1049,7 +1056,7 @@ foreach(_app EngineScanVST3 XERVac xer_engine_ui_render XERVacUI
         ArchiveManager HubCivitAIBrowser Editor video_editor
         XERVideoLoader XERSyncMedia XERFxScript VE.ExtensionsRuntime
         IDEXEJSO
-        XBrowser XER_VST3_CEF xer_browser_shell)
+        XBrowser XER_VST3_CEF xer_browser_shell xer_packager)
     if(TARGET ${_app})
         xer_app_win32(${_app})
     endif()
