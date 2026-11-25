@@ -9,6 +9,41 @@ implements the manifest's `automatic_*` policy: per-dep status, git
 clone/fetch + binary-tarball staging, libclang-driven cmake patch
 generation, static verification and a Build.ps1-friendly `auto` mode.
 
+## 2026-11-26 update (as of `b7414b2`)
+
+- **Manifest 16 → 165 deps**: `dependencies-from-github` 137 +
+  `dependencies-opensource` 28 — the full `msys2-exit-plan.md`
+  inventory: complete FFmpeg codec tree, glib/gnutls stacks, prebuilt
+  toolchain routes (llvm-mingw ucrt `20261117`, pkg-config-lite, BtbN
+  ffmpeg-builds, NVIDIA cuda/cudnn redist, MKL wheels, fftw/sqlite/
+  boost). 48 deps carry `notes` flagging them 'hard' (ffmpeg autotools,
+  glib stack, skia, v8, gnutls, oiio, opencv) with a per-dep path.
+- **New schema fields**: `ref` pins a git dep (clone lands on the ref,
+  drift re-pins, pinned deps skip update counting — used for
+  pthreadpool `a56dcd79`, fxdiv `63058ef`, fp16 `4dfe081`,
+  dlfcn-win32 `v1.4.2`); `notes` free-text; `build_mode` (root +
+  per-dep via `EffectiveBuildMode`) — `cmake-gen` emits
+  `BUILD_SHARED_LIBS OFF` scoping and `STATIC` source-list targets.
+- **New flags**: `addfromgit --ref <sha>`; `mirrors[]` on binary deps
+  (cef spotifycdn timeouts); `extract_map` remaps archive roots
+  (onnxruntime nupkg → `win-x64/` + `include/`); `--cacert` + CA-bundle
+  probing (libcurl cert failures).
+- **onnxruntime source**: upstream github repo 404s — the working
+  channel is NuGet v3 flat-container `microsoft.ml.onnxruntime`.
+- **Restore-after-wipe lessons**: unpatched upstream pthreadpool fails
+  on MinGW (`<alloca.h>` missing; `alloca` macro predefined by
+  `malloc.h`) — the in-tree patch at `third_party/pthreadpool/src/
+  pthreads.c:77` is load-bearing, keep it. Newer CEF dists put real
+  runtime handlers under `libcef_dll/{cpptoc,ctocpp}/test/` — excluding
+  `/test/` from the wrapper glob produced undefined-symbol links
+  (`CefInputHandlerCppToC`, `CefCaptureBrowserWindowCallbackCppToC`);
+  filter now only drops `_unittest|cef_dump_without_crashing`.
+- **Known unverified URLs**: several clone URLs are canonical-upstream
+  guesses (bitbucket x265, gitlab.xiph mirrors, git.libssh.org) — first
+  full `sync` will surface bad ones. `w64devkit` is a 7z SFX —
+  ArchiveManager compat untested. `ffmpeg-builds` latest-release asset
+  name may drift.
+
 ## Subcommands
 
 | command | what it does |
