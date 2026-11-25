@@ -160,15 +160,21 @@ int ConfigureWriterFormat(archive* a, const std::string& path) {
     return archive_write_set_format_zip(a);
 }
 
-WritePtr OpenWriter(const std::string& path, std::string* error) {
+// Opens `path` for writing with the format chosen from `format_path`'s
+// extension — callers writing through a temp sibling (RewriteArchive)
+// pass the real archive name as `format_path` so ".xer-tmp" never
+// confuses the format bidder.
+WritePtr OpenWriter(const std::string& path,
+                    const std::string& format_path,
+                    std::string* error) {
     archive* a = archive_write_new();
     if (a == nullptr) {
         *error = "archive_write_new failed";
         return {};
     }
     WritePtr w(a, WriteDeleter{});
-    if (ConfigureWriterFormat(a, path) != ARCHIVE_OK) {
-        *error = "cannot determine archive format for " + path;
+    if (ConfigureWriterFormat(a, format_path) != ARCHIVE_OK) {
+        *error = "cannot determine archive format for " + format_path;
         return {};
     }
 #ifdef _WIN32
@@ -245,7 +251,10 @@ bool RewriteArchive(const std::string& archive_path,
     }
 
     const std::string tmp_path = archive_path + ".xer-tmp";
-    WritePtr writer = OpenWriter(tmp_path, error);
+    // Format detection must look at the final name ("out.zip"), not the
+    // temp sibling ("out.zip.xer-tmp" defeats by_ext — and the failed
+    // call also poisons the archive so the zip fallback can't recover).
+    WritePtr writer = OpenWriter(tmp_path, archive_path, error);
     if (!writer) return false;
 
     // If we are modifying an existing archive, the output format must

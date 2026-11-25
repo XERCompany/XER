@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <utility>
 
 #include "lab/object_ops.h"   // MaskToPolygon — mask-contour overlay
@@ -27,6 +28,25 @@ constexpr float kDragThreshold = 4.0f;
 constexpr double kDoubleClickSeconds = 0.4;
 // Wheel zoom: one notch steps the zoom by this factor.
 constexpr float kZoomStep = 1.25f;
+
+// ---- transform gizmo metrics ----
+// Handle square half-size (DIP); hit slop is wider than the visual.
+constexpr float kGizmoHandleHalf = 3.5f;
+constexpr float kGizmoHitSlop = 7.0f;
+// Rotation stem: the rotate handle rides this far above the box's
+// top-edge midpoint (Premiere-style).
+constexpr float kGizmoStem = 22.0f;
+// Snap distance in client px (timeline snap threshold parity).
+constexpr float kGizmoSnapPx = 6.0f;
+// Snap indicator — the timeline's kAccentCyan magnet-guide token.
+constexpr Color kGizmoSnapColor{0.13f, 0.83f, 0.93f, 1.0f};
+// Rotation snap step when Shift is held (degrees).
+constexpr float kGizmoRotSnapDeg = 15.0f;
+// Scale drag clamps — keeps the warp's `scale > 0` contract and a
+// recoverable minimum handle.
+constexpr float kGizmoMinScale = 0.02f;
+constexpr float kGizmoMaxScale = 100.0f;
+constexpr double kGizmoPi = 3.14159265358979323846;
 
 Color WithAlpha(Color c, float alpha) {
     c.a *= alpha;
@@ -116,9 +136,59 @@ void MonitorSurface::SetFrame(const std::vector<std::uint8_t>& bgra,
             static_cast<std::size_t>(height)) {
         return;
     }
+    video_frame_ = nullptr;   // legacy path — drop any VideoFrame lease
+    frame_px_offset_ = 0;
     frame_ = std::make_shared<const std::vector<std::uint8_t>>(bgra);
     frame_width_ = width;
     frame_height_ = height;
+    Invalidate(VideoAreaRect());
+}
+
+void MonitorSurface::SetVideoFrame(
+    Render::scoped_refptr<Render::VideoFrame> frame) {
+    // R9 zero-copy feed — same validity contract as SetFrame, plus
+    // storage/format gates the CPU paint path needs. Unsupported
+    // frames are dropped silently: callers keep their CPU fallback.
+    if (!frame || !frame->IsMappable() || frame->planes() < 1 ||
+        frame->data(0) == nullptr) {
+        return;
+    }
+    const auto fmt = frame->format();
+    if (fmt != Render::VideoPixelFormat::kBGRA8 &&
+        fmt != Render::VideoPixelFormat::kRGBA8) {
+        return;
+    }
+    const Render::VideoRect vis = frame->visible_rect();
+    const Render::VideoSize coded = frame->coded_size();
+    if (vis.IsEmpty() || coded.IsEmpty() ||
+        !vis.FitsInside(coded)) {
+        return;
+    }
+    // DrawFrameBgra reads packed rows — the visible rows must be
+    // contiguous (stride == vis.width*4). Padded/unpacked sources
+    // need a repack or the texture path; neither exists yet.
+    if (frame->stride(0) != vis.width * 4) {
+        return;
+    }
+    auto pixels = frame->SharePixels();
+    if (!pixels || pixels->empty() ||
+        pixels->size() / 4u <
+            static_cast<std::size_t>(coded.width) *
+                static_cast<std::size_t>(coded.height)) {
+        return;
+    }
+    // Order matters for pooling: release the previous alias FIRST so
+    // the old frame's storage is the sole owner when the lease dies
+    // — that is the only case the pool recycles (a live alias means
+    // the buffer frees with the reader instead).
+    frame_ = std::move(pixels);
+    video_frame_ = std::move(frame);
+    frame_px_offset_ =
+        static_cast<std::size_t>(vis.y) *
+            static_cast<std::size_t>(frame->stride(0)) +
+        static_cast<std::size_t>(vis.x) * 4;
+    frame_width_ = vis.width;
+    frame_height_ = vis.height;
     Invalidate(VideoAreaRect());
 }
 
@@ -170,6 +240,12 @@ void MonitorSurface::SetMarks(double in_seconds, double out_seconds) {
     mark_in_ = in_seconds;
     mark_out_ = out_seconds;
     Invalidate(RulerRect());
+}
+
+void MonitorSurface::SetSpeedBadge(double rate) {
+    if (speed_rate_ == rate) return;
+    speed_rate_ = rate;
+    Invalidate(VideoAreaRect());
 }
 
 // ---- overlay toggles --------------------------------------------------------
@@ -373,6 +449,542 @@ const Marker* MonitorSurface::ActiveMarker() const {
     return active;
 }
 
+// ---- transform gizmo ----------------------------------------------------------
+//
+// Geometry mirrors WarpClipFrameRegion (compositor.cc) exactly:
+//   dw = src_w * scale, ox = offset_x * canvas_w,
+//   c  = (ox + dw/2, oy + dh/2)          — rotation center / anchor
+//   corner_i = c + R(+theta) * (±dw/2, ±dh/2)
+// in CANVAS px, then mapped through the current FittedFrameRect into
+// client coords. The gizmo therefore boxes exactly what the
+// compositor warps — including the live keyframe-resolved transform
+// the shell pushes (preview writes come back through the same pull,
+// so the box rides the drag without a feedback path of its own).
+
+bool MonitorSurface::GizmoGeomValid(const MonitorGizmoTarget& t) const {
+    const auto dest = FittedFrameRect();
+    return !t.clip_id.empty() && t.src_w > 0 && t.src_h > 0 &&
+           t.canvas_w > 0 && t.canvas_h > 0 &&
+           t.transform.scale > 0.0f && dest.width > 0.0f &&
+           dest.height > 0.0f;
+}
+
+MonitorSurface::GizmoGeom MonitorSurface::GizmoGeometry(
+    const MonitorGizmoTarget& t) const {
+    GizmoGeom g;
+    const auto dest = FittedFrameRect();
+    const double cw = t.canvas_w, ch = t.canvas_h;
+    const double dw = t.src_w * static_cast<double>(t.transform.scale);
+    const double dh = t.src_h * static_cast<double>(t.transform.scale);
+    const double cx = t.transform.offset_x * cw + dw * 0.5;
+    const double cy = t.transform.offset_y * ch + dh * 0.5;
+    const double th =
+        static_cast<double>(t.transform.rotation_deg) * kGizmoPi /
+        180.0;
+    const double cs = std::cos(th), sn = std::sin(th);
+    const auto map_x = [&](double u) {
+        return dest.x + static_cast<float>(u / cw) * dest.width;
+    };
+    const auto map_y = [&](double v) {
+        return dest.y + static_cast<float>(v / ch) * dest.height;
+    };
+    g.c[0] = map_x(cx);
+    g.c[1] = map_y(cy);
+    // TL / TR / BR / BL local corners rotated +theta about c.
+    const double lx[4] = {-dw * 0.5, dw * 0.5, dw * 0.5, -dw * 0.5};
+    const double ly[4] = {-dh * 0.5, -dh * 0.5, dh * 0.5, dh * 0.5};
+    float min_x = 1e30f, min_y = 1e30f;
+    float max_x = -1e30f, max_y = -1e30f;
+    for (int i = 0; i < 4; ++i) {
+        const double vx = lx[i] * cs - ly[i] * sn;
+        const double vy = lx[i] * sn + ly[i] * cs;
+        g.pt[i][0] = map_x(cx + vx);
+        g.pt[i][1] = map_y(cy + vy);
+        min_x = std::min(min_x, g.pt[i][0]);
+        min_y = std::min(min_y, g.pt[i][1]);
+        max_x = std::max(max_x, g.pt[i][0]);
+        max_y = std::max(max_y, g.pt[i][1]);
+    }
+    g.aabb = {min_x, min_y, max_x - min_x, max_y - min_y};
+    // Rotation stem: box-local "up" is R(theta)*(0,-1) = (sn,-cs).
+    const float tm_x = (g.pt[0][0] + g.pt[1][0]) * 0.5f;
+    const float tm_y = (g.pt[0][1] + g.pt[1][1]) * 0.5f;
+    g.rot[0] = tm_x + static_cast<float>(sn) * kGizmoStem;
+    g.rot[1] = tm_y - static_cast<float>(cs) * kGizmoStem;
+    // Pre-rotation half extents in client px — the local frame the
+    // scale handles drag in.
+    g.half_w = static_cast<float>(dw * 0.5 / cw) * dest.width;
+    g.half_h = static_cast<float>(dh * 0.5 / ch) * dest.height;
+    return g;
+}
+
+MonitorSurface::GizmoState MonitorSurface::ResolveGizmo() const {
+    GizmoState s;
+    if (id_ != Id::Program || hooks_.gizmo_target == nullptr ||
+        !HasFrame()) {
+        return s;
+    }
+    if (gizmo_mode_ != GizmoMode::None) {
+        // Mid-gesture: the box draws from the live preview transform
+        // (a dropped hook pull can't flicker the box mid-drag).
+        s.target = gizmo_target_;
+        s.target.transform = gizmo_live_;
+    } else {
+        // Idle and pending-select both pull fresh — the selection
+        // round-trip has already landed, so the picked clip's box
+        // appears under the cursor immediately.
+        s.target = hooks_.gizmo_target();
+    }
+    s.valid = GizmoGeomValid(s.target);
+    if (s.valid) {
+        s.geom = GizmoGeometry(s.target);
+    }
+    return s;
+}
+
+bool MonitorSurface::GizmoVisible() const {
+    return ResolveGizmo().valid;
+}
+
+XER::UI::Layout::Rect MonitorSurface::GizmoBounds() const {
+    const GizmoState s = ResolveGizmo();
+    return s.valid ? s.geom.aabb : Layout::Rect{};
+}
+
+MonitorSurface::GizmoMode MonitorSurface::GizmoHit(
+    Layout::Point p, const GizmoState& s) const {
+    const auto near_pt = [&](float x, float y, float r) {
+        const float dx = p.x - x, dy = p.y - y;
+        return dx * dx + dy * dy <= r * r;
+    };
+    // Rotate tip first — it sits off the box and must win over the
+    // body hit below.
+    if (near_pt(s.geom.rot[0], s.geom.rot[1], kGizmoHitSlop)) {
+        return GizmoMode::Rotate;
+    }
+    // 8 handles: 4 corners + 4 edge midpoints of the rotated quad.
+    static const GizmoMode kModes[8] = {
+        GizmoMode::ScaleNW, GizmoMode::ScaleN,
+        GizmoMode::ScaleNE, GizmoMode::ScaleE,
+        GizmoMode::ScaleSE, GizmoMode::ScaleS,
+        GizmoMode::ScaleSW, GizmoMode::ScaleW,
+    };
+    const float hx[8] = {
+        s.geom.pt[0][0],
+        (s.geom.pt[0][0] + s.geom.pt[1][0]) * 0.5f,
+        s.geom.pt[1][0],
+        (s.geom.pt[1][0] + s.geom.pt[2][0]) * 0.5f,
+        s.geom.pt[2][0],
+        (s.geom.pt[2][0] + s.geom.pt[3][0]) * 0.5f,
+        s.geom.pt[3][0],
+        (s.geom.pt[3][0] + s.geom.pt[0][0]) * 0.5f,
+    };
+    const float hy[8] = {
+        s.geom.pt[0][1],
+        (s.geom.pt[0][1] + s.geom.pt[1][1]) * 0.5f,
+        s.geom.pt[1][1],
+        (s.geom.pt[1][1] + s.geom.pt[2][1]) * 0.5f,
+        s.geom.pt[2][1],
+        (s.geom.pt[2][1] + s.geom.pt[3][1]) * 0.5f,
+        s.geom.pt[3][1],
+        (s.geom.pt[3][1] + s.geom.pt[0][1]) * 0.5f,
+    };
+    for (int i = 0; i < 8; ++i) {
+        if (near_pt(hx[i], hy[i], kGizmoHitSlop)) return kModes[i];
+    }
+    // Body: inverse-rotate the point about the anchor and test the
+    // unrotated extents (same rect the compositor fills).
+    const double th =
+        static_cast<double>(s.target.transform.rotation_deg) *
+        kGizmoPi / 180.0;
+    const double cs = std::cos(th), sn = std::sin(th);
+    const double vx = p.x - s.geom.c[0], vy = p.y - s.geom.c[1];
+    const double ux = vx * cs + vy * sn;
+    const double uy = -vx * sn + vy * cs;
+    if (std::fabs(ux) <= s.geom.half_w &&
+        std::fabs(uy) <= s.geom.half_h) {
+        return GizmoMode::Move;
+    }
+    return GizmoMode::None;
+}
+
+bool MonitorSurface::GizmoArmMove(const std::string& clip_id,
+                                  Layout::Point grab) {
+    if (hooks_.gizmo_target == nullptr) return false;
+    MonitorGizmoTarget t = hooks_.gizmo_target();
+    if (t.clip_id != clip_id || !GizmoGeomValid(t)) return false;
+    gizmo_target_ = t;
+    gizmo_mode_ = GizmoMode::Move;
+    gizmo_orig_ = t.transform;
+    gizmo_live_ = t.transform;
+    gizmo_dirty_commit_ = false;
+    const auto dest = FittedFrameRect();
+    // Frame-normalized pointer -> center grab delta.
+    const double npx = (grab.x - dest.x) / dest.width;
+    const double npy = (grab.y - dest.y) / dest.height;
+    const double ccx = t.transform.offset_x +
+                       t.src_w * t.transform.scale / (2.0 * t.canvas_w);
+    const double ccy = t.transform.offset_y +
+                       t.src_h * t.transform.scale / (2.0 * t.canvas_h);
+    gizmo_grab_dx_ = static_cast<float>(npx - ccx);
+    gizmo_grab_dy_ = static_cast<float>(npy - ccy);
+    return true;
+}
+
+// Candidate rotated-AABB in CANVAS-normalized coords for transform t.
+static void GizmoAabbNorm(const MonitorGizmoTarget& target,
+                          const Transform& t, float* x0, float* y0,
+                          float* x1, float* y1) {
+    const double dw = target.src_w * static_cast<double>(t.scale);
+    const double dh = target.src_h * static_cast<double>(t.scale);
+    const double cx = t.offset_x * target.canvas_w + dw * 0.5;
+    const double cy = t.offset_y * target.canvas_h + dh * 0.5;
+    const double th =
+        static_cast<double>(t.rotation_deg) * kGizmoPi / 180.0;
+    const double cs = std::cos(th), sn = std::sin(th);
+    double ax0 = 1e30, ay0 = 1e30, ax1 = -1e30, ay1 = -1e30;
+    const double lx[4] = {-dw * 0.5, dw * 0.5, dw * 0.5, -dw * 0.5};
+    const double ly[4] = {-dh * 0.5, -dh * 0.5, dh * 0.5, dh * 0.5};
+    for (int i = 0; i < 4; ++i) {
+        const double px = cx + lx[i] * cs - ly[i] * sn;
+        const double py = cy + lx[i] * sn + ly[i] * cs;
+        ax0 = std::min(ax0, px);
+        ay0 = std::min(ay0, py);
+        ax1 = std::max(ax1, px);
+        ay1 = std::max(ay1, py);
+    }
+    *x0 = static_cast<float>(ax0 / target.canvas_w);
+    *y0 = static_cast<float>(ay0 / target.canvas_h);
+    *x1 = static_cast<float>(ax1 / target.canvas_w);
+    *y1 = static_cast<float>(ay1 / target.canvas_h);
+}
+
+void MonitorSurface::GizmoSnapMove(Transform* t) {
+    gizmo_snap_x_ = -1.0f;
+    gizmo_snap_y_ = -1.0f;
+    if (hooks_.gizmo_snap_enabled == nullptr ||
+        !hooks_.gizmo_snap_enabled()) {
+        return;
+    }
+    const auto dest = FittedFrameRect();
+    if (dest.width <= 0.0f || dest.height <= 0.0f) return;
+    float x0, y0, x1, y1;
+    GizmoAabbNorm(gizmo_target_, *t, &x0, &y0, &x1, &y1);
+    // Frame edges + center + safe-margin lines (canvas-normalized).
+    static const float kLines[7] = {0.0f, 0.05f, 0.10f, 0.5f,
+                                    0.90f, 0.95f, 1.0f};
+    const float thr_x = kGizmoSnapPx / dest.width;
+    const float thr_y = kGizmoSnapPx / dest.height;
+    const float cand_x[3] = {x0, (x0 + x1) * 0.5f, x1};
+    const float cand_y[3] = {y0, (y0 + y1) * 0.5f, y1};
+    float best_dx = thr_x, best_dy = thr_y;
+    float line_x = -1.0f, line_y = -1.0f;
+    for (const float line : kLines) {
+        for (const float c : cand_x) {
+            const float d = std::fabs(c - line);
+            if (d <= best_dx + 1e-6f) {
+                best_dx = d;
+                line_x = line;
+            }
+        }
+        for (const float c : cand_y) {
+            const float d = std::fabs(c - line);
+            if (d <= best_dy + 1e-6f) {
+                best_dy = d;
+                line_y = line;
+            }
+        }
+    }
+    if (line_x >= 0.0f) {
+        // Apply the offset delta that lands the nearest candidate
+        // edge on the line.
+        float delta = 1e30f;
+        for (const float c : cand_x) {
+            if (std::fabs(c - line_x) == best_dx) {
+                delta = line_x - c;
+                break;
+            }
+        }
+        if (delta < 1e29f) {
+            t->offset_x += delta;
+            gizmo_snap_x_ = dest.x + line_x * dest.width;
+        }
+    }
+    if (line_y >= 0.0f) {
+        float delta = 1e30f;
+        for (const float c : cand_y) {
+            if (std::fabs(c - line_y) == best_dy) {
+                delta = line_y - c;
+                break;
+            }
+        }
+        if (delta < 1e29f) {
+            t->offset_y += delta;
+            gizmo_snap_y_ = dest.y + line_y * dest.height;
+        }
+    }
+}
+
+void MonitorSurface::GizmoSnapEdge(Transform* t, bool x_axis) {
+    if (hooks_.gizmo_snap_enabled == nullptr ||
+        !hooks_.gizmo_snap_enabled()) {
+        return;
+    }
+    const auto dest = FittedFrameRect();
+    if (dest.width <= 0.0f || dest.height <= 0.0f) return;
+    float x0, y0, x1, y1;
+    GizmoAabbNorm(gizmo_target_, *t, &x0, &y0, &x1, &y1);
+    static const float kLines[7] = {0.0f, 0.05f, 0.10f, 0.5f,
+                                    0.90f, 0.95f, 1.0f};
+    // The dragged edge only: E/W drags snap the right/left edge,
+    // N/S the bottom/top — sign picked by which side the handle is.
+    const bool far_side =
+        gizmo_mode_ == GizmoMode::ScaleE ||
+        gizmo_mode_ == GizmoMode::ScaleS ||
+        gizmo_mode_ == GizmoMode::ScaleSE ||
+        gizmo_mode_ == GizmoMode::ScaleNE;
+    const float edge = x_axis ? (far_side ? x1 : x0)
+                              : (far_side ? y1 : y0);
+    const float thr =
+        (x_axis ? kGizmoSnapPx / dest.width
+                : kGizmoSnapPx / dest.height);
+    float best = thr, line = -1.0f;
+    for (const float l : kLines) {
+        const float d = std::fabs(edge - l);
+        if (d <= best + 1e-6f) {
+            best = d;
+            line = l;
+        }
+    }
+    if (line < 0.0f) return;
+    if (x_axis) {
+        t->offset_x += line - edge;
+        gizmo_snap_x_ = dest.x + line * dest.width;
+    } else {
+        t->offset_y += line - edge;
+        gizmo_snap_y_ = dest.y + line * dest.height;
+    }
+}
+
+Transform MonitorSurface::GizmoApplyDrag(
+    Layout::Point p, const W::Event& e) {
+    Transform t = gizmo_orig_;
+    const auto& target = gizmo_target_;
+    const auto dest = FittedFrameRect();
+    if (dest.width <= 0.0f || dest.height <= 0.0f ||
+        target.canvas_w <= 0 || target.canvas_h <= 0) {
+        return t;
+    }
+    const double cw = target.canvas_w, ch = target.canvas_h;
+    gizmo_snap_x_ = -1.0f;
+    gizmo_snap_y_ = -1.0f;
+
+    if (gizmo_mode_ == GizmoMode::Move) {
+        const double npx = (p.x - dest.x) / dest.width;
+        const double npy = (p.y - dest.y) / dest.height;
+        const double ccx = npx - gizmo_grab_dx_;
+        const double ccy = npy - gizmo_grab_dy_;
+        const double dw = target.src_w * t.scale;
+        const double dh = target.src_h * t.scale;
+        t.offset_x = static_cast<float>(ccx - dw / (2.0 * cw));
+        t.offset_y = static_cast<float>(ccy - dh / (2.0 * ch));
+        GizmoSnapMove(&t);
+        return t;
+    }
+
+    const auto geom = GizmoGeometry(
+        MonitorGizmoTarget{target.clip_id, gizmo_orig_, target.src_w,
+                           target.src_h, target.canvas_w,
+                           target.canvas_h});
+
+    if (gizmo_mode_ == GizmoMode::Rotate) {
+        const double ang = std::atan2(p.y - geom.c[1],
+                                      p.x - geom.c[0]);
+        float deg = gizmo_orig_.rotation_deg +
+                    static_cast<float>(ang - gizmo_grab_dx_) *
+                        static_cast<float>(180.0 / kGizmoPi);
+        if (e.is_shift) {
+            deg = std::round(deg / kGizmoRotSnapDeg) *
+                  kGizmoRotSnapDeg;
+        }
+        t.rotation_deg = deg;
+        return t;
+    }
+
+    // Scale: pointer distance to the anchor in the box's LOCAL
+    // (pre-rotation) frame — corners scale by radial ratio, edges by
+    // that axis's local component. The anchor (transform center)
+    // stays fixed: offset is recomputed from the new dest size.
+    const double th =
+        static_cast<double>(gizmo_orig_.rotation_deg) * kGizmoPi /
+        180.0;
+    const double cs = std::cos(th), sn = std::sin(th);
+    const auto to_local = [&](Layout::Point q, double* lx,
+                              double* ly) {
+        const double vx = q.x - geom.c[0], vy = q.y - geom.c[1];
+        *lx = vx * cs + vy * sn;
+        *ly = -vx * sn + vy * cs;
+    };
+    double lx_p = 0.0, ly_p = 0.0, lx_d = 0.0, ly_d = 0.0;
+    to_local(p, &lx_p, &ly_p);
+    to_local(down_pos_, &lx_d, &ly_d);
+    double ratio = 1.0;
+    switch (gizmo_mode_) {
+        case GizmoMode::ScaleE:
+        case GizmoMode::ScaleW:
+            if (std::fabs(lx_d) > 1e-6) ratio = lx_p / lx_d;
+            break;
+        case GizmoMode::ScaleN:
+        case GizmoMode::ScaleS:
+            if (std::fabs(ly_d) > 1e-6) ratio = ly_p / ly_d;
+            break;
+        default: {   // corners — radial ratio
+            const double rd = std::hypot(lx_d, ly_d);
+            if (rd > 1e-6) {
+                ratio = std::hypot(lx_p, ly_p) / rd;
+            }
+            break;
+        }
+    }
+    const float scale = std::clamp(
+        static_cast<float>(
+            static_cast<double>(gizmo_orig_.scale) * ratio),
+        kGizmoMinScale, kGizmoMaxScale);
+    t.scale = scale;
+    // Hold the anchor fixed in canvas space.
+    const double ccx =
+        gizmo_orig_.offset_x * cw +
+        target.src_w * gizmo_orig_.scale * 0.5;
+    const double ccy =
+        gizmo_orig_.offset_y * ch +
+        target.src_h * gizmo_orig_.scale * 0.5;
+    t.offset_x = static_cast<float>(
+        (ccx - target.src_w * scale * 0.5) / cw);
+    t.offset_y = static_cast<float>(
+        (ccy - target.src_h * scale * 0.5) / ch);
+    // Edge midpoint drags additionally snap the dragged edge (the
+    // model's uniform scale can't grow a side in place, so the snap
+    // nudges the position to land the edge on the guide).
+    if (gizmo_mode_ == GizmoMode::ScaleE ||
+        gizmo_mode_ == GizmoMode::ScaleW) {
+        GizmoSnapEdge(&t, /*x_axis=*/true);
+    } else if (gizmo_mode_ == GizmoMode::ScaleN ||
+               gizmo_mode_ == GizmoMode::ScaleS) {
+        GizmoSnapEdge(&t, /*x_axis=*/false);
+    }
+    return t;
+}
+
+void MonitorSurface::GizmoCancel() {
+    // Restore the pre-gesture preview, then close the macro — no
+    // commit fires. A press that never crossed the drag threshold
+    // never opened the gesture (begin/end stay paired).
+    if (gizmo_gesture_started_) {
+        if (hooks_.on_gizmo_preview) {
+            hooks_.on_gizmo_preview(gizmo_target_.clip_id,
+                                    gizmo_orig_);
+        }
+        if (hooks_.on_gizmo_end) hooks_.on_gizmo_end();
+    }
+    gizmo_mode_ = GizmoMode::None;
+    gizmo_gesture_started_ = false;
+    gizmo_pending_select_ = false;
+    gizmo_pending_clip_id_.clear();
+    gizmo_snap_x_ = gizmo_snap_y_ = -1.0f;
+    gizmo_dirty_commit_ = false;
+    Invalidate(VideoAreaRect());
+}
+
+void MonitorSurface::GizmoFinish(bool commit) {
+    if (gizmo_gesture_started_) {
+        if (commit && gizmo_dirty_commit_ &&
+            hooks_.on_gizmo_commit) {
+            hooks_.on_gizmo_commit(gizmo_target_.clip_id,
+                                   gizmo_live_);
+        }
+        if (hooks_.on_gizmo_end) hooks_.on_gizmo_end();
+    }
+    gizmo_mode_ = GizmoMode::None;
+    gizmo_gesture_started_ = false;
+    gizmo_pending_select_ = false;
+    gizmo_pending_clip_id_.clear();
+    gizmo_snap_x_ = gizmo_snap_y_ = -1.0f;
+    gizmo_dirty_commit_ = false;
+    Invalidate(VideoAreaRect());
+}
+
+void MonitorSurface::DrawGizmo(Rendering::Renderer& renderer,
+                               const Theme::Tokens& tokens,
+                               const GizmoState& s) {
+    const Color box = WithAlpha(tokens.accent, 0.95f);
+    const Color handle_fill{1.0f, 1.0f, 1.0f, 0.96f};
+    const auto line = [&](float x0, float y0, float x1, float y1,
+                          Color c, float w) {
+        renderer.DrawLine({x0, y0}, {x1, y1}, c, w);
+    };
+    for (int i = 0; i < 4; ++i) {
+        const int j = (i + 1) % 4;
+        line(s.geom.pt[i][0], s.geom.pt[i][1], s.geom.pt[j][0],
+             s.geom.pt[j][1], box, 1.5f);
+    }
+    // Rotation stem + tip handle.
+    const float tm_x = (s.geom.pt[0][0] + s.geom.pt[1][0]) * 0.5f;
+    const float tm_y = (s.geom.pt[0][1] + s.geom.pt[1][1]) * 0.5f;
+    line(tm_x, tm_y, s.geom.rot[0], s.geom.rot[1], box, 1.5f);
+    const auto handle = [&](float x, float y) {
+        const Layout::Rect r{x - kGizmoHandleHalf,
+                             y - kGizmoHandleHalf,
+                             kGizmoHandleHalf * 2.0f,
+                             kGizmoHandleHalf * 2.0f};
+        renderer.FillRect(r, handle_fill, 1.0f);
+        renderer.StrokeRect(r, tokens.accent, 1.0f, 0.0f);
+    };
+    handle(s.geom.rot[0], s.geom.rot[1]);
+    // 8 scale handles.
+    const float hx[8] = {
+        s.geom.pt[0][0],
+        (s.geom.pt[0][0] + s.geom.pt[1][0]) * 0.5f,
+        s.geom.pt[1][0],
+        (s.geom.pt[1][0] + s.geom.pt[2][0]) * 0.5f,
+        s.geom.pt[2][0],
+        (s.geom.pt[2][0] + s.geom.pt[3][0]) * 0.5f,
+        s.geom.pt[3][0],
+        (s.geom.pt[3][0] + s.geom.pt[0][0]) * 0.5f,
+    };
+    const float hy[8] = {
+        s.geom.pt[0][1],
+        (s.geom.pt[0][1] + s.geom.pt[1][1]) * 0.5f,
+        s.geom.pt[1][1],
+        (s.geom.pt[1][1] + s.geom.pt[2][1]) * 0.5f,
+        s.geom.pt[2][1],
+        (s.geom.pt[2][1] + s.geom.pt[3][1]) * 0.5f,
+        s.geom.pt[3][1],
+        (s.geom.pt[3][1] + s.geom.pt[0][1]) * 0.5f,
+    };
+    for (int i = 0; i < 8; ++i) handle(hx[i], hy[i]);
+    // Anchor: the transform center the compositor rotates about —
+    // small accent cross + center dot (AE anchor-point parity).
+    const float cx = s.geom.c[0], cy = s.geom.c[1];
+    constexpr float arm = 6.0f;
+    line(cx - arm, cy, cx + arm, cy, box, 1.0f);
+    line(cx, cy - arm, cx, cy + arm, box, 1.0f);
+    renderer.FillRect({cx - 1.5f, cy - 1.5f, 3.0f, 3.0f}, handle_fill,
+                      1.0f);
+    // Snap guides — full-frame accent lines at the winning candidate
+    // (timeline magnet-line parity).
+    const auto dest = FittedFrameRect();
+    if (gizmo_snap_x_ >= 0.0f) {
+        renderer.DrawLine({gizmo_snap_x_, dest.y},
+                          {gizmo_snap_x_, dest.y + dest.height},
+                          kGizmoSnapColor, 1.5f);
+    }
+    if (gizmo_snap_y_ >= 0.0f) {
+        renderer.DrawLine({dest.x, gizmo_snap_y_},
+                          {dest.x + dest.width, gizmo_snap_y_},
+                          kGizmoSnapColor, 1.5f);
+    }
+}
+
 // ---- paint -------------------------------------------------------------------
 
 void MonitorSurface::Paint(Rendering::Renderer& renderer,
@@ -405,12 +1017,22 @@ void MonitorSurface::Paint(Rendering::Renderer& renderer,
                         tokens.radius_medium);
 
     if (pixels != nullptr && !pixels->empty() && frame_width_ > 0 &&
-        frame_height_ > 0) {
+        frame_height_ > 0 &&
+        frame_px_offset_ + static_cast<std::size_t>(frame_width_) *
+                                   frame_height_ * 4 <=
+                               pixels->size()) {
         const auto dest = FittedFrameRect();
-        renderer.DrawFrameBgra(pixels->data(), frame_width_,
-                               frame_height_, dest, 1.0f);
+        renderer.DrawFrameBgra(pixels->data() + frame_px_offset_,
+                               frame_width_, frame_height_, dest,
+                               1.0f);
         renderer.StrokeRect(dest, tokens.border, 1.0f, 0.0f);
         DrawOverlays(renderer, tokens, dest);
+        // Transform gizmo — over the frame/overlays, inside the
+        // video area. No-ops when the shell binds no gizmo_target
+        // (the source monitor never does).
+        if (const GizmoState gizmo = ResolveGizmo(); gizmo.valid) {
+            DrawGizmo(renderer, tokens, gizmo);
+        }
     } else {
         // Centered empty state — DrawText is top-left aligned, so
         // measure first and hand it a box centered in the video area.
@@ -430,6 +1052,26 @@ void MonitorSurface::Paint(Rendering::Renderer& renderer,
             std::min(ts.width, video_area.width),
             std::min(ts.height, video_area.height)};
         renderer.DrawText(text, tr, st);
+    }
+
+    // Speed badge — top-left chip while the applied rate is anything
+    // but stopped or plain +1x (JKL shuttle, K-held slow shuttle,
+    // reverse). The shell pushes the raw rate; 0/+1 hides.
+    if (speed_rate_ != 0.0 && speed_rate_ != 1.0) {
+        char badge[24];
+        std::snprintf(badge, sizeof(badge), "%gx", speed_rate_);
+        const Rendering::TextStyle badge_style{tokens.accent,
+                                               tokens.font_body, 700};
+        const auto bs = renderer.MeasureText(badge, badge_style);
+        const Layout::Rect chip{video_area.x + 8.0f,
+                                video_area.y + 8.0f,
+                                bs.width + 14.0f, bs.height + 8.0f};
+        renderer.FillRect(chip, WithAlpha(tokens.background, 0.72f),
+                          tokens.radius_small);
+        renderer.DrawText(badge,
+                          {chip.x + 7.0f, chip.y + 4.0f, bs.width,
+                           bs.height},
+                          badge_style);
     }
 
     DrawRuler(renderer, tokens, RulerRect());
@@ -662,6 +1304,75 @@ bool MonitorSurface::OnSurfaceEvent(const W::Event& event) {
             }
             return true;
         }
+        // Transform gizmo (program only): armed click points keep
+        // priority — the whole gizmo path is skipped while the
+        // SmartSelect seam is armed.
+        if (event.mouse_button == Btn::Left &&
+            !click_points_armed_ && VideoAreaRect().Contains(p)) {
+            const auto dest = FittedFrameRect();
+            const GizmoState gizmo = ResolveGizmo();
+            const GizmoMode mode =
+                gizmo.valid ? GizmoHit(p, gizmo) : GizmoMode::None;
+            if (mode != GizmoMode::None) {
+                gizmo_target_ = gizmo.target;
+                gizmo_mode_ = mode;
+                gizmo_orig_ = gizmo.target.transform;
+                gizmo_live_ = gizmo.target.transform;
+                gizmo_dirty_commit_ = false;
+                gizmo_click_ = true;
+                // Esc-cancel routing: the kit Surface child isn't
+                // focusable, so the drag's KeyDown would never reach
+                // us — take focus ourselves (kPointer: no ring).
+                SetFocused(true, W::FocusReason::kPointer);
+                if (mode == GizmoMode::Move) {
+                    // Track by the grabbed point, not the box
+                    // center (frame-normalized grab delta).
+                    const auto& t = gizmo_orig_;
+                    gizmo_grab_dx_ = static_cast<float>(
+                        (p.x - dest.x) / dest.width -
+                        (t.offset_x +
+                         gizmo_target_.src_w * t.scale /
+                             (2.0 * gizmo_target_.canvas_w)));
+                    gizmo_grab_dy_ = static_cast<float>(
+                        (p.y - dest.y) / dest.height -
+                        (t.offset_y +
+                         gizmo_target_.src_h * t.scale /
+                             (2.0 * gizmo_target_.canvas_h)));
+                } else if (mode == GizmoMode::Rotate) {
+                    gizmo_grab_dx_ = static_cast<float>(std::atan2(
+                        p.y - gizmo.geom.c[1],
+                        p.x - gizmo.geom.c[0]));
+                }
+                // on_gizmo_begin defers to the first post-threshold
+                // move — a plain click on the box stays a click.
+                panning_ = false;
+                return true;
+            }
+            // No gizmo hit — press-to-select: the shell maps the
+            // frame point to the topmost clip under the cursor at
+            // the playhead ("" = nothing selectable there).
+            if (hooks_.gizmo_pick != nullptr &&
+                dest.width > 0.0f && dest.height > 0.0f) {
+                const std::string picked = hooks_.gizmo_pick(
+                    (p.x - dest.x) / dest.width,
+                    (p.y - dest.y) / dest.height);
+                if (!picked.empty()) {
+                    gizmo_pending_select_ = true;
+                    gizmo_pending_clip_id_ = picked;
+                    gizmo_click_ = true;
+                    // Same Esc routing as a direct handle grab —
+                    // this press can still promote into a drag.
+                    SetFocused(true, W::FocusReason::kPointer);
+                    if ((!gizmo.valid ||
+                         picked != gizmo.target.clip_id) &&
+                        hooks_.on_gizmo_select) {
+                        hooks_.on_gizmo_select(picked);
+                    }
+                    panning_ = false;
+                    return true;
+                }
+            }
+        }
         panning_ = VideoAreaRect().Contains(p) &&
                    (event.mouse_button == Btn::Middle || Zoomed());
         return true;
@@ -671,6 +1382,59 @@ bool MonitorSurface::OnSurfaceEvent(const W::Event& event) {
         if (ruler_drag_ && left_down_) {
             if (hooks_.on_time_changed) {
                 hooks_.on_time_changed(RulerTimeAtX(p.x));
+            }
+            return true;
+        }
+        // Gizmo drag — claims the move before pan/view handling.
+        if (left_down_ &&
+            (gizmo_mode_ != GizmoMode::None ||
+             gizmo_pending_select_)) {
+            const float dx = p.x - down_pos_.x;
+            const float dy = p.y - down_pos_.y;
+            if (std::fabs(dx) + std::fabs(dy) > kDragThreshold) {
+                drag_moved_ = true;
+            }
+            if (gizmo_pending_select_ && drag_moved_) {
+                // Press-to-select promotes into a Move once the
+                // threshold is crossed (selection round-trip has
+                // already landed via on_gizmo_select at press).
+                if (!GizmoArmMove(gizmo_pending_clip_id_,
+                                  down_pos_)) {
+                    gizmo_pending_select_ = false;
+                    gizmo_pending_clip_id_.clear();
+                    gizmo_click_ = false;
+                } else {
+                    gizmo_pending_select_ = false;
+                    gizmo_pending_clip_id_.clear();
+                }
+            }
+            if (gizmo_mode_ != GizmoMode::None) {
+                // The gesture begins (shell macro + preview
+                // compositor) only once real motion accrues.
+                if (!gizmo_gesture_started_ && drag_moved_) {
+                    gizmo_gesture_started_ = true;
+                    if (hooks_.on_gizmo_begin) {
+                        hooks_.on_gizmo_begin("monitor transform");
+                    }
+                }
+                if (!gizmo_gesture_started_) return true;
+                const Transform t = GizmoApplyDrag(p, event);
+                if (t.offset_x != gizmo_live_.offset_x ||
+                    t.offset_y != gizmo_live_.offset_y ||
+                    t.scale != gizmo_live_.scale ||
+                    t.rotation_deg != gizmo_live_.rotation_deg) {
+                    gizmo_live_ = t;
+                    gizmo_dirty_commit_ =
+                        t.offset_x != gizmo_orig_.offset_x ||
+                        t.offset_y != gizmo_orig_.offset_y ||
+                        t.scale != gizmo_orig_.scale ||
+                        t.rotation_deg != gizmo_orig_.rotation_deg;
+                    if (hooks_.on_gizmo_preview) {
+                        hooks_.on_gizmo_preview(
+                            gizmo_target_.clip_id, t);
+                    }
+                    Invalidate(VideoAreaRect());
+                }
             }
             return true;
         }
@@ -701,6 +1465,12 @@ bool MonitorSurface::OnSurfaceEvent(const W::Event& event) {
         if (event.mouse_button == Btn::Left) {
             left_down_ = false;
             ruler_drag_ = false;
+            // Gizmo gesture close-out: exactly ONE commit on release
+            // (skipped for a no-change drag), then the macro's end.
+            if (gizmo_mode_ != GizmoMode::None ||
+                gizmo_pending_select_) {
+                GizmoFinish(/*commit=*/true);
+            }
         }
         if (event.mouse_button == Btn::Middle ||
             event.mouse_button == Btn::Left) {
@@ -751,11 +1521,35 @@ bool MonitorSurface::OnSurfaceEvent(const W::Event& event) {
     if (event.type == Type::Click && event.mouse_button == Btn::Left) {
         if (drag_moved_) {
             drag_moved_ = false;   // a pan/ruler scrub, not a click
+            gizmo_click_ = false;  // a completed gizmo drag consumes
+                                   // its claim — the next click is
+                                   // clean again
             return true;
         }
         if (RulerRect().Contains(p)) {
             if (hooks_.on_time_changed) {
                 hooks_.on_time_changed(RulerTimeAtX(p.x));
+            }
+            return true;
+        }
+        // A press the gizmo path claimed never toggles playback;
+        // an inside-box double-click resets the transform instead
+        // (the in-frame double-click zoom reset still applies
+        // outside the box).
+        if (gizmo_click_) {
+            gizmo_click_ = false;
+            const GizmoState gizmo = ResolveGizmo();
+            if (gizmo.valid &&
+                GizmoHit(p, gizmo) != GizmoMode::None) {
+                if (click_clock_ - last_gizmo_click_at_ <=
+                    kDoubleClickSeconds) {
+                    last_gizmo_click_at_ = -10.0;
+                    if (hooks_.on_gizmo_reset) {
+                        hooks_.on_gizmo_reset(gizmo.target.clip_id);
+                    }
+                } else {
+                    last_gizmo_click_at_ = click_clock_;
+                }
             }
             return true;
         }
@@ -792,6 +1586,16 @@ bool MonitorSurface::OnSurfaceEvent(const W::Event& event) {
         return false;
     }
 
+    // Esc cancels an in-flight gizmo gesture: the original transform
+    // is re-previewed, the macro closes, nothing commits.
+    if (event.type == Type::KeyDown &&
+        event.key == W::KeyCode::Escape &&
+        (gizmo_mode_ != GizmoMode::None || gizmo_pending_select_)) {
+        GizmoCancel();
+        gizmo_click_ = false;
+        return true;
+    }
+
     return false;
 }
 
@@ -820,6 +1624,15 @@ bool MonitorSurface::HandleEvent(const W::Event& event) {
     if (event.type == W::Event::Type::MouseDown) {
         Activate();
         return false;   // let the child's callback handle geometry
+    }
+    // KeyDown routes to the focused widget (us, not the Surface
+    // child) — Esc cancels an in-flight gizmo gesture.
+    if (event.type == W::Event::Type::KeyDown &&
+        event.key == W::KeyCode::Escape &&
+        (gizmo_mode_ != GizmoMode::None || gizmo_pending_select_)) {
+        GizmoCancel();
+        gizmo_click_ = false;
+        return true;
     }
     return false;
 }

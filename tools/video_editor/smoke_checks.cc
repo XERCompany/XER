@@ -35,6 +35,7 @@
 #include "ai/img2img_runner.h"
 #include "ai/object_track.h"
 #include "ai/rife_interp.h"
+#include "ai/sam2_track.h"
 #include "ai/silence_detect.h"
 #include "ai/silero_vad.h"
 #include "ai/smart_reframe.h"
@@ -70,6 +71,7 @@
 #include "helper/string_utils.h"
 #include "js_fx.h"
 #include "keyboard_map.h"
+#include "l2_frame_cache.h"
 #include "lut_manager.h"
 #include "media_catalog.h"
 #include "media_decoder.h"               // MakeGpuDecoder / IMediaDecoder
@@ -102,10 +104,12 @@
 #include "timeline_history.h"
 #include "timeline_model.h"
 #include "transcript_edit.h"
+#include "transitions_lib.h"
 #include "tz/tz.h"
 #include "url_import.h"
 #include "worker_pipe.h"
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"
+#include "xer_transition_bridge.h"
 
 #if defined(_WIN32)
 #include <windows.h>   // GetModuleFileNameW — worker-exe sibling lookup
@@ -178,7 +182,7 @@ namespace FFmpeg = XER::Bridge::FFmpeg;
 // delay-loaded backend DLL closures (ggml_backend_load_all, the
 // ~50-DLL OpenCV set), and the FFmpeg export legitimately take tens
 // of seconds on a cold disk / indexer-scanned machine.
-constexpr int kWatchdogSeconds = 240;
+constexpr int kWatchdogSeconds = 480;
 
 // Scratch area for the file-backed checks (store, autosave, catalog,
 // presets, export). Distinct from the unit-test dir so a smoke run
@@ -1949,7 +1953,10 @@ std::string CheckAutoCache() {
         return {};
     }
     struct NullSink : PreviewEngine::Sink {
-        void OnVideoFrame(const video::Frame&) override { ++frames; }
+        void OnVideoFrame(
+            Render::scoped_refptr<Render::VideoFrame>) override {
+            ++frames;
+        }
         void OnAudioPeakLevels(float, float) override {}
         void OnPlayhead(double) override {}
         std::atomic<int> frames{0};
@@ -2019,6 +2026,456 @@ std::string CheckAutoCache() {
                  (unsigned long long)hits_before,
                  (unsigned long long)hits_after);
     engine.Shutdown();
+    return {};
+}
+
+// ---- parallel_determinism --------------------------------------------
+// VeParallelRows must be byte-deterministic: every wrapped kernel writes
+// disjoint output rows, so serial vs pooled dispatch must produce
+// identical pixels. Renders one frame of a project exercising every
+// parallel family — a crossfade transition over the cut, a feathered
+// clip mask, a rotated+scaled+offset warp, a non-Normal blend mode on
+// an upper layer, and two builtin per-pixel kernels — once under
+// XER_VE_THREADS=1 (serial path, pool never engaged) and once under
+// the full pool, then memcmps. XER_VE_THREADS is read per dispatch
+// (parallel_rows.cc VeRenderThreadCount) so both configs live in one
+// process; the serial pass runs FIRST so its bytes can never have been
+// produced by a worker. Wall ms for both passes is printed so the
+// check log shows the speedup alongside the proof.
+std::string CheckParallelDeterminism() {
+    const auto build = [] {
+        Project project = MakeRenderProject(960, 540, 15);
+        project.tracks.push_back(Track{TrackKind::Video, "V2"});
+        Clip& a = project.clips[0];                    // bars [0,2)
+        a.effects.push_back({"builtin:xer.fx.film_grain",
+                             {30.f, 1.f, 2.f, 5.f}});
+        a.effects.push_back({"grayscale", {}});
+        a.transform.rotation_deg = 12.0f;
+        a.transform.scale = 1.3f;
+        a.transform.offset_x = 0.05f;
+        a.transform.opacity = 0.9f;
+        a.masks.push_back(ClipMask{});                 // feathered ellipse
+        Clip b = MakeGeneratedClip("bars-b", 0, 2.0, 1.0,
+                                   SourceKind::ColorBars, "smpte75");
+        b.effects.push_back({"builtin:xer.fx.vignette2",
+                             {1.0f, 0.5f, 0.4f, 1.0f}});
+        project.clips.push_back(b);
+        Transition tr;
+        tr.from_clip = "bars";
+        tr.to_clip = "bars-b";
+        tr.type = Transition::Type::Crossfade;
+        tr.duration = 1.0;
+        project.transitions.push_back(tr);
+        Clip top = MakeGeneratedClip("top", 2, 0.0, 3.0,
+                                     SourceKind::ColorBars, "smpte75");
+        top.blend_mode = BlendMode::Multiply;
+        top.transform.scale = 0.6f;
+        project.clips.push_back(top);
+        return project;
+    };
+    std::string err;
+    const auto render = [&build](std::vector<std::uint8_t>* out,
+                                 double* ms, std::string* err) {
+        const Project project = build();
+        Compositor compositor;
+        if (!compositor.Init(project, {}, err)) return false;
+        // Warmup: lazily builds LUTs / spawns pool workers so the timed
+        // pass measures steady-state dispatch.
+        if (!compositor.RenderFrameAt(1.8, out, err)) return false;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = compositor.RenderFrameAt(1.8, out, err);
+        *ms = std::chrono::duration<double, std::milli>(
+                  std::chrono::steady_clock::now() - t0).count();
+        compositor.Shutdown();
+        return ok;
+    };
+
+    // Restores XER_VE_THREADS on every exit path (checks run in one
+    // process — a leaked "1" would silently serialize every later
+    // render check).
+    const char* prev_env = std::getenv("XER_VE_THREADS");
+    struct EnvGuard {
+        ~EnvGuard() {
+#if defined(_WIN32)
+            // _putenv_s with an empty value deletes the variable.
+            _putenv_s("XER_VE_THREADS", value.c_str());
+#else
+            if (value.empty()) unsetenv("XER_VE_THREADS");
+            else setenv("XER_VE_THREADS", value.c_str(), 1);
+#endif
+        }
+        std::string value;
+    } guard{prev_env != nullptr ? prev_env : ""};
+    const auto set_threads = [](const char* v) {
+#if defined(_WIN32)
+        _putenv_s("XER_VE_THREADS", v);
+#else
+        setenv("XER_VE_THREADS", v, 1);
+#endif
+    };
+
+    std::vector<std::uint8_t> serial, pooled;
+    double serial_ms = 0, pooled_ms = 0;
+    set_threads("1");
+    if (!render(&serial, &serial_ms, &err)) {
+        return "serial render failed: " + err;
+    }
+    // Overshoot clamps to the pool's hardware bound (parallel_rows.cc).
+    set_threads("64");
+    if (!render(&pooled, &pooled_ms, &err)) {
+        return "pooled render failed: " + err;
+    }
+    if (serial.size() != pooled.size() ||
+        std::memcmp(serial.data(), pooled.data(), serial.size()) != 0) {
+        return "parallel rows changed pixels: serial/pooled outputs "
+               "differ";
+    }
+    std::fprintf(stderr,
+                 "  parallel_determinism: serial %.1f ms  pooled "
+                 "%.1f ms  bytes %zu identical\n",
+                 serial_ms, pooled_ms, serial.size());
+    return {};
+}
+
+// ---- l2_frame_cache ---------------------------------------------------
+// Disk tier behind the RAM EffectFrameCache. Hermetic: the explicit
+// ctor (no env gate) rooted under SmokeTempDir, a RAM capacity of
+// exactly one frame, then store A -> store B (A evicts from RAM, both
+// write-through to disk) -> Flush -> Lookup(A) must be an L2 hit that
+// promotes the decoded .dxcfz bytes back into RAM, pixel-exact. Then
+// a second Lookup(A) is a RAM hit (promotion works), and stats assert
+// the counters moved the right way.
+std::string CheckL2FrameCache() {
+    const auto dir = SmokeTempDir() / "l2_frame_cache";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    constexpr int kW = 64, kH = 36;
+    const std::size_t frame_bytes =
+        static_cast<std::size_t>(kW) * kH * 4;
+    auto l2 = std::make_shared<L2FrameCache>(
+        dir, /*capacity_bytes*/ 64ull * 1024ull * 1024ull);
+    EffectFrameCache cache(frame_bytes);   // exactly one frame fits
+    cache.SetDiskTier(l2);
+
+    const auto make_frame = [](std::uint8_t seed) {
+        std::vector<std::uint8_t> px(kW * kH * 4);
+        for (std::size_t i = 0; i < px.size(); ++i) {
+            px[i] = static_cast<std::uint8_t>(seed + i * 31u);
+        }
+        video::Frame f;
+        f.Adopt(kW, kH, video::PixelFormat::BGRA8, std::move(px));
+        return f;
+    };
+    EffectFrameCache::Key ka{"clip-a", 1000, 1111};
+    EffectFrameCache::Key kb{"clip-b", 2000, 2222};
+    const video::Frame fa = make_frame(7), fb = make_frame(101);
+    cache.Store(ka, fa);
+    cache.Store(kb, fb);      // RAM capacity: 1 frame -> ka evicts
+    l2->Flush();              // async writer drains to .dxcfz
+
+    auto stats = cache.GetStats();
+    if (stats.entries != 1 || stats.evictions != 1) {
+        return "RAM tier did not evict as expected";
+    }
+    const auto l2st0 = l2->GetStats();
+    if (l2st0.stores != 2) {
+        return "write-through did not store 2 frames to disk";
+    }
+
+    video::Frame out;
+    if (!cache.Lookup(ka, &out)) {
+        return "L2 lookup miss for evicted frame";
+    }
+    if (out.Width() != kW || out.Height() != kH ||
+        out.DataSize() != fa.DataSize() ||
+        std::memcmp(out.Data(), fa.Data(), fa.DataSize()) != 0) {
+        return "L2-promoted frame pixels differ";
+    }
+    stats = cache.GetStats();
+    if (stats.l2_hits != 1 || stats.hits != 1) {
+        return "L2 hit not counted in cache stats";
+    }
+    // The promote wrote ka back into RAM — a second lookup must be a
+    // pure RAM hit (l2_hits stays 1) and must have evicted kb again.
+    if (!cache.Lookup(ka, &out)) {
+        return "promoted frame not served from RAM";
+    }
+    stats = cache.GetStats();
+    if (stats.hits != 2 || stats.l2_hits != 1) {
+        return "RAM re-hit after promote not counted";
+    }
+    // kb is still on disk even though it fell out of RAM again.
+    if (!cache.Lookup(kb, &out) ||
+        out.DataSize() != fb.DataSize() ||
+        std::memcmp(out.Data(), fb.Data(), fb.DataSize()) != 0) {
+        return "second frame did not survive RAM eviction via L2";
+    }
+    const auto l2st = l2->GetStats();
+    std::fprintf(stderr,
+                 "  l2_frame_cache: stores %llu hits %llu misses %llu "
+                 "bytes_on_disk %llu\n",
+                 (unsigned long long)l2st.stores,
+                 (unsigned long long)l2st.hits,
+                 (unsigned long long)l2st.misses,
+                 (unsigned long long)l2st.bytes_on_disk);
+    return {};
+}
+
+// ---- preview_perf ---------------------------------------------------
+// End-to-end monitor-preview throughput harness — the check that
+// answers "время рендера кадров". A deterministic fake decoder at the
+// canvas size isolates the PIPELINE cost (decode ~0 ms) so the
+// reported per-stage table splits render vs deliver honestly, and a
+// manual FrameClock makes every tick land on a fresh frame — the
+// measured number is pure render+deliver throughput, not wall-clock
+// luck. Bound: a basic 640x360 timeline must present faster than
+// realtime (>30 fps of engine work per frame).
+
+// Deterministic decoder: endless WxH frames at a fixed fps. Each
+// NextFrame writes a cheap moving gradient so the warp path sees
+// realistic (non-uniform) pixels; decode time is counted so the
+// report can separate "decode" from "composite" inside render_ms.
+class PerfDecoder final : public IMediaDecoder {
+public:
+    PerfDecoder(int w, int h, double fps)
+        : w_(w), h_(h), fps_(fps) {}
+    bool Open(const std::string& utf8_path,
+              std::string* /*error_out*/) override {
+        opened_path_ = utf8_path;
+        pos_ = 0.0;
+        return true;
+    }
+    void Close() override {}
+    bool IsOpen() const override { return !opened_path_.empty(); }
+    bool NextFrame(std::vector<std::uint8_t>* bgra, int* width,
+                   int* height) override {
+        const auto d0 = std::chrono::steady_clock::now();
+        bgra->resize(static_cast<std::size_t>(w_) * h_ * 4u);
+        // Moving 16px block pattern — compressible in cost terms but
+        // not uniform, so resample/blend loops can't early-out.
+        const int shift = static_cast<int>(pos_ * fps_) & 15;
+        std::uint8_t* px = bgra->data();
+        for (int y = 0; y < h_; ++y) {
+            std::uint8_t* row = px + static_cast<std::size_t>(y) * w_ * 4u;
+            for (int x = 0; x < w_; ++x) {
+                const bool on = (((x + shift) >> 4) + (y >> 4)) & 1;
+                row[x * 4 + 0] = on ? 200 : 30;
+                row[x * 4 + 1] = on ? 160 : 30;
+                row[x * 4 + 2] = on ? 90 : 30;
+                row[x * 4 + 3] = 255;
+            }
+        }
+        *width = w_;
+        *height = h_;
+        pos_ += 1.0 / fps_;
+        decode_ns_.fetch_add(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - d0)
+                .count()));
+        decode_calls_.fetch_add(1);
+        return true;
+    }
+    bool Seek(double seconds) override {
+        pos_ = std::max(0.0, seconds);
+        return true;
+    }
+    double GetPositionSeconds() const override { return pos_; }
+    double GetFps() const override { return fps_; }
+    double GetDurationSeconds() const override { return 60.0; }
+    int GetWidth() const override { return w_; }
+    int GetHeight() const override { return h_; }
+    void EnableAudioTap(bool) override {}
+    bool HasAudio() const override { return false; }
+    double GetAudioStartSeconds() const override { return 0.0; }
+    double GetAudioTimeBase() const override { return 0.0; }
+    bool ReadAudioFrames(
+        std::vector<XER::Bridge::FFmpeg::AudioFrameInfo>* /*out*/,
+        int /*max_frames*/) override {
+        return false;
+    }
+    bool AudioDrained() const override { return true; }
+    std::uint64_t GetAudioEpoch() const override { return 0; }
+
+    // Aggregate across every instance the factories hand out (the
+    // compositor opens one per clip session).
+    static std::atomic<std::uint64_t> decode_calls_;
+    static std::atomic<std::uint64_t> decode_ns_;
+
+private:
+    int w_;
+    int h_;
+    double fps_;
+    std::string opened_path_;
+    double pos_ = 0.0;
+};
+std::atomic<std::uint64_t> PerfDecoder::decode_calls_{0};
+std::atomic<std::uint64_t> PerfDecoder::decode_ns_{0};
+
+// Virtual-time clock for the engine: NowSeconds only advances through
+// SleepSeconds, so each playing tick lands exactly one project frame
+// ahead regardless of how long the render actually took.
+class PerfManualClock final : public FrameClock {
+public:
+    double NowSeconds() const override { return now_; }
+    void SleepSeconds(double seconds) override {
+        if (seconds > 0.0) {
+            now_ += seconds;
+        }
+        // Let the harness thread observe progress without burning the
+        // CPU the engine worker needs for the measurement.
+        std::this_thread::sleep_for(std::chrono::microseconds(200));
+    }
+
+private:
+    double now_ = 0.0;
+};
+
+std::string CheckPreviewPerf() {
+    constexpr int kW = 640;
+    constexpr int kH = 360;
+    constexpr int kFps = 30;
+    constexpr int kWarmupFrames = 15;
+    constexpr int kMeasureFrames = 60;
+    Project p;
+    p.width = kW;
+    p.height = kH;
+    p.fps_num = kFps;
+    p.fps_den = 1;
+    p.tracks.push_back(Track{TrackKind::Video, "V1"});
+    p.tracks.push_back(Track{TrackKind::Audio, "A1"});
+    Clip clip;
+    clip.id = "perf.mp4";
+    clip.track = 0;
+    clip.timeline_start = 0.0;
+    clip.duration = 30.0;
+    clip.source.kind = SourceKind::Media;
+    clip.source_path = "perf_synthetic.mp4";   // PerfDecoder ignores it
+    p.clips.push_back(clip);
+
+    auto factory = MediaDecoderFactory{[] {
+        return MediaDecoderPtr(new PerfDecoder(kW, kH, kFps));
+    }};
+
+    // ---- stage A: engine end-to-end at full quality ----------------
+    PreviewEngine::PerfStats full_stats;
+    std::uint64_t presented = 0;
+    {
+        struct CountSink : PreviewEngine::Sink {
+            void OnVideoFrame(
+                Render::scoped_refptr<Render::VideoFrame> f) override {
+                ++frames;
+                last_w = f->visible_rect().width;
+                last_h = f->visible_rect().height;
+            }
+            void OnAudioPeakLevels(float, float) override {}
+            void OnPlayhead(double) override {}
+            std::atomic<int> frames{0};
+            std::atomic<int> last_w{0};
+            std::atomic<int> last_h{0};
+        } sink;
+        PreviewEngine engine;
+        PreviewOptions po;
+        po.decoder_factory = factory;
+        po.clock = std::make_shared<PerfManualClock>();
+        po.audio_enabled = false;
+        std::string err;
+        if (!engine.Init(p, po, &sink, &err)) {
+            return "perf engine init failed: " + err;
+        }
+        engine.SetPlaying(true);
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (sink.frames.load() < kWarmupFrames + kMeasureFrames &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        if (sink.frames.load() < kWarmupFrames + kMeasureFrames) {
+            return "perf playback stalled at " +
+                   std::to_string(sink.frames.load()) + " frames";
+        }
+        // fx-free timeline: the autocache gate must leave the worker
+        // off — no pre-render thread competing for the measured core.
+        // WaitAutoCacheIdle returns trivially-true when disabled, so
+        // this also flushes any settle delay if the gate regressed.
+        engine.WaitAutoCacheIdle(10000);
+        const AutoCacher::Stats ac = engine.AutoCacheStats();
+        if (ac.done != 0 || ac.queued != 0) {
+            return "autocache ran on an fx-free timeline (done=" +
+                   std::to_string(ac.done) + ")";
+        }
+        engine.ResetPerfStats();
+        const int warm_target = sink.frames.load() + kMeasureFrames;
+        while (sink.frames.load() < warm_target &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        full_stats = engine.GetPerfStats();
+        presented = static_cast<std::uint64_t>(sink.frames.load());
+        if (sink.last_w.load() != kW || sink.last_h.load() != kH) {
+            return "full-quality frame dims drifted";
+        }
+
+        // ---- stage B: quality tier 0.5 — canvas scaling --------------
+        engine.ResetPerfStats();
+        engine.SetQuality(0.5f);
+        const int half_target = sink.frames.load() + kMeasureFrames;
+        while (sink.frames.load() < half_target &&
+               std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        const PreviewEngine::PerfStats half_stats =
+            engine.GetPerfStats();
+        const int exp_w = (kW + 1) / 2;
+        const int exp_h = kH / 2;
+        if (sink.last_w.load() != exp_w || sink.last_h.load() != exp_h) {
+            return "half-quality frame dims wrong: got " +
+                   std::to_string(sink.last_w.load()) + "x" +
+                   std::to_string(sink.last_h.load()) + " want " +
+                   std::to_string(exp_w) + "x" + std::to_string(exp_h);
+        }
+        engine.Shutdown();
+
+        const auto avg = [](double ms, std::uint64_t n) {
+            return n == 0 ? 0.0 : ms / static_cast<double>(n);
+        };
+        const double decode_ms =
+            static_cast<double>(PerfDecoder::decode_ns_.load()) / 1e6;
+        const std::uint64_t decode_n = PerfDecoder::decode_calls_.load();
+        const double full_frame = avg(
+            full_stats.render_ms + full_stats.deliver_ms,
+            full_stats.renders);
+        const double half_frame = avg(
+            half_stats.render_ms + half_stats.deliver_ms,
+            half_stats.renders);
+        std::fprintf(
+            stderr,
+            "  preview_perf: %llux%llu@%dfps media clip, %llu frames\n"
+            "    full q: render %.2f ms (decode %.2f ms inside) "
+            "deliver %.2f ms audio %.2f ms -> %.1f fps\n"
+            "    half q: render %.2f ms deliver %.2f ms -> %.1f fps "
+            "(%.0f%% of full-res cost)\n",
+            (unsigned long long)kW, (unsigned long long)kH, kFps,
+            (unsigned long long)presented,
+            avg(full_stats.render_ms, full_stats.renders),
+            avg(decode_ms, decode_n),
+            avg(full_stats.deliver_ms, full_stats.renders),
+            avg(full_stats.audio_ms, full_stats.ticks),
+            full_frame > 0.0 ? 1000.0 / full_frame : 0.0,
+            avg(half_stats.render_ms, half_stats.renders),
+            avg(half_stats.deliver_ms, half_stats.renders),
+            half_frame > 0.0 ? 1000.0 / half_frame : 0.0,
+            full_frame > 0.0 ? 100.0 * half_frame / full_frame : 0.0);
+        // The bound: >30fps of render+deliver on a basic timeline.
+        // (Half-quality is a report only — no bound, it must simply
+        // be faster and correctly sized.)
+        if (full_frame >= 1000.0 / 30.0) {
+            return "basic 640x360 timeline below realtime: " +
+                   std::to_string(full_frame) + " ms/frame";
+        }
+        if (half_stats.renders == 0) {
+            return "half-quality tier produced no frames";
+        }
+    }
     return {};
 }
 
@@ -2186,10 +2643,16 @@ std::string CheckJsFx() {
 std::string CheckBuiltinFx() {
     const std::vector<std::string> ids = BuiltinFx::Ids();
     // 49 migrated effects + xer.fx.smart_reframe + xer.fx.track_mosaic
-    // + xer.fx.face_blur (all three geometric/track-driven — their ABI
-    // fns are identities; the compositor applies them at the warp/mask
-    // pass).
-    if (ids.size() != 52) {
+    // + xer.fx.face_blur + xer.fx.track_mask (all four geometric/
+    // track-driven — their ABI fns are identities; the compositor
+    // applies them at the warp/mask pass) + the film-look kit
+    // (xer.fx.halation/gate_weave/light_leak/film_flicker/
+    // dust_scratch/vignette2 — film_grain was already migrated and
+    // is upgraded in place, not added) + the 14 effects_rack
+    // exposures (xer.af.compressor/limiter/gate/expander,
+    // eq_parametric/eq_graphic, chorus/flanger/phaser/vibrato/
+    // ring_mod, autotune, reverb + reverb_ir).
+    if (ids.size() != 73) {
         return "builtin table size drifted from the migrated set";
     }
     for (const std::string& id : ids) {
@@ -2342,6 +2805,753 @@ std::string CheckBuiltinFx() {
         }
         if (sig_after <= sig_before * 0.3) {
             return "voice_isolate destroyed the harmonic region";
+        }
+    }
+    return {};
+}
+
+// FFmpeg xfade transitions (docs/wiki/research/2026-11-24 §1.2):
+// synthetic A/B frames through the cached-graph bridge plus the
+// compositor's Type::Xfade dispatch. Endpoints must pin to A/B,
+// a true wipe must differ from alpha crossfade at mid-progress,
+// xfade "fade" must match our crossfade math (±1 LSB of rounding),
+// and the unknown-name contract must fall back to crossfade.
+std::string CheckXfade() {
+    if (!XfadeAvailable()) {
+        return "xfade filter missing from the linked libavfilter";
+    }
+    constexpr int kW = 64, kH = 48;
+    // A = solid opaque red; B = opaque blue with a horizontal
+    // gradient so both a uniform blend and a spatial wipe are
+    // distinguishable.
+    video::Frame A, B;
+    if (!A.Allocate(kW, kH, video::PixelFormat::BGRA8) ||
+        !B.Allocate(kW, kH, video::PixelFormat::BGRA8)) {
+        return "xfade test frames failed to allocate";
+    }
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            std::uint8_t* a =
+                A.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            std::uint8_t* b =
+                B.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            a[0] = 0;   a[1] = 0;   a[2] = 255; a[3] = 255;
+            b[0] = static_cast<std::uint8_t>(64 + x * 2);
+            b[1] = 32;  b[2] = 0;   b[3] = 255;
+        }
+    }
+    const auto same = [](const video::Frame& x, const video::Frame& y) {
+        return x.DataSize() == y.DataSize() &&
+               std::memcmp(x.Data(), y.Data(), x.DataSize()) == 0;
+    };
+    const auto max_diff = [](const video::Frame& x,
+                             const video::Frame& y) {
+        int worst = 0;
+        const size_t n = std::min(x.DataSize(), y.DataSize());
+        for (size_t i = 0; i < n; ++i) {
+            worst = std::max(worst, std::abs(
+                static_cast<int>(x.Data()[i]) -
+                static_cast<int>(y.Data()[i])));
+        }
+        return worst;
+    };
+    // The exported type table must be populated and probeable.
+    if (XfadeTransitions().empty() ||
+        !XfadeTypeAvailable("circleopen") ||
+        XfadeTypeAvailable("not_a_real_xfade")) {
+        return "xfade type table / availability probe is wrong";
+    }
+    // Endpoints: w=0 must be exactly A, w=1 exactly B.
+    video::Frame out;
+    if (!ApplyXfadeTransition("circleopen", 0.0, A, B, &out) ||
+        !same(out, A)) {
+        return "xfade w=0 did not reproduce the outgoing frame";
+    }
+    if (!ApplyXfadeTransition("circleopen", 1.0, A, B, &out) ||
+        !same(out, B)) {
+        return "xfade w=1 did not reproduce the incoming frame";
+    }
+    // Our plain crossfade at w=0.5 as the blend reference.
+    video::Frame xf;
+    if (!ApplyTransitionPixels(Transition::Type::Crossfade, 0.5,
+                               A, B, &xf, "")) {
+        return "crossfade reference eval failed";
+    }
+    // Wipes must differ from a uniform blend at mid-progress;
+    // xfade's own "fade" must match it (same linear math, allow
+    // 1 LSB of pixel-format rounding inside the filter graph).
+    const char* kWipes[] = {"radial", "circleopen", "coverleft",
+                            "pixelize"};
+    for (const char* name : kWipes) {
+        if (!ApplyXfadeTransition(name, 0.5, A, B, &out)) {
+            return std::string("xfade '") + name + "' eval failed";
+        }
+        if (same(out, xf)) {
+            return std::string("xfade '") + name +
+                "' is indistinguishable from crossfade at w=0.5";
+        }
+    }
+    if (!ApplyXfadeTransition("fade", 0.5, A, B, &out) ||
+        max_diff(out, xf) > 1) {
+        return "xfade 'fade' diverged from crossfade at w=0.5";
+    }
+    // Compositor dispatch: Type::Xfade + name must equal the bridge
+    // result; an unknown name must fall back to crossfade.
+    video::Frame via_comp;
+    if (!ApplyTransitionPixels(Transition::Type::Xfade, 0.5,
+                               A, B, &via_comp, "circleopen")) {
+        return "Type::Xfade compositor dispatch failed";
+    }
+    video::Frame circle;
+    if (!ApplyXfadeTransition("circleopen", 0.5, A, B, &circle) ||
+        !same(via_comp, circle)) {
+        return "Type::Xfade dispatch diverged from the bridge";
+    }
+    if (!ApplyTransitionPixels(Transition::Type::Xfade, 0.5,
+                               A, B, &via_comp,
+                               "not_a_real_xfade") ||
+        !same(via_comp, xf)) {
+        return "unknown xfade name did not fall back to crossfade";
+    }
+    // Cache-exercise: sweep progress on one (name,geometry) graph —
+    // must stay sane across repeated evals, then drop the cache.
+    for (double w = 0.1; w < 1.0; w += 0.2) {
+        if (!ApplyXfadeTransition("wipetl", w, A, B, &out)) {
+            return "xfade progress sweep failed mid-graph";
+        }
+    }
+    XfadeGraphCacheClear();
+    return {};
+}
+
+// XER-native xer.tr.* transitions (docs/wiki/research/2026-11-24-
+// transitions.md): synthetic A/B frames through every registered
+// kernel — endpoints must pin exactly to A/B (dispatcher memcpy
+// short-circuit), mid-progress must be valid AND distinct from a
+// plain crossfade (a transition that degenerates to the reference
+// blend has no reason to exist), evals must be deterministic
+// (same inputs -> identical output), the param schema must
+// parse/format round-trip, and an unknown id must fail at the lib
+// boundary while the compositor dispatch falls back to crossfade.
+std::string CheckXerTransitions() {
+    constexpr int kW = 64, kH = 48;
+    video::Frame A, B;
+    if (!A.Allocate(kW, kH, video::PixelFormat::BGRA8) ||
+        !B.Allocate(kW, kH, video::PixelFormat::BGRA8)) {
+        return "xer.tr test frames failed to allocate";
+    }
+    // A = warm left/right split; B = cool gradient — both spatial and
+    // color differences so reveal/blend kernels are distinguishable.
+    for (int y = 0; y < kH; ++y) {
+        for (int x = 0; x < kW; ++x) {
+            std::uint8_t* a =
+                A.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            std::uint8_t* b =
+                B.Data() + (static_cast<size_t>(y) * kW + x) * 4;
+            const bool left = x < kW / 2;
+            a[0] = 20;  a[1] = 40;  a[2] = left ? 235 : 60;
+            a[3] = 255;
+            b[0] = static_cast<std::uint8_t>(60 + x * 2);
+            b[1] = static_cast<std::uint8_t>(40 + y * 3);
+            b[2] = 30;
+            b[3] = 255;
+        }
+    }
+    const auto same = [](const video::Frame& x, const video::Frame& y) {
+        return x.DataSize() == y.DataSize() &&
+               std::memcmp(x.Data(), y.Data(), x.DataSize()) == 0;
+    };
+    // The registry must be populated and probeable.
+    if (XerTransitions().size() < 12 ||
+        !XerTransitionKnown("xer.tr.whip_pan") ||
+        XerTransitionKnown("xer.tr.not_real")) {
+        return "xer.tr registry / probe is wrong";
+    }
+    // Param schema: parse honors overrides + clamps, format emits
+    // only non-defaults, round-trips.
+    {
+        const XerTransitionParams p =
+            ParseXerTransitionParams("dir=3;soft=0.4;int=0.5;seed=9");
+        if (p.direction != 3 || std::fabs(p.softness - 0.4) > 1e-9 ||
+            std::fabs(p.intensity - 0.5) > 1e-9 || p.seed != 9) {
+            return "xer.tr params did not parse";
+        }
+        const XerTransitionParams clamped =
+            ParseXerTransitionParams("soft=9;int=-2;bogus=1");
+        if (clamped.softness != 1.0 || clamped.intensity != 0.0) {
+            return "xer.tr params did not clamp";
+        }
+        const XerTransitionParams round =
+            ParseXerTransitionParams(FormatXerTransitionParams(p));
+        if (round.direction != p.direction ||
+            std::fabs(round.softness - p.softness) > 1e-9 ||
+            std::fabs(round.intensity - p.intensity) > 1e-9 ||
+            round.seed != p.seed) {
+            return "xer.tr params format/parse did not round-trip";
+        }
+        if (!FormatXerTransitionParams(XerTransitionParams{}).empty()) {
+            return "xer.tr default params should serialize empty";
+        }
+    }
+    // Crossfade reference for distinctness checks.
+    video::Frame xf;
+    if (!ApplyTransitionPixels(Transition::Type::Crossfade, 0.5,
+                               A, B, &xf, "")) {
+        return "crossfade reference eval failed";
+    }
+    // Every registered id: endpoints exact, mid valid + distinct
+    // from crossfade, deterministic across two evals.
+    video::Frame out, out2;
+    for (const XerTransitionInfo& info : XerTransitions()) {
+        const std::string id = info.id;
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 0.0,
+                                A, B, &out) ||
+            !same(out, A)) {
+            return id + ": w=0 did not reproduce the outgoing frame";
+        }
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 1.0,
+                                A, B, &out) ||
+            !same(out, B)) {
+            return id + ": w=1 did not reproduce the incoming frame";
+        }
+        bool any_mid_content = false;
+        for (double w : {0.25, 0.5, 0.75}) {
+            if (!ApplyXerTransition(id, XerTransitionParams{}, w,
+                                    A, B, &out)) {
+                return id + ": mid-progress eval failed";
+            }
+            bool all_zero = true, all_255 = true;
+            for (size_t i = 0; i < out.DataSize(); ++i) {
+                if (out.Data()[i] != 0) all_zero = false;
+                if (out.Data()[i] != 255) all_255 = false;
+            }
+            // Kernels whose mid point is a legit full-field state
+            // (flash blows out to white at w=0.5) still have to carry
+            // real content somewhere inside the window.
+            if (!all_zero && !all_255) {
+                any_mid_content = true;
+            }
+        }
+        if (!any_mid_content) {
+            return id + ": degenerate at every mid-progress point";
+        }
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 0.5,
+                                A, B, &out)) {
+            return id + ": w=0.5 eval failed";
+        }
+        if (same(out, xf)) {
+            return id + ": indistinguishable from crossfade at w=0.5";
+        }
+        if (!ApplyXerTransition(id, XerTransitionParams{}, 0.5,
+                                A, B, &out2) ||
+            !same(out, out2)) {
+            return id + ": not deterministic across evals";
+        }
+        // Non-default params must still evaluate (and for seeded
+        // kernels a different seed is a different frame).
+        XerTransitionParams alt;
+        alt.direction = 2;
+        alt.softness = 0.5;
+        alt.intensity = 0.6;
+        alt.seed = 12345;
+        if (!ApplyXerTransition(id, alt, 0.5, A, B, &out2)) {
+            return id + ": non-default params eval failed";
+        }
+    }
+    // Unknown id: lib returns false; the compositor dispatch falls
+    // back to a true crossfade (same contract as a bad xfade token).
+    if (ApplyXerTransition("xer.tr.not_real", XerTransitionParams{},
+                          0.5, A, B, &out)) {
+        return "unknown xer.tr id did not fail at the lib boundary";
+    }
+    if (!ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &out, "", "xer.tr.whip_pan",
+                               "")) {
+        return "Type::XerFx compositor dispatch failed";
+    }
+    video::Frame via_lib;
+    if (!ApplyXerTransition("xer.tr.whip_pan", XerTransitionParams{},
+                            0.5, A, B, &via_lib) ||
+        !same(out, via_lib)) {
+        return "Type::XerFx dispatch diverged from the lib";
+    }
+    if (!ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &out, "", "xer.tr.not_real",
+                               "") ||
+        !same(out, xf)) {
+        return "unknown xer.tr id did not fall back to crossfade";
+    }
+    // Params reach the kernel through the compositor: seeded glitch
+    // with two seeds must differ.
+    video::Frame g1, g2;
+    if (!ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &g1, "", "xer.tr.glitch",
+                               "seed=1") ||
+        !ApplyTransitionPixels(Transition::Type::XerFx, 0.5,
+                               A, B, &g2, "", "xer.tr.glitch",
+                               "seed=2") ||
+        same(g1, g2)) {
+        return "xer.tr params did not reach the kernel";
+    }
+    // Wire-name round trip covers the new enum.
+    {
+        Transition::Type back = Transition::Type::Crossfade;
+        if (!TransitionTypeFromString(
+                TransitionTypeToString(Transition::Type::XerFx),
+                &back) ||
+            back != Transition::Type::XerFx) {
+            return "XerFx wire-name round trip failed";
+        }
+    }
+    return {};
+}
+
+// The 14 effects_rack exposures (xer.af.* added in wave-1 §1.2b):
+// every descriptor must resolve + apply on stereo 48 kHz PCM with
+// both default and out-of-range params (params must clamp, never
+// crash or return NaN), and the dynamics/space kernels get a real
+// semantic assert — limiter ceiling, gate muting, compressor
+// gain reduction, and the convolution reverb's tail.
+std::string CheckAudioFxRack() {
+    const char* kIds[] = {
+        "xer.af.compressor", "xer.af.limiter",
+        "xer.af.gate",       "xer.af.expander",
+        "xer.af.eq_parametric", "xer.af.eq_graphic",
+        "xer.af.chorus",     "xer.af.flanger",
+        "xer.af.phaser",     "xer.af.vibrato",
+        "xer.af.ring_mod",   "xer.af.autotune",
+        "xer.af.reverb",     "xer.af.reverb_ir",
+    };
+    constexpr int kFrames = 4096, kCh = 2, kSr = 48000;
+    const auto make_pcm = [&](double amp, double hz, int frames) {
+        std::vector<float> v(static_cast<size_t>(frames) * kCh);
+        for (int i = 0; i < frames; ++i) {
+            const float s = static_cast<float>(
+                amp * std::sin(2.0 * 3.14159265 * hz * i / kSr));
+            for (int c = 0; c < kCh; ++c) {
+                v[static_cast<size_t>(i) * kCh + c] = s;
+            }
+        }
+        return v;
+    };
+    const auto finite = [](const std::vector<float>& v) {
+        for (float s : v) {
+            if (!std::isfinite(s)) return false;
+        }
+        return true;
+    };
+    const auto peak = [](const std::vector<float>& v) {
+        float p = 0.f;
+        for (float s : v) p = std::max(p, std::fabs(s));
+        return p;
+    };
+    const auto rms = [](const std::vector<float>& v) {
+        double acc = 0.0;
+        for (float s : v) acc += static_cast<double>(s) * s;
+        return std::sqrt(acc / static_cast<double>(v.size()));
+    };
+    const auto apply = [&](const char* id, std::vector<float>* pcm,
+                           const std::vector<float>& params) {
+        const PluginDesc* d =
+            PluginHost::ForEffectType(std::string("builtin:") + id);
+        if (d == nullptr || !d->builtin || d->audio_fn == nullptr) {
+            return false;
+        }
+        return PluginHost::ApplyAudio(
+            *d, pcm->data(),
+            static_cast<int32_t>(pcm->size() / kCh), kCh, kSr,
+            params);
+    };
+    // Resolve + apply: defaults, then deliberately wild params.
+    for (const char* id : kIds) {
+        std::vector<float> pcm = make_pcm(0.5, 440.0, kFrames);
+        if (!apply(id, &pcm, {})) {
+            return std::string(id) + " apply failed on defaults";
+        }
+        if (!finite(pcm)) {
+            return std::string(id) + " produced non-finite output";
+        }
+        std::vector<float> wild = make_pcm(0.5, 440.0, kFrames);
+        const PluginDesc* d =
+            PluginHost::ForEffectType(std::string("builtin:") + id);
+        std::vector<float> params(d->params.size(), 1.0e9f);
+        if (!apply(id, &wild, params)) {
+            return std::string(id) +
+                " rejected out-of-range params (must clamp)";
+        }
+        if (!finite(wild)) {
+            return std::string(id) +
+                " produced non-finite output on wild params";
+        }
+    }
+    // Limiter: ceiling -20 dB on a constant 0.95 DC input. A sine
+    // would legitimately recover gain between peaks (the release
+    // runs per-sample through the troughs), so DC is the honest
+    // probe — gain converges to ceiling/0.95 ≈ 0.105 and the tail
+    // of the block must sit at ~0.1.
+    {
+        std::vector<float> pcm(static_cast<size_t>(kFrames) * kCh,
+                               0.95f);
+        if (!apply("xer.af.limiter", &pcm, {-20.f, 5.f})) {
+            return "xer.af.limiter apply failed";
+        }
+        float tail_peak = 0.f;
+        for (size_t i = pcm.size() / 2; i < pcm.size(); ++i) {
+            tail_peak = std::max(tail_peak, std::fabs(pcm[i]));
+        }
+        if (tail_peak > 0.13f) {
+            return "xer.af.limiter overshot its ceiling";
+        }
+        if (tail_peak < 0.05f) {
+            return "xer.af.limiter crushed the signal below ceiling";
+        }
+    }
+    // Gate: -70 dBFS noise floor under a -40 dB threshold must come
+    // back (near-)silent.
+    {
+        std::vector<float> pcm(static_cast<size_t>(kFrames) * kCh);
+        std::uint32_t rng = 0x51ED1E55u;
+        for (float& s : pcm) {
+            rng = rng * 1664525u + 1013904223u;
+            s = (static_cast<float>((rng >> 9) & 0x7FFFFF) /
+                     4194304.f - 1.f) * 0.0004f;
+        }
+        const double in = rms(pcm);
+        if (!apply("xer.af.gate", &pcm, {-40.f, 10.f})) {
+            return "xer.af.gate apply failed";
+        }
+        if (rms(pcm) > in * 0.2) {
+            return "xer.af.gate did not mute below-threshold audio";
+        }
+    }
+    // Compressor: -20 dB threshold / 8:1 on a 0.9 sine — steady-state
+    // gain reduction must pull the tail of the block well under the
+    // input peak (early attack overshoot is allowed, so compare the
+    // last half).
+    {
+        std::vector<float> pcm = make_pcm(0.9, 440.0, kFrames);
+        if (!apply("xer.af.compressor", &pcm,
+                   {-20.f, 8.f, 5.f, 80.f})) {
+            return "xer.af.compressor apply failed";
+        }
+        float tail_peak = 0.f;
+        for (size_t i = pcm.size() / 2; i < pcm.size(); ++i) {
+            tail_peak = std::max(tail_peak, std::fabs(pcm[i]));
+        }
+        if (tail_peak > 0.45f || tail_peak < 0.02f) {
+            return "xer.af.compressor did not reduce gain in range";
+        }
+    }
+    // Convolution reverb: an impulse must grow a decaying tail.
+    {
+        std::vector<float> pcm(static_cast<size_t>(kFrames) * kCh,
+                               0.f);
+        pcm[0] = pcm[1] = 1.f;
+        if (!apply("xer.af.reverb_ir", &pcm, {1.0f, 0.4f, 1.0f})) {
+            return "xer.af.reverb_ir apply failed";
+        }
+        double tail = 0.0;
+        for (int i = 200; i < kFrames; ++i) {
+            for (int c = 0; c < kCh; ++c) {
+                const float s = pcm[static_cast<size_t>(i) * kCh + c];
+                tail += s * s;
+            }
+        }
+        if (tail < 1.0e-6) {
+            return "xer.af.reverb_ir produced no impulse tail";
+        }
+    }
+    return {};
+}
+
+// The film-look kit (docs/wiki/research/2026-11-24 §1.1): film_grain
+// v2, halation, gate_weave, light_leak, film_flicker, dust_scratch
+// and vignette2. The time-aware ids dispatch through the compositor
+// with (media_time, clip_seed) — identical inputs must bit-match
+// while the output animates across time. Each kernel's signature is
+// verified on synthetic BGRA frames, plus one generated-source
+// project through the real compositor path.
+std::string CheckFilmFx() {
+    namespace BF = BuiltinFx;
+    constexpr int kW = 64, kH = 36, kStride = kW * 4;
+    const char* kAll[] = {
+        "xer.fx.film_grain",   "xer.fx.halation",
+        "xer.fx.gate_weave",   "xer.fx.light_leak",
+        "xer.fx.film_flicker", "xer.fx.dust_scratch",
+        "xer.fx.vignette2",
+    };
+    for (const char* id : kAll) {
+        const PluginDesc* d =
+            PluginHost::ForEffectType(std::string("builtin:") + id);
+        if (d == nullptr || !d->builtin || d->video_fn == nullptr) {
+            return std::string("builtin:") + id + " is not registered";
+        }
+    }
+    const char* kTimed[] = {
+        "xer.fx.film_grain", "xer.fx.gate_weave", "xer.fx.light_leak",
+        "xer.fx.film_flicker", "xer.fx.dust_scratch",
+    };
+    for (const char* id : kTimed) {
+        if (!BF::IsFilmEffectId(id)) {
+            return std::string(id) + " missing from the film set";
+        }
+    }
+    // halation/vignette2 are pure per-frame kernels — the normal ABI
+    // path applies them; they must NOT sit in the time-aware set.
+    if (BF::IsFilmEffectId("xer.fx.halation") ||
+        BF::IsFilmEffectId("xer.fx.vignette2")) {
+        return "a pure per-frame kernel leaked into the film set";
+    }
+
+    const auto flat = [](std::uint8_t v) {
+        std::vector<std::uint8_t> f(static_cast<size_t>(kW) * kH * 4);
+        for (std::size_t i = 0; i + 3 < f.size(); i += 4) {
+            f[i] = f[i + 1] = f[i + 2] = v;
+            f[i + 3] = 255;
+        }
+        return f;
+    };
+    const auto film = [](const char* id, std::vector<std::uint8_t>* f,
+                         const std::vector<float>& params, double t,
+                         std::uint64_t seed) {
+        return BF::ApplyFilmEffect(id, f->data(), kW, kH, kStride,
+                                   params, t, seed);
+    };
+    const auto variance = [](const std::vector<std::uint8_t>& f) {
+        const double npx = static_cast<double>(f.size()) / 4.0;
+        double mean = 0.0;
+        for (std::size_t i = 0; i < f.size(); i += 4) mean += f[i];
+        mean /= npx;
+        double var = 0.0;
+        for (std::size_t i = 0; i < f.size(); i += 4) {
+            const double d = f[i] - mean;
+            var += d * d;
+        }
+        return var / npx;
+    };
+    const auto mean_luma = [](const std::vector<std::uint8_t>& f) {
+        double m = 0.0;
+        for (std::size_t i = 0; i < f.size(); i += 4) {
+            m += 0.114 * f[i] + 0.587 * f[i + 1] + 0.299 * f[i + 2];
+        }
+        return m / (static_cast<double>(f.size()) / 4.0);
+    };
+
+    // film_grain: deterministic at fixed (seed,time), adds variance
+    // to a flat field, regenerates across time, shadow-weighted.
+    {
+        std::vector<std::uint8_t> a = flat(90), b = flat(90);
+        if (!film("xer.fx.film_grain", &a, {40.f, 1.f, 2.f, 7.f}, 0.5,
+                  42) ||
+            !film("xer.fx.film_grain", &b, {40.f, 1.f, 2.f, 7.f}, 0.5,
+                  42)) {
+            return "film_grain apply failed";
+        }
+        if (a != b) {
+            return "film_grain is not deterministic at fixed time";
+        }
+        if (variance(a) < 4.0) {
+            return "film_grain added no measurable variance";
+        }
+        std::vector<std::uint8_t> c = flat(90);
+        film("xer.fx.film_grain", &c, {40.f, 1.f, 2.f, 7.f}, 0.6, 42);
+        if (a == c) {
+            return "film_grain did not regenerate across time";
+        }
+        std::vector<std::uint8_t> dark = flat(40), bright = flat(215);
+        film("xer.fx.film_grain", &dark, {60.f, 1.f, 1.f, 3.f}, 0.5,
+             42);
+        film("xer.fx.film_grain", &bright, {60.f, 1.f, 1.f, 3.f}, 0.5,
+             42);
+        if (variance(dark) <= variance(bright) * 2.0) {
+            return "film_grain is not shadow-weighted";
+        }
+    }
+
+    // halation (pure ABI): the bright core must bleed warm light
+    // outward — pixels beside it gain red over blue — while the far
+    // corner stays dark.
+    {
+        std::vector<std::uint8_t> f = flat(0);
+        for (int y = 14; y < 22; ++y) {
+            for (int x = 28; x < 36; ++x) {
+                std::uint8_t* px =
+                    f.data() + (static_cast<size_t>(y) * kW + x) * 4;
+                px[0] = px[1] = px[2] = 255;
+            }
+        }
+        const PluginDesc* d =
+            PluginHost::ForEffectType("builtin:xer.fx.halation");
+        if (!PluginHost::ApplyVideo(*d, f.data(), kW, kH, kStride,
+                                    {200.f, 10.f, 0.9f, 25.f})) {
+            return "halation apply failed";
+        }
+        const std::uint8_t* near_px =
+            f.data() + (static_cast<size_t>(18) * kW + 22) * 4;
+        const std::uint8_t* far_px =
+            f.data() + (static_cast<size_t>(2) * kW + 2) * 4;
+        if (near_px[2] <= near_px[0] || near_px[2] < 8) {
+            return "halation did not bleed warm light";
+        }
+        if (far_px[2] >= near_px[2]) {
+            return "halation bloomed the shadows";
+        }
+    }
+
+    // gate_weave: same-time bit-match plus a measurable translation
+    // somewhere along the seeded wander curve.
+    {
+        std::vector<std::uint8_t> f = flat(0);
+        for (int y = 0; y < kH; ++y) {
+            std::uint8_t* px =
+                f.data() + (static_cast<size_t>(y) * kW + 32) * 4;
+            px[0] = px[1] = px[2] = 255;
+        }
+        std::vector<std::uint8_t> a = f, b = f;
+        film("xer.fx.gate_weave", &a, {4.f, 1.0f, 3.f}, 0.5, 9);
+        film("xer.fx.gate_weave", &b, {4.f, 1.0f, 3.f}, 0.5, 9);
+        if (a != b) {
+            return "gate_weave is not deterministic at fixed time";
+        }
+        double best = 0.0;
+        for (double t = 0.05; t < 3.0; t += 0.1) {
+            std::vector<std::uint8_t> g = f;
+            film("xer.fx.gate_weave", &g, {4.f, 1.0f, 3.f}, t, 9);
+            double cx = 0.0, mass = 0.0;
+            for (int y = 0; y < kH; ++y) {
+                for (int x = 0; x < kW; ++x) {
+                    const double v =
+                        g[(static_cast<size_t>(y) * kW + x) * 4 + 2];
+                    cx += v * x;
+                    mass += v;
+                }
+            }
+            if (mass > 0.0) {
+                best = std::max(best, std::fabs(cx / mass - 32.0));
+            }
+        }
+        if (best < 0.5) {
+            return "gate_weave never displaced the frame";
+        }
+    }
+
+    // light_leak: the edge band must warm up more than the center.
+    {
+        std::vector<std::uint8_t> g = flat(60), g2 = flat(60);
+        film("xer.fx.light_leak", &g, {1.0f, 30.f, 5.f, 0.f}, 0.5, 77);
+        film("xer.fx.light_leak", &g2, {1.0f, 30.f, 5.f, 0.f}, 0.5, 77);
+        if (g != g2) {
+            return "light_leak is not deterministic at fixed time";
+        }
+        if (g == flat(60)) {
+            return "light_leak changed nothing";
+        }
+        const auto warm_delta = [&](bool edge_band) {
+            double sum = 0.0;
+            int cnt = 0;
+            for (int y = 0; y < kH; ++y) {
+                for (int x = 0; x < kW; ++x) {
+                    const bool edge = x < 6 || x >= kW - 6 || y < 6 ||
+                                      y >= kH - 6;
+                    if (edge != edge_band) continue;
+                    const std::size_t i =
+                        (static_cast<size_t>(y) * kW + x) * 4;
+                    sum += static_cast<int>(g[i + 2]) -
+                           static_cast<int>(g[i]);
+                    ++cnt;
+                }
+            }
+            return cnt > 0 ? sum / cnt : 0.0;
+        };
+        if (warm_delta(true) <= warm_delta(false)) {
+            return "light_leak did not warm the frame edges";
+        }
+    }
+
+    // film_flicker: mean luma must wander over time, deterministically.
+    {
+        double lo = 1e9, hi = -1e9;
+        for (double t = 0.0; t < 2.0; t += 0.05) {
+            std::vector<std::uint8_t> f = flat(120);
+            film("xer.fx.film_flicker", &f, {0.5f, 6.f, 3.f}, t, 11);
+            const double m = mean_luma(f);
+            lo = std::min(lo, m);
+            hi = std::max(hi, m);
+        }
+        if (hi - lo < 5.0) {
+            return "film_flicker did not modulate luma";
+        }
+        std::vector<std::uint8_t> a = flat(120), b = flat(120);
+        film("xer.fx.film_flicker", &a, {0.5f, 6.f, 3.f}, 0.31, 11);
+        film("xer.fx.film_flicker", &b, {0.5f, 6.f, 3.f}, 0.31, 11);
+        if (a != b) {
+            return "film_flicker is not deterministic at fixed time";
+        }
+    }
+
+    // dust_scratch: sparse deterministic specks on a flat field.
+    {
+        std::vector<std::uint8_t> g = flat(80), g2 = flat(80);
+        film("xer.fx.dust_scratch", &g, {0.9f, 11.f}, 0.5, 3);
+        film("xer.fx.dust_scratch", &g2, {0.9f, 11.f}, 0.5, 3);
+        if (g != g2) {
+            return "dust_scratch is not deterministic at fixed time";
+        }
+        int changed = 0;
+        for (std::size_t i = 0; i < g.size(); i += 4) {
+            if (std::abs(static_cast<int>(g[i]) - 80) > 15) ++changed;
+        }
+        const int npx = kW * kH;
+        if (changed < 10) {
+            return "dust_scratch produced no specks";
+        }
+        if (changed > static_cast<int>(npx * 0.9)) {
+            return "dust_scratch is not sparse";
+        }
+    }
+
+    // vignette2 (pure ABI): corners darken, center is preserved.
+    {
+        std::vector<std::uint8_t> f = flat(200);
+        const PluginDesc* d =
+            PluginHost::ForEffectType("builtin:xer.fx.vignette2");
+        if (!PluginHost::ApplyVideo(*d, f.data(), kW, kH, kStride,
+                                    {1.0f, 0.5f, 0.4f, 1.0f})) {
+            return "vignette2 apply failed";
+        }
+        const std::uint8_t center =
+            f[(static_cast<size_t>(18) * kW + 32) * 4];
+        const std::uint8_t corner = f[0];
+        if (center < 190 || corner > 60 || corner >= center) {
+            return "vignette2 falloff is wrong";
+        }
+    }
+
+    // End-to-end through the real compositor path: a generated clip
+    // carrying film_grain renders bit-identically across sessions at
+    // the same t (deterministic dispatch) and animates across t.
+    {
+        const auto render = [](double t,
+                               std::vector<std::uint8_t>* out) {
+            Project project = MakeRenderProject(kW, kH, 15);
+            project.clips[0].effects.push_back(
+                {"builtin:xer.fx.film_grain", {30.f, 1.f, 2.f, 5.f}});
+            Compositor compositor;
+            std::string err;
+            if (!compositor.Init(project, {}, &err)) return false;
+            const bool ok = compositor.RenderFrameAt(t, out, &err);
+            compositor.Shutdown();
+            return ok;
+        };
+        std::vector<std::uint8_t> a, b, c;
+        if (!render(0.5, &a) || !render(0.5, &b) || !render(0.6, &c)) {
+            return "film_fx compositor render failed";
+        }
+        if (a != b) {
+            return "film_grain render is not deterministic";
+        }
+        if (a == c) {
+            return "film_grain did not animate through the compositor";
         }
     }
     return {};
@@ -4936,7 +6146,8 @@ std::string CheckVeCoreV3() {
                                Transition::Type::SlideDown,
                                Transition::Type::DipToBlack,
                                Transition::Type::AdditiveDissolve,
-                               Transition::Type::Script}) {
+                               Transition::Type::Script,
+                               Transition::Type::Xfade}) {
         Transition::Type back = Transition::Type::Crossfade;
         const char* text = TransitionTypeToString(t);
         if (text == nullptr || *text == '\0' ||
@@ -6750,6 +7961,423 @@ std::string CheckFaceDetect() {
     return {};
 }
 
+// SAM2.1-hiera-tiny mask tracking (ai/sam2_session.h +
+// ai/sam2_track.h) — the "Track Mask (AI)" clip seam landing
+// Clip::mask_track + builtin:xer.fx.track_mask. Always verified:
+// the graceful-degradation contract (unloaded sessions reject
+// cleanly, scans fail with a reason), every model-free mask helper
+// (bounds/centroid/packed-bits/IoU), MaskTrackAt's crossfade +
+// scene-boundary snap, the armed-click transform map, the
+// registered descriptor, and a synthetic-mask isolate render
+// through the compositor branch. The LIVE model path is env-gated
+// behind XER_SMOKE_SAM2_LIVE=1: ORT hard-crashes inside SAM-family
+// encoder/decoder inference on this machine (ai_lab_ops is
+// commented out of kChecks for the same confirmed 2026-11-23 crash
+// — a crash kills the whole suite, so real inference is opt-in
+// until the ORT/model stack is fixed).
+std::string CheckSam2Track() {
+    std::string err;
+
+    // ---- graceful-degradation contract (always verified) ----
+    Ai::Sam2Encoder encoder;
+    if (encoder.IsLoaded()) {
+        return "fresh Sam2Encoder reports loaded";
+    }
+    if (encoder.Load("definitely/missing/vision_encoder.onnx",
+                     &err)) {
+        return "Sam2Encoder::Load accepted a nonexistent model";
+    }
+    if (err.empty()) {
+        return "Sam2Encoder::Load failed a missing model with no "
+               "reason";
+    }
+    err.clear();
+    Ai::Sam2Embedding emb;
+    std::vector<std::uint8_t> bgra(160 * 120 * 4, 0x40);
+    for (std::size_t p = 3; p < bgra.size(); p += 4) bgra[p] = 0xFF;
+    if (encoder.Encode(bgra.data(), 160, 120, 160 * 4, &emb, &err)) {
+        return "Sam2Encoder::Encode ran on an unloaded session";
+    }
+    err.clear();
+    Ai::Sam2Decoder decoder;
+    if (decoder.IsLoaded()) {
+        return "fresh Sam2Decoder reports loaded";
+    }
+    if (decoder.Load("definitely/missing/decoder.onnx", &err)) {
+        return "Sam2Decoder::Load accepted a nonexistent model";
+    }
+    err.clear();
+    Ai::Sam2Prompt prompt;
+    prompt.points = {80.0f, 60.0f};
+    prompt.labels = {1};
+    Ai::Sam2Mask mask;
+    if (decoder.Decode(emb, prompt, &mask, &err)) {
+        return "Sam2Decoder::Decode ran on an unloaded session";
+    }
+    err.clear();
+    Clip scan_clip;
+    scan_clip.id = "sam-scan";
+    scan_clip.source_path = "definitely/missing/media.mp4";
+    scan_clip.duration = 5.0;
+    ClipMaskTrack track;
+    if (Ai::ScanClipMaskTrack(scan_clip, "", "",
+                              Ai::Sam2TrackParams{}, nullptr, nullptr,
+                              &track, &err)) {
+        return "ScanClipMaskTrack succeeded with no models";
+    }
+    if (err.empty() || !track.samples.empty()) {
+        return "no-model mask scan did not report a reason";
+    }
+    err.clear();
+    Clip generated = MakeGeneratedClip("gensam", 0, 0.0, 1.0,
+                                       SourceKind::ColorBars,
+                                       "smpte75");
+    if (Ai::ScanClipMaskTrack(generated, "e.onnx", "d.onnx",
+                              Ai::Sam2TrackParams{}, nullptr, nullptr,
+                              &track, &err)) {
+        return "ScanClipMaskTrack scanned a generated clip";
+    }
+    err.clear();
+
+    // ---- mask math (model-free) ---------------------------------
+    // 8x8 logits with a 4x4 >=0 block at rows/cols 2..5 (centered):
+    // bounds + centroid land on the block, the packed-bit resample
+    // reproduces it, and IoU math agrees with the shifts.
+    {
+        constexpr int MW = 8, MH = 8;
+        std::vector<float> logits(MW * MH, -1.0f);
+        for (int y = 2; y <= 5; ++y) {
+            for (int x = 2; x <= 5; ++x) {
+                logits[y * MW + x] = 1.0f;
+            }
+        }
+        float cx = 0.0f, cy = 0.0f, w = 0.0f, h = 0.0f;
+        if (!Ai::Sam2MaskBounds(logits.data(), MW, MH, &cx, &cy, &w,
+                                &h)) {
+            return "Sam2MaskBounds rejected a non-empty mask";
+        }
+        // Block covers cols 2..5 -> x span [2,6)/8 = [0.25,0.75) ->
+        // center 0.5, width 0.5.
+        if (std::fabs(cx - 0.5f) > 1e-3f ||
+            std::fabs(cy - 0.5f) > 1e-3f ||
+            std::fabs(w - 0.5f) > 1e-3f ||
+            std::fabs(h - 0.5f) > 1e-3f) {
+            return "Sam2MaskBounds bbox is off the block math";
+        }
+        // Cell-center mean of cols/rows 2..5 -> (2.5+3.5+4.5+5.5)/4
+        // = 4 -> 4/8 = 0.5.
+        if (!Ai::Sam2MaskCentroid(logits.data(), MW, MH, &cx, &cy) ||
+            std::fabs(cx - 0.5f) > 0.02f ||
+            std::fabs(cy - 0.5f) > 0.02f) {
+            return "Sam2MaskCentroid missed the block center";
+        }
+        std::vector<float> empty_logits(MW * MH, -1.0f);
+        if (Ai::Sam2MaskBounds(empty_logits.data(), MW, MH, &cx, &cy,
+                               &w, &h) ||
+            Ai::Sam2MaskCentroid(empty_logits.data(), MW, MH, &cx,
+                                 &cy)) {
+            return "empty mask reported bounds/centroid";
+        }
+        const auto bits = Ai::Sam2MaskBits(logits.data(), MW, MH, 8,
+                                           8);
+        if (bits.size() != 8) {
+            return "Sam2MaskBits packed the wrong byte count";
+        }
+        // Cells 2..5 set => each row byte is 0b00111100 = 0x3C.
+        for (std::size_t i = 0; i < bits.size(); ++i) {
+            const std::uint8_t want =
+                (i >= 2 && i <= 5) ? 0x3C : 0x00;
+            if (bits[i] != want) {
+                return "Sam2MaskBits cell coverage is wrong";
+            }
+        }
+        if (!Ai::Sam2BitAt(bits.data(), 8, 8, 3, 3) ||
+            Ai::Sam2BitAt(bits.data(), 8, 8, 0, 0) ||
+            Ai::Sam2BitAt(bits.data(), 8, 8, 7, 7)) {
+            return "Sam2BitAt reads the wrong cells";
+        }
+        if (std::fabs(Ai::Sam2BitsIoU(bits.data(), bits.data(), 8,
+                                      8) -
+                      1.0f) > 1e-6f) {
+            return "Sam2BitsIoU self-overlap is not 1";
+        }
+        const auto empty_bits =
+            Ai::Sam2MaskBits(empty_logits.data(), MW, MH, 8, 8);
+        if (Ai::Sam2BitsIoU(bits.data(), empty_bits.data(), 8, 8) !=
+            0.0f) {
+            return "Sam2BitsIoU vs empty is not 0";
+        }
+        // Shift the block one cell right -> halves the overlap with
+        // the original (3x4 vs 4x4 -> IoU 12/20 = 0.6).
+        std::vector<float> shifted(MW * MH, -1.0f);
+        for (int y = 2; y <= 5; ++y) {
+            for (int x = 3; x <= 6; ++x) {
+                shifted[y * MW + x] = 1.0f;
+            }
+        }
+        const auto sbits =
+            Ai::Sam2MaskBits(shifted.data(), MW, MH, 8, 8);
+        if (std::fabs(Ai::Sam2BitsIoU(bits.data(), sbits.data(), 8,
+                                      8) -
+                      0.6f) > 1e-3f) {
+            return "Sam2BitsIoU on a shifted mask is off";
+        }
+    }
+
+    // ---- MaskTrackAt: crossfade + snap + span ends --------------
+    {
+        ClipMaskTrack mt;
+        mt.grid_w = 8;
+        mt.grid_h = 8;
+        mt.label = "sam";
+        ClipMaskSample a;
+        a.t = 0.0;
+        a.confidence = 0.9f;
+        // Left half covered: cols 0..3 -> 0xF0 per row.
+        a.bits.assign(8, 0xF0);
+        ClipMaskSample b;
+        b.t = 1.0;
+        b.confidence = 0.9f;
+        // Right half covered: cols 4..7 -> 0x0F.
+        b.bits.assign(8, 0x0F);
+        mt.samples = {a, b};
+        std::vector<std::uint8_t> a8;
+        if (!Ai::MaskTrackAt(mt, 0.0, &a8) ||
+            a8.size() != 64 || a8[0] != 255 || a8[7] != 0) {
+            return "MaskTrackAt at t0 is not the left-half mask";
+        }
+        if (!Ai::MaskTrackAt(mt, 1.0, &a8) ||
+            a8[0] != 0 || a8[7] != 255) {
+            return "MaskTrackAt at t1 is not the right-half mask";
+        }
+        if (!Ai::MaskTrackAt(mt, 0.5, &a8)) {
+            return "MaskTrackAt mid-span failed";
+        }
+        // Crossfade at 0.5: both halves partial (~128).
+        if (a8[0] < 100 || a8[0] > 160 || a8[7] < 100 ||
+            a8[7] > 160) {
+            return "MaskTrackAt did not crossfade between samples";
+        }
+        // Past the sampled span coverage goes empty.
+        if (Ai::MaskTrackAt(mt, 3.0, &a8)) {
+            bool any = false;
+            for (const std::uint8_t v : a8) any = any || v != 0;
+            if (any) {
+                return "MaskTrackAt emitted coverage outside the "
+                       "span";
+            }
+        }
+        // scene_boundary on b snaps the lerp: at t=0.9 the mask is
+        // still fully the a bitmap.
+        mt.samples[1].scene_boundary = true;
+        if (!Ai::MaskTrackAt(mt, 0.9, &a8) || a8[0] != 255 ||
+            a8[7] != 0) {
+            return "MaskTrackAt did not snap across a scene "
+                   "boundary";
+        }
+        // Degenerate tracks resolve as "nothing tracked".
+        ClipMaskTrack empty_track;
+        if (Ai::MaskTrackAt(empty_track, 0.0, &a8)) {
+            return "MaskTrackAt accepted an empty track";
+        }
+        ClipMaskTrack no_grid = mt;
+        no_grid.grid_w = 0;
+        if (Ai::MaskTrackAt(no_grid, 0.0, &a8)) {
+            return "MaskTrackAt accepted a zero-grid track";
+        }
+    }
+
+    // ---- armed-click -> source-fraction map ----------------------
+    {
+        Clip clip;
+        clip.duration = 4.0;
+        // Default transform = identity: a 320x180 src sits
+        // un-scaled top-left on the 1920x1080 canvas.
+        float fx = 0.0f, fy = 0.0f;
+        if (!Ai::CanvasPointToSourceFraction(clip, 0.0, 1920, 1080,
+                                           320, 180, 0.08, 0.08,
+                                           &fx, &fy)) {
+            return "in-rect canvas click did not map";
+        }
+        // canvas px (153.6, 86.4); rect center (160,90), dw=320,
+        // dh=180 -> fractions (0.48, 0.48).
+        if (std::fabs(fx - 0.48f) > 0.01f ||
+            std::fabs(fy - 0.48f) > 0.01f) {
+            return "canvas->source map produced wrong fractions";
+        }
+        if (Ai::CanvasPointToSourceFraction(clip, 0.0, 1920, 1080,
+                                            320, 180, 0.5, 0.5, &fx,
+                                            &fy)) {
+            return "out-of-rect canvas click mapped anyway";
+        }
+        // Offset 0.25,0: rect slides right 480px — a click just
+        // inside its left edge maps near x-fraction 0.18.
+        clip.transform.offset_x = 0.25f;
+        if (!Ai::CanvasPointToSourceFraction(clip, 0.0, 1920, 1080,
+                                           320, 180, 0.28, 0.08,
+                                           &fx, &fy)) {
+            return "offset-rect canvas click did not map";
+        }
+        if (std::fabs(fx - 0.18f) > 0.01f ||
+            std::fabs(fy - 0.48f) > 0.01f) {
+            return "offset-rect map produced wrong fractions";
+        }
+    }
+
+    // ---- registered descriptor + compositor isolate branch ------
+    {
+        const PluginDesc* desc =
+            PluginHost::ForEffectType("builtin:xer.fx.track_mask");
+        if (desc == nullptr || !desc->builtin ||
+            desc->id != Ai::kTrackMaskId) {
+            return "builtin:xer.fx.track_mask is not registered";
+        }
+        if (desc->params.size() != 3 ||
+            std::string(desc->params[0].name) != "mode" ||
+            std::string(desc->params[1].name) != "feather" ||
+            std::string(desc->params[2].name) != "smoothing") {
+            return "track_mask param table is not {mode, feather, "
+                   "smoothing}";
+        }
+        // Isolate mode: a mask covering the LEFT half of the grid
+        // alphas out the right half — proven by COLOR, not alpha:
+        // the masked red matte sits over a blue matte, so the left
+        // half reads red and the right half shows the blue plate
+        // through the cutout.
+        Project project;
+        project.width = 200;
+        project.height = 100;
+        project.fps_num = 15;
+        project.fps_den = 1;
+        project.tracks.push_back(Track{TrackKind::Video, "V1"});
+        project.tracks.push_back(Track{TrackKind::Video, "V2"});
+        project.clips.push_back(MakeGeneratedClip(
+            "blue", 0, 0.0, 1.0, SourceKind::ColorMatte, "#3366CC"));
+        Clip red = MakeGeneratedClip("red", 1, 0.0, 1.0,
+                                     SourceKind::ColorMatte,
+                                     "#CC3333");
+        red.effects.push_back(
+            {"builtin:xer.fx.track_mask", {0.0f, 0.0f, 0.5f}});
+        ClipMaskSample ms;
+        ms.t = 0.0;
+        ms.cx = 0.25f;
+        ms.cy = 0.5f;
+        ms.w = 0.5f;
+        ms.h = 1.0f;
+        ms.confidence = 0.9f;
+        ms.bits.assign(8, 0xF0);   // 8x8 grid, left half set
+        red.mask_track.grid_w = 8;
+        red.mask_track.grid_h = 8;
+        red.mask_track.label = "sam";
+        red.mask_track.samples.push_back(ms);
+        project.clips.push_back(red);
+        Compositor compositor;
+        if (!compositor.Init(project, {}, &err)) {
+            return "Compositor::Init failed: " + err;
+        }
+        std::vector<std::uint8_t> out;
+        const bool rendered = compositor.RenderFrameAt(0.0, &out, &err);
+        compositor.Shutdown();
+        if (!rendered) {
+            return "RenderFrameAt failed: " + err;
+        }
+        const auto px = [&out](int x, int y) {
+            const std::uint8_t* p =
+                out.data() +
+                (static_cast<std::size_t>(y) * 200 + x) * 4;
+            return std::array<int, 3>{p[0], p[1], p[2]};   // B,G,R
+        };
+        // Left: the red matte survived the mask (B low, R high).
+        // Right: the unmasked side was cut to alpha 0 -> the blue
+        // backdrop shows (B high, R low).
+        const auto left = px(50, 50);
+        const auto right = px(150, 50);
+        if (left[2] < 0xB0 || left[0] > 0x60) {
+            return "track_mask isolate cut the masked half";
+        }
+        if (right[0] < 0xB0 || right[2] > 0x60) {
+            return "track_mask isolate kept the unmasked half";
+        }
+    }
+
+    // ---- live model path: opt-in (ORT crash class — see header) --
+    if (std::getenv("XER_SMOKE_SAM2_LIVE") == nullptr ||
+        !Ai::Sam2ModelsStaged() ||
+        XER::AI::Onnx::ActiveBackendId().empty()) {
+        std::fprintf(stdout,
+                     "  sam2_track: SKIP (live inference opt-in via "
+                     "XER_SMOKE_SAM2_LIVE=1, or models/backend "
+                     "unavailable)\n");
+        std::fflush(stdout);
+        return {};
+    }
+    if (!encoder.Load(Ai::Sam2EncoderModel(), &err)) {
+        std::fprintf(stdout,
+                     "  sam2_track: SKIP (encoder rejected: %s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    if (!decoder.Load(Ai::Sam2DecoderModel(), &err)) {
+        std::fprintf(stdout,
+                     "  sam2_track: SKIP (decoder rejected: %s)\n",
+                     err.c_str());
+        std::fflush(stdout);
+        return {};
+    }
+    // Synthetic 640x360 frame: dark plate + bright 120x120 square
+    // centered at (200,180). Encode once, decode a point prompt at
+    // the square's center — the contract is "a non-empty mask whose
+    // bounds contain the prompt".
+    {
+        constexpr int FW = 640, FH = 360;
+        std::vector<std::uint8_t> frame(FW * FH * 4, 0x20);
+        for (int y = 120; y < 240; ++y) {
+            for (int x = 140; x < 260; ++x) {
+                std::uint8_t* p =
+                    frame.data() +
+                    (static_cast<std::size_t>(y) * FW + x) * 4;
+                p[0] = p[1] = p[2] = 0xF0;
+            }
+        }
+        for (std::size_t p = 3; p < frame.size(); p += 4) {
+            frame[p] = 0xFF;
+        }
+        if (!encoder.Encode(frame.data(), FW, FH, FW * 4, &emb,
+                            &err)) {
+            return "Sam2 encode failed on a synthetic frame: " + err;
+        }
+        if (!emb.Valid() || emb.src_w != FW || emb.src_h != FH) {
+            return "Sam2 embedding is degenerate";
+        }
+        prompt.points = {200.0f, 180.0f};
+        if (!decoder.Decode(emb, prompt, &mask, &err)) {
+            return "Sam2 decode failed on a point prompt: " + err;
+        }
+        if (mask.w <= 0 || mask.h <= 0 || mask.logits.empty()) {
+            return "Sam2 mask is degenerate";
+        }
+        float cx = 0.0f, cy = 0.0f, w = 0.0f, h = 0.0f;
+        if (!Ai::Sam2MaskBounds(mask.logits.data(), mask.w, mask.h,
+                                &cx, &cy, &w, &h)) {
+            return "Sam2 decoded an empty mask for a bright square";
+        }
+        // The prompt point in fractions: (200/640, 180/360) =
+        // (0.3125, 0.5) — must fall inside the mask bbox.
+        if (0.3125f < cx - w * 0.5f || 0.3125f > cx + w * 0.5f ||
+            0.5f < cy - h * 0.5f || 0.5f > cy + h * 0.5f) {
+            return "Sam2 mask bounds do not contain the prompt "
+                   "point";
+        }
+        std::fprintf(stdout,
+                     "  sam2_track: inference ran on '%s' -> mask "
+                     "bbox (%.2f,%.2f %.2fx%.2f)\n",
+                     decoder.BackendId().c_str(), cx, cy, w, h);
+        std::fflush(stdout);
+    }
+    return {};
+}
+
 // Real-ESRGAN x4v3 upscale (ai/img2img_runner.h + ai/upscale_x4v3.h)
 // — the wave-2 "AI Upscale 4x" bin bounce. What MUST hold
 // regardless of the environment: Load on a missing file fails with
@@ -8395,8 +10023,15 @@ constexpr CheckEntry kChecks[] = {
     {"preview_quality", &CheckPreviewQualityScale},
     {"fx_frame_cache", &CheckFxFrameCache},
     {"auto_cache", &CheckAutoCache},
+    {"parallel_determinism", &CheckParallelDeterminism},
+    {"l2_frame_cache", &CheckL2FrameCache},
+    {"preview_perf", &CheckPreviewPerf},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},
+    {"xfade", &CheckXfade},
+    {"xer_transitions", &CheckXerTransitions},
+    {"audio_fx_rack", &CheckAudioFxRack},
+    {"film_fx", &CheckFilmFx},
     {"audio_mixer", &CheckAudioMixer},
     {"audio_sync", &CheckAudioSync},
     {"project_store", &CheckProjectStore},
@@ -8430,6 +10065,7 @@ constexpr CheckEntry kChecks[] = {
     {"face_detect", &CheckFaceDetect},
     {"upscale_x4v3", &CheckUpscaleX4v3},
     {"rife_interp", &CheckRifeInterp},
+    {"sam2_track", &CheckSam2Track},
     // Env-gated: ai_lab_ops crashes inside ORT SAM inference on this machine
     // (onnxruntime + SAM encoder/decoder; fails before any repo code returns,
     // confirmed 2026-11-23). Re-enable when the ORT/model stack is fixed.

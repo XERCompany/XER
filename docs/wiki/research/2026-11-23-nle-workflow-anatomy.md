@@ -132,6 +132,57 @@ of pure seam work, all smoke-testable); **wave B** = #7 + #10–#12
 = #14 (trim monitor) after #12; **wave D** = #15–#17 (bin
 infrastructure) whenever the catalog schema wave is scheduled.
 
+### Implementation status (2026-11-25, base `d47f023`)
+
+- **#7 patching/targeting — DONE (shell-state model).** Targeting
+  lives on `TimelineSurface` (`SetTrackTargeted`/`TrackTargeted`/
+  `FirstTargetedTrack`/`TargetedMask`/`ResetTrackTargets`), seeded
+  to the first track per kind on `SetProject` (Premiere's default
+  V1/A1 patch) and re-seeded per document in `VeApp::SetProject` —
+  Resolve-style session state, never serialized. A V/A badge in the
+  track header's upper band (hit-test/paint share one rect; header
+  button id 6) toggles membership; untargeted badges dim. With
+  `on_track_target` bound the badge reports the REQUESTED state and
+  the shell stays source of truth; unbound, the surface owns the
+  set. `EditSourceToTimeline` resolves video leg → first unlocked
+  targeted V track, audio leg → first unlocked targeted A track
+  (patched-off leg drops silently; a kind with lanes but nothing
+  targeted errors instead of guessing). `ProgramLiftExtract` passes
+  the mask into `TimelineHistory::LiftRange`'s new `track_target`
+  param — untargeted lanes behave like locked ones.
+- **#10 verbs — PARTIAL.** Landed: replace
+  (`VeApp::SourceReplaceEdit` — three-point swap keeping the
+  timeline clip's footprint/id/effects/link_group, clamps a short
+  source to media bounds), fit-to-fill (`SourceFitToFill` —
+  rate = source span / work-area-or-targeted-clip span, one history
+  macro via `OverwriteClipAt`), top-and-tail (`ProgramTopTail` —
+  Q/W-style head/tail ripple trim to the playhead via
+  `RippleTrimClip`), timeline context-menu verb dispatch
+  (`RunSourceVerb` over insert/overwrite/replace/fit-to-fill at a
+  context point via `SourceEditVerb` + `on_source_verb` hook), and
+  insert/overwrite honoring targets + `at_override`. Still open:
+  append-to-end, place-on-top, ripple-overwrite, monitor drop
+  overlays (#11), and the Resolve F9–F12 keys (the kit `KeyCode`
+  table has no F9–F12, so bindings currently ride letter keys).
+- **#14 trim monitor — PARTIAL (timeline-side overlay).** Edge-grab
+  arms a trim-preview state on the surface (`ArmTrimPreview`/
+  `RefreshTrimPreview`/`DisarmTrimPreview`): roll drags resolve the
+  A/B pair's source frames from `clip_previews_`, single-edge trims
+  show the moving side + still neighbor (empty pane across a gap),
+  and a ±frames counter rides the overlay (`TrimOffsetSeconds`/
+  `TrimOffsetFrames`). Release or Esc disarms. The program-monitor
+  2-up presentation, JKL dynamic trim, and loop-around playback are
+  still open (monitor surface work was scoped to another agent).
+- **Paste-against-targets: N/A** — there is no clipboard/paste path
+  in the codebase yet; Premiere's "paste respects targeted tracks"
+  has nothing to land on.
+- Coverage: `ui2_timeline` smoke gained `CheckTrackTargeting`
+  (seeded defaults, badge-click toggle, hook-bound request path,
+  mask) and `CheckTrimPreview` (arm/counter/A-B sides/Esc); the
+  `ui2_monitor` smoke gained `CheckEditVerbs` (targeted overwrite /
+  insert-at-point / masked lift+extract / replace / fit-to-fill /
+  top-and-tail round-trips through history Undo).
+
 ---
 
 ## Appendix — source URLs (accessed 2026-11-23)

@@ -36,6 +36,16 @@ list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX
 list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX
     "/records_store\\.cc$")
 
+# Chromium render port — the UI-free render primitives compile into
+# the core lib (slice 2 wires PreviewEngine/Compositor to them, and
+# XER_VideoEditor_Tests links the same lib). probe_render.cc stays
+# exe-only (it backs `video_editor --probe-render`), d2d_presenter.cc
+# needs the UI include path — both live in the exe target_sources
+# block at the bottom of this file.
+list(APPEND VIDEO_EDITOR_CORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/video_frame.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/frame_scheduler.cc)
+
 set(_ve_core_deps
     XER_Video          # video::Frame / FrameExporter (clip_poster)
     XER_ContentVideo   # XER::Content::Video::ProbeVideo (catalog)
@@ -581,6 +591,13 @@ if(WIN32)
         "${CMAKE_CURRENT_SOURCE_DIR}/ui2/*.cc"
     )
     target_sources(video_editor PRIVATE ${VIDEO_EDITOR_UI2_SOURCES})
+    # gpu/ — GPU bring-up probes (chromium-render-port R1). Exe-side
+    # like ui2/; the probe LoadLibrary's the staged ANGLE DLLs from
+    # bin/ at runtime — no import libs or EGL headers required.
+    file(GLOB VIDEO_EDITOR_GPU_SOURCES CONFIGURE_DEPENDS
+        "${CMAKE_CURRENT_SOURCE_DIR}/gpu/*.cc"
+    )
+    target_sources(video_editor PRIVATE ${VIDEO_EDITOR_GPU_SOURCES})
     target_link_libraries(video_editor PRIVATE XER_UI_Core)
     # CEF browser embedding — stub lib when the distribution is absent.
     if(TARGET XER_Cef)
@@ -828,3 +845,19 @@ endforeach()
 # gracefully when one is absent).
 add_dependencies(video_editor XERVideoLoader XERSyncMedia XERFxScript
     VE.ExtensionsRuntime)
+
+# ---------------------------------------------------------------------------
+# Chromium render port (tools/video_editor/render/). The UI-free
+# primitives (video_frame.cc, frame_scheduler.cc) moved into
+# XER_VideoEditor_Core at the top of this file in slice 2 — the
+# preview engine + compositor + tests all consume them through the
+# core lib. probe_render.cc backs `video_editor --probe-render`;
+# d2d_presenter.cc is the Windows D2D/D3D11 presenter skeleton — it
+# needs the XER_UI_Core include path the WIN32 block above provides.
+# ---------------------------------------------------------------------------
+target_sources(video_editor PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/probe_render.cc)
+if(WIN32)
+    target_sources(video_editor PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/render/d2d_presenter.cc)
+endif()

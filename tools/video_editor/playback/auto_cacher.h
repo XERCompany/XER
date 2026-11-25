@@ -109,7 +109,9 @@ public:
         std::function<std::string(const std::string&)> media_resolver;
     };
 
-    // Counters for the smoke log / HUD — all monotonic per Init.
+    // Counters for the smoke log / HUD — monotonic, cumulative across
+    // re-Init (the PreviewEngine re-binds this worker on quality-tier
+    // flips; readers see one continuous stream).
     struct Stats {
         std::uint64_t windows = 0;     // windows scheduled
         std::uint64_t queued = 0;      // frame entries enqueued
@@ -195,6 +197,10 @@ private:
     bool stop_ = false;
     bool busy_ = false;                 // a render is in flight
     bool dirty_ = false;                // a window is owed (seek/edit)
+    // True across the Shutdown→spawn window inside Init: stop_ is
+    // transiently set there and must not read as "idle" to WaitIdle
+    // (a quality-tier re-bind would look like a settled worker).
+    bool initializing_ = false;
     std::int64_t anchor_ = -1;          // frame idx the queue was built around
     std::chrono::steady_clock::time_point settle_at_;
     std::deque<std::int64_t> queue_;    // frame indices, increasing

@@ -73,6 +73,10 @@ Tokens DarkTokens(std::uint32_t accent_argb) {
     t.track_audio = kTrackAudio;
     t.playhead = kPlayhead;
     t.warning_chip = kWarningChip;
+    // Render-status stoplight (timeline bar + dropped-frame dot).
+    t.status_ok = {0.290f, 0.871f, 0.502f, 1.0f};    // #4ade80
+    t.status_warn = {0.984f, 0.749f, 0.141f, 1.0f};  // #fbbf24
+    t.status_bad = {0.898f, 0.282f, 0.302f, 1.0f};   // #e5484d
     t.radius_small = kRadiusSm;
     t.radius_medium = kRadiusMd;
     t.radius_large = kRadiusLg;

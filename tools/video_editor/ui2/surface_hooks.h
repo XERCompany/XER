@@ -46,6 +46,18 @@ enum class MediaLookup {
     kFailed,   // permanent miss — surface caches the failure
 };
 
+// Source-edit verbs the shell owns (Premiere three-point edit
+// parity). The timeline context menu lists them when
+// TimelineHooks::on_source_verb is bound; `point` is the timeline
+// seconds under the context click and `clip_id` the right-clicked
+// clip ("" = lane background).
+enum class SourceEditVerb {
+    kInsert,      // splice source range at point (Premiere `,`)
+    kOverwrite,   // overwrite at point (Premiere `.`)
+    kReplace,     // swap clip_id's clip for the source range
+    kFitToFill,   // fit source range into [point-region] via rate
+};
+
 // TimelineSurface (S1) hook contract — TimelineWidget::Hooks ported
 // verbatim. The shell binds every member; surfaces may fire them from
 // any gesture handler.
@@ -80,8 +92,10 @@ struct TimelineHooks {
     std::function<void(const std::string&, double)> on_rate_stretch;
     // Clip junction context menu: add a transition of `type` to the
     // next clip on the track. duration_seconds <= 0 asks the shell
-    // for its default transition duration. script_id is "" unless
-    // type == Script.
+    // for its default transition duration. The trailing string is a
+    // type-scoped variant id: script_id when type == Script, the
+    // avfilter transition token ("radial", ...) when type == Xfade,
+    // the "xer.tr.*" transition id when type == XerFx, "" otherwise.
     std::function<void(const std::string&, Transition::Type,
                        double, const std::string&)>
         on_add_transition;
@@ -102,6 +116,20 @@ struct TimelineHooks {
     std::function<void(int, bool)> on_track_mute;
     std::function<void(int, bool)> on_track_hidden;
     std::function<void(int, bool)> on_track_locked;
+    // Track-header V/A target badge + header context-menu "Target
+    // Track" (Premiere source patching / Resolve destination
+    // control): fires with the REQUESTED target state so the shell
+    // stays the single source of truth — unset -> the surface
+    // toggles its own session targeting set. Targeting is view
+    // state, not document state (Resolve semantics): it never
+    // enters history and is never serialized.
+    std::function<void(int, bool)> on_track_target;
+    // Context-menu source-edit verbs (see SourceEditVerb):
+    // (verb, timeline-point, clip_id-or-"") — the shell resolves
+    // source marks/playhead and reports failures via on_status.
+    // Unset -> the verb items never appear in the menu.
+    std::function<void(SourceEditVerb, double, const std::string&)>
+        on_source_verb;
     // Optional media queries — every one degrades gracefully when
     // unset. Tri-state non-blocking contract (see MediaLookup):
     // the shell serves a warm cache and answers kPending while a
@@ -119,6 +147,13 @@ struct TimelineHooks {
     std::function<bool(const std::string&, MediaBounds*)>
         get_media_bounds;
     std::function<void(const std::string&, bool)> on_status;
+    // Render-status bar (Premiere's green/yellow/red needs-render
+    // strip painted above each clip): the shell classifies a clip's
+    // render cost — the return value is a ClipCostClass ordinal
+    // (0 kRealtime / 1 kCached / 2 kNeedsRender, compositor.h).
+    // Unset -> no strip. Must stay O(1)-cheap: the surface calls it
+    // per clip when it refreshes the cached classes.
+    std::function<int(const Clip&)> get_clip_cost_class;
     // Empty-lane context menu "Add … Here" items: create a
     // generated clip of `kind` (matte/bars/text) on `track` at
     // `at_seconds` timeline time. The shell owns any config
@@ -162,6 +197,14 @@ struct TimelineHooks {
     // ClipTrack labeled "face" on Clip::object_track and applies the
     // builtin:xer.fx.face_blur effect — the auto-censor preset.
     std::function<void(const std::string&)> on_face_blur;
+    // Clip context menu "Track Mask (AI)…" / "Clear Mask Track":
+    // the shell arms the monitor click-point seam, the next frame
+    // click becomes the SAM2 prompt, and an async job
+    // (ai/sam2_track.h ScanClipMaskTrack) lands Clip::mask_track +
+    // the builtin:xer.fx.track_mask effect. Clear empties the mask
+    // track (the effect stays — it no-ops on an empty track).
+    std::function<void(const std::string&)> on_track_mask;
+    std::function<void(const std::string&)> on_clear_mask;
     // Clip context menu "Smooth slow-mo (AI)": the shell runs the
     // async RIFE bounce (ai/rife_interp.h + ai/ai_bounce.h) over the
     // clip's consumed source span, writes
@@ -188,6 +231,21 @@ struct TimelineHooks {
     std::function<void()> on_gesture_end;
 };
 
+// MonitorSurface transform-gizmo target — the payload of
+// MonitorHooks::gizmo_target (ui2 addition: Premiere "Motion" /
+// After-Effects direct manipulation on the program monitor).
+// `transform` is the clip's EFFECTIVE transform at the program
+// playhead (keyframe-resolved — the box tracks what the user sees);
+// src_* are the clip's decoded source px, canvas_* the sequence
+// dims. Empty clip_id hides the box (no selection, clip inactive at
+// the playhead, audio/hidden/locked track, or degenerate dims).
+struct MonitorGizmoTarget {
+    std::string clip_id;
+    Transform transform;
+    int src_w = 0, src_h = 0;
+    int canvas_w = 0, canvas_h = 0;
+};
+
 // MonitorSurface (S2) hook contract — the frame is drawn by the
 // surface; chrome (transport row, timecode, quality select, badges)
 // stays widget-composed per spec §5.
@@ -204,6 +262,50 @@ struct MonitorHooks {
     std::function<void(float, float)> on_click_point;
     std::function<void()> on_toggle_play;
     std::function<void(const std::string&, bool)> on_status;
+
+    // ---- transform gizmo (program scope; ui2 addition) -------------
+    // Direct manipulation on the program monitor — the selected
+    // clip's transformed rect drawn with 8 scale handles, a rotation
+    // stem and a center anchor. All optional: unset members degrade
+    // to "no gizmo" / "that sub-gesture inert", never a mutation.
+    //
+    // gizmo_target — polled per paint and at gesture start; the
+    //   shell resolves the timeline selection into a
+    //   MonitorGizmoTarget ("" clip_id hides the box).
+    // gizmo_pick — press-to-select hit test: maps a frame-normalized
+    //   point to the topmost clip id whose warped rect contains it
+    //   at the playhead ("" = none). Armed click points still win —
+    //   the surface skips the whole gizmo path while armed.
+    // on_gizmo_select — fired with the picked id (the shell mirrors
+    //   it through the same selection seam the timeline uses).
+    // on_gizmo_begin/end — gesture bracketing, the
+    //   TimelineHooks::on_gesture_begin/end discipline: the shell
+    //   maps the pair onto ONE history BeginMacro/EndMacro.
+    // on_gizmo_preview — live transform during a drag, IN-MEMORY
+    //   paint state only (never history). The final frame of a
+    //   cancelled gesture (Esc) re-fires the original transform so
+    //   the shell's preview write restores.
+    // on_gizmo_commit — fired ONCE on release with the final
+    //   transform; the shell lands it through
+    //   TimelineHistory::ReplaceClip (the inspector's
+    //   on_commit_clips path) inside the gesture macro — one undo
+    //   step per drag.
+    // on_gizmo_reset — double-click inside the box; the shell
+    //   substitutes the clip's imported placement
+    //   (FitTransformToCanvas) and commits through the same path.
+    // gizmo_snap_enabled — read live per gesture; the shell binds
+    //   the timeline's magnet flag so one toggle rules both.
+    std::function<MonitorGizmoTarget()> gizmo_target;
+    std::function<std::string(float, float)> gizmo_pick;
+    std::function<void(const std::string&)> on_gizmo_select;
+    std::function<void(const char*)> on_gizmo_begin;
+    std::function<void()> on_gizmo_end;
+    std::function<void(const std::string&, const Transform&)>
+        on_gizmo_preview;
+    std::function<void(const std::string&, const Transform&)>
+        on_gizmo_commit;
+    std::function<void(const std::string&)> on_gizmo_reset;
+    std::function<bool()> gizmo_snap_enabled;
 };
 
 }  // namespace XER::VideoEditor::Ui2

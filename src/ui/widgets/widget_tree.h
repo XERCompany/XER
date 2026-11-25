@@ -145,6 +145,20 @@ public:
     // selections) settles instead of sticking forever.
     void CancelPointerCapture();
 
+    // --- Focus (views::FocusManager contract) -------------------------
+    // Moves focus through the tree's focusable set in DFS order, wrapping
+    // at both ends (Shift+Tab passes reverse=true). Focus gained here is
+    // FocusReason::kTraversal — the focus ring paints. Returns false when
+    // nothing is focusable. Tab/Shift+Tab KeyDown events already route
+    // through this; hosts call it directly to drive traversal
+    // programmatically.
+    bool AdvanceFocus(bool reverse);
+    // The currently focused widget (nullptr when nothing has focus).
+    std::shared_ptr<Widget> GetFocusedWidget() const;
+    // Programmatic focus request — FocusReason::kProgrammatic, so the
+    // ring paints. Pass nullptr to drop focus entirely.
+    void RequestFocus(const std::shared_ptr<Widget>& widget);
+
     // Fallback handler for right-button MouseDown events that no widget
     // consumed (returns true = handled). Used for context menus.
     void SetContextMenuHandler(std::function<bool(const Event&)> handler) {
@@ -190,7 +204,13 @@ private:
         const Event& event
     );
     bool MoveFocus(bool backwards);
-    void SetFocusedWidget(const std::shared_ptr<Widget>& widget);
+    void SetFocusedWidget(const std::shared_ptr<Widget>& widget,
+                          FocusReason reason);
+    // Deepest widget (DFS) carrying the focused_ flag anywhere in the
+    // subtree — including non-focusable/disabled widgets that were
+    // focused before they became ineligible.
+    std::shared_ptr<Widget> FindFocused(
+        const std::shared_ptr<Widget>& widget) const;
 
     std::shared_ptr<Widget> root_;
     std::shared_ptr<Widget> overlay_;

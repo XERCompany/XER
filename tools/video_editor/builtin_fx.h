@@ -13,6 +13,8 @@
 // kernel ported verbatim (param defaults and clamp ranges preserved).
 #pragma once
 
+#include <cstdint>
+#include <string>
 #include <vector>
 
 #include "plugin_host.h"
@@ -27,5 +29,22 @@ const std::vector<PluginDesc>& Effects();
 // Convenience for the smoke checks: canonical id list (bare ids,
 // no "plugin:"/"builtin:" prefix).
 std::vector<std::string> Ids();
+
+// ---- film-look kit ----
+// Time-aware film effects (film_grain, gate_weave, light_leak,
+// film_flicker, dust_scratch) are dispatched by the compositor with
+// the clip's media time and a per-clip seed so their noise/motion
+// fields are a deterministic function of (clip, time) — animated
+// frame to frame without strobing, and still safe for the
+// effect-frame cache (media time is already the cache key's time
+// component). IsFilmEffectId reports membership; ApplyFilmEffect is
+// the compositor entry point. Their ABI fns render the same kernel
+// at t=0/seed=0 so generic PluginHost::ApplyVideo paths still get a
+// real (static) effect.
+bool IsFilmEffectId(const std::string& id);
+bool ApplyFilmEffect(const std::string& id, void* bgra, int width,
+                     int height, int stride,
+                     const std::vector<float>& params,
+                     double media_time_s, std::uint64_t clip_seed);
 
 }  // namespace XER::VideoEditor::BuiltinFx

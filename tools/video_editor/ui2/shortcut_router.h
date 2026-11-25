@@ -30,8 +30,19 @@
 // returns false declines the event and the lookup falls through to
 // the next matching binding (e.g. "Alt+I only while a source is
 // loaded" declining leaves the event unhandled).
+//
+// Held-key bindings (BindHeldKey) extend the contract to KeyUp: a
+// binding that declares needs_key_up is recorded in held_keys_ the
+// moment its handler accepts the press, OS auto-repeat presses while
+// it is held re-fire the SAME recorded binding (the gesture keeps the
+// scope it started in), and the release routes to that binding's
+// on_up handler even if the active scope moved meanwhile. This is
+// what Premiere's K+J/K+L held combos need: J/L presses see
+// IsHeld('k') and run a held slow shuttle instead of the ladder.
 #pragma once
 
+#include <cctype>
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <vector>
@@ -66,6 +77,13 @@ public:
         std::string scope = kScopeGlobal;
         std::string label;        // menu/palette display name
         Handler handler;
+        // Held-key contract: while the key is held the router records
+        // this binding (auto-repeat presses re-fire `handler`, never
+        // re-dispatch) and the KeyUp release invokes `on_up` — always
+        // through THIS binding, regardless of the scope that is active
+        // at release time. See BindHeldKey.
+        bool needs_key_up = false;
+        Handler on_up;
     };
 
     // Unmodified (or Shift/Alt-modified) printable key — 'j', 'i',
@@ -95,6 +113,35 @@ public:
         bindings_.back().alt = true;
     }
 
+    // Held-key binding: `handler` fires on the press (and on each OS
+    // auto-repeat while the key stays held — same cadence today's
+    // BindKey repeats produce); `on_up` fires once on release. The
+    // press arrives through the normal channels (TextInput for
+    // unmodified letters, KeyDown for chords); the release arrives as
+    // KeyUp — letter KeyCodes normalize back to `key`. While the key
+    // is held, IsHeld(key) reports true; other handlers use that for
+    // held-combo branching (K held + J/L = slow shuttle, not a ladder
+    // step). An unset on_up still consumes the release.
+    void BindHeldKey(char key, Handler handler, Handler on_up,
+                     std::string scope = kScopeGlobal,
+                     std::string label = {}) {
+        BindKey(key, std::move(handler), scope, label);
+        bindings_.back().needs_key_up = true;
+        bindings_.back().on_up = std::move(on_up);
+    }
+
+    // True while a held-key binding recorded `key` as pressed.
+    bool IsHeld(char key) const {
+        key = static_cast<char>(
+            std::tolower(static_cast<unsigned char>(key)));
+        for (const HeldKey& held : held_keys_) {
+            if (held.key == key && held.code == KeyCode::None) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // Special key or chord: KeyCode::Space, ArrowLeft, Home…, or the
     // Ctrl-letter KeyCodes (KeyCode::S + ctrl=true == Ctrl+S).
     void BindChord(KeyCode code, Handler handler,
@@ -113,7 +160,10 @@ public:
         bindings_.push_back(std::move(b));
     }
 
-    void ClearBindings() { bindings_.clear(); }
+    void ClearBindings() {
+        bindings_.clear();
+        held_keys_.clear();
+    }
 
     // Last-active-viewer routing — MonitorHooks::on_activate calls this
     // with kScopeSource/kScopeProgram so J/K/L etc. follow the viewer.
@@ -122,7 +172,8 @@ public:
 
     // Normalizes `event` and runs the first accepting binding —
     // active-scope bindings shadow global ones. Returns true when the
-    // event was consumed. KeyUp is never a shortcut (old parity).
+    // event was consumed. KeyUp reaches only held-key bindings
+    // (recorded at their press); an unrecorded release is unhandled.
     bool HandleEvent(const Event& event);
 
     // True when `event` normalizes to any registered binding — the
@@ -136,8 +187,23 @@ private:
     // Normalizes the event into (key|code, mods); false when the event
     // cannot be a shortcut (KeyUp, multi-byte IME text, mouse events).
     static bool Normalize(const Event& event, Binding* out);
+    // KeyUp identity: a letter KeyCode maps back to its lowercase
+    // `key` char (the press arrived as TextInput); any other KeyCode
+    // maps to `code` like KeyDown. False only for None/non-KeyUp.
+    static bool NormalizeKeyUp(const Event& event, char* key,
+                               KeyCode* code);
+
+    // A held-key binding recorded at press: the (key|code) identity
+    // plus the binding index that accepted it — auto-repeat re-fires
+    // and the release routes here, not through the scope dispatch.
+    struct HeldKey {
+        char key = 0;
+        KeyCode code = KeyCode::None;
+        std::size_t binding = 0;
+    };
 
     std::vector<Binding> bindings_;
+    std::vector<HeldKey> held_keys_;
     std::string active_scope_ = kScopeProgram;
 };
 

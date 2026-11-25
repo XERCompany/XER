@@ -24,6 +24,14 @@ public:
     ~Frame() = default;
 
     bool Allocate(int w, int h, PixelFormat fmt);
+    // Adopts a caller-owned packed pixel buffer (moves it in — no
+    // copy), replacing the current contents. `pixels.size()` must be
+    // exactly the format's byte count for w*h (w*h*4 for BGRA8/RGBA8,
+    // w*h*3/2 for NV12/YUV420P); a mismatch fails and releases the
+    // frame. Use when the producer already owns a sized buffer — it
+    // kills the Allocate+memcpy pair on hot hand-off paths.
+    bool Adopt(int w, int h, PixelFormat fmt,
+               std::vector<std::uint8_t>&& pixels);
     void Release();
     bool IsValid() const { return !data_.empty(); }
 

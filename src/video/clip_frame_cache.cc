@@ -38,12 +38,14 @@ bool CheckedUint32(int value, std::uint32_t* out) {
 
 }  // namespace
 
-ClipFrameCache::ClipFrameCache(std::filesystem::path root, std::string key, std::uint32_t ttl_seconds)
-    : storage_(std::move(root)), key_(std::move(key)), ttl_seconds_(ttl_seconds) {}
+ClipFrameCache::ClipFrameCache(std::filesystem::path root, std::string key,
+                               std::uint32_t ttl_seconds, std::string scope)
+    : storage_(std::move(root)), key_(std::move(key)),
+      scope_(std::move(scope)), ttl_seconds_(ttl_seconds) {}
 
 XER::Cache::CacheEntry ClipFrameCache::EntryFor(std::size_t frame_index) const {
     return XER::Cache::MakeEntryWithTtl(
-        "video_music_bass_eq_frames",
+        scope_,
         key_,
         absl::StrCat("frame_", frame_index, ".dxcfz"),
         ttl_seconds_);
@@ -95,8 +97,16 @@ bool ClipFrameCache::ReadFrame(std::size_t frame_index, std::shared_ptr<Frame>* 
         return false;
     }
 
+    // Exists honors TTL (ReadBinary doesn't check expiry itself), and
+    // skips a pointless file open on a plain miss.
+    const XER::Cache::CacheEntry entry = EntryFor(frame_index);
+    if (!storage_.Exists(entry)) {
+        if (error_out != nullptr) *error_out = "clip frame cache entry is absent or expired";
+        return false;
+    }
+
     std::vector<std::uint8_t> bytes;
-    if (!storage_.ReadBinary(EntryFor(frame_index), &bytes, error_out)) {
+    if (!storage_.ReadBinary(entry, &bytes, error_out)) {
         return false;
     }
     if (bytes.size() < sizeof(PackedFrameHeader)) {
@@ -146,6 +156,14 @@ bool ClipFrameCache::ReadFrame(std::size_t frame_index, std::shared_ptr<Frame>* 
 
 bool ClipFrameCache::RemoveFrame(std::size_t frame_index, std::string* error_out) {
     return storage_.Remove(EntryFor(frame_index), error_out);
+}
+
+bool ClipFrameCache::HasFrame(std::size_t frame_index) const {
+    return storage_.Exists(EntryFor(frame_index));
+}
+
+std::filesystem::path ClipFrameCache::PathForFrame(std::size_t frame_index) const {
+    return storage_.PathFor(EntryFor(frame_index));
 }
 
 }  // namespace video

@@ -9,6 +9,22 @@
 #include "widget_tree.h"
 
 namespace XER::UI::Widgets {
+namespace {
+
+// Process-wide layout-time measurer (see SetTextMeasureTarget in
+// widget.h). A plain pointer, not std::function — the host hands over
+// the live renderer and must clear the slot before the renderer dies.
+const Rendering::Renderer* g_text_measure_target = nullptr;
+
+}  // namespace
+
+void SetTextMeasureTarget(const Rendering::Renderer* renderer) {
+    g_text_measure_target = renderer;
+}
+
+const Rendering::Renderer* GetTextMeasureTarget() {
+    return g_text_measure_target;
+}
 
 void Widget::Layout(const Layout::Rect& bounds, const Theme::Tokens& tokens) {
     cached_tokens_ = tokens;
@@ -52,6 +68,7 @@ void Widget::SetFocusable(bool focusable) {
     focusable_ = focusable;
     if (!focusable_) {
         focused_ = false;
+        focus_reason_ = FocusReason::kProgrammatic;
     }
     Invalidate();
 }
@@ -61,16 +78,33 @@ bool Widget::IsFocusable() const {
 }
 
 void Widget::SetFocused(bool focused) {
+    // The legacy entry point: direct callers are by definition
+    // programmatic focus (a mouse click reaches focus only through
+    // WidgetTree, which passes kPointer explicitly).
+    SetFocused(focused, FocusReason::kProgrammatic);
+}
+
+void Widget::SetFocused(bool focused, FocusReason reason) {
     const bool next = focused && focusable_ && visible_ && enabled_;
-    if (focused_ == next) {
+    const FocusReason next_reason =
+        next ? reason : FocusReason::kProgrammatic;
+    if (focused_ == next && focus_reason_ == next_reason) {
         return;
     }
     focused_ = next;
+    focus_reason_ = next_reason;
     Invalidate();
 }
 
 bool Widget::IsFocused() const {
     return focused_;
+}
+
+bool Widget::IsFocusRingVisible() const {
+    // views parity: the ring is a keyboard affordance — pointer-originated
+    // focus keeps the focused flag (keys still reach the widget) without
+    // painting the ring.
+    return focused_ && focus_reason_ != FocusReason::kPointer;
 }
 
 void Widget::SetHovered(bool hovered) {
@@ -258,6 +292,7 @@ void Widget::ClearSubtreeInteractionState() {
     // not leave descendants stuck in either state (they would repaint with
     // a stale highlight if the subtree is shown again).
     focused_ = false;
+    focus_reason_ = FocusReason::kProgrammatic;
     hovered_ = false;
     for (const auto& child : children_) {
         child->ClearSubtreeInteractionState();
@@ -575,7 +610,7 @@ void Widget::RenderFocusRing(
     const Theme::Tokens& tokens,
     float radius
 ) const {
-    if (!IsFocused()) {
+    if (!IsFocusRingVisible()) {
         return;
     }
     constexpr float kRingOffset = 2.0f;

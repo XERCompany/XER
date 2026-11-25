@@ -1,0 +1,811 @@
+-- format: json
+-- Full dependency inventory for the MSYS2 exit
+-- (docs/wiki/architecture/msys2-exit-plan.md). Every dep the project
+-- pulls from MSYS2 clang64 is declared here; build semantics:
+--   "build_mode": "static"  (manifest default) -> cmake-gen emits
+--   BUILD_SHARED_LIBS=OFF around upstream CMake wrappers and STATIC
+--   source-list libraries.
+-- "notes" marks route per the exit plan (B=cmake-buildable, P=prebuilt,
+-- H=hard — needs w64devkit/custom build script, X=drop candidate).
+{
+    "automatic_update": true,
+    "automatic_update_interval_days": 7,
+    "automatic_update_check_on_start": true,
+    "automatic_create_patch_for_cmake_all_dependencies": true,
+    "prefix_new_version_all_dependencies": "XER-",
+    "output_directory": "third_party",
+    "build_mode": "static",
+    "dependencies-from-github": [
+        {
+            "name": "abseil-cpp",
+            "url": "https://github.com/abseil/abseil-cpp"
+        },
+        {
+            "name": "libxml2",
+            "url": "https://github.com/GNOME/libxml2"
+        },
+        {
+            "name": "ffmpeg",
+            "url": "https://git.ffmpeg.org/ffmpeg.git",
+            "notes": "H: autotools-only (configure+make) — cmake-gen emits XER_FFMPEG_REQUIRES_CONFIGURE; real route is the ffmpeg-builds prebuilt dep or a w64devkit build"
+        },
+        {
+            "name": "zlib",
+            "url": "https://github.com/madler/zlib"
+        },
+        {
+            "name": "brotli",
+            "url": "https://github.com/google/brotli"
+        },
+        {
+            "name": "libuv",
+            "url": "https://github.com/libuv/libuv"
+        },
+        {
+            "name": "fp16",
+            "url": "https://github.com/Maratyszcza/fp16",
+            "ref": "4dfe081cf6bcd15db339cf2680b9281b8451eeb3",
+            "notes": "header-only; pinned to vcpkg port ref (VENDORED.md)"
+        },
+        {
+            "name": "re2",
+            "url": "https://github.com/google/re2"
+        },
+        {
+            "name": "zstd",
+            "url": "https://github.com/facebook/zstd",
+            "notes": "upstream cmake lives in build/cmake — root-level source-list fallback also works"
+        },
+        {
+            "name": "pthreadpool",
+            "url": "https://github.com/Maratyszcza/pthreadpool",
+            "ref": "a56dcd79c699366e7ac6466792c3025883ff7704",
+            "notes": "source-list build; pinned to vcpkg port ref (VENDORED.md)"
+        },
+        {
+            "name": "fxdiv",
+            "url": "https://github.com/Maratyszcza/FXdiv",
+            "ref": "63058eff77e11aa15bf531df5dd34395ec3017c8",
+            "notes": "header-only; pinned to vcpkg port ref (VENDORED.md)"
+        },
+        {
+            "name": "dlfcn-win32",
+            "url": "https://github.com/dlfcn-win32/dlfcn-win32",
+            "ref": "v1.4.2",
+            "notes": "pinned to tag v1.4.2 (vcpkg port version, VENDORED.md)"
+        },
+        {
+            "name": "assimp",
+            "url": "https://github.com/assimp/assimp"
+        },
+        {
+            "name": "sdl2",
+            "url": "https://github.com/libsdl-org/SDL"
+        },
+        {
+            "name": "jsoncpp",
+            "url": "https://github.com/open-source-parsers/jsoncpp"
+        },
+        {
+            "name": "fmt",
+            "url": "https://github.com/fmtlib/fmt"
+        },
+        {
+            "name": "yaml-cpp",
+            "url": "https://github.com/jbeder/yaml-cpp"
+        },
+        {
+            "name": "pugixml",
+            "url": "https://github.com/zeux/pugixml"
+        },
+        {
+            "name": "tinyxml2",
+            "url": "https://github.com/leethomason/tinyxml2"
+        },
+        {
+            "name": "flatbuffers",
+            "url": "https://github.com/google/flatbuffers"
+        },
+        {
+            "name": "lz4",
+            "url": "https://github.com/lz4/lz4",
+            "notes": "upstream cmake lives in build/cmake — root-level source-list build of lib/*.c works"
+        },
+        {
+            "name": "snappy",
+            "url": "https://github.com/google/snappy"
+        },
+        {
+            "name": "bzip2",
+            "url": "https://gitlab.com/bzip2/bzip2",
+            "notes": "cmake exists on master (1.1.x) only; release tarballs are Makefile — verify before building"
+        },
+        {
+            "name": "mimalloc",
+            "url": "https://github.com/microsoft/mimalloc"
+        },
+        {
+            "name": "asmjit",
+            "url": "https://github.com/asmjit/asmjit"
+        },
+        {
+            "name": "libarchive",
+            "url": "https://github.com/libarchive/libarchive"
+        },
+        {
+            "name": "xz",
+            "url": "https://github.com/tukaani-project/xz",
+            "notes": "upstream cmake added in 5.x (win32 supported)"
+        },
+        {
+            "name": "minizip-ng",
+            "url": "https://github.com/zlib-ng/minizip-ng"
+        },
+        {
+            "name": "libdeflate",
+            "url": "https://github.com/ebiggers/libdeflate"
+        },
+        {
+            "name": "expat",
+            "url": "https://github.com/libexpat/libexpat",
+            "notes": "upstream cmake lives in expat/ subdir — source-list fallback covers it"
+        },
+        {
+            "name": "pcre2",
+            "url": "https://github.com/PCRE2Project/pcre2"
+        },
+        {
+            "name": "libressl",
+            "url": "https://github.com/libressl-portable/portable",
+            "notes": "B: preferred TLS backend — cmake, OpenSSL-API-compatible; needs OpenSSL::SSL/Crypto aliases (exit plan 3.2)"
+        },
+        {
+            "name": "openssl",
+            "url": "https://github.com/openssl/openssl",
+            "notes": "H: perl Configure + make — needs w64devkit; prefer libressl (cmake) or prebuilt"
+        },
+        {
+            "name": "curl",
+            "url": "https://github.com/curl/curl",
+            "notes": "B: cmake — configure with schannel to delete the whole gnutls runtime set (exit plan 3.2)"
+        },
+        {
+            "name": "icu",
+            "url": "https://github.com/unicode-org/icu",
+            "notes": "H: autotools-only (icu4c/source) — w64devkit build or vendored-subset shrink; hardest 'small' dep (exit plan 3.2/3.4)"
+        },
+        {
+            "name": "libffi",
+            "url": "https://github.com/libffi/libffi",
+            "notes": "H: autotools — vcpkg carries a cmake overlay to lift, or replace ffi usage in pxer_host.cc with dyncall"
+        },
+        {
+            "name": "eigen3",
+            "url": "https://gitlab.com/libeigen/eigen",
+            "notes": "header-only usage — INTERFACE patch"
+        },
+        {
+            "name": "cereal",
+            "url": "https://github.com/USCILab/cereal",
+            "notes": "header-only"
+        },
+        {
+            "name": "range-v3",
+            "url": "https://github.com/ericniebler/range-v3",
+            "notes": "header-only usage"
+        },
+        {
+            "name": "fast_float",
+            "url": "https://github.com/fastfloat/fast_float",
+            "notes": "header-only"
+        },
+        {
+            "name": "rapidjson",
+            "url": "https://github.com/Tencent/rapidjson",
+            "notes": "header-only"
+        },
+        {
+            "name": "nlohmann-json",
+            "url": "https://github.com/nlohmann/json",
+            "notes": "header-only usage"
+        },
+        {
+            "name": "date",
+            "url": "https://github.com/HowardHinnant/date",
+            "notes": "chrono-date pacman pkg; header-only usage"
+        },
+        {
+            "name": "libraw",
+            "url": "https://github.com/LibRaw/LibRaw"
+        },
+        {
+            "name": "libavif",
+            "url": "https://github.com/AOMediaCodec/libavif"
+        },
+        {
+            "name": "leptonica",
+            "url": "https://github.com/DanBloomberg/leptonica"
+        },
+        {
+            "name": "tesseract",
+            "url": "https://github.com/tesseract-ocr/tesseract"
+        },
+        {
+            "name": "libyuv",
+            "url": "https://chromium.googlesource.com/libyuv/libyuv"
+        },
+        {
+            "name": "onnx",
+            "url": "https://github.com/onnx/onnx",
+            "notes": "cmake; needs protobuf synced alongside"
+        },
+        {
+            "name": "protobuf",
+            "url": "https://github.com/protocolbuffers/protobuf",
+            "notes": "cmake; slow L build"
+        },
+        {
+            "name": "shaderc",
+            "url": "https://github.com/google/shaderc",
+            "notes": "cmake; needs glslang + SPIRV-Tools/SPIRV-Headers synced alongside"
+        },
+        {
+            "name": "glslang",
+            "url": "https://github.com/KhronosGroup/glslang"
+        },
+        {
+            "name": "spirv-tools",
+            "url": "https://github.com/KhronosGroup/SPIRV-Tools",
+            "notes": "needs spirv-headers alongside"
+        },
+        {
+            "name": "spirv-headers",
+            "url": "https://github.com/KhronosGroup/SPIRV-Headers"
+        },
+        {
+            "name": "spirv-cross",
+            "url": "https://github.com/KhronosGroup/SPIRV-Cross"
+        },
+        {
+            "name": "vulkan-headers",
+            "url": "https://github.com/KhronosGroup/Vulkan-Headers"
+        },
+        {
+            "name": "vulkan-loader",
+            "url": "https://github.com/KhronosGroup/Vulkan-Loader"
+        },
+        {
+            "name": "vulkan-memory-allocator",
+            "url": "https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator",
+            "notes": "header-only"
+        },
+        {
+            "name": "vulkan-utility-libraries",
+            "url": "https://github.com/KhronosGroup/Vulkan-Utility-Libraries"
+        },
+        {
+            "name": "opencl-headers",
+            "url": "https://github.com/KhronosGroup/OpenCL-Headers"
+        },
+        {
+            "name": "opencl-icd-loader",
+            "url": "https://github.com/KhronosGroup/OpenCL-ICD-Loader"
+        },
+        {
+            "name": "xnnpack",
+            "url": "https://github.com/google/XNNPACK",
+            "notes": "cmake; needs pthreadpool + fp16 + fxdiv alongside"
+        },
+        {
+            "name": "onednn",
+            "url": "https://github.com/uxlfoundation/oneDNN",
+            "notes": "cmake; slow L build"
+        },
+        {
+            "name": "ggml",
+            "url": "https://github.com/ggml-org/ggml",
+            "notes": "cmake; backend-DLL model (ggml-cpu-*, vulkan, opencl) reproducible — CUDA backend stays off (no nvcc)"
+        },
+        {
+            "name": "whisper-cpp",
+            "url": "https://github.com/ggml-org/whisper.cpp"
+        },
+        {
+            "name": "openexr",
+            "url": "https://github.com/AcademySoftwareFoundation/openexr",
+            "notes": "needs imath alongside (OpenEXR >= 3.x)"
+        },
+        {
+            "name": "imath",
+            "url": "https://github.com/AcademySoftwareFoundation/Imath"
+        },
+        {
+            "name": "ptex",
+            "url": "https://github.com/wdas/ptex"
+        },
+        {
+            "name": "pystring",
+            "url": "https://github.com/imageworks/pystring",
+            "notes": "tiny OCIO dep — no upstream cmake; source-list build"
+        },
+        {
+            "name": "opencolorio",
+            "url": "https://github.com/AcademySoftwareFoundation/OpenColorIO",
+            "notes": "L: cmake; needs imath/openexr/yaml-cpp/pystring/minizip-ng first"
+        },
+        {
+            "name": "openimageio",
+            "url": "https://github.com/AcademySoftwareFoundation/OpenImageIO",
+            "notes": "H (L-XL): build with minimal formats (png/jpg/tiff/exr+ffmpeg) to avoid re-creating the openvdb/dcmtk/jxl/heif closure"
+        },
+        {
+            "name": "openvdb",
+            "url": "https://github.com/AcademySoftwareFoundation/openvdb",
+            "notes": "X drop candidate — only needed by a full-format OIIO build"
+        },
+        {
+            "name": "dcmtk",
+            "url": "https://github.com/DCMTK/dcmtk",
+            "notes": "X drop candidate — only needed by a full-format OIIO build"
+        },
+        {
+            "name": "opencv",
+            "url": "https://github.com/opencv/opencv",
+            "notes": "H (L): real cmake build ~30-45min — must source-build (C++ API under libc++); delay-load seam absorbs the DLL set"
+        },
+        {
+            "name": "folly",
+            "url": "https://github.com/facebook/folly",
+            "notes": "H/X: link-only dep today — MSYS2's mingw folly is a patched port (XL to reproduce); prefer making find_package QUIET"
+        },
+        {
+            "name": "llvm-project",
+            "url": "https://github.com/llvm/llvm-project",
+            "notes": "H (XL): only needed for pe_deps/llvm dev, libclang, VE JIT — llvm-mingw ships no dev libs; prefer pe_deps rewrite + feature gates (exit plan 2)"
+        },
+        {
+            "name": "skia",
+            "url": "https://skia.googlesource.com/skia",
+            "notes": "H (XL, critical path): GN build (gn+ninja+depot_tools), C++ ABI locked to libc++ — biggest single risk per exit plan 3.4"
+        },
+        {
+            "name": "v8",
+            "url": "https://chromium.googlesource.com/v8/v8",
+            "notes": "H: depot_tools+gn, XL, officially MSVC-only; ENABLE_V8 off today — defer / QuickJS decision"
+        },
+        {
+            "name": "mupdf",
+            "url": "https://github.com/ArtifexSoftware/mupdf",
+            "notes": "H: no upstream cmake — vcpkg port has a cmake overlay to lift; REQUIRED by src/content/pdf"
+        },
+        {
+            "name": "cryptopp",
+            "url": "https://github.com/weidai11/cryptopp",
+            "notes": "no upstream cmake — use cryptopp-cmake overlay or source-list build"
+        },
+        {
+            "name": "libpng",
+            "url": "https://github.com/pnggroup/libpng"
+        },
+        {
+            "name": "libjpeg-turbo",
+            "url": "https://github.com/libjpeg-turbo/libjpeg-turbo"
+        },
+        {
+            "name": "libtiff",
+            "url": "https://gitlab.com/libtiff/libtiff"
+        },
+        {
+            "name": "libwebp",
+            "url": "https://github.com/webmproject/libwebp"
+        },
+        {
+            "name": "lcms2",
+            "url": "https://github.com/mm2/Little-CMS"
+        },
+        {
+            "name": "libheif",
+            "url": "https://github.com/strukturag/libheif"
+        },
+        {
+            "name": "openjpeg",
+            "url": "https://github.com/uclouvain/openjpeg"
+        },
+        {
+            "name": "openjph",
+            "url": "https://github.com/aous72/OpenJPH"
+        },
+        {
+            "name": "lerc",
+            "url": "https://github.com/Esri/lerc",
+            "notes": "libtiff codec dep"
+        },
+        {
+            "name": "libultrahdr",
+            "url": "https://github.com/google/libultrahdr"
+        },
+        {
+            "name": "zxing-cpp",
+            "url": "https://github.com/zxing-cpp/zxing-cpp"
+        },
+        {
+            "name": "libjxl",
+            "url": "https://github.com/libjxl/libjxl",
+            "notes": "needs submodules (brotli/highway/skcms) — shallow clone misses them; prefer release tarball + deps.sh or resolve via manifest deps"
+        },
+        {
+            "name": "highway",
+            "url": "https://github.com/google/highway",
+            "notes": "libjxl dep"
+        },
+        {
+            "name": "freetype",
+            "url": "https://gitlab.freedesktop.org/freetype/freetype"
+        },
+        {
+            "name": "harfbuzz",
+            "url": "https://github.com/harfbuzz/harfbuzz",
+            "notes": "upstream keeps a cmake alt (meson preferred)"
+        },
+        {
+            "name": "fribidi",
+            "url": "https://github.com/fribidi/fribidi",
+            "notes": "H: meson-only"
+        },
+        {
+            "name": "fontconfig",
+            "url": "https://gitlab.freedesktop.org/fontconfig/fontconfig",
+            "notes": "H: meson-only (autotools dropped in 2.14); needs expat+freetype"
+        },
+        {
+            "name": "cairo",
+            "url": "https://gitlab.freedesktop.org/cairo/cairo",
+            "notes": "H: meson-only; part of the glib-adjacent set — prefer an ffmpeg build without librsvg"
+        },
+        {
+            "name": "pango",
+            "url": "https://gitlab.gnome.org/GNOME/pango",
+            "notes": "H: meson + needs the glib stack"
+        },
+        {
+            "name": "glib",
+            "url": "https://gitlab.gnome.org/GNOME/glib",
+            "notes": "H: meson; the whole stack enters via ffmpeg .pc closure + librsvg — eliminate via ffmpeg build config"
+        },
+        {
+            "name": "librsvg",
+            "url": "https://gitlab.gnome.org/GNOME/librsvg",
+            "notes": "H: rust+meson; prefer eliminating via an ffmpeg build without rsvg"
+        },
+        {
+            "name": "graphite2",
+            "url": "https://github.com/silnrsi/graphite"
+        },
+        {
+            "name": "pixman",
+            "url": "https://gitlab.freedesktop.org/pixman/pixman",
+            "notes": "H: meson-only"
+        },
+        {
+            "name": "libdatrie",
+            "url": "https://github.com/tlwg/libdatrie",
+            "notes": "H: autotools"
+        },
+        {
+            "name": "libthai",
+            "url": "https://github.com/tlwg/libthai",
+            "notes": "H: autotools; needs libdatrie"
+        },
+        {
+            "name": "gnutls",
+            "url": "https://gitlab.com/gnutls/gnutls",
+            "notes": "H: autotools+bootstrap; enters via ffmpeg srt/https + curl — curl->schannel + ffmpeg-without-gnutls removes the whole stack"
+        },
+        {
+            "name": "p11-kit",
+            "url": "https://github.com/p11-glue/p11-kit",
+            "notes": "H: meson; gnutls-stack member"
+        },
+        {
+            "name": "libssh",
+            "url": "https://git.libssh.org/projects/libssh.git",
+            "notes": "cmake; enters via ffmpeg ssh protocol — alternatively drop via ffmpeg --disable-libssh"
+        },
+        {
+            "name": "cyrus-sasl",
+            "url": "https://github.com/cyrusimap/cyrus-sasl",
+            "notes": "H: autotools; probably unneeded — transitive only (openldap/curl)"
+        },
+        {
+            "name": "openldap",
+            "url": "https://github.com/openldap/openldap",
+            "notes": "H: autotools; probably unneeded — transitive only"
+        },
+        {
+            "name": "x264",
+            "url": "https://code.videolan.org/videolan/x264.git",
+            "notes": "H: custom configure+make — w64devkit build"
+        },
+        {
+            "name": "x265",
+            "url": "https://bitbucket.org/multicoreware/x265_git.git",
+            "notes": "upstream cmake lives in source/ — needs wrapper pointing there or custom patch"
+        },
+        {
+            "name": "svt-av1",
+            "url": "https://gitlab.com/AOMediaCodec/SVT-AV1"
+        },
+        {
+            "name": "aom",
+            "url": "https://aomedia.googlesource.com/aom"
+        },
+        {
+            "name": "dav1d",
+            "url": "https://code.videolan.org/videolan/dav1d",
+            "notes": "H: meson-only — needs meson or a custom build step"
+        },
+        {
+            "name": "kvazaar",
+            "url": "https://github.com/ultravideo/kvazaar",
+            "notes": "cmake added in 2.x — verify before building"
+        },
+        {
+            "name": "openh264",
+            "url": "https://github.com/cisco/openh264",
+            "notes": "Makefile build; meson.build exists in newer releases — no cmake"
+        },
+        {
+            "name": "rav1e",
+            "url": "https://github.com/xiph/rav1e",
+            "notes": "H: Rust/cargo-c — not cmake/meson; needs the rust toolchain or drop"
+        },
+        {
+            "name": "libvpx",
+            "url": "https://chromium.googlesource.com/webm/libvpx",
+            "notes": "H: custom configure+make — w64devkit build"
+        },
+        {
+            "name": "opus",
+            "url": "https://github.com/xiph/opus"
+        },
+        {
+            "name": "ogg",
+            "url": "https://github.com/xiph/ogg"
+        },
+        {
+            "name": "vorbis",
+            "url": "https://github.com/xiph/vorbis",
+            "notes": "needs ogg alongside"
+        },
+        {
+            "name": "theora",
+            "url": "https://github.com/xiph/theora",
+            "notes": "H: autotools; needs ogg+vorbis"
+        },
+        {
+            "name": "speex",
+            "url": "https://github.com/xiph/speex",
+            "notes": "H: autotools; ffmpeg's native speex decoder may make this droppable"
+        },
+        {
+            "name": "speexdsp",
+            "url": "https://github.com/xiph/speexdsp",
+            "notes": "H: autotools"
+        },
+        {
+            "name": "srt",
+            "url": "https://github.com/Haivision/srt"
+        },
+        {
+            "name": "rtmpdump",
+            "url": "https://git.ffmpeg.org/rtmpdump",
+            "notes": "no upstream cmake — source-list build of librtmp/"
+        },
+        {
+            "name": "libmodplug",
+            "url": "https://github.com/Konstanty/libmodplug"
+        },
+        {
+            "name": "game-music-emu",
+            "url": "https://github.com/libgme/game-music-emu"
+        },
+        {
+            "name": "blosc",
+            "url": "https://github.com/Blosc/c-blosc"
+        },
+        {
+            "name": "liblc3",
+            "url": "https://github.com/google/liblc3",
+            "notes": "H: meson-only"
+        },
+        {
+            "name": "libbluray",
+            "url": "https://code.videolan.org/videolan/libbluray.git",
+            "notes": "H: autotools; needs freetype+fontconfig+libxml2"
+        },
+        {
+            "name": "libass",
+            "url": "https://github.com/libass/libass",
+            "notes": "meson (>=0.17) / autotools; needs freetype+harfbuzz+fribidi+fontconfig"
+        },
+        {
+            "name": "dovi",
+            "url": "https://github.com/quietvoid/dovi_tool",
+            "notes": "H: Rust/cargo-c (libdovi); appears in the ffmpeg static-closure gap-filler list"
+        },
+        {
+            "name": "libva",
+            "url": "https://github.com/intel/libva",
+            "notes": "H: meson-only; va/va_win32 hwaccel deps"
+        },
+        {
+            "name": "onevpl",
+            "url": "https://github.com/intel/libvpl",
+            "notes": "vpl dispatcher — cmake"
+        },
+        {
+            "name": "openblas",
+            "url": "https://github.com/OpenMathLib/OpenBLAS",
+            "notes": "X: drop candidate — preset already configures CMAKE_DISABLE_FIND_PACKAGE_OpenBLAS=ON"
+        }
+    ],
+    "dependencies-opensource": [
+        {
+            "package_name": "cef",
+            "url": "https://cef-builds.spotifycdn.com/cef_binary_158.0.6%2Bg23f1736%2Bchromium-158.0.8127.89_windows64.tar.bz2",
+            "mirrors": [
+                "https://cef-builds.spotifycdn.com/cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_windows64.tar.bz2"
+            ]
+        },
+        {
+            "package_name": "onnxruntime",
+            "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.32.0/microsoft.ml.onnxruntime.1.32.0.nupkg",
+            "extract_map": [
+                {"from": "runtimes/win-x64/native/", "to": "win-x64/"},
+                {"from": "build/native/include/", "to": "include/"}
+            ]
+        },
+        {
+            "package_name": "llvm-mingw",
+            "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20261117/llvm-mingw-20261117-ucrt-x86_64.zip",
+            "notes": "toolchain replacement for MSYS2 clang64 (clang+lld+libc++/ucrt, identical ABI) — lands under third_party/llvm-mingw; see exit plan 2c"
+        },
+        {
+            "package_name": "pkg-config-lite",
+            "url": "https://downloads.sourceforge.net/project/pkgconfiglite/0.28-1/pkg-config-lite-0.28-1_bin-win32.zip",
+            "notes": "native pkg-config for pkg-config strategy A (generated .pc set in the sysroot)"
+        },
+        {
+            "package_name": "w64devkit",
+            "url": "https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe",
+            "notes": "H escape hatch: portable GCC+busybox (sh/make/sed) for autotools deps — 7z SFX, verify ArchiveManager can read it or unpack manually"
+        },
+        {
+            "package_name": "sqlite3",
+            "url": "https://sqlite.org/2025/sqlite-amalgamation-3500400.zip",
+            "mirrors": [
+                "https://www.sqlite.org/2025/sqlite-amalgamation-3500400.zip"
+            ],
+            "notes": "source amalgamation (sqlite3.c/.h) — cmake-gen static skeleton"
+        },
+        {
+            "package_name": "boost",
+            "url": "https://archives.boost.io/release/1.88.0/source/boost_1_88_0.tar.gz",
+            "mirrors": [
+                "https://downloads.sourceforge.net/project/boost/boost/1.88.0/boost_1_88_0.tar.gz"
+            ],
+            "notes": "headers only (Boost::boost) — no compiled boost libs needed"
+        },
+        {
+            "package_name": "fftw3",
+            "url": "https://fftw.org/fftw-3.3.10-dll64.zip",
+            "mirrors": [
+                "https://ftp.fftw.org/pub/fftw/fftw-3.3.10-dll64.zip"
+            ],
+            "notes": "prebuilt win64 DLLs + .def files — generate .dll.a implibs with llvm-dlltool; alternative: w64devkit source build"
+        },
+        {
+            "package_name": "ffmpeg-builds",
+            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip",
+            "mirrors": [
+                "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n8.0-latest-win64-gpl-shared-8.0.zip"
+            ],
+            "notes": "P: BtbN win64-gpl-shared (mingw .dll.a implibs) — interim ffmpeg route; pick a build WITHOUT librsvg to drop the whole glib/cairo/pango set. Asset name carries the ffmpeg version — check the latest release page if both URLs miss"
+        },
+        {
+            "package_name": "lame",
+            "url": "https://downloads.sourceforge.net/project/lame/lame/3.100/lame-3.100.tar.gz",
+            "notes": "H: source tarball, autotools — w64devkit build or config.h port"
+        },
+        {
+            "package_name": "mpg123",
+            "url": "https://downloads.sourceforge.net/project/mpg123/mpg123/1.32.10/mpg123-1.32.10.tar.bz2",
+            "notes": "H: source tarball, autotools — w64devkit build"
+        },
+        {
+            "package_name": "soxr",
+            "url": "https://downloads.sourceforge.net/project/soxr/soxr-0.1.3-Source.tar.xz",
+            "notes": "source tarball; upstream cmake build"
+        },
+        {
+            "package_name": "gsm",
+            "url": "https://www.quut.com/gsm/gsm-1.0.22.tar.gz",
+            "notes": "tiny Makefile-only source tree — source-list build"
+        },
+        {
+            "package_name": "opencore-amr",
+            "url": "https://downloads.sourceforge.net/project/opencore-amr/opencore-amr/opencore-amr-0.1.6.tar.gz",
+            "notes": "H: autotools — w64devkit build"
+        },
+        {
+            "package_name": "xvid",
+            "url": "https://downloads.xvid.com/downloads/xvidcore-1.3.7.tar.gz",
+            "notes": "H: configure+make — w64devkit build"
+        },
+        {
+            "package_name": "zvbi",
+            "url": "https://downloads.sourceforge.net/project/zapping/zvbi/0.2.35/zvbi-0.2.35.tar.bz2",
+            "notes": "H: autotools — w64devkit build; drop candidate if ffmpeg config drops libzvbi"
+        },
+        {
+            "package_name": "giflib",
+            "url": "https://downloads.sourceforge.net/project/giflib/giflib-5.2.2.tar.gz",
+            "notes": "Makefile-only source tree — source-list build"
+        },
+        {
+            "package_name": "jbigkit",
+            "url": "https://www.cl.cam.ac.uk/~mgk25/jbigkit/jbigkit-2.1.tar.gz",
+            "notes": "Makefile-only source tree (libtiff dep) — source-list build"
+        },
+        {
+            "package_name": "gmp",
+            "url": "https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz",
+            "notes": "H: autotools (gnutls stack) — w64devkit build; drop with the gnutls set"
+        },
+        {
+            "package_name": "nettle",
+            "url": "https://ftp.gnu.org/gnu/nettle/nettle-3.10.1.tar.gz",
+            "notes": "H: autotools (nettle+hogweed, gnutls stack) — w64devkit build"
+        },
+        {
+            "package_name": "libtasn1",
+            "url": "https://ftp.gnu.org/gnu/libtasn1/libtasn1-4.20.0.tar.gz",
+            "notes": "H: autotools (gnutls stack) — w64devkit build"
+        },
+        {
+            "package_name": "libunistring",
+            "url": "https://ftp.gnu.org/gnu/libunistring/libunistring-1.3.tar.gz",
+            "notes": "H: autotools (gnutls stack) — w64devkit build"
+        },
+        {
+            "package_name": "libidn2",
+            "url": "https://ftp.gnu.org/gnu/libidn/libidn2-2.3.8.tar.gz",
+            "notes": "H: autotools (gnutls stack) — w64devkit build; needs libunistring"
+        },
+        {
+            "package_name": "libiconv",
+            "url": "https://ftp.gnu.org/gnu/libiconv/libiconv-1.18.tar.gz",
+            "notes": "H: autotools (glib/gettext stack) — w64devkit build"
+        },
+        {
+            "package_name": "gettext",
+            "url": "https://ftp.gnu.org/gnu/gettext/gettext-0.26.tar.xz",
+            "notes": "H: autotools (intl) — w64devkit build"
+        },
+        {
+            "package_name": "cuda-cudart",
+            "url": "https://developer.download.nvidia.com/compute/cuda/redist/cuda_cudart/windows-x86_64/cuda_cudart-windows-x86_64-12.6.77-archive.zip",
+            "notes": "NVIDIA redist headers+libs only (no nvcc needed) — verify version against the redist component manifest (exit plan 5)"
+        },
+        {
+            "package_name": "cudnn",
+            "url": "https://developer.download.nvidia.com/compute/cudnn/redist/cudnn/windows-x86_64/cudnn-windows-x86_64-9.5.1.17_cuda12-archive.zip",
+            "notes": "NVIDIA redist runtime DLLs + headers — verify version against the cudnn redist manifest; CUDNN shim probes CUDNN_ROOT"
+        },
+        {
+            "package_name": "mkl-devel",
+            "url": "https://files.pythonhosted.org/packages/92/16/0251aee7cf1407df1ff0cf0cd5bc676760d17e8eea5a0d938d584b4159b4/mkl_devel-2026.2.1-py2.py3-none-win_amd64.whl",
+            "notes": "pip wheel (zip): static/implib + cmake files under Library/ — pair with the mkl (DLLs) and mkl-include (headers) wheels; extract_map pending wheel-layout check"
+        }
+    ]
+}

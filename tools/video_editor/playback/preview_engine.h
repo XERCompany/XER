@@ -56,6 +56,7 @@
 #include "frame_clock.h"
 #include "audio_output.h"
 #include "media_decoder.h"
+#include "render/video_frame.h"  // render::VideoFrame (chromium port)
 #include "timeline_model.h"
 
 namespace XER::VideoEditor {
@@ -75,6 +76,14 @@ struct PreviewOptions {
     int sample_rate = 48000;          // mixer output rate (s16 stereo)
     int audio_chunk_samples = 1024;   // mixer/provider chunk size
     bool audio_enabled = true;        // false -> video-only pump
+    // Measured adaptive quality ladder (AE "Adaptive Resolution"
+    // parity): while playing, a rolling average of per-frame render
+    // ms is compared to the frame budget; sustained >90% drops the
+    // playback tier one step (x1 -> /2 -> /4 -> /8) and marks
+    // FrameStats::adaptive_level for the monitor badge; pausing
+    // restores the configured tier (paused frames always render at
+    // full res — Premiere's separate Paused Resolution). Default ON.
+    bool adaptive_quality = true;
     // Olive-style idle-time pre-render around the playhead into the
     // shared EffectFrameCache (playback/auto_cacher.h). Also gated by
     // the XER_VE_AUTOCACHE env var (=0 disables); effective enable is
@@ -94,9 +103,13 @@ public:
     // UI-facing callbacks — all fired on the worker thread.
     struct Sink {
         virtual ~Sink() = default;
-        // Latest composited canvas, packed BGRA8 (scaled down when
-        // quality < 1). pts is the timeline time in microseconds.
-        virtual void OnVideoFrame(const video::Frame& frame) = 0;
+        // Latest composited canvas as a refcounted render::VideoFrame
+        // (kBGRA8 owned-memory, packed plane; scaled down when
+        // quality < 1). timestamp_us() is the timeline time in
+        // microseconds. Zero-copy mailbox hand-off — the sink takes a
+        // ref; the pooled storage recycles when the last ref dies.
+        virtual void OnVideoFrame(
+            Render::scoped_refptr<Render::VideoFrame> frame) = 0;
         // Stereo peak magnitudes of the last mixed chunk (may exceed
         // 1.0 on overs). Fired once per written chunk; {0,0} on
         // pause-at-end and after seeks so meters decay.
@@ -133,9 +146,12 @@ public:
     // continuity rules above.
     void SetLoop(double in_s, double out_s);
     // Preview render scale in (0,1] — values > 1 or non-finite clamp
-    // to 1 (full res). Applies a nearest-neighbor downsample of the
-    // composited BGRA before OnVideoFrame (decodes still run at
-    // source resolution; cheap CPU post-pass, honest "1/2" preview).
+    // to 1 (full res). Scales the CANVAS the compositor renders to
+    // (the warp, blend, canvas and delivery copies all shrink
+    // quadratically — decode still runs at source resolution), so
+    // the tier is honest render work reduction, not a display
+    // downsample. Canvas dims are effect-cache key material, so a
+    // tier flip re-binds the compositor and re-primes the AutoCacher.
     void SetQuality(float scale);
     // Master fader in dB — forwarded to the audio mixer and applied
     // to the mixed output BEFORE the peak read, so OnAudioPeakLevels
@@ -148,6 +164,48 @@ public:
     double DurationSeconds() const;
     // Completed OnVideoFrame deliveries — tests/monitoring.
     std::uint64_t FramesPresented() const;
+    // Frame counters + timing for the monitor's dropped-frame
+    // indicator and the adaptive ladder (Premiere's Dropped Frame
+    // Indicator — the engine's wall-clock playhead already drops
+    // silently; these make it measurable):
+    //   rendered        == FramesPresented()
+    //   dropped         — project-frame indices the playhead skipped
+    //                     past without a render while playing. A skip
+    //                     only counts beyond the rate's expected step
+    //                     (|rate| = 2 legitimately renders every other
+    //                     frame); seeks/loop wraps/reopens never count.
+    //   last_render_ms  — wall time of the most recent RenderFrameAt.
+    //   effective_scale — the canvas tier bound RIGHT NOW: the
+    //                     configured tier x adaptive step while
+    //                     playing, 1.0 while paused (Premiere's
+    //                     separate Paused Resolution).
+    //   adaptive_level  — >0 while the measured auto-drop is active
+    //                     (the monitor's "adaptive" badge).
+    //   scheduler_dropped / scheduler_missed — the render::
+    //                     FrameScheduler's own counters (BeginFrame
+    //                     drop accounting + missed deadline windows).
+    //                     `dropped` and `scheduler_dropped` measure the
+    //                     same quantity two ways — they converge at
+    //                     quiescence; either may transiently lead while
+    //                     a frame is mid-render.
+    struct FrameStats {
+        std::uint64_t rendered = 0;
+        std::uint64_t dropped = 0;
+        double last_render_ms = 0.0;
+        float effective_scale = 1.0f;
+        int adaptive_level = 0;
+        std::uint64_t scheduler_dropped = 0;
+        std::uint64_t scheduler_missed = 0;
+    };
+    FrameStats GetFrameStats() const;
+    // Zero the dropped-frame counter — Premiere resets the indicator
+    // on every playback start (PreviewBinding calls this on play).
+    void ResetDroppedFrames();
+    // Effect-cache coverage for one clip — how many entries the
+    // shared EffectFrameCache currently holds for clip_id (the
+    // timeline render-status bar's green "cached" tier). 0 when no
+    // cache is attached.
+    std::size_t ClipCachedFrames(const std::string& clip_id) const;
     // Accumulated non-fatal notes (compositor + mixer, dedup'd).
     std::vector<std::string> Warnings() const;
 
@@ -159,6 +217,24 @@ public:
     // AutoCacher counters (windows/queued/done/skipped/cancelled/
     // failed) — all zeros when the feature is disabled.
     AutoCacher::Stats AutoCacheStats() const;
+    // Coarse per-stage wall-clock totals accumulated by the worker —
+    // the "why is preview slow" breakdown. `render` is the compositor
+    // call (decode + effect chain + warp + blend happen inside it),
+    // `deliver` is the frame wrap/copy + Sink::OnVideoFrame marshal,
+    // `audio` is the mixer pump, `tick` is the whole loop iteration.
+    // Monotonic from Init; ResetPerfStats() re-zeroes for a
+    // measurement window (smoke checks, perf HUDs).
+    struct PerfStats {
+        std::uint64_t ticks = 0;      // worker loop iterations
+        std::uint64_t renders = 0;    // RenderAndDeliver attempts
+        double render_ms = 0.0;       // comp_.RenderFrameAt total
+        double deliver_ms = 0.0;      // frame wrap + OnVideoFrame total
+        double audio_ms = 0.0;        // PumpAudio total
+        double tick_ms = 0.0;         // full tick (work, excl. sleep)
+        double sleep_ms = 0.0;        // idle pacing total
+    };
+    PerfStats GetPerfStats() const;
+    void ResetPerfStats();
     // Waits until the AutoCacher queue is drained and no window is
     // pending (up to timeout_ms) — tests/smoke only; returns false on
     // timeout or when disabled-but-idle (idle is always true then:

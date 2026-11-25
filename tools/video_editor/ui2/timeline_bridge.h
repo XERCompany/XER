@@ -98,11 +98,34 @@ public:
         // "Auto-blur faces" — YuNet scan -> face ClipTrack ->
         // xer.fx.face_blur effect, all shell-side.
         std::function<void(const std::string&)> face_blur;
+        // "Track Mask (AI)…" — the shell arms the monitor click
+        // seam, the click becomes the SAM2 prompt, and the async
+        // mask scan lands Clip::mask_track + xer.fx.track_mask,
+        // all shell-side. "Clear Mask Track" empties it.
+        std::function<void(const std::string&)> track_mask;
+        std::function<void(const std::string&)> clear_mask;
         // "Smooth slow-mo (AI)" — RIFE bounce of the consumed span
         // -> baked media + clip repoint (ai/rife_interp.h), all
         // shell-side.
         std::function<void(const std::string&)> ai_slowmo;
         std::function<void(const std::string&)> edit_transcript;
+        // Render-status bar feed (Premiere's green/yellow/red strip):
+        // classifies one clip's render cost — ClipCostClass ordinal
+        // (0 realtime / 1 cached / 2 needs-render). Unset -> the
+        // surface draws no strip.
+        std::function<int(const Clip&)> clip_cost_class;
+        // Context-menu source-edit verbs (insert / overwrite /
+        // replace / fit-to-fill): (verb, timeline point, clip id or
+        // "") — the shell resolves source marks + track targets.
+        // Unset -> the verb items hide.
+        std::function<void(SourceEditVerb, double,
+                           const std::string&)>
+            source_verb;
+        // Track target toggles (the V/A badge + header menu "Target
+        // Track") — fires with the requested state; the shell pushes
+        // it back through TimelineSurface::SetTrackTargeted. Unset ->
+        // the surface owns its own session targeting set.
+        std::function<void(int, bool)> on_track_target;
     };
 
     // Borrows both — the shell outlives the bridge. `host` copies;
@@ -144,7 +167,10 @@ public:
     void SlideClipBy(const std::string& clip_id, double delta_tl);
     void SetClipRateBy(const std::string& clip_id, double rate);
     // Adds a transition from `clip_id` to the next clip on its track
-    // (duration <= 0 uses the re-armed default).
+    // (duration <= 0 uses the re-armed default). `script` is the
+    // type-scoped variant string: JS script id for Type::Script, the
+    // avfilter token ("radial", ...) for Type::Xfade, the "xer.tr.*"
+    // transition id for Type::XerFx, "" otherwise.
     void AddTransitionAfter(const std::string& clip_id,
                             Transition::Type type, double duration,
                             const std::string& script);

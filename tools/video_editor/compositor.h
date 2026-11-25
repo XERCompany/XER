@@ -73,11 +73,23 @@ double TransitionWeightAt(double t_seconds, const Transition& transition,
 //     over_px  = bilinear(over,  x+0.5-odx, y+0.5-ody) with outside
 //     sampling -> transparent, result = AlphaOver(under_px, over_px).
 //     At w=0 -> under only; w=1 -> over only.
+//   Xfade: delegated to xer_transition_bridge (libavfilter xfade) —
+//     `xfade_name` carries the avfilter token ("radial", ...); on an
+//     unknown name, a missing filter, or a graph failure the caller
+//     falls back to Crossfade so a render never dies on an absent
+//     optional dep.
+//   XerFx: delegated to transitions_lib (hand-written xer.tr.* set) —
+//     `xer_fx` carries the id ("xer.tr.whip_pan", ...) and
+//     `xer_params` the optional "k=v;k=v" knob string; an unknown id
+//     falls back to Crossfade, same contract as a bad xfade token.
 // Returns false on size/format mismatch or allocation failure.
 bool ApplyTransitionPixels(Transition::Type type, double weight,
                            const video::Frame& under,
                            const video::Frame& over,
-                           video::Frame* out);
+                           video::Frame* out,
+                           const std::string& xfade_name = "",
+                           const std::string& xer_fx = "",
+                           const std::string& xer_params = "");
 
 // Renders `src` (packed BGRA8, any dims) into a canvas-sized
 // transparent-black layer applying `tr`: the scaled rect
@@ -131,6 +143,27 @@ bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
                           const video::Frame& src);
 
 // ---- the compositor ----
+
+// Premiere render-bar cost class for a clip (the green/yellow/red
+// strip above timeline clips — a STATIC "which-processor" estimate,
+// not a measurement):
+//   kRealtime    — no fx chain, or every effect on the accelerated
+//                  allowlist: probably keeps up (yellow bar).
+//   kCached      — frames already sit in the shared effect cache:
+//                  realtime guaranteed (green bar). Never returned by
+//                  ClipCostClassFor — the shell upgrades to this when
+//                  PreviewEngine::ClipCachedFrames reports coverage.
+//   kNeedsRender — a heavy/uncached chain: spatial distortion and
+//                  multi-tap kernels (blur/warp/twirl...), the AI
+//                  track-driven effects (track_mosaic/track_mask/
+//                  face_blur/smart_reframe), script:/ocio: and real
+//                  plugin DLLs, and adjustment clips (red bar).
+enum class ClipCostClass { kRealtime = 0, kCached = 1, kNeedsRender = 2 };
+
+// Static half of the render-bar classification — pure, next to
+// ChainCacheable in compositor.cc. Returns kNeedsRender or
+// kRealtime; callers layer cache coverage on top (-> kCached).
+ClipCostClass ClipCostClassFor(const Clip& clip);
 
 struct CompositorOptions {
     // Empty -> DefaultDecoderFactory() (real FFmpeg bridge). Tests
@@ -202,6 +235,30 @@ public:
     // returns false with "export cancelled"-style error.
     bool RenderFrameAt(double t, std::vector<std::uint8_t>* out_bgra,
                        std::string* error_out = nullptr);
+
+    // RenderFrameAt variant that copies the finished canvas into a
+    // caller-owned buffer — `dst_bgra` must hold at least
+    // CanvasWidth()*CanvasHeight()*4 bytes (packed BGRA8, stride
+    // width*4). This is the render::VideoFramePool hand-off the
+    // preview engine uses: the pooled frame's plane is the copy
+    // destination, so the per-frame delivery needs no fresh vector
+    // allocation. Same render contract otherwise (clamped t, false +
+    // error_out on decode/render failure).
+    bool RenderFrameAtTo(double t, std::uint8_t* dst_bgra,
+                         std::size_t dst_bytes,
+                         std::string* error_out = nullptr);
+
+    // ui2 monitor-gizmo seam: replaces one clip's STATIC transform in
+    // the bound project snapshot. Sessions stay open and the
+    // per-layer memo/effect caches re-key on the transform hash, so a
+    // direct-manipulation preview (monitor drag) re-renders through a
+    // plain RenderFrameAt — no re-Init, no decoder re-open.
+    // Keyframed props still evaluate over the static value via
+    // EffectiveTransformAt, matching the inspector's static-field
+    // edits. Returns false when the id isn't bound or the compositor
+    // isn't initialized. Single-consumer-thread like RenderFrameAt.
+    bool UpdateClipTransform(const std::string& clip_id,
+                             const Transform& transform);
 
     // Preview-quality hint in (0,1]: below 1.0 the expensive spatial
     // clip effects (lens sphere / magnifier / ribbed glass / bokeh)

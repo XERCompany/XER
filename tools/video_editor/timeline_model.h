@@ -165,6 +165,42 @@ struct ClipTrack {
     std::vector<std::string> classes;     // labels observed in the span
 };
 
+// SAM2.1 mask-track sample (ai/sam2_track.h — ctx-menu "Track Mask
+// (SAM)…" → xer.fx.track_mask). One analyzed frame's mask: the
+// bounding box rides the SAME source-seconds / frame-fraction
+// convention as ReframeSample so all existing track math applies,
+// and the silhouette itself is a packed 1bpp bitmap resampled onto
+// the track's fixed grid (grid_w x grid_h cells, row-major, MSB-
+// first, ceil(w*h/8) bytes — ~512 B/sample at the default 64x64).
+// A packed bitmap (not the photo/ A8 TiledDevice) is the deliberate
+// storage choice: it serializes verbatim into .xerproj as base64,
+// interpolates as raw coverage, and stays small enough that a
+// minute of 0.5 s-cadence tracking costs ~60 KB.
+struct ClipMaskSample {
+    double t = 0.0;        // source seconds
+    float cx = 0.5f;       // mask bbox center x, frame fraction 0..1
+    float cy = 0.5f;       // mask bbox center y, frame fraction
+    float w = 0.0f;        // mask bbox width, frame fraction
+    float h = 0.0f;        // mask bbox height, frame fraction
+    float confidence = 0.0f;  // decoder-chosen head's IoU score
+    bool scene_boundary = false;  // a cut/drift collapse precedes
+                                  // this sample — snappable like
+                                  // ReframeSample::scene_boundary
+    std::vector<std::uint8_t> bits;  // packed grid bitmap (see above)
+};
+
+// Analyzed SAM mask track on a clip (ai/sam2_track.h). Kept separate
+// from Clip::object_track — the box track is the coarse pin/censor
+// target while this carries per-pixel silhouettes for the
+// xer.fx.track_mask isolate/blur-behind/key compositor branch.
+// grid_w/grid_h describe every sample's bitmap (0 => empty track).
+struct ClipMaskTrack {
+    int grid_w = 0;
+    int grid_h = 0;
+    std::vector<ClipMaskSample> samples;  // sorted by t, source seconds
+    std::string label;                    // "sam" — provenance tag
+};
+
 struct Clip {
     std::string id;             // uuid (NewClipId)
     std::string source_path;    // UTF-8
@@ -197,6 +233,8 @@ struct Clip {
     std::vector<ClipTag> tags;  // AI find-objects result (source seconds)
     ClipReframe reframe;        // AI smart-reframe subject track
     ClipTrack object_track;     // AI track-object result for pinning
+    ClipMaskTrack mask_track;   // SAM2.1 mask-track result for
+                                // xer.fx.track_mask (roto/isolate)
     // Compound clip (Premiere "Nest" / Resolve "Compound Clip" /
     // FCP "Compound"): non-empty `compound` is the id of a Sequence in
     // Project::sequences whose timeline the clip renders/mixes. The
@@ -212,13 +250,29 @@ struct Transition {
         Crossfade, WipeLeft, WipeRight, WipeUp, WipeDown,
         SlideLeft, SlideRight, SlideUp, SlideDown,
         DipToBlack, DipToWhite, AdditiveDissolve,
-        Script              // blend weight comes from a JS fx script
+        Script,             // blend weight comes from a JS fx script
+        Xfade,              // FFmpeg libavfilter xfade (`xfade` names it)
+        XerFx               // hand-written XER transition (`xer_fx` ids it)
     } type = Type::Crossfade;
     double duration = 1.0;              // seconds, centered on the cut
     // type == Script: transition id from scripts/fx/fx.json —
     // weight(progress) is called per frame; renders as a crossfade
     // with the script-supplied easing curve.
     std::string script;
+    // type == Xfade: the avfilter transition token
+    // (xer_transition_bridge.h — "radial", "circleopen", ...). An
+    // unknown/absent-filter name falls back to the native crossfade
+    // at render time (and on builds without libavfilter).
+    std::string xfade;
+    // type == XerFx: the XER-native transition id
+    // (transitions_lib.h — "xer.tr.whip_pan", "xer.tr.glitch", ...).
+    // Same lenient contract: an unknown id falls back to the native
+    // crossfade at render time.
+    std::string xer_fx;
+    // type == XerFx: optional "k=v;k=v" knob overrides parsed by
+    // transitions_lib (dir/soft/int/seed). Empty = the transition's
+    // compiled defaults.
+    std::string xer_params;
 };
 struct Track {
     TrackKind kind = TrackKind::Video;
@@ -355,8 +409,13 @@ bool RippleDeleteClip(Project&, const std::string& clip_id,
 // [t0, t1) on ALL unlocked tracks. Clips spanning the range edges are
 // split at the boundaries first. close_gap=false lifts (leaves a
 // hole); close_gap=true extracts and shifts subsequent clips left.
+// `track_target` is an optional track-sized mask (Premiere track
+// targeting / Resolve auto-select): non-empty and shorter than the
+// track list is an error; mask[t]==false skips track t exactly like
+// a locked track. Empty = every unlocked track (legacy behavior).
 bool LiftRange(Project&, double t0, double t1, bool close_gap,
-               std::string* error_out);
+               std::string* error_out,
+               const std::vector<bool>& track_target = {});
 bool MoveClip(Project&, const std::string& clip_id, double new_timeline_start,
               const MediaBounds&, std::string* error_out);
 // Rolling edit on an adjacent pair (from ends where to starts, same
@@ -434,7 +493,10 @@ bool ReplaceClip(Project&, const std::string& clip_id, const Clip& replacement,
 bool AddTransition(Project&, const std::string& from_clip,
                    const std::string& to_clip, Transition::Type type,
                    double duration, std::string* error_out,
-                   const std::string& script = "");
+                   const std::string& script = "",
+                   const std::string& xfade = "",
+                   const std::string& xer_fx = "",
+                   const std::string& xer_params = "");
 bool RemoveTransition(Project&, const std::string& from_clip,
                       const std::string& to_clip);
 // Retargets an existing transition's duration (junction-handle drag).

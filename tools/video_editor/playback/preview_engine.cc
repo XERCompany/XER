@@ -5,6 +5,7 @@
 #include "preview_engine.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
@@ -13,11 +14,14 @@
 #include <thread>
 #include <utility>
 
+#include "l2_frame_cache.h"   // disk tier behind frame_cache_
+#include "render/frame_scheduler.h"   // chromium render-port slice 2
 #include "wrapper/ffmpeg/ffmpeg_engine_bridge.h"   // AudioFrameInfo
 
 namespace XER::VideoEditor {
 namespace {
 namespace FFmpeg = XER::Bridge::FFmpeg;
+namespace RenderNs = XER::VideoEditor::Render;
 
 // Same-direction tolerance for the session-continuity check — below
 // this a tick is "not moving backwards" (sub-nanosecond clock noise).
@@ -35,21 +39,63 @@ constexpr std::size_t kAudioGapSkipChunks = 96;   // ~2 s at 1024/48k
 // real discontinuities (user seek, backward, >2 s gap) — never on
 // ordinary per-tick jitter.
 constexpr double kAudioLeadSeconds = 0.12;
+// Audio-master drift correction (chromium render-port R8): while the
+// sink is actively consuming samples the AudioClockTimeSource is the
+// authoritative media clock — the wall estimate is rebased onto the
+// audible position (written frontier minus the structural lead) only
+// when the divergence exceeds this threshold. ~3 frames at 30 fps;
+// absorbs the unknown sink-buffer residual without per-tick jitter.
+constexpr double kAudioDriftCorrectSeconds = 0.10;
 
-// Nearest-neighbor BGRA8 downsample for the quality post-pass — both
-// buffers are packed stride==width*4.
-void DownsampleNearestBGRA(const std::uint8_t* src, int sw, int sh,
-                           std::uint8_t* dst, int dw, int dh) {
-    for (int y = 0; y < dh; ++y) {
-        const int sy = std::min(sh - 1, (y * sh) / dh);
-        const std::uint8_t* srow =
-            src + static_cast<std::size_t>(sy) * sw * 4u;
-        std::uint8_t* drow = dst + static_cast<std::size_t>(y) * dw * 4u;
-        for (int x = 0; x < dw; ++x) {
-            const int sx = std::min(sw - 1, (x * sw) / dw);
-            std::memcpy(drow + x * 4, srow + sx * 4, 4);
+// Measured adaptive-quality ladder (PreviewOptions::adaptive_quality):
+// the user's playback pick is multiplied by these step factors —
+// level 0 = full pick, 1 = half, 2 = quarter, 3 = eighth. ~500 ms
+// hysteresis windows gate each step so the tier can't flap, and a
+// pause always restores level 0 (paused frames render full-res
+// anyway — Premiere's separate Paused Resolution).
+constexpr float kAdaptiveSteps[] = {1.0f, 0.5f, 0.25f, 0.125f};
+constexpr int kAdaptiveMaxLevel = 3;
+constexpr std::chrono::milliseconds kAdaptiveWindow{500};
+// Window thresholds: a rolling render-time average sustained above
+// 90% of the frame budget steps the ladder down; below 40% steps it
+// back up (doc T4 — measured, not a menu).
+constexpr double kAdaptiveHigh = 0.9;
+constexpr double kAdaptiveLow = 0.4;
+// EMA weight of each rendered frame in the rolling average.
+constexpr double kAdaptiveEmaAlpha = 0.25;
+
+// Quality-tier canvas scaling: the "1/2 / 1/4" monitor options shrink
+// the canvas the compositor renders to, so warp, blend, layer and
+// canvas copies all drop quadratically with scale — the honest form
+// of preview-quality (a post-pass downsample would still pay full
+// price for every upstream stage). Canvas dims are folded into the
+// effect-cache state hash, so the scaled project is ALSO what the
+// AutoCacher binds: keys stay aligned between pre-render and playback.
+Project ScaledRenderProject(const Project& p, double scale) {
+    if (!(scale > 0.0) || scale >= 1.0) {
+        return p;
+    }
+    Project rp = p;
+    rp.width = std::max(
+        1, static_cast<int>(std::lround(p.width * scale)));
+    rp.height = std::max(
+        1, static_cast<int>(std::lround(p.height * scale)));
+    return rp;
+}
+
+// The shared EffectFrameCache only stores clips with a non-empty
+// effect or mask chain (see the `cacheable` gate in
+// compositor.cc's RenderClipLayer — an empty chain is a memcpy, not
+// worth a cache round-trip). A project without ANY such clip can
+// never benefit from pre-rendering: the AutoCacher's second decoder
+// set and render loop would burn a CPU core for zero hits.
+bool ProjectHasCacheableContent(const Project& p) {
+    for (const Clip& clip : p.clips) {
+        if (!clip.effects.empty() || !clip.masks.empty()) {
+            return true;
         }
     }
+    return false;
 }
 
 }  // namespace
@@ -86,6 +132,30 @@ struct PreviewEngine::Impl {
 
     // ---- worker-owned playback state (worker thread only) ----
     Compositor comp_;
+    // The canvas-scaled snapshot the compositor and the AutoCacher
+    // bind — rebuilt when the applied quality tier flips (the
+    // command block's quality_cmd_ is the request, render_scale_ the
+    // tier actually bound). At scale 1 this is just project_.
+    Project render_project_;
+    float render_scale_ = 1.0f;
+    // The EFFECTIVE playback tier (user pick x adaptive step) the
+    // AutoCacher is bound at — tracked separately from render_scale_
+    // so the pause<->play canvas flips (paused = full res) never
+    // re-prime it; only real playback-tier changes do.
+    float autocache_scale_ = 1.0f;
+    // Set by the worker when autocache_scale_ changes — canvas dims
+    // are cache-key material, so the AutoCacher must re-Init on the
+    // scaled snapshot or it fills keys playback never requests.
+    bool autocache_reset_pending_ = false;
+    // Project-frame index (floor(t/frame_dt)) of the last successful
+    // render — the basis of the dropped-frame count. -1 after any
+    // discontinuity (seek, session reopen, Init).
+    std::int64_t last_frame_idx_ = -1;
+    // Measured adaptive ladder (worker-owned; adaptive_level_out_ is
+    // the atomic mirror the UI reads for the badge).
+    double ema_render_ms_ = -1.0;
+    int adaptive_level_ = 0;
+    std::chrono::steady_clock::time_point adaptive_window0_{};
     // Shared effect-chain result cache — injected into every
     // compositor session this engine opens. Survives ReopenCompositor
     // (every backward seek / loop wrap re-binds the compositor), so
@@ -95,6 +165,11 @@ struct PreviewEngine::Impl {
     // safe — changed inputs simply miss.
     std::shared_ptr<EffectFrameCache> frame_cache_ =
         std::make_shared<EffectFrameCache>();
+    // Disk tier behind frame_cache_ (l2_frame_cache.h — .dxcfz
+    // spill). Created once at first Init when XER_VE_L2 allows and
+    // attached to the shared cache — the AutoCacher's private
+    // compositor hits/spills through the same tier automatically.
+    std::shared_ptr<L2FrameCache> l2_cache_;
     // Olive-style idle-time pre-render into frame_cache_ — owns a
     // SECOND compositor (the only safe seam: Compositor is single-
     // consumer-thread), fills the shared cache on its own worker so
@@ -104,19 +179,58 @@ struct PreviewEngine::Impl {
     bool comp_open_ = false;
     bool mixer_open_ = false;
     bool audio_broken_ = false;         // GetChunk hard-failed; stop pump
-    double anchor_t_ = 0.0;             // playhead at anchor_wall_
-    double anchor_wall_ = 0.0;          // clock seconds at anchor
+    // Media clocks (chromium render-port slice 2): wall_ts_ carries
+    // the playhead — same anchor+delta*rate math the raw anchor_t_/
+    // anchor_wall_ pair ran, but as a render::TimeSource so the
+    // FrameScheduler can consume it. Its NowFn rides the injected
+    // FrameClock, so manual-clock tests stay deterministic. When an
+    // audio sink exists, audio_ts_ counts written samples
+    // (AudioClock analogue) and becomes the scheduler's master +
+    // the drift-correction reference for wall_ts_.
+    RenderNs::WallClockTimeSource wall_ts_;
+    std::unique_ptr<RenderNs::AudioClockTimeSource> audio_ts_;
+    // BeginFrame-style scheduler (FrameScheduler/FrameTick): ticked
+    // once per worker iteration, acked per presented frame. Its
+    // counters mirror into sched_* atomics for the badge/tests.
+    std::unique_ptr<RenderNs::FrameScheduler> sched_;
+    // Samples-written value seen on the previous drift check —
+    // corrections are gated on the counter actually advancing.
+    std::int64_t last_audio_samples_ = -1;
     double last_render_t_ = -1.0;       // <0: nothing rendered this session
+    double last_render_tr_ = -1.0;      // last frame-snapped render t
     std::size_t audio_next_index_ = 0;  // next chunk index to produce
     std::size_t audio_chunk_count_ = 0;
     double chunk_dur_ = 0.0;            // chunk_samples / sample_rate
-    std::vector<std::uint8_t> bgra_;    // compositor output scratch
-    video::Frame out_frame_;            // delivery frame (reused)
+    // Pooled delivery frames — the R9 zero-copy marshal: the
+    // compositor renders straight into an acquired frame's plane and
+    // the ref flows worker->binding->monitor with no pixel copies;
+    // the storage recycles when the last consumer's ref dies.
+    RenderNs::VideoFramePool frame_pool_;
 
     // ---- UI-readable atomics ----
     std::atomic<double> playhead_{0.0};
     std::atomic<bool> playing_{false};
     std::atomic<std::uint64_t> frames_presented_{0};
+    // T1 counters — the dropped-frame indicator data: project-frame
+    // indices the wall-clock playhead skipped without a render while
+    // playing (beyond the rate's expected step), plus the last
+    // RenderFrameAt wall time in ms.
+    std::atomic<std::uint64_t> frames_dropped_{0};
+    std::atomic<double> last_render_ms_{0.0};
+    // T4 badge mirrors: the ladder level currently applied and the
+    // canvas tier actually bound (paused monitors bind 1.0).
+    std::atomic<int> adaptive_level_out_{0};
+    std::atomic<float> effective_scale_out_{1.0f};
+    // FrameScheduler counter mirrors (worker writes, UI reads) +
+    // rebase offsets so ResetDroppedFrames zeroes them alongside the
+    // engine counter — Premiere's per-play indicator reset.
+    std::atomic<std::uint64_t> sched_dropped_{0};
+    std::atomic<std::uint64_t> sched_missed_{0};
+    std::atomic<std::uint64_t> sched_dropped_base_{0};
+    std::atomic<std::uint64_t> sched_missed_base_{0};
+    // Per-stage wall-clock totals (PerfStats) — written on the worker
+    // under mutex_, read on the UI thread by GetPerfStats().
+    PreviewEngine::PerfStats perf_;
 
     std::thread worker_;
 
@@ -205,29 +319,83 @@ struct PreviewEngine::Impl {
         comp_open_ = false;
         mixer_open_ = false;
         audio_broken_ = false;
-        anchor_t_ = 0.0;
-        anchor_wall_ = 0.0;
+        // Media clocks + BeginFrame scheduler. The wall source's NowFn
+        // rides the injected FrameClock — injected manual clocks keep
+        // every playhead advance deterministic. The audio source
+        // exists only when a real sink can consume samples (it is fed
+        // per Write in PumpAudio); it is the scheduler's master clock
+        // when present — audio owns the TimeSource upstream too.
+        wall_ts_ = RenderNs::WallClockTimeSource(
+            [this] { return clock_->NowSeconds(); });
+        audio_ts_ =
+            (options_.audio_enabled && options_.audio_sink != nullptr)
+                ? std::make_unique<RenderNs::AudioClockTimeSource>(
+                      options_.sample_rate)
+                : nullptr;
+        sched_ = std::make_unique<RenderNs::FrameScheduler>(
+            audio_ts_ != nullptr
+                ? static_cast<RenderNs::TimeSource*>(audio_ts_.get())
+                : static_cast<RenderNs::TimeSource*>(&wall_ts_));
+        sched_->SetMediaFrameDuration(frame_dt_);
+        last_audio_samples_ = -1;
         last_render_t_ = -1.0;
+        last_render_tr_ = -1.0;
+        last_frame_idx_ = -1;
+        ema_render_ms_ = -1.0;
+        adaptive_level_ = 0;
+        adaptive_window0_ = {};
+        render_scale_ = 1.0f;
+        render_project_ = project_;
+        autocache_scale_ = 1.0f;
+        autocache_reset_pending_ = false;
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            perf_ = PreviewEngine::PerfStats{};
+        }
         audio_next_index_ = 0;
         audio_chunk_count_ = 0;
         chunk_dur_ = 0.0;
         playhead_.store(0.0, std::memory_order_relaxed);
         playing_.store(false, std::memory_order_relaxed);
         frames_presented_.store(0, std::memory_order_relaxed);
+        frames_dropped_.store(0, std::memory_order_relaxed);
+        last_render_ms_.store(0.0, std::memory_order_relaxed);
+        adaptive_level_out_.store(0, std::memory_order_relaxed);
+        effective_scale_out_.store(1.0f, std::memory_order_relaxed);
+        sched_dropped_.store(0, std::memory_order_relaxed);
+        sched_missed_.store(0, std::memory_order_relaxed);
+        sched_dropped_base_.store(0, std::memory_order_relaxed);
+        sched_missed_base_.store(0, std::memory_order_relaxed);
+        // Disk tier behind frame_cache_ — attach once; it survives
+        // compositor session reopens alongside the RAM tier, so a
+        // warm .dxcfz store makes even first-pass playback cheap.
+        // A create failure degrades to RAM-only (non-fatal).
+        if (frame_cache_->DiskTier() == nullptr &&
+            L2FrameCache::EnabledByEnv()) {
+            std::string l2_err;
+            l2_cache_ = L2FrameCache::Create(&l2_err);
+            if (l2_cache_ != nullptr) {
+                frame_cache_->SetDiskTier(l2_cache_);
+            } else {
+                WarnOnce("L2 frame cache unavailable: " + l2_err);
+            }
+        }
         // AutoCacher: pre-renders the playhead window into
         // frame_cache_ on its own low-priority thread + private
-        // compositor. Same snapshot + factory, same cache — playback
-        // renders then hit instead of re-decoding. Init failures are
-        // non-fatal (the feature degrades to plain playback).
+        // compositor. Same (scaled) snapshot + factory, same cache —
+        // playback renders then hit instead of re-decoding. Init
+        // failures are non-fatal (the feature degrades to plain
+        // playback). Skipped entirely when no clip carries a
+        // cacheable chain — the EffectFrameCache only stores
+        // effect/mask-bearing frames, so pre-rendering an fx-free
+        // timeline would just burn a second decoder set for nothing.
         if (options_.autocache && AutoCacher::EnabledByEnv() &&
-            frame_cache_->CapacityBytes() > 0) {
-            AutoCacher::Options aco;
-            aco.decoder_factory = factory_;
-            aco.frame_cache = frame_cache_;
-            aco.media_resolver = options_.media_resolver;
+            frame_cache_->CapacityBytes() > 0 &&
+            ProjectHasCacheableContent(project_)) {
             auto ac = std::make_unique<AutoCacher>();
             std::string ac_err;
-            if (ac->Init(project_, aco, &ac_err)) {
+            if (ac->Init(render_project_, AutoCacheOptions(),
+                         &ac_err)) {
                 autocache_ = std::move(ac);
             } else {
                 WarnOnce("autocache disabled: " + ac_err);
@@ -356,6 +524,20 @@ struct PreviewEngine::Impl {
 
     // ---- session lifecycle (worker thread) ----------------------------
 
+    AutoCacher::Options AutoCacheOptions() const {
+        AutoCacher::Options aco;
+        aco.decoder_factory = factory_;
+        aco.frame_cache = frame_cache_;
+        aco.media_resolver = options_.media_resolver;
+        // The heavy-effect detour tier must equal the playback
+        // compositor's — preview_quality is folded into the cache
+        // state hash, so a mismatched tier fills unreachable keys.
+        // This is the PLAYBACK tier (pick x adaptive step): paused
+        // full-res frames don't ride the shared cache.
+        aco.quality = autocache_scale_;
+        return aco;
+    }
+
     void ReopenCompositor() {
         if (comp_open_) {
             comp_.Shutdown();
@@ -367,7 +549,7 @@ struct PreviewEngine::Impl {
         opts.media_resolver = options_.media_resolver;
         std::string err;
         std::vector<std::string> w;
-        if (!comp_.Init(project_, opts, &err, &w)) {
+        if (!comp_.Init(render_project_, opts, &err, &w)) {
             // Pre-validated at Init — only reachable on allocation
             // failure. Warn once; the next discontinuity retries.
             WarnOnce("compositor init failed: " + err);
@@ -403,6 +585,14 @@ struct PreviewEngine::Impl {
         chunk_dur_ = static_cast<double>(options_.audio_chunk_samples) /
                      static_cast<double>(options_.sample_rate);
         audio_next_index_ = ChunkIndexAt(t);
+        if (audio_ts_ != nullptr) {
+            // AudioClock SetBaseTimestamp: the written frontier starts
+            // at this chunk's media position and the sample
+            // accumulator re-zeroes against it.
+            audio_ts_->Start(
+                static_cast<double>(audio_next_index_) * chunk_dur_);
+            last_audio_samples_ = -1;
+        }
     }
 
     std::size_t ChunkIndexAt(double t) const {
@@ -420,14 +610,17 @@ struct PreviewEngine::Impl {
 
     // ---- render / pump (worker thread) --------------------------------
 
-    void RenderAndDeliver(double t, float quality) {
+    void RenderAndDeliver(double t, bool playing, double rate) {
         if (!comp_open_) {
             return;
         }
-        // Preview-quality hint: <1.0 runs the heavy clip effects on a
-        // downscaled frame inside the compositor (export/screenshot
-        // compositors never set this — full quality stays bit-exact).
-        comp_.SetPreviewQuality(quality);
+        // Heavy-effect quality hint: <1.0 runs the expensive spatial
+        // kernels on a downscaled frame inside the compositor. This
+        // rides on top of the canvas scaling (render_project_) — the
+        // tier matches what the AutoCacher renders at so the shared
+        // cache keys line up. Export/screenshot compositors never set
+        // either — full quality stays bit-exact.
+        comp_.SetPreviewQuality(render_scale_);
         // Frame-snapped render time: the cache key quantizes the
         // request to microseconds, so a raw wall-clock t would make
         // every tick a distinct key — nothing could ever hit, and the
@@ -439,46 +632,92 @@ struct PreviewEngine::Impl {
         const double tr = std::clamp(
             std::floor(t / frame_dt_ + 1e-9) * frame_dt_, 0.0,
             duration_);
+        // Dropped-frame counting (Premiere's stoplight data): the
+        // playhead index vs the last rendered index. Only skips
+        // beyond the rate's expected step count — a 2x shuttle
+        // legitimately renders every other frame — and only while
+        // playing (paused presents aren't drops). Discontinuities
+        // reset last_frame_idx_ (seeks/reopens), so a landing never
+        // counts as a drop.
+        const std::int64_t frame_idx =
+            static_cast<std::int64_t>(std::llround(tr / frame_dt_));
+        if (playing && last_frame_idx_ >= 0) {
+            const std::int64_t step = std::max<std::int64_t>(
+                1, static_cast<std::int64_t>(
+                       std::llround(std::fabs(rate))));
+            if (frame_idx > last_frame_idx_ + step) {
+                frames_dropped_.fetch_add(
+                    static_cast<std::uint64_t>(
+                        frame_idx - last_frame_idx_ - step),
+                    std::memory_order_relaxed);
+            }
+        }
+        const int sw = comp_.CanvasWidth();
+        const int sh = comp_.CanvasHeight();
+        // R9 zero-copy delivery: acquire a pooled VideoFrame and have
+        // the compositor write the finished canvas straight into its
+        // plane — the refcounted frame then flows to the monitor
+        // widget with no further pixel copies. timestamp = tr (the
+        // snapped frame time), duration = one project frame.
+        auto vframe = frame_pool_.Acquire(
+            RenderNs::VideoPixelFormat::kBGRA8,
+            RenderNs::VideoSize{sw, sh}, RenderNs::VideoRect{},
+            static_cast<std::int64_t>(std::llround(tr * 1000000.0)),
+            static_cast<std::int64_t>(
+                std::llround(frame_dt_ * 1000000.0)));
+        if (!vframe) {
+            WarnOnce("preview frame pool acquire failed");
+            return;
+        }
+        // Perf timing uses the REAL steady clock — the injected
+        // FrameClock is virtual (tests advance it through sleeps) and
+        // would report ~0 ms of work per tick.
+        const auto t0 = std::chrono::steady_clock::now();
         std::string err;
-        if (!comp_.RenderFrameAt(tr, &bgra_, &err)) {
+        if (!comp_.RenderFrameAtTo(tr, vframe->data(0),
+                                   vframe->plane_size(0), &err)) {
             WarnOnce("preview render failed at t=" +
                      std::to_string(t) + ": " + err);
             return;
         }
-        const int sw = comp_.CanvasWidth();
-        const int sh = comp_.CanvasHeight();
-        const float q = (std::isfinite(quality) && quality > 0.0f &&
-                         quality < 1.0f)
-                            ? quality
-                            : 1.0f;
-        const int tw =
-            std::max(1, static_cast<int>(std::lround(sw * q)));
-        const int th =
-            std::max(1, static_cast<int>(std::lround(sh * q)));
-        if (!out_frame_.IsValid() || out_frame_.Width() != tw ||
-            out_frame_.Height() != th ||
-            out_frame_.Format() != video::PixelFormat::BGRA8) {
-            out_frame_.Release();
-            if (!out_frame_.Allocate(tw, th, video::PixelFormat::BGRA8)) {
-                WarnOnce("preview output frame allocation failed");
-                return;
-            }
+        const auto t1 = std::chrono::steady_clock::now();
+        const double render_ms =
+            std::chrono::duration<double, std::milli>(t1 - t0).count();
+        last_render_ms_.store(render_ms, std::memory_order_relaxed);
+        // Adaptive ladder input — only playing renders feed the
+        // rolling average (paused full-res inspection frames aren't
+        // the measurement). The window evaluator in WorkerMain does
+        // the stepping.
+        if (playing && options_.adaptive_quality) {
+            ema_render_ms_ =
+                ema_render_ms_ < 0.0
+                    ? render_ms
+                    : ema_render_ms_ * (1.0 - kAdaptiveEmaAlpha) +
+                          render_ms * kAdaptiveEmaAlpha;
         }
-        if (tw == sw && th == sh) {
-            std::memcpy(out_frame_.Data(), bgra_.data(), bgra_.size());
-        } else {
-            DownsampleNearestBGRA(bgra_.data(), sw, sh,
-                                  out_frame_.Data(), tw, th);
+        sink_->OnVideoFrame(std::move(vframe));
+        // DidFinishFrame analogue: ack the presented pts so the
+        // scheduler can count skipped media slots / missed windows.
+        if (sched_) {
+            sched_->OnFramePresented(tr);
+            const auto sc = sched_->counters();
+            sched_dropped_.store(sc.dropped, std::memory_order_relaxed);
         }
-        // pts reports the rendered frame's timeline position (tr —
-        // the snapped frame time), not the raw wall-clock estimate.
-        out_frame_.SetPts(static_cast<std::int64_t>(
-            std::llround(tr * 1000000.0)));
-        out_frame_.Meta().fps =
-            static_cast<double>(project_.fps_num) / project_.fps_den;
-        sink_->OnVideoFrame(out_frame_);
+        const auto t2 = std::chrono::steady_clock::now();
+        {
+            std::lock_guard<std::mutex> lk(mutex_);
+            ++perf_.renders;
+            perf_.render_ms +=
+                std::chrono::duration<double, std::milli>(t1 - t0)
+                    .count();
+            perf_.deliver_ms +=
+                std::chrono::duration<double, std::milli>(t2 - t1)
+                    .count();
+        }
         ++frames_presented_;
         last_render_t_ = t;
+        last_render_tr_ = tr;
+        last_frame_idx_ = frame_idx;
     }
 
     // Drains every mixer chunk index crossed by the playhead (each
@@ -547,8 +786,15 @@ struct PreviewEngine::Impl {
                 const auto* pcm =
                     reinterpret_cast<const std::int16_t*>(
                         chunk.data.data());
-                if (!options_.audio_sink->Write(pcm, chunk.sample_count,
-                                                chunk.sample_rate)) {
+                if (options_.audio_sink->Write(pcm, chunk.sample_count,
+                                               chunk.sample_rate)) {
+                    // AudioClock feed — the master media clock counts
+                    // output samples the device consumed.
+                    if (audio_ts_ != nullptr) {
+                        audio_ts_->WroteAudioSamples(
+                            chunk.sample_count);
+                    }
+                } else {
                     // Include the sink's own reason when it has one —
                     // a bare "dropping" hides device-level causes.
                     const std::string sink_err =
@@ -575,6 +821,7 @@ struct PreviewEngine::Impl {
             double loop_in, loop_out;
             bool present;
             bool seek_applied = false;
+            bool pause_fresh = false;
             {
                 std::unique_lock<std::mutex> lk(mutex_);
                 cv_.wait(lk, [this] {
@@ -585,55 +832,102 @@ struct PreviewEngine::Impl {
                     return;
                 }
                 if (seek_pending_) {
-                    // Rebase the wall-clock anchor — works for both
-                    // paused presents and mid-play seeks.
+                    // Rebase the media clock — works for both paused
+                    // presents and mid-play seeks (run state kept).
                     seek_pending_ = false;
                     seek_applied = true;
-                    anchor_t_ = seek_t_;
-                    anchor_wall_ = clock_->NowSeconds();
+                    wall_ts_.SetMediaTime(seek_t_);
+                    if (sched_) sched_->Reset();
+                    // A seek landing never counts as a frame drop.
+                    last_frame_idx_ = -1;
                 }
                 rate = rate_cmd_;
                 if (rate != applied_rate) {
                     // Freeze the current estimate into the anchor so a
                     // rate flip never jumps the playhead.
-                    const double n = clock_->NowSeconds();
-                    const double cur =
-                        playing
-                            ? anchor_t_ + (n - anchor_wall_) * applied_rate
-                            : anchor_t_;
-                    anchor_t_ = cur;
-                    anchor_wall_ = n;
+                    wall_ts_.SetPlaybackRate(rate);
+                    if (audio_ts_ != nullptr) {
+                        audio_ts_->SetPlaybackRate(rate);
+                    }
                     applied_rate = rate;
                 }
                 if (playing_cmd_ && !playing) {
                     // Resume: continue from the last reported playhead.
-                    anchor_t_ =
-                        playhead_.load(std::memory_order_relaxed);
-                    anchor_wall_ = clock_->NowSeconds();
+                    wall_ts_.Start(
+                        playhead_.load(std::memory_order_relaxed));
+                    // The audio clock resumes at the write frontier
+                    // (written-end media position, not the playhead).
+                    if (audio_ts_ != nullptr && mixer_open_) {
+                        audio_ts_->Start(
+                            static_cast<double>(audio_next_index_) *
+                            chunk_dur_);
+                        last_audio_samples_ = -1;
+                    }
                 } else if (!playing_cmd_ && playing) {
-                    // Pause: freeze the anchor at the current estimate
+                    // Pause: freeze the clocks at the current estimate
                     // so paused presents (seek landing, quality
                     // refresh) render the frame under the cursor, not
                     // wherever playback originally anchored.
-                    const double n = clock_->NowSeconds();
-                    anchor_t_ =
-                        anchor_t_ + (n - anchor_wall_) * applied_rate;
-                    anchor_wall_ = n;
+                    wall_ts_.Pause();
+                    if (audio_ts_ != nullptr) {
+                        audio_ts_->Pause();
+                    }
+                    pause_fresh = true;
                 }
                 playing = playing_cmd_;
                 quality = quality_cmd_;
                 master_gain_db = master_gain_cmd_;
                 loop_in = loop_in_cmd_;
                 loop_out = loop_out_cmd_;
-                present = present_pending_;
+                // A fresh pause re-renders the frame under the cursor
+                // at full res — Premiere's Paused Resolution (the
+                // quality split below makes the render full-scale).
+                present = present_pending_ || pause_fresh;
                 present_pending_ = false;
             }
 
-            const double now = clock_->NowSeconds();
-            double t = anchor_t_;
-            if (playing && applied_rate != 0.0) {
-                t = anchor_t_ + (now - anchor_wall_) * applied_rate;
+            const auto tick_wall0 = std::chrono::steady_clock::now();
+            const double tick_begin = clock_->NowSeconds();
+
+            // Paused-vs-playing quality split (Premiere's separate
+            // Playback / Paused Resolutions): a playing tick binds
+            // the configured tier multiplied by the adaptive ladder
+            // step; a paused tick binds full res so inspection
+            // frames (focus/edge checks) are pixel-true. The flip
+            // rebuilds the scaled render snapshot and re-binds the
+            // compositor — canvas dims are cache-key material.
+            const float play_scale =
+                quality *
+                kAdaptiveSteps[std::min(adaptive_level_,
+                                        kAdaptiveMaxLevel)];
+            const float desired_scale = playing ? play_scale : 1.0f;
+            const bool quality_changed = (desired_scale != render_scale_);
+            if (quality_changed) {
+                render_scale_ = desired_scale;
+                render_project_ =
+                    ScaledRenderProject(project_, render_scale_);
             }
+            // The AutoCacher tracks the PLAYBACK tier only — the
+            // paused full-res canvas flip must not re-prime it.
+            if (play_scale != autocache_scale_) {
+                autocache_scale_ = play_scale;
+                autocache_reset_pending_ = true;
+            }
+            effective_scale_out_.store(render_scale_,
+                                       std::memory_order_relaxed);
+
+            const double now = clock_->NowSeconds();
+            // BeginFrame tick on the scheduler's vsync grid — produces
+            // the deadline window + missed-tick accounting (frames
+            // still snap below; the deadline-driven pick is the
+            // slice-3 frame-queue work).
+            if (sched_) {
+                sched_->BeginFrame(now);
+                sched_missed_.store(
+                    sched_->counters().missed_deadlines,
+                    std::memory_order_relaxed);
+            }
+            double t = wall_ts_.MediaTimeSeconds();
             const bool loop_on = loop_out > loop_in;
             const double bound_lo = loop_on ? loop_in : 0.0;
             const double bound_hi = loop_on ? loop_out : duration_;
@@ -644,8 +938,7 @@ struct PreviewEngine::Impl {
                     // triggers a session reopen below.
                     t = bound_lo +
                         std::fmod(t - bound_hi, bound_hi - bound_lo);
-                    anchor_t_ = t;
-                    anchor_wall_ = now;
+                    wall_ts_.SetMediaTime(t);
                 } else {
                     t = bound_hi;
                     hit_end = true;
@@ -654,8 +947,7 @@ struct PreviewEngine::Impl {
                 if (loop_on) {
                     t = bound_hi -
                         std::fmod(bound_lo - t, bound_hi - bound_lo);
-                    anchor_t_ = t;
-                    anchor_wall_ = now;
+                    wall_ts_.SetMediaTime(t);
                 } else {
                     t = bound_lo;
                     hit_end = true;
@@ -663,8 +955,36 @@ struct PreviewEngine::Impl {
             }
             t = std::clamp(t, 0.0, duration_);
 
+            // Audio-master drift correction (R8): while the sink is
+            // actively consuming chunks the AudioClockTimeSource is
+            // authoritative — rebase the wall estimate onto the
+            // audible position when it drifts past the threshold.
+            // Gated on the sample counter actually advancing this
+            // tick (a stalled/broken clock can never pull the
+            // playhead), and skipped while looping (the loop wrap
+            // intentionally dislocates audio and video clocks).
+            if (playing && audio_ts_ != nullptr && !loop_on &&
+                !audio_broken_ && applied_rate > 0.0 &&
+                applied_rate <= PreviewEngine::kMaxAudioRate) {
+                const std::int64_t written =
+                    audio_ts_->samples_written();
+                if (last_audio_samples_ >= 0 &&
+                    written > last_audio_samples_) {
+                    const double audible =
+                        audio_ts_->MediaTimeSeconds() -
+                        kAudioLeadSeconds;
+                    if (std::fabs(t - audible) >
+                        kAudioDriftCorrectSeconds) {
+                        wall_ts_.SetMediaTime(audible);
+                        t = std::clamp(wall_ts_.MediaTimeSeconds(),
+                                       0.0, duration_);
+                    }
+                }
+                last_audio_samples_ = written;
+            }
+
             // Session continuity — see preview_engine.h for the rule.
-            bool need_reopen = !comp_open_;
+            bool need_reopen = !comp_open_ || quality_changed;
             if (!need_reopen && last_render_t_ >= 0.0) {
                 const double dt = t - last_render_t_;
                 if (dt < -kTimeEpsilon ||
@@ -675,17 +995,92 @@ struct PreviewEngine::Impl {
             if (need_reopen) {
                 ReopenCompositor();
                 last_render_t_ = -1.0;
+                last_render_tr_ = -1.0;
+                last_frame_idx_ = -1;
+                // Discontinuity — the scheduler forgets its outstanding
+                // deadline/present anchor so landings never count as
+                // drops (same rule as last_frame_idx_ = -1).
+                if (sched_) sched_->Reset();
+            }
+            if (autocache_reset_pending_) {
+                autocache_reset_pending_ = false;
+                if (autocache_) {
+                    std::string ac_err;
+                    if (!autocache_->Init(
+                            ScaledRenderProject(project_,
+                                                autocache_scale_),
+                            AutoCacheOptions(),
+                            &ac_err)) {
+                        WarnOnce("autocache re-init failed: " + ac_err);
+                        autocache_.reset();
+                    }
+                }
             }
 
             if (playing || present) {
+                // Skip ticks whose frame index is unchanged — the
+                // snapped render time equals the previous one, so the
+                // compositor would produce a byte-identical frame (its
+                // per-clip memo already covers the chain, but the
+                // blend + canvas copy still cost a full pass).
+                const double tr = std::clamp(
+                    std::floor(t / frame_dt_ + 1e-9) * frame_dt_, 0.0,
+                    duration_);
+                const bool same_frame =
+                    playing && !present && tr == last_render_tr_;
                 // rate == 0 (frozen shuttle) still presents on seeks —
                 // plain playing ticks skip the redundant re-render.
-                if (!(playing && applied_rate == 0.0 &&
+                if (!same_frame &&
+                    !(playing && applied_rate == 0.0 &&
                       last_render_t_ == t)) {
-                    RenderAndDeliver(t, quality);
+                    RenderAndDeliver(t, playing, applied_rate);
                 }
             }
+            // Adaptive ladder evaluation (T4): once per ~500 ms
+            // window of playing time, step the tier down while the
+            // rolling render average saturates the frame budget, step
+            // back up with headroom. Pausing restores level 0 — the
+            // measurement restarts on the next play.
+            if (playing && options_.adaptive_quality) {
+                const auto eval_now = std::chrono::steady_clock::now();
+                if (adaptive_window0_.time_since_epoch().count() == 0) {
+                    adaptive_window0_ = eval_now;
+                }
+                if (ema_render_ms_ >= 0.0 &&
+                    eval_now - adaptive_window0_ >= kAdaptiveWindow) {
+                    adaptive_window0_ = eval_now;
+                    const double abs_rate =
+                        std::max(std::fabs(applied_rate), 1e-9);
+                    const double budget_ms =
+                        frame_dt_ / abs_rate * 1000.0;
+                    if (ema_render_ms_ > kAdaptiveHigh * budget_ms &&
+                        adaptive_level_ < kAdaptiveMaxLevel) {
+                        ++adaptive_level_;
+                        // Re-measure at the new tier — don't let the
+                        // slow frames that caused the step keep it
+                        // pinned down.
+                        ema_render_ms_ = -1.0;
+                    } else if (ema_render_ms_ <
+                                   kAdaptiveLow * budget_ms &&
+                               adaptive_level_ > 0) {
+                        --adaptive_level_;
+                        ema_render_ms_ = -1.0;
+                    }
+                }
+            } else if (!playing) {
+                adaptive_level_ = 0;
+                ema_render_ms_ = -1.0;
+                adaptive_window0_ = {};
+            }
+            // Published AFTER the eval — the worker parks on cv_.wait
+            // once paused, so a store left before the eval would pin
+            // the stale level forever (the monitor's "adaptive" badge
+            // never clears on pause).
+            adaptive_level_out_.store(adaptive_level_,
+                                      std::memory_order_relaxed);
+            const auto audio_t0 = std::chrono::steady_clock::now();
             PumpAudio(playing, applied_rate, t, master_gain_db);
+            const auto audio_t1 = std::chrono::steady_clock::now();
             HarvestEngineWarnings();
 
             // Playhead callback AFTER the frame so the UI sees a
@@ -714,11 +1109,43 @@ struct PreviewEngine::Impl {
                 continue;   // -> CV wait (flags consumed) = clean pause
             }
             if (playing) {
-                const double abs_rate = std::fabs(applied_rate);
-                const double wall_dt = abs_rate > 1e-9
-                                           ? frame_dt_ / abs_rate
-                                           : frame_dt_;
-                clock_->SleepSeconds(std::clamp(wall_dt, 0.001, 0.25));
+                // Sink cadence hint (GetPreferredRenderInterval): the
+                // media frame duration scaled by |rate| — identical
+                // math to the old frame_dt_/|rate| expression.
+                const double wall_dt =
+                    (sched_ != nullptr &&
+                     std::fabs(applied_rate) > 1e-9)
+                        ? sched_->preferred_render_interval()
+                        : frame_dt_;
+                // Budget the WHOLE tick — render + pump + marshal have
+                // already consumed part of the frame interval, so
+                // sleeping the full wall_dt on top stretched every
+                // tick to work+frame_dt and cut the delivered frame
+                // rate accordingly.
+                const double spent = clock_->NowSeconds() - tick_begin;
+                const double remain = wall_dt - spent;
+                if (remain > 0.0) {
+                    const auto s0 = std::chrono::steady_clock::now();
+                    clock_->SleepSeconds(std::min(remain, 0.25));
+                    const auto s1 = std::chrono::steady_clock::now();
+                    std::lock_guard<std::mutex> lk(mutex_);
+                    perf_.sleep_ms +=
+                        std::chrono::duration<double, std::milli>(
+                            s1 - s0)
+                            .count();
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lk(mutex_);
+                ++perf_.ticks;
+                perf_.tick_ms +=
+                    std::chrono::duration<double, std::milli>(
+                        std::chrono::steady_clock::now() - tick_wall0)
+                        .count();
+                perf_.audio_ms +=
+                    std::chrono::duration<double, std::milli>(
+                        audio_t1 - audio_t0)
+                        .count();
             }
             // Paused: next iteration blocks on the CV until a command.
         }
@@ -768,6 +1195,40 @@ double PreviewEngine::DurationSeconds() const { return impl_->duration_; }
 std::uint64_t PreviewEngine::FramesPresented() const {
     return impl_->frames_presented_.load(std::memory_order_relaxed);
 }
+PreviewEngine::FrameStats PreviewEngine::GetFrameStats() const {
+    FrameStats s;
+    s.rendered = impl_->frames_presented_.load(std::memory_order_relaxed);
+    s.dropped = impl_->frames_dropped_.load(std::memory_order_relaxed);
+    s.last_render_ms =
+        impl_->last_render_ms_.load(std::memory_order_relaxed);
+    s.effective_scale =
+        impl_->effective_scale_out_.load(std::memory_order_relaxed);
+    s.adaptive_level =
+        impl_->adaptive_level_out_.load(std::memory_order_relaxed);
+    s.scheduler_dropped =
+        impl_->sched_dropped_.load(std::memory_order_relaxed) -
+        impl_->sched_dropped_base_.load(std::memory_order_relaxed);
+    s.scheduler_missed =
+        impl_->sched_missed_.load(std::memory_order_relaxed) -
+        impl_->sched_missed_base_.load(std::memory_order_relaxed);
+    return s;
+}
+void PreviewEngine::ResetDroppedFrames() {
+    impl_->frames_dropped_.store(0, std::memory_order_relaxed);
+    // Rebase the scheduler mirrors too — the badge compares the two
+    // counters from the same "playback started" origin.
+    impl_->sched_dropped_base_.store(
+        impl_->sched_dropped_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+    impl_->sched_missed_base_.store(
+        impl_->sched_missed_.load(std::memory_order_relaxed),
+        std::memory_order_relaxed);
+}
+std::size_t PreviewEngine::ClipCachedFrames(
+    const std::string& clip_id) const {
+    return impl_->frame_cache_ ? impl_->frame_cache_->ClipEntryCount(clip_id)
+                              : 0;
+}
 std::vector<std::string> PreviewEngine::Warnings() const {
     std::lock_guard<std::mutex> lk(impl_->mutex_);
     return impl_->warnings_;
@@ -779,6 +1240,14 @@ EffectFrameCache::Stats PreviewEngine::FrameCacheStats() const {
 AutoCacher::Stats PreviewEngine::AutoCacheStats() const {
     return impl_->autocache_ ? impl_->autocache_->GetStats()
                              : AutoCacher::Stats{};
+}
+PreviewEngine::PerfStats PreviewEngine::GetPerfStats() const {
+    std::lock_guard<std::mutex> lk(impl_->mutex_);
+    return impl_->perf_;
+}
+void PreviewEngine::ResetPerfStats() {
+    std::lock_guard<std::mutex> lk(impl_->mutex_);
+    impl_->perf_ = PerfStats{};
 }
 bool PreviewEngine::WaitAutoCacheIdle(int timeout_ms) {
     // Disabled -> trivially idle (the check is "no pending work").

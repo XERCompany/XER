@@ -65,8 +65,21 @@ public:
     const std::string& SelectedClipId() const {
         return selected_clip_id_;
     }
+    // Render-status strip (Premiere's green/yellow/red needs-render
+    // bar): the ClipCostClass ordinal the strip draws for clip_id,
+    // or -1 when the hook is unwired — smoke/debug seam.
+    int CostClassOf(const std::string& clip_id) const;
     void SetSnapEnabled(bool enabled);
     bool SnapEnabled() const { return snap_enabled_; }
+    // Snap-indicator seam: while a drag resolves through
+    // SnapCandidate to a snapped time, this reports that time (the
+    // Render pass draws a full-height guide line there); -1 hides.
+    // Cleared on the release that ends the drag.
+    double SnapIndicatorSeconds() const { return snap_indicator_t_; }
+    // The snap query itself — read-only, so it stays public (the
+    // mutating ToolCommit ops below remain tool-private); the
+    // snap-indicator smoke resolves candidates through it.
+    double SnapCandidate(double seconds, int track) const override;
     void SetZoom(double px_per_second);
     double PxPerSecond() const { return px_per_second_; }
     void SetScrollSeconds(double seconds);
@@ -79,6 +92,53 @@ public:
     // membership (Premiere's "Linked Selection" off state).
     void SetLinkEditsEnabled(bool enabled);
     bool LinkEditsEnabled() const { return link_edits_enabled_; }
+
+    // ---- track targeting (Premiere source patching / Resolve
+    // ---- destination controls) ------------------------------------
+    // Session view state — which tracks source edits (insert /
+    // overwrite / replace / fit-to-fill) and range ops (lift /
+    // extract) apply to. The header V/A badge click (button id 6)
+    // and the header context-menu "Target Track" item toggle
+    // membership; the shell reads the set back through these
+    // accessors. Never serialized and never in history (Resolve
+    // semantics: patching is UI state). The default seed is the
+    // first track per kind (Premiere's V1/A1 default); the shell
+    // re-seeds via ResetTrackTargets on document load so a new
+    // project never inherits stale targets.
+    void SetTrackTargeted(int track, bool targeted);
+    bool TrackTargeted(int track) const;
+    // Targeted indices of `kind`, ascending (shell + smoke seams).
+    std::vector<int> TargetedTracks(TrackKind kind) const;
+    // First targeted index of `kind` that is not locked; -1 = none.
+    int FirstTargetedTrack(TrackKind kind) const;
+    // Track-sized mask for range ops (model LiftRange's
+    // track_target contract); empty when no project is bound.
+    std::vector<bool> TargetedMask() const;
+    void ResetTrackTargets();
+
+    // ---- trim preview (Premiere trim-mode / FCP precision-editor
+    // ---- parity) ---------------------------------------------------
+    // A two-up outgoing/incoming overlay + trim-offset counters fed
+    // by the live clip previews during roll (N) and edge trims
+    // (V/B). Tools keep committing through the same hooks — the
+    // preview is read-only state on top of them. The poster seam is
+    // the program monitor's contract, so the program-side preview
+    // needs no monitor-panel changes.
+    bool TrimPreviewActive() const;
+    // Live delta of the moving edge in timeline seconds / frames
+    // (project fps) — sign follows the drag direction.
+    double TrimOffsetSeconds() const { return trim_.offset; }
+    int TrimOffsetFrames() const;
+    // A/B side state for the smoke: clip id + source seconds of the
+    // previewed frame + whether the gesture moves that side's edge.
+    struct TrimSide {
+        std::string clip_id;
+        double source_seconds = 0.0;
+        bool moves = false;
+    };
+    TrimSide TrimPreviewOutgoing() const;
+    TrimSide TrimPreviewIncoming() const;
+
     // Zoom so the whole project fills the track area (strip "fit").
     void ZoomToFit();
     // The shell calls this after a media-lookup result lands so
@@ -175,7 +235,7 @@ private:
     // Track-header affordance hit. Logical button ids:
     //   0 = mute (audio), 1 = hidden/eye (video), 2 = lock,
     //   3 = expand chevron (both kinds), 4 = solo (audio),
-    //   5 = record arm (audio).
+    //   5 = record arm (audio), 6 = V/A target badge (both kinds).
     // track -1 = no hit.
     struct HeaderHit {
         int track = -1;
@@ -248,6 +308,11 @@ private:
                           const XER::UI::Theme::Tokens& tokens,
                           const Clip& clip,
                           const XER::UI::Layout::Rect& rect);
+    // Two-up outgoing/incoming card + trim counters while a
+    // roll/ripple/edge drag is live (the public Trim* accessors).
+    void RenderTrimPreview(XER::UI::Rendering::Renderer& renderer,
+                           const XER::UI::Theme::Tokens& tokens,
+                           const XER::UI::Layout::Rect& bounds);
 
     // --- media caches ---
     // Peaks for `path` (nullptr on miss/failure — misses are cached
@@ -283,7 +348,6 @@ private:
                    bool is_error = false) override;
     void SelectClip(const std::string& clip_id) override;
     void RequestRepaint() override { Invalidate(); }
-    double SnapCandidate(double seconds, int track) const override;
     void SetClipPreview(const std::string& clip_id,
                         double start_seconds,
                         double end_seconds) override;
@@ -345,6 +409,42 @@ private:
     // field.
     std::unordered_set<int> expanded_tracks_;
 
+    // Per-track targeting set (the public block above) — surface-
+    // owned view state like expanded_tracks_; never serialized.
+    // targets_seeded_ guards the default first-per-kind seeding so
+    // SetProject on an existing document preserves a user's patch
+    // map while a fresh surface still seeds once.
+    std::unordered_set<int> targeted_tracks_;
+    bool targets_seeded_ = false;
+
+    // Trim-preview state — armed on pointer-down over an edge/cut
+    // grab (ArmTrimPreview), fed from clip_previews_ on every drag
+    // move (RefreshTrimPreview), cleared on release/Esc/tool switch
+    // (DisarmTrimPreview). RenderTrimPreview draws the two-up card
+    // while armed && the tool is dragging.
+    struct TrimPreview {
+        bool armed = false;
+        ToolId tool = ToolId::Selection;
+        TrimEdge edge = TrimEdge::Out;    // V/B: which edge was grabbed
+        std::string edge_clip;            // V/B: the trimmed clip id
+        std::string roll_from;            // N: outgoing clip id
+        std::string roll_to;              // N: incoming clip id
+        double boundary = 0.0;            // original cut/edge time
+        double offset = 0.0;              // live moving-edge delta (s)
+        // Resolved A/B panes — clip ids + source times of the frames
+        // at the cut + which side's edge the gesture moves.
+        std::string out_id;
+        std::string in_id;
+        double out_src = 0.0;
+        double in_src = 0.0;
+        bool out_moves = false;
+        bool in_moves = false;
+    };
+    TrimPreview trim_;
+    void ArmTrimPreview(const ToolContext& ctx);
+    void RefreshTrimPreview();
+    void DisarmTrimPreview() { trim_ = TrimPreview{}; }
+
     // Tool model — one instance per ToolId, active_tool_ picks the
     // receiver of pointer events.
     ToolId active_tool_ = ToolId::Selection;
@@ -357,6 +457,11 @@ private:
     bool marquee_active_ = false;
     float marquee_x0_ = 0.0f;
     float marquee_x1_ = 0.0f;
+
+    // Snap indicator — the last snapped drag time (mutable:
+    // SnapCandidate is a const tool-facing seam, so the record lives
+    // here; -1 = hidden). MouseUp clears; Render draws the guide.
+    mutable double snap_indicator_t_ = -1.0;
 
     // Work-area bar drag (edges + whole-bar move).
     WorkDrag work_drag_ = WorkDrag::None;
@@ -407,6 +512,15 @@ private:
     std::unordered_set<std::string> poster_missing_;  // "path@ms"
     std::deque<std::string> poster_missing_lru_;
     std::list<PosterKey> poster_lru_;   // front = LRU, back = MRU
+
+    // Render-status strip state — per-clip ClipCostClass ordinals
+    // pulled through TimelineHooks::get_clip_cost_class. Refreshed on
+    // SetProject and on a ~500 ms cadence in Tick: the AutoCacher
+    // keeps landing coverage without any document mutation, so
+    // SetProject alone can't drive it.
+    void RefreshCostClasses();
+    std::unordered_map<std::string, int> clip_cost_class_;
+    std::chrono::steady_clock::time_point cost_refresh_{};
 
     XER::UI::Layout::Rect timeline_area_{};
 };

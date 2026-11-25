@@ -8,6 +8,7 @@ add_executable(XER_UI_Tests
     ui/presentation_widget_tests.cc
     ui/flex_layout_tests.cc
     ui/widget_geometry_tests.cc
+    ui/label_focus_tests.cc
     ui/ffmpeg_avatar_tests.cc
     ui/ffmpeg_video_decode_tests.cc
     ui/ffmpeg_audio_tap_tests.cc
@@ -130,3 +131,15 @@ if(TARGET video_editor_assets)
     add_dependencies(XER_VideoEditor_Tests video_editor_assets)
 endif()
 add_test(NAME XER_VideoEditor_Tests COMMAND XER_VideoEditor_Tests)
+
+# content/opendialog — headless selftest (filter parsing, option
+# validation, Result plumbing). Interactive COM dialogs run manually via
+# XER_OpenDialog_Smoke --dlg-open|--dlg-save|--dlg-dir|--dlg-dir-write.
+add_executable(XER_OpenDialog_Smoke opendialog_smoke.cc)
+target_link_libraries(XER_OpenDialog_Smoke PRIVATE
+    XER_ContentOpenDialog
+    XER_Helper
+)
+target_include_directories(XER_OpenDialog_Smoke PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_features(XER_OpenDialog_Smoke PRIVATE cxx_std_23)
+add_test(NAME XER_OpenDialog_Smoke COMMAND XER_OpenDialog_Smoke)

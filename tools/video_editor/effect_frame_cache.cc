@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "l2_frame_cache.h"
+
 namespace XER::VideoEditor {
 
 namespace {
@@ -44,36 +46,76 @@ EffectFrameCache::EffectFrameCache(std::size_t capacity_bytes)
     : capacity_bytes_(capacity_bytes) {}
 
 bool EffectFrameCache::Lookup(const Key& key, video::Frame* out) {
-    std::lock_guard<std::mutex> lk(mutex_);
-    const auto it = map_.find(key);
-    if (it == map_.end() || out == nullptr) {
-        ++misses_;
-        return false;
-    }
-    Entry& entry = it->second;
-    const std::size_t need =
-        static_cast<std::size_t>(entry.width) *
-        static_cast<std::size_t>(entry.height) * 4u;
-    if (entry.pixels.size() != need || need == 0) {
-        // Corrupt entry — drop it rather than serve a bad frame.
-        lru_.erase(entry.lru_it);
-        bytes_ -= entry.pixels.size();
-        map_.erase(it);
-        ++misses_;
-        return false;
-    }
-    if (out->Width() != entry.width || out->Height() != entry.height ||
-        out->Format() != video::PixelFormat::BGRA8) {
-        out->Release();
-        if (!out->Allocate(entry.width, entry.height,
-                           video::PixelFormat::BGRA8)) {
-            ++misses_;
-            return false;   // allocation failure — caller recomputes
+    std::shared_ptr<L2FrameCache> l2;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        const auto it = map_.find(key);
+        if (it != map_.end() && out != nullptr) {
+            Entry& entry = it->second;
+            const std::size_t need =
+                static_cast<std::size_t>(entry.width) *
+                static_cast<std::size_t>(entry.height) * 4u;
+            if (entry.pixels.size() == need && need != 0) {
+                if (out->Width() != entry.width ||
+                    out->Height() != entry.height ||
+                    out->Format() != video::PixelFormat::BGRA8) {
+                    out->Release();
+                    if (!out->Allocate(entry.width, entry.height,
+                                       video::PixelFormat::BGRA8)) {
+                        ++misses_;
+                        return false;   // alloc failure — recompute
+                    }
+                }
+                std::memcpy(out->Data(), entry.pixels.data(), need);
+                TouchLocked(it);
+                ++hits_;
+                return true;
+            }
+            // Corrupt entry — drop it rather than serve a bad frame.
+            lru_.erase(entry.lru_it);
+            bytes_ -= entry.pixels.size();
+            if (auto c = clip_counts_.find(key.clip_id);
+                c != clip_counts_.end() && --c->second == 0) {
+                clip_counts_.erase(c);
+            }
+            map_.erase(it);
         }
+        ++misses_;
+        l2 = l2_;   // snapshot under lock; disk I/O happens off-lock
     }
-    std::memcpy(out->Data(), entry.pixels.data(), need);
-    TouchLocked(it);
-    ++hits_;
+
+    // RAM miss — try the disk tier. On hit the frame promotes back
+    // into the LRU (same key = same inputs = same pixels).
+    if (l2 == nullptr || out == nullptr) {
+        return false;
+    }
+    video::Frame disk_frame;
+    if (!l2->Lookup(key, &disk_frame)) {
+        std::lock_guard<std::mutex> lk(mutex_);
+        ++l2_misses_;
+        return false;
+    }
+    const std::size_t size = disk_frame.DataSize();
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        if (size > 0 && size <= capacity_bytes_ &&
+            map_.find(key) == map_.end()) {
+            EvictLocked(size);
+            lru_.push_front(key);
+            Entry entry;
+            entry.pixels.assign(disk_frame.Data(),
+                                disk_frame.Data() + size);
+            entry.width = disk_frame.Width();
+            entry.height = disk_frame.Height();
+            entry.lru_it = lru_.begin();
+            map_.emplace(key, std::move(entry));
+            ++clip_counts_[key.clip_id];
+            bytes_ += size;
+        }
+        ++l2_hits_;
+        ++hits_;
+    }
+    *out = std::move(disk_frame);
     return true;
 }
 
@@ -89,33 +131,48 @@ void EffectFrameCache::Store(const Key& key, const video::Frame& frame) {
     if (size == 0 || size != need) {
         return;
     }
-    std::lock_guard<std::mutex> lk(mutex_);
-    if (size > capacity_bytes_) {
-        return;   // never fits — don't evict the world for one frame
+    std::shared_ptr<L2FrameCache> l2;
+    bool l2_write = false;
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        l2 = l2_;
+        const auto existing = map_.find(key);
+        if (existing != map_.end()) {
+            // Same key re-stored (shouldn't happen — stores follow
+            // misses) — refresh content + recency; same key means the
+            // same pixels, so no L2 write is needed either.
+            bytes_ -= existing->second.pixels.size();
+            existing->second.pixels.assign(frame.Data(),
+                                           frame.Data() + size);
+            existing->second.width = frame.Width();
+            existing->second.height = frame.Height();
+            bytes_ += size;
+            TouchLocked(existing);
+        } else if (size > capacity_bytes_) {
+            // Never fits — don't evict the world for one frame; it
+            // can still spill to disk so the next lookup isn't a
+            // full recompute.
+            l2_write = true;
+        } else {
+            EvictLocked(size);
+            lru_.push_front(key);
+            Entry entry;
+            entry.pixels.assign(frame.Data(), frame.Data() + size);
+            entry.width = frame.Width();
+            entry.height = frame.Height();
+            entry.lru_it = lru_.begin();
+            map_.emplace(key, std::move(entry));
+            ++clip_counts_[key.clip_id];
+            bytes_ += size;
+            ++stores_;
+            l2_write = true;
+        }
     }
-    const auto existing = map_.find(key);
-    if (existing != map_.end()) {
-        // Same key re-stored (shouldn't happen — stores follow misses)
-        // — refresh content + recency, keep accounting consistent.
-        bytes_ -= existing->second.pixels.size();
-        existing->second.pixels.assign(frame.Data(),
-                                       frame.Data() + size);
-        existing->second.width = frame.Width();
-        existing->second.height = frame.Height();
-        bytes_ += size;
-        TouchLocked(existing);
-        return;
+    // Write-through to the disk tier — enqueues a pixel copy on the
+    // tier's writer thread; no disk I/O on this thread.
+    if (l2_write && l2 != nullptr) {
+        l2->Store(key, frame);
     }
-    EvictLocked(size);
-    lru_.push_front(key);
-    Entry entry;
-    entry.pixels.assign(frame.Data(), frame.Data() + size);
-    entry.width = frame.Width();
-    entry.height = frame.Height();
-    entry.lru_it = lru_.begin();
-    map_.emplace(key, std::move(entry));
-    bytes_ += size;
-    ++stores_;
 }
 
 void EffectFrameCache::TouchLocked(
@@ -131,6 +188,10 @@ void EffectFrameCache::EvictLocked(std::size_t need_bytes) {
         const auto it = map_.find(oldest);
         if (it != map_.end()) {
             bytes_ -= it->second.pixels.size();
+            if (auto c = clip_counts_.find(oldest.clip_id);
+                c != clip_counts_.end() && --c->second == 0) {
+                clip_counts_.erase(c);
+            }
             map_.erase(it);
         }
         lru_.pop_back();
@@ -142,6 +203,7 @@ void EffectFrameCache::Clear() {
     std::lock_guard<std::mutex> lk(mutex_);
     map_.clear();
     lru_.clear();
+    clip_counts_.clear();
     bytes_ = 0;
 }
 
@@ -156,6 +218,16 @@ void EffectFrameCache::SetCapacityBytes(std::size_t bytes) {
     EvictLocked(0);
 }
 
+void EffectFrameCache::SetDiskTier(std::shared_ptr<L2FrameCache> l2) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    l2_ = std::move(l2);
+}
+
+std::shared_ptr<L2FrameCache> EffectFrameCache::DiskTier() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return l2_;
+}
+
 EffectFrameCache::Stats EffectFrameCache::GetStats() const {
     std::lock_guard<std::mutex> lk(mutex_);
     Stats s;
@@ -164,6 +236,8 @@ EffectFrameCache::Stats EffectFrameCache::GetStats() const {
     s.stores = stores_;
     s.evictions = evictions_;
     s.lookups_saved_frames = hits_;
+    s.l2_hits = l2_hits_;
+    s.l2_misses = l2_misses_;
     s.bytes = bytes_;
     s.entries = map_.size();
     return s;
@@ -175,6 +249,13 @@ double EffectFrameCache::HitRate() const {
     return total == 0
                ? 0.0
                : static_cast<double>(hits_) / static_cast<double>(total);
+}
+
+std::size_t EffectFrameCache::ClipEntryCount(
+    const std::string& clip_id) const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    const auto it = clip_counts_.find(clip_id);
+    return it != clip_counts_.end() ? it->second : 0;
 }
 
 }  // namespace XER::VideoEditor

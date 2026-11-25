@@ -78,3 +78,52 @@ evaluated inside the worker.
 - `window.cc` renderer sites → `CreateRendererFromEnv`; UI-render
   worker replays onto provider-chosen backend.
 - Full op coverage matrix in `src/ui/ARCHITECTURE.md`.
+
+## Compositor row parallelism + L2 disk frame cache (2026-11-25)
+
+Two perf items landed in `tools/video_editor` (uncommitted, branch
+`feat/ui-kit-ve-shell`; verified by `--smoke`, 86/86 OK):
+
+- **`parallel_rows.{h,cc}`** — a process-wide persistent render pool
+  (lazy singleton, ≤16 workers + caller) plus
+  `VeParallelFor(units, fn)` / `VeParallelRows` row-range dispatch.
+  `XER_VE_THREADS=N` overrides the width (read per dispatch; `1` or
+  `0` = serial, default `min(8, hw)`); work under
+  `kVeParallelMinUnits` stays serial. Whole passes serialize on a
+  submit mutex so the preview compositor and the AutoCacher's private
+  compositor never interleave on the workers. Every wrapped kernel
+  writes disjoint output rows → byte-deterministic, proven by the
+  `parallel_determinism` smoke check (960x540 composite — transition,
+  mask, warp, blend mode, builtin fx — serial 178.6 ms vs pooled
+  31.5 ms, **5.7x**, outputs memcmp-identical).
+  `--bench-effects` at 1080p full quality: magnifier 2.9→1.7 ms,
+  bokeh_blur 2.1→0.9 ms, bokeh_dof 2.3→1.8 ms per frame (these
+  kernels are already memory-bound, so gains are modest vs the
+  composite number above).
+- **Wrapped loops**: compositor.cc — `AlphaOverFrame`,
+  `ResampleBilinearBGRA`, `WarpClipFrameRegion` inner bilinear, all
+  transition kernels, `ApplyMaskPixels`, `ApplyBlendModePixels`,
+  glass/lens kernels (`ApplySphereRefraction`,
+  `ApplyRibbedGlassPixels`, magnifier, bokeh), track-mask/mosaic,
+  opacity copy, adjustment layer; builtin_fx.cc — all heavy per-pixel
+  kernels (invert_lum, color_isolate, wave_h/v, ripple, mirror_quad,
+  tile, twirl, film grain/light-leak/flicker/dust/vignette2, blur +
+  geometric kernels).
+- **`l2_frame_cache.{h,cc}`** — Adobe-style two-tier preview cache:
+  an L2 disk tier behind the RAM `EffectFrameCache`, built on
+  `video::ClipFrameCache` `.dxcfz` files (packed BGRA8, zlib
+  Z_BEST_SPEED, 6 h TTL sidecar). RAM miss → disk read → promote
+  back into the RAM LRU; every Store write-through-enqueues a pixel
+  copy onto a private writer thread (bounded queue — drops counted,
+  never blocks render). `XER_VE_L2=0` killswitch, `XER_VE_L2_MB`
+  byte cap (default 2048, mtime-ordered sweep prunes to ~90%),
+  `XER_VE_L2_DIR` root override. Attached in
+  `PreviewEngine::Impl::Init` after `frame_cache_` creation;
+  `EffectFrameCache::Stats` gained `l2_hits`/`l2_misses`. Covered by
+  the `l2_frame_cache` smoke check (store→evict→disk-hit promote,
+  pixel-exact).
+- **`src/video/clip_frame_cache`** gained a `scope` param on
+  ctor/`EntryFor`, `PathForFrame`, `HasFrame`, and a TTL check inside
+  `ReadFrame` (`PersistentStorage::ReadBinary` does not honor the
+  `.ttl` sidecar — only `Exists` did, so stale entries previously
+  read back as valid).

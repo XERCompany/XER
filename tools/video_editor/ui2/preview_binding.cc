@@ -45,17 +45,19 @@ class PreviewBinding::Sink final : public PreviewEngine::Sink {
 public:
     explicit Sink(PreviewBinding* owner) : owner_(owner) {}
 
-    void OnVideoFrame(const video::Frame& frame) override {
-        if (frame.DataSize() == 0 || frame.Width() <= 0 ||
-            frame.Height() <= 0) {
+    void OnVideoFrame(
+        Render::scoped_refptr<Render::VideoFrame> frame) override {
+        // Refcount hand-off — the frame's plane is already the
+        // composited canvas; a newer pending frame just drops its
+        // ref (storage returns to the engine's pool when the last
+        // consumer releases).
+        if (!frame || frame->planes() < 1 ||
+            frame->coded_size().IsEmpty()) {
             return;
         }
         auto* o = owner_;
         std::lock_guard<std::mutex> lock(o->mutex_);
-        o->pending_frame_.assign(frame.Data(),
-                                 frame.Data() + frame.DataSize());
-        o->pending_w_ = frame.Width();
-        o->pending_h_ = frame.Height();
+        o->pending_frame_ = std::move(frame);
         o->has_frame_ = true;
     }
     void OnAudioPeakLevels(float l, float r) override {
@@ -107,6 +109,9 @@ void PreviewBinding::SetDecoderFactory(MediaDecoderFactory factory) {
 void PreviewBinding::SetAutocache(bool enabled) {
     autocache_ = enabled;
 }
+void PreviewBinding::SetClock(std::shared_ptr<FrameClock> clock) {
+    clock_ = std::move(clock);
+}
 void PreviewBinding::SetFps(int num, int den) {
     fps_num_ = num > 0 ? num : 30;
     fps_den_ = den > 0 ? den : 1;
@@ -134,7 +139,7 @@ void PreviewBinding::SetProject(const Project& snapshot) {
     dirty_ = true;
     playhead_ = 0.0;
     ui_playing_ = false;
-    shuttle_rate_ = 0.0;
+    SetShuttleRate(0.0);
 }
 
 double PreviewBinding::Duration() const { return snapshot_.duration(); }
@@ -172,6 +177,7 @@ bool PreviewBinding::Ensure() {
     options.audio_sink = sink_binding_.get();
     options.autocache = autocache_;
     if (decoder_factory_) options.decoder_factory = decoder_factory_;
+    if (clock_) options.clock = clock_;
     if (media_resolver_) options.media_resolver = media_resolver_;
     std::string error;
     ready_ = engine_->Init(snapshot_, options, sink_.get(), &error);
@@ -190,10 +196,15 @@ void PreviewBinding::Shutdown() {
     if (engine_ != nullptr) engine_->Shutdown();
     ready_ = false;
     ui_playing_ = false;
-    shuttle_rate_ = 0.0;
+    SetShuttleRate(0.0);
 }
 
 // ---- transport --------------------------------------------------------------------
+
+void PreviewBinding::SetShuttleRate(double rate) {
+    shuttle_rate_ = rate;
+    if (panel_ != nullptr) panel_->SetSpeedBadge(rate);
+}
 
 void PreviewBinding::ApplyLoopCommand() {
     // Loop honors the explicit range, else the pushed work area; the
@@ -223,14 +234,16 @@ void PreviewBinding::StartPlayback(double rate) {
     ApplyLoopCommand();
     engine_->SetRate(rate);
     engine_->SetPlaying(true);
+    // Premiere resets the dropped-frame indicator on every play.
+    engine_->ResetDroppedFrames();
     ui_playing_ = true;
-    shuttle_rate_ = rate;
+    SetShuttleRate(rate);
     if (panel_ != nullptr) panel_->SetPlaying(true);
 }
 
 void PreviewBinding::TogglePlay() {
     const bool next = !ui_playing_;
-    shuttle_rate_ = 0.0;   // Space always returns to normal 1x
+    SetShuttleRate(0.0);   // Space always returns to normal 1x
     if (next) {
         if (!Ensure()) {
             Report("Preview engine unavailable", true);
@@ -284,7 +297,7 @@ void PreviewBinding::ShuttleStep(int direction) {
         // playhead never jumps on a rate flip (engine contract).
         engine_->SetRate(rate);
         engine_->SetPlaying(true);
-        shuttle_rate_ = rate;
+        SetShuttleRate(rate);
         if (panel_ != nullptr) panel_->SetPlaying(true);
     }
     char label[32];
@@ -292,15 +305,37 @@ void PreviewBinding::ShuttleStep(int direction) {
     Report(std::string("Shuttle ") + label);
 }
 
+void PreviewBinding::HeldShuttle(double rate) {
+    // Fixed-rate shuttle for K+J/K+L held combos — NOT the ladder.
+    // The router re-fires the held binding on OS auto-repeat, so the
+    // apply path must be idempotent: SetRate while playing just
+    // rebases the wall-clock anchor at the same rate.
+    const bool rebuilt = dirty_;
+    if (!Ensure()) {
+        Report("Preview engine unavailable", true);
+        return;
+    }
+    if (!ui_playing_) {
+        StartPlayback(rate);
+    } else {
+        if (rebuilt) {
+            engine_->Seek(playhead_);
+        }
+        engine_->SetRate(rate);
+        engine_->SetPlaying(true);
+        SetShuttleRate(rate);
+        if (panel_ != nullptr) panel_->SetPlaying(true);
+    }
+}
+
 void PreviewBinding::ShuttleStop() {
     // Premiere K = pause only (Space toggles) — also the shuttle
     // brake; a paused K is a no-op beyond resetting the ladder.
-    shuttle_rate_ = 0.0;
     Stop();
 }
 
 void PreviewBinding::Stop() {
-    shuttle_rate_ = 0.0;
+    SetShuttleRate(0.0);
     if (ready_) {
         engine_->SetRate(1.0);
         engine_->SetPlaying(false);
@@ -346,19 +381,17 @@ bool PreviewBinding::Playing() const {
 
 void PreviewBinding::DrainPending() {
     // Swap pending values out under the lock; apply unlocked —
-    // SetFrame is a full-frame memcpy + paint state update and
-    // holding the mutex through it stalls the engine worker.
-    std::vector<std::uint8_t> frame;
-    int w = 0, h = 0;
+    // applying a frame is a ref move + paint-state update and holding
+    // the mutex through it stalls the engine worker.
+    Render::scoped_refptr<Render::VideoFrame> frame;
     bool has_frame = false, has_peaks = false;
     float pl = 0.0f, pr = 0.0f;
     double playhead = -1.0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (has_frame_) {
-            frame.swap(pending_frame_);
-            w = pending_w_;
-            h = pending_h_;
+            frame = std::move(pending_frame_);
+            pending_frame_.reset();
             has_frame_ = false;
             has_frame = true;
         }
@@ -373,6 +406,33 @@ void PreviewBinding::DrainPending() {
             pending_playhead_ = -1.0;
         }
     }
+    // Frame stats -> the monitor's drop stoplight + adaptive badge
+    // (Premiere's indicator drains per UI tick like the frame pull).
+    if (ready_) {
+        const PreviewEngine::FrameStats s = engine_->GetFrameStats();
+        last_stats_.rendered = s.rendered;
+        last_stats_.dropped = s.dropped;
+        last_stats_.last_render_ms = s.last_render_ms;
+        last_stats_.effective_scale = s.effective_scale;
+        last_stats_.adaptive_level = s.adaptive_level;
+        last_stats_.scheduler_dropped = s.scheduler_dropped;
+        last_stats_.scheduler_missed = s.scheduler_missed;
+        if (panel_ != nullptr) {
+            panel_->SetDropStats(s.dropped, s.rendered,
+                                 s.last_render_ms, s.adaptive_level,
+                                 s.effective_scale);
+        }
+        // Status-strip mirror ("dropped N") — throttled: the count
+        // can grow every tick under sustained overload.
+        const auto now = std::chrono::steady_clock::now();
+        if (s.dropped > 0 && s.dropped != last_reported_dropped_ &&
+            now - last_drop_report_ >= std::chrono::seconds(1)) {
+            last_reported_dropped_ = s.dropped;
+            last_drop_report_ = now;
+            Report("dropped " + std::to_string(s.dropped) +
+                   " frame" + (s.dropped == 1 ? "" : "s"));
+        }
+    }
     if (panel_ == nullptr) {
         if (playhead >= 0.0) {
             playhead_ =
@@ -381,7 +441,7 @@ void PreviewBinding::DrainPending() {
         }
         return;
     }
-    if (has_frame) panel_->SetFrame(frame, w, h);
+    if (has_frame) panel_->SetVideoFrame(std::move(frame));
     if (has_peaks) panel_->SetPeakLevels(pl, pr);
     if (playhead >= 0.0) {
         playhead_ =
@@ -392,7 +452,7 @@ void PreviewBinding::DrainPending() {
         if (ready_ && !engine_->Playing() && ui_playing_) {
             // Engine auto-stopped at the end (or at t=0 on a reverse
             // shuttle) — mirror onto the chrome.
-            shuttle_rate_ = 0.0;
+            SetShuttleRate(0.0);
             ui_playing_ = false;
             panel_->SetPlaying(false);
         }
@@ -406,6 +466,11 @@ std::pair<float, float> PreviewBinding::PeakLevels() const {
     // has_peaks_ is consumed by DrainPending but the slots keep the
     // last-reported values — exactly what a meter pull wants.
     return {pending_peak_l_, pending_peak_r_};
+}
+
+bool PreviewBinding::ClipCached(const std::string& clip_id) const {
+    return ready_ && engine_ != nullptr &&
+           engine_->ClipCachedFrames(clip_id) > 0;
 }
 
 }  // namespace XER::VideoEditor::Ui2

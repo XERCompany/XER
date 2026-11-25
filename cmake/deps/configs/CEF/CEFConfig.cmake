@@ -58,8 +58,10 @@ if(NOT TARGET CEF::libcef_dll_wrapper)
         "${CEF_ROOT}/libcef_dll/ctocpp/*.cc"
         "${CEF_ROOT}/libcef_dll/wrapper/*.cc"
         "${CEF_ROOT}/libcef_dll/*.cc")
-    # Test/util sources that are not part of the runtime wrapper.
-    list(FILTER _cef_wrapper_srcs EXCLUDE REGEX "/test/|_unittest|cef_dump_without_crashing")
+    # cpptoc/test + ctocpp/test hold real runtime handlers (test_server,
+    # capture_browser_window, translator/api_version test clients) that
+    # wrapper.cc references — only actual unittest/dump sources are junk.
+    list(FILTER _cef_wrapper_srcs EXCLUDE REGEX "_unittest|cef_dump_without_crashing")
     add_library(cef_dll_wrapper STATIC ${_cef_wrapper_srcs})
     add_library(CEF::libcef_dll_wrapper ALIAS cef_dll_wrapper)
     target_include_directories(cef_dll_wrapper PUBLIC

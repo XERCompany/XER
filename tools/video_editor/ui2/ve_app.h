@@ -52,6 +52,7 @@
 #include "shell_prefs.h"
 #include "shortcut_router.h"
 #include "source_edit.h"          // SourceMarks — per-path mark storage
+#include "surface_hooks.h"        // MonitorGizmoTarget — gizmo seam
 #include "timeline_model.h"
 #include "workspace_layout.h"
 #include "widgets/widget.h"
@@ -76,6 +77,7 @@ class MediaCatalog;
 class MediaPrep;
 class ProxyManager;
 class ExportEngine;      // export_engine.h — single-job async worker
+class Compositor;        // compositor.h — gizmo live-preview renderer
 struct CatalogEntry;     // media_catalog.h — bin row
 }
 
@@ -385,8 +387,56 @@ public:
     // Three-point edits: the marked source range lands on the
     // timeline at the program playhead (insert = ripple, overwrite
     // = replace — old EditSourceToTimeline parity, history macro).
-    void EditSourceToTimeline(bool insert);
+    // `at_override` >= 0 pins the destination to a context-menu
+    // point instead of the playhead. The destination track comes
+    // from the surface's V/A patching badges — no targeted track of
+    // the source's kind errors, a patched-off audio leg drops
+    // silently (Premiere/Resolve patching semantics).
+    void EditSourceToTimeline(bool insert, double at_override = -1.0);
+    // Replace edit (Premiere "Replace with Clip from Source"): the
+    // clip under the playhead on a targeted track — or `target`
+    // when the context menu names one — is swapped for the marked
+    // source range through history_->ReplaceClip (the timeline
+    // footprint/effects/link_group stay; a short source clamps to
+    // its media bounds).
+    void SourceReplaceEdit(const Clip* target = nullptr);
+    // Fit to fill (Resolve "Fit to Fill"): the marked source range
+    // retimes into the work area on the targeted track — rate =
+    // source span / fill span, one history macro via
+    // OverwriteClipAt. No work area -> the targeted clip under the
+    // playhead's span is the fill range.
+    void SourceFitToFill();
+    // Timeline context-menu verb dispatcher (on_source_verb hook):
+    // kInsert/kOverwrite at `point`, kReplace onto `clip_id`,
+    // kFitToFill into the work area.
+    void RunSourceVerb(Ui2::SourceEditVerb verb, double point,
+                       const std::string& clip_id);
+    // Top-and-tail (Premiere Q/W): ripple-trim the clip under the
+    // playhead on the targeted track — head=true moves its start to
+    // the playhead, head=false its end (history_->RippleTrimClip
+    // closes the freed gap).
+    void ProgramTopTail(bool head);
     void StopSourceTransport();
+
+    // Held-combo + play-around transports (the router's held-key
+    // contract): while 'k' is held, J/L presses run a fixed slow
+    // shuttle instead of the ladder (Premiere K+J/K+L); Shift+K
+    // plays around the playhead and pauses at the post-roll edge.
+    void ProgramHeldShuttle(int direction);   // K-held J/L, ±1
+    void SourceHeldShuttle(int direction);
+    void EndHeldShuttle(int direction);       // 0=K up, ±1=J/L up
+    void ProgramPlayAround();                 // Shift+K
+    void SourcePlayAround();
+    // Shift+I/Shift+O — go to in/out (work-area edges on program,
+    // marks on source — Premiere "Go to In/Out Point").
+    void ProgramGoToWorkAreaEdge(bool mark_in);
+    void SourceGoToMark(bool mark_in);
+    // F — match frame: the timeline clip under the playhead loads
+    // into the source monitor at the matching source time.
+    void ProgramMatchFrame();
+    static constexpr double kHeldShuttleRate = 0.25;
+    static constexpr double kPlayAroundPre = 3.0;
+    static constexpr double kPlayAroundPost = 3.0;
 
     // ── widget contract ──────────────────────────────────────
     void Render(XER::UI::Rendering::Renderer& renderer,
@@ -444,6 +494,10 @@ private:
     // methods above, activation → ShortcutRouter scope, status →
     // SetStatus) and attaches each binding to its panel.
     void WireMonitorPanels();
+    // Last-active-viewer scope: the router's active scope and the
+    // monitor accent borders move together (single seam for
+    // on_activate hooks + OpenInSourceMonitor).
+    void ActivateViewerScope(const char* scope);
     // ── M3 panel/media wiring ─────────────────────────────────
     // Opens the catalog (DefaultDbPath) and builds the MediaPrep
     // pool + ProxyManager on first call — deferred from the ctor so
@@ -504,6 +558,21 @@ private:
     // history_->ReplaceClip in one undoable macro.
     void StartFaceBlur(const std::string& clip_id);
     void PumpFaceBlurJob();
+    // "Track Mask (AI)…" (clip ctx menu): arms the program monitor's
+    // click-point seam — the next frame click is the SAM2 prompt
+    // (track_mask_clip_id_ remembers which clip). The click maps
+    // into source-frame fractions (ai/sam2_track.h
+    // CanvasPointToSourceFraction) and BeginTrackMaskJob launches
+    // the async per-frame re-prompt scan; PumpTrackMaskJob drains
+    // the mutex slot in Tick and commits mask_track +
+    // builtin:xer.fx.track_mask through history_->ReplaceClip.
+    // ClearMaskTrack empties the track through the same history
+    // path (the effect stays — it no-ops on an empty track).
+    void StartTrackMask(const std::string& clip_id);
+    void BeginTrackMaskJob(const Clip& clip, float fx, float fy,
+                           double src_seconds);
+    void PumpTrackMaskJob();
+    void ClearMaskTrack(const std::string& clip_id);
     // "AI Upscale 4x" (bin ctx) + "Smooth slow-mo (AI)" (clip ctx):
     // one shared async bounce slot (both are seconds-per-frame CPU
     // work — serializing is honest). The worker runs
@@ -548,6 +617,25 @@ private:
     // routing back through the bridge (which would re-seek).
     void ApplyProgramPlayhead(double seconds);
     void ApplySourcePlayhead(double seconds);
+
+    // ── program-monitor transform gizmo (WireMonitorPanels) ──
+    // The surface pulls the selection's gizmo target per paint;
+    // presses that miss the box hit-test the topmost clip under the
+    // cursor; gesture hooks bracket live previews (in-memory only —
+    // rendered through gizmo_preview_comp_, never history) with ONE
+    // ReplaceClip commit inside a BeginMacro/EndMacro pair.
+    MonitorGizmoTarget GizmoTargetForSelection() const;
+    // Topmost clip whose warped rect contains the frame-normalized
+    // point at the playhead ("" = none). Video tracks top→bottom;
+    // hidden tracks skipped.
+    std::string GizmoPickClip(float nx, float ny) const;
+    // clip source px for the gizmo rect — catalog dims for media,
+    // canvas dims for generated/compound/adjustment sources.
+    bool GizmoClipSourceSize(const Clip& clip, int* w, int* h) const;
+    void GizmoPreviewTransform(const std::string& clip_id,
+                               const Transform& transform);
+    void CommitGizmoTransform(const std::string& clip_id,
+                              const Transform& transform);
 
     std::string project_path_;
     std::filesystem::path prefs_path_;
@@ -600,6 +688,22 @@ private:
     int source_fps_num_ = 30, source_fps_den_ = 1;
     bool source_has_video_ = false, source_has_audio_ = false;
     std::unordered_map<std::string, SourceMarks> source_marks_;
+    // K-held combo state: which J/L direction the gesture is
+    // shuttling (0 = none) and which binding owns it. The router's
+    // on_up path ends it when K or the direction key releases.
+    int held_shuttle_dir_ = 0;
+    bool held_shuttle_source_ = false;
+    // Program-monitor gizmo live-preview renderer — one Compositor
+    // per gesture (Init at on_gizmo_begin, Shutdown at end). Its
+    // bound project snapshot is mutated through UpdateClipTransform
+    // so preview frames render with warm decoders; project_ itself
+    // is untouched until the single commit lands.
+    std::unique_ptr<Compositor> gizmo_preview_comp_;
+    bool gizmo_preview_ok_ = false;
+    // Shift+K play-around: the post-roll time the Tick pump pauses
+    // at (-1 = idle) and which binding owns the gesture.
+    double playaround_until_ = -1.0;
+    bool playaround_source_ = false;
 
     // ── M3 panels + media stack (shell-owned; panels see hooks) ──
     std::shared_ptr<MediaPanel> media_panel_;
@@ -724,6 +828,24 @@ private:
     ClipTrack face_result_;
     std::string face_result_error_;
     std::string face_job_clip_id_;
+
+    // "Track Mask (AI)" armed-pick + async SAM2 job — same
+    // marshalling contract as the face worker (worker writes ONLY
+    // the mutex-guarded slot; Tick drains it). track_mask_armed_
+    // shares the click seam with color_pick_armed_ — first writer
+    // wins; both can't be armed at once.
+    bool track_mask_armed_ = false;
+    std::string track_mask_clip_id_;
+    std::thread mask_worker_;
+    std::atomic<bool> mask_cancel_{false};
+    std::atomic<float> mask_progress_{0.0f};
+    std::atomic<bool> mask_running_{false};
+    std::mutex mask_result_mutex_;
+    bool mask_result_ready_ = false;
+    bool mask_result_ok_ = false;
+    ClipMaskTrack mask_result_;
+    std::string mask_result_error_;
+    std::string mask_job_clip_id_;
 
     // AI bounce jobs (upscale + slow-mo share ONE slot — both are
     // seconds-per-frame CPU work, so serializing them is the honest

@@ -3,6 +3,7 @@
 // assertions through a real WidgetTree, never pixel comparison.
 #include "ui2_monitor_smoke.h"
 
+#include <algorithm>
 #include <cmath>
 #include <filesystem>
 #include <memory>
@@ -13,7 +14,10 @@
 #include "monitor_surface.h"
 #include "rendering/renderer.h"
 #include "shortcut_router.h"
+#include "timeline_bridge.h"
 #include "timeline_model.h"
+#include "timeline_strip.h"
+#include "timeline_surface.h"
 #include "ve_app.h"
 #include "ve_theme.h"
 #include "widgets/widget_tree.h"
@@ -33,19 +37,58 @@ class RecordingRenderer final : public Renderer {
 public:
     int frame_calls = 0;
     int text_calls = 0;
+    int stroke_calls = 0;
     Layout::Rect last_frame_dst{};
+    struct Stroke {
+        XER::UI::Theme::Color color;
+        float width;
+    };
+    std::vector<Stroke> strokes;
+    std::vector<std::string> texts;
 
     void BeginFrame(Layout::Rect) override {}
     void EndFrame() override {}
     void FillRect(Layout::Rect, XER::UI::Theme::Color,
                   float) override {}
-    void StrokeRect(Layout::Rect, XER::UI::Theme::Color, float,
-                    float) override {}
+    void StrokeRect(Layout::Rect, XER::UI::Theme::Color color,
+                    float width, float) override {
+        ++stroke_calls;
+        strokes.push_back({color, width});
+    }
+    bool DrewStroke(XER::UI::Theme::Color color, float width) const {
+        for (const Stroke& s : strokes) {
+            if (s.width == width && s.color.a == color.a &&
+                s.color.r == color.r && s.color.g == color.g &&
+                s.color.b == color.b) {
+                return true;
+            }
+        }
+        return false;
+    }
     void DrawLine(Layout::Point, Layout::Point,
-                  XER::UI::Theme::Color, float) override {}
-    void DrawText(std::string_view, Layout::Rect,
+                  XER::UI::Theme::Color color, float) override {
+        ++line_calls;
+        line_colors.push_back(color);
+    }
+    int line_calls = 0;
+    std::vector<XER::UI::Theme::Color> line_colors;
+    bool DrewLine(XER::UI::Theme::Color color) const {
+        for (const auto& c : line_colors) {
+            if (c.a == color.a && c.r == color.r && c.g == color.g &&
+                c.b == color.b) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void DrawText(std::string_view text, Layout::Rect,
                   TextStyle) override {
         ++text_calls;
+        texts.emplace_back(text);
+    }
+    bool DrewText(std::string_view wanted) const {
+        return std::find(texts.begin(), texts.end(), wanted) !=
+               texts.end();
     }
     Layout::Size MeasureText(std::string_view text,
                              TextStyle) const override {
@@ -306,6 +349,42 @@ std::string CheckPanelChrome() {
         if (r.text_calls == 0) return "panel painted no chrome text";
     }
 
+    // Active-viewer accent border: the scoped panel strokes its
+    // border in tokens.accent at 2px instead of the quiet 1px ring.
+    if (source->ScopeActive()) return "panel starts scoped";
+    source->SetScopeActive(true);
+    if (!source->ScopeActive()) return "scope flag did not latch";
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (!r.DrewStroke(tokens.accent, 2.0f)) {
+            return "scoped panel did not paint the accent border";
+        }
+    }
+    // Speed badge: a non-1 rate paints the "<rate>x" chip on the
+    // surface; 0 / +1 hides it (PreviewBinding pushes the raw rate).
+    source->SetSpeedBadge(-0.25);
+    if (source->VideoSurface().SpeedBadgeRate() != -0.25) {
+        return "speed badge rate did not latch";
+    }
+    source->VideoSurface().SetDuration(10.0);
+    source->VideoSurface().SetFrame(FakeBgra(160, 90), 160, 90);
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (!r.DrewText("-0.25x")) {
+            return "speed badge did not paint the rate chip";
+        }
+    }
+    source->SetSpeedBadge(1.0);
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (r.DrewText("-0.25x")) {
+            return "badge stayed visible at +1x";
+        }
+    }
+
     // Hook dispatch: press inside the panel activates; a click in
     // the frame toggles play.
     int activated = 0, toggled = 0, marked_in = 0;
@@ -350,6 +429,12 @@ std::string CheckShellWiring() {
         std::string(ShortcutRouter::kScopeProgram)) {
         return "default scope is not program";
     }
+    // Last-active-viewer border: the program monitor starts scoped,
+    // the source does not (WireMonitorPanels pushes the default).
+    if (!app->ProgramMonitor()->ScopeActive() ||
+        app->SourceMonitor()->ScopeActive()) {
+        return "default scope border is not on the program monitor";
+    }
 
     // Program transport — real binding, empty project (zero clips
     // decode nothing; the engine worker is bounded by the app dtor).
@@ -373,6 +458,10 @@ std::string CheckShellWiring() {
         std::string(ShortcutRouter::kScopeSource)) {
         return "source load did not activate the source scope";
     }
+    if (!app->SourceMonitor()->ScopeActive() ||
+        app->ProgramMonitor()->ScopeActive()) {
+        return "source load did not move the scope border";
+    }
 
     // Marks at the playhead -> insert edit lands a clip on A1
     // through history (undoable, three-point dispatch).
@@ -383,6 +472,22 @@ std::string CheckShellWiring() {
     app->EditSourceToTimeline(/*insert=*/false);
     if (app->Document()->clips.size() != clips_before + 1) {
         return "source overwrite edit did not land a clip";
+    }
+    // F match frame: playhead inside the landed clip loads its media
+    // into the source monitor at the matching source time —
+    // src_t = in_point + (playhead - start) * rate (the smoke clip
+    // is [0,3) at rate 1, in_point 0).
+    app->Seek(1.5);
+    app->ProgramMatchFrame();
+    if (app->SourcePath() != "smoke_src.wav") {
+        return "match frame did not reload the clip's source";
+    }
+    if (!Near(static_cast<float>(
+                  app->SourcePlayback().Playhead()),
+              1.5f, 0.001f)) {
+        return "match frame mapped the wrong source time (got " +
+               std::to_string(app->SourcePlayback().Playhead()) +
+               ")";
     }
     app->Undo();
     if (app->Document()->clips.size() != clips_before) {
@@ -417,6 +522,606 @@ std::string CheckShellWiring() {
         std::string(ShortcutRouter::kScopeProgram)) {
         return "program press did not activate the program scope";
     }
+    if (!app->ProgramMonitor()->ScopeActive() ||
+        app->SourceMonitor()->ScopeActive()) {
+        return "program press did not move the scope border back";
+    }
+
+    // Transform gizmo end-to-end: a generated ColorMatte clip on the
+    // video track (no decoder needed — the live-preview compositor
+    // renders it headless) selects via the bridge, the program
+    // surface boxes it, a synthetic center drag lands ONE
+    // ReplaceClip commit, and a single Undo restores the offset.
+    {
+        Project gp;
+        gp.width = 640;
+        gp.height = 360;
+        Track gv;
+        gv.kind = TrackKind::Video;
+        gp.tracks.push_back(gv);
+        Clip gclip;
+        gclip.id = "gizmo-matte";
+        gclip.source.kind = SourceKind::ColorMatte;
+        gclip.source.param = "#204060";
+        gclip.track = 0;
+        gclip.timeline_start = 0.0;
+        gclip.duration = 10.0;
+        gp.clips.push_back(gclip);
+        app->SetProject(gp);
+        app->Bridge()->SelectClip("gizmo-matte");
+        app->ProgramMonitor()->SetFrame(FakeBgra(640, 360), 640, 360);
+        MonitorSurface& gsurf =
+            app->ProgramMonitor()->VideoSurface();
+        if (!gsurf.GizmoVisible()) {
+            return "gizmo did not box the selected matte clip";
+        }
+        const Layout::Rect gbox = gsurf.GizmoBounds();
+        if (gbox.width <= 0.0f || gbox.height <= 0.0f) {
+            return "gizmo bounds empty for the matte clip";
+        }
+        const float gcx = gbox.x + gbox.width * 0.5f;
+        const float gcy = gbox.y + gbox.height * 0.5f;
+        tree.HandleEvent(MouseDown(gcx, gcy));
+        W::Event mv{};
+        mv.type = W::Event::Type::MouseMove;
+        mv.position = {gcx + 64.0f, gcy};
+        tree.HandleEvent(mv);
+        tree.HandleEvent(MouseUp(gcx + 64.0f, gcy));
+        const Clip* after = FindClip(*app->Document(), "gizmo-matte");
+        if (after == nullptr) {
+            return "gizmo clip vanished mid-gesture";
+        }
+        // The matte's source IS the canvas — a +64 client-px move is
+        // +64/dest_width normalized offset.
+        const float expect =
+            64.0f / gsurf.FittedFrameRect().width;
+        if (!Near(after->transform.offset_x, expect, 0.01f)) {
+            return "gizmo drag did not move the clip (got " +
+                   std::to_string(after->transform.offset_x) + ")";
+        }
+        app->Undo();
+        const Clip* undone =
+            FindClip(*app->Document(), "gizmo-matte");
+        if (undone == nullptr ||
+            !Near(undone->transform.offset_x, 0.0f, 0.001f)) {
+            return "gizmo drag was not one undo step";
+        }
+    }
+
+    tree.SetRoot(nullptr);
+    return {};
+}
+
+// ---- source-patch + edit verbs (round-trip) -----------------------
+//
+// App-level contract for the NLE verbs: the surface's V/A patching
+// badges steer insert/overwrite/lift/extract destination tracks, and
+// replace / fit-to-fill / top-and-tail commute with Undo. The
+// project fixture is three clips ([0,10) on V1, V2, A1) so the
+// untargeted lane proves the mask, not an empty track.
+
+std::string CheckEditVerbs() {
+    const auto prefs_path =
+        std::filesystem::temp_directory_path() /
+        "xer_ui2_monitor_verb_prefs" / "ui2_shell.json";
+    std::error_code ec;
+    std::filesystem::remove_all(prefs_path.parent_path(), ec);
+
+    auto app = std::make_shared<VeApp>(std::string{}, prefs_path);
+    W::WidgetTree tree;
+    tree.SetRoot(app);
+    const auto tokens = Theme::DarkTokens();
+    tree.Layout({0.0f, 0.0f, 1440.0f, 860.0f}, tokens);
+    app->InstallShortcutRouter();
+
+    Project p;
+    p.width = 640;
+    p.height = 360;
+    Track v1;
+    v1.kind = TrackKind::Video;
+    Track v2;
+    v2.kind = TrackKind::Video;
+    Track a1;
+    a1.kind = TrackKind::Audio;
+    p.tracks = {v1, v2, a1};
+    const auto make_clip = [](const char* id, const char* path,
+                              int track) {
+        Clip c;
+        c.id = id;
+        c.source_path = path;
+        c.name = id;
+        c.source.kind = SourceKind::Media;
+        c.track = track;
+        c.timeline_start = 0.0;
+        c.in_point = 0.0;
+        c.duration = 10.0;
+        c.playback_rate = 1.0;
+        return c;
+    };
+    p.clips.push_back(make_clip("v1-clip", "old_a.mov", 0));
+    p.clips.push_back(make_clip("v2-clip", "old_b.mov", 1));
+    p.clips.push_back(make_clip("a1-clip", "old_c.wav", 2));
+    app->SetProject(p);
+
+    if (app->Timeline() == nullptr ||
+        app->Timeline()->Surface() == nullptr) {
+        return "timeline surface missing";
+    }
+    TimelineSurface* surf = app->Timeline()->Surface().get();
+    // SetProject re-seeds Premiere's default patch: first track of
+    // each kind (V1 + A1 here).
+    if (surf->FirstTargetedTrack(TrackKind::Video) != 0 ||
+        surf->FirstTargetedTrack(TrackKind::Audio) != 2) {
+        return "default patch is not V1 + A1";
+    }
+    // Repatch video onto V2; A1 stays targeted, V1 goes dark.
+    surf->SetTrackTargeted(0, false);
+    surf->SetTrackTargeted(1, true);
+    if (surf->FirstTargetedTrack(TrackKind::Video) != 1) {
+        return "video repatch did not land on V2";
+    }
+
+    const auto count_on_track = [&](int track) {
+        int n = 0;
+        for (const Clip& c : app->Document()->clips) {
+            if (c.track == track) ++n;
+        }
+        return n;
+    };
+    const auto find_on_track = [&](int track,
+                                   const std::string& path) {
+        for (const Clip& c : app->Document()->clips) {
+            if (c.track == track && c.source_path == path) return &c;
+        }
+        return static_cast<const Clip*>(nullptr);
+    };
+
+    // Video-only source: [0,2) marked, program playhead at 4.
+    app->OpenInSourceMonitor("verb_src.mov", "verb_src", 6.0, 30, 1,
+                             /*has_video=*/true, /*has_audio=*/false,
+                             640, 360);
+    if (!app->SourceLoaded()) return "verb source did not load";
+    app->SourceMark(true);        // in = 0
+    app->SourceSeek(2.0);
+    app->SourceMark(false);       // out = 2
+
+    // Overwrite lands on the TARGETED V2 at the playhead — the
+    // untargeted V1 stays empty of new media.
+    app->Seek(4.0);
+    app->EditSourceToTimeline(/*insert=*/false);
+    const Clip* landed = find_on_track(1, "verb_src.mov");
+    if (landed == nullptr) {
+        return "overwrite did not land on the targeted V2";
+    }
+    if (!Near(static_cast<float>(landed->timeline_start), 4.0f,
+              0.01f) ||
+        !Near(static_cast<float>(landed->duration), 2.0f, 0.01f)) {
+        return "overwrite clip geometry drifted";
+    }
+    if (find_on_track(0, "verb_src.mov") != nullptr) {
+        return "overwrite touched the untargeted V1";
+    }
+    app->Undo();
+    if (find_on_track(1, "verb_src.mov") != nullptr ||
+        count_on_track(1) != 1) {
+        return "overwrite did not undo cleanly";
+    }
+
+    // Insert at an explicit context-menu point: the straddler on V2
+    // splits and the marked range lands inside the ripple.
+    app->EditSourceToTimeline(/*insert=*/true, /*at_override=*/7.0);
+    landed = find_on_track(1, "verb_src.mov");
+    if (landed == nullptr ||
+        !Near(static_cast<float>(landed->timeline_start), 7.0f,
+              0.01f) ||
+        !Near(static_cast<float>(landed->duration), 2.0f, 0.01f)) {
+        return "insert-at-point did not land on the targeted V2";
+    }
+    if (count_on_track(1) != 3) {
+        return "insert did not ripple the straddler apart";
+    }
+    app->Undo();
+    if (count_on_track(1) != 1 ||
+        FindClip(*app->Document(), "v2-clip") == nullptr) {
+        return "insert did not undo cleanly";
+    }
+
+    // Lift/extract honoring the mask: work area [2,5), V2 + A1
+    // targeted, V1 dark — V1's clip must survive untouched.
+    app->Seek(2.0);
+    app->ProgramSetWorkAreaPoint(true);
+    app->Seek(5.0);
+    app->ProgramSetWorkAreaPoint(false);
+    app->ProgramLiftExtract(/*close_gap=*/false);
+    const Clip* v1c = FindClip(*app->Document(), "v1-clip");
+    if (v1c == nullptr || v1c->duration != 10.0 ||
+        count_on_track(0) != 1) {
+        return "lift touched the untargeted V1";
+    }
+    if (count_on_track(1) != 2 || count_on_track(2) != 2) {
+        return "lift did not split the targeted lanes";
+    }
+    app->Undo();
+    if (count_on_track(1) != 1 || count_on_track(2) != 1) {
+        return "lift did not undo cleanly";
+    }
+    // Extract ripples the freed span on targeted lanes only.
+    app->ProgramLiftExtract(/*close_gap=*/true);
+    {
+        double latest_end = 0.0;
+        for (const Clip& c : app->Document()->clips) {
+            if (c.track == 1) {
+                latest_end = std::max(
+                    latest_end, c.timeline_start + c.duration);
+            }
+        }
+        if (!Near(static_cast<float>(latest_end), 7.0f, 0.01f)) {
+            return "extract did not close the gap on V2";
+        }
+    }
+    if (count_on_track(0) != 1 ||
+        FindClip(*app->Document(), "v1-clip")->duration != 10.0) {
+        return "extract touched the untargeted V1";
+    }
+    app->Undo();
+
+    // Replace edit: playhead inside the targeted V2 clip swaps its
+    // media for the marked source range, keeping the clip id.
+    app->Seek(3.0);
+    app->SourceReplaceEdit();
+    {
+        const Clip* rc = FindClip(*app->Document(), "v2-clip");
+        if (rc == nullptr || rc->source_path != "verb_src.mov") {
+            return "replace did not swap the targeted clip's media";
+        }
+        if (!Near(static_cast<float>(rc->duration), 2.0f, 0.01f) ||
+            !Near(static_cast<float>(rc->in_point), 0.0f, 0.01f)) {
+            return "replace did not use the marked source range";
+        }
+    }
+    app->Undo();
+    {
+        const Clip* rc = FindClip(*app->Document(), "v2-clip");
+        if (rc == nullptr || rc->source_path != "old_b.mov" ||
+            rc->duration != 10.0) {
+            return "replace did not undo cleanly";
+        }
+    }
+
+    // Fit to fill: work area is still [2,5) — a 2 s source retimes
+    // to 3 s at 2/3 speed on the targeted V2.
+    app->SourceFitToFill();
+    landed = find_on_track(1, "verb_src.mov");
+    if (landed == nullptr) {
+        return "fit to fill did not land on the targeted V2";
+    }
+    if (!Near(static_cast<float>(landed->duration), 3.0f, 0.01f) ||
+        !Near(static_cast<float>(landed->playback_rate),
+              2.0f / 3.0f, 0.01f)) {
+        return "fit to fill computed the wrong retime";
+    }
+    app->Undo();
+    if (find_on_track(1, "verb_src.mov") != nullptr ||
+        count_on_track(1) != 1) {
+        return "fit to fill did not undo cleanly";
+    }
+
+    // Top-and-tail (Q/W): head trims to the playhead and ripples the
+    // freed head closed; tail trims the end.
+    app->Seek(4.0);
+    app->ProgramTopTail(/*head=*/true);
+    {
+        const Clip* tc = FindClip(*app->Document(), "v2-clip");
+        if (tc == nullptr ||
+            !Near(static_cast<float>(tc->timeline_start), 0.0f,
+                  0.01f) ||
+            !Near(static_cast<float>(tc->duration), 6.0f, 0.01f) ||
+            !Near(static_cast<float>(tc->in_point), 4.0f, 0.01f)) {
+            return "top-and-tail head did not ripple-trim to the "
+                   "playhead";
+        }
+    }
+    app->Undo();
+    {
+        const Clip* tc = FindClip(*app->Document(), "v2-clip");
+        if (tc == nullptr || tc->duration != 10.0 ||
+            tc->in_point != 0.0) {
+            return "top-and-tail head did not undo cleanly";
+        }
+    }
+    app->Seek(6.0);
+    app->ProgramTopTail(/*head=*/false);
+    {
+        const Clip* tc = FindClip(*app->Document(), "v2-clip");
+        if (tc == nullptr ||
+            !Near(static_cast<float>(tc->duration), 6.0f, 0.01f)) {
+            return "top-and-tail tail did not trim the end";
+        }
+    }
+    app->Undo();
+
+    tree.SetRoot(nullptr);
+    return {};
+}
+
+// ---- transform gizmo ---------------------------------------------
+//
+// Surface-level gesture contract: a fake shell binds the gizmo
+// members on MonitorHooks and the checks drive real
+// press/drag/release sequences through the WidgetTree — box
+// geometry, move/scale/rotate math, snap guides, press-to-select,
+// double-click reset, Esc cancel, armed-click-points priority.
+// Coordinates are canvas-normalized * the pushed frame's fitted
+// rect (frame 640x360 == the target canvas dims, so client and
+// canvas px coincide modulo the 13 px letterbox).
+
+std::string CheckTransformGizmo() {
+    auto surface = MonitorSurface::Create(MonitorSurface::Id::Program);
+    W::WidgetTree tree;
+    tree.SetRoot(surface);
+    const auto tokens = Theme::DarkTokens();
+    tree.Layout({0.0f, 0.0f, 640.0f, 400.0f}, tokens);
+    surface->SetDuration(10.0);
+    surface->SetFrame(FakeBgra(640, 360), 640, 360);
+    const Layout::Rect dest = surface->FittedFrameRect();
+    if (!Near(dest.width, 640.0f) || !Near(dest.height, 360.0f)) {
+        return "unexpected fitted rect for the gizmo check";
+    }
+
+    // src 320x180 at {.31,.33,scale .5} -> dest 160x90 with the
+    // transform center at canvas (278.4, 163.8) -> client
+    // (278.4, 176.8). Box aabb {198.4,131.8,160,90}.
+    MonitorGizmoTarget current;
+    current.clip_id = "c1";
+    current.transform = Transform{0.31f, 0.33f, 0.5f, 0.0f, 1.0f};
+    current.src_w = 320;
+    current.src_h = 180;
+    current.canvas_w = 640;
+    current.canvas_h = 360;
+    MonitorGizmoTarget c2 = current;
+    c2.clip_id = "c2";
+    c2.transform = Transform{0.02f, 0.02f, 0.5f, 0.0f, 1.0f};
+
+    int begins = 0, ends = 0, commits = 0, previews = 0,
+        selects = 0, resets = 0;
+    Transform last_preview{}, last_commit{};
+    std::string committed_id, selected_id, reset_id;
+    bool snap_on = false;
+    int toggled = 0;
+    float picked_x = -1.0f;
+
+    MonitorHooks hooks;
+    hooks.gizmo_target = [&] { return current; };
+    hooks.gizmo_pick = [&](float nx, float ny) -> std::string {
+        picked_x = nx;
+        // A pick hit only inside a 10% square at the frame's top-left
+        // corner — everywhere else reports "no clip" so empty-frame
+        // presses keep their classic behavior.
+        return (nx < 0.10f && ny < 0.10f) ? c2.clip_id
+                                          : std::string{};
+    };
+    hooks.on_gizmo_select = [&](const std::string& id) {
+        ++selects;
+        selected_id = id;
+        if (id == c2.clip_id) current = c2;   // selection round-trip
+    };
+    hooks.on_gizmo_begin = [&](const char*) { ++begins; };
+    hooks.on_gizmo_end = [&] { ++ends; };
+    hooks.on_gizmo_preview =
+        [&](const std::string&, const Transform& t) {
+            ++previews;
+            last_preview = t;
+        };
+    hooks.on_gizmo_commit =
+        [&](const std::string& id, const Transform& t) {
+            ++commits;
+            committed_id = id;
+            last_commit = t;
+        };
+    hooks.on_gizmo_reset = [&](const std::string& id) {
+        ++resets;
+        reset_id = id;
+    };
+    hooks.gizmo_snap_enabled = [&] { return snap_on; };
+    hooks.on_toggle_play = [&] { ++toggled; };
+    surface->SetHooks(std::move(hooks));
+
+    // ---- box geometry ----
+    if (!surface->GizmoVisible()) return "gizmo not visible";
+    const Layout::Rect box = surface->GizmoBounds();
+    if (!Near(box.x, 198.4f, 0.2f) || !Near(box.y, 131.8f, 0.2f) ||
+        !Near(box.width, 160.0f, 0.2f) ||
+        !Near(box.height, 90.0f, 0.2f)) {
+        return "gizmo bounds mismatch vs the warped rect";
+    }
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        if (r.line_calls < 7) {
+            return "gizmo did not paint its box/stem/anchor lines";
+        }
+    }
+    const float cx = box.x + box.width * 0.5f;    // 278.4
+    const float cy = box.y + box.height * 0.5f;   // 176.8
+    const auto mouse_move = [&](float x, float y) {
+        W::Event ev{};
+        ev.type = W::Event::Type::MouseMove;
+        ev.position = {x, y};
+        tree.HandleEvent(ev);
+    };
+    const auto key = [&](W::KeyCode k) {
+        W::Event ev{};
+        ev.type = W::Event::Type::KeyDown;
+        ev.key = k;
+        tree.HandleEvent(ev);
+    };
+
+    // ---- move drag: +40,+20 client px -> normalized delta ----
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 40.0f, cy + 20.0f);
+    if (!surface->GizmoDragging()) return "move drag did not arm";
+    tree.HandleEvent(MouseUp(cx + 40.0f, cy + 20.0f));
+    if (begins != 1 || ends != 1) {
+        return "move drag did not bracket exactly one gesture";
+    }
+    if (commits != 1 || committed_id != "c1") {
+        return "move drag did not commit once";
+    }
+    if (!Near(last_commit.offset_x, 0.31f + 40.0f / 640.0f, 0.002f) ||
+        !Near(last_commit.offset_y, 0.33f + 20.0f / 360.0f, 0.002f)) {
+        return "move commit drifted from the pointer delta";
+    }
+    if (previews == 0) return "move drag produced no previews";
+    if (last_commit.scale != 0.5f ||
+        last_commit.rotation_deg != 0.0f ||
+        last_commit.opacity != 1.0f) {
+        return "move drag touched non-position transform fields";
+    }
+
+    // ---- click on the box (no drag): no gesture, no toggle ----
+    tree.HandleEvent(MouseDown(cx, cy));
+    tree.HandleEvent(MouseUp(cx, cy));
+    if (begins != 1 || ends != 1) {
+        return "plain click on the box opened a gesture";
+    }
+    if (toggled != 0) return "click inside the box toggled playback";
+
+    // ---- rotate stem: tip sits 22 px above top-edge midpoint ----
+    const float tip_x = box.x + box.width * 0.5f;   // top-mid x
+    const float tip_y = box.y - 22.0f;
+    tree.HandleEvent(MouseDown(tip_x, tip_y));
+    mouse_move(cx + 50.0f, cy);   // -90deg start -> 0deg now = +90
+    tree.HandleEvent(MouseUp(cx + 50.0f, cy));
+    if (commits != 2) return "rotate drag did not commit";
+    if (!Near(last_commit.rotation_deg, 90.0f, 1.0f)) {
+        return "rotate commit is not +90 degrees";
+    }
+
+    // ---- corner scale: SE handle out to 2x radial distance ----
+    const float se_x = box.x + box.width;          // 358.4
+    const float se_y = box.y + box.height;         // 221.8
+    tree.HandleEvent(MouseDown(se_x, se_y));
+    mouse_move(cx + 160.0f, cy + 90.0f);           // dist *2
+    tree.HandleEvent(MouseUp(cx + 160.0f, cy + 90.0f));
+    if (commits != 3) return "corner scale drag did not commit";
+    if (!Near(last_commit.scale, 1.0f, 0.02f)) {
+        return "corner drag did not double the uniform scale";
+    }
+    // Anchor (transform center) holds: canvas c=(278.4,163.8) ->
+    // offset = c_norm - dw/2 (dw = 320*1.0).
+    if (!Near(last_commit.offset_x, 278.4f / 640.0f - 0.25f,
+              0.01f) ||
+        !Near(last_commit.offset_y, 163.8f / 360.0f - 0.25f,
+              0.01f)) {
+        return "corner scale moved the anchor point";
+    }
+
+    // ---- edge scale: E midpoint — axis ratio into the uniform
+    // scale (the model has no per-axis scale) ----
+    const float e_x = box.x + box.width;           // right-mid
+    tree.HandleEvent(MouseDown(e_x, cy));
+    mouse_move(e_x + 80.0f, cy);                   // lx: 80 -> 160
+    tree.HandleEvent(MouseUp(e_x + 80.0f, cy));
+    if (commits != 4) return "edge scale drag did not commit";
+    if (!Near(last_commit.scale, 1.0f, 0.02f)) {
+        return "edge drag did not double the uniform scale";
+    }
+
+    // ---- Esc cancels: preview(orig) restores, nothing commits ----
+    const Transform pre_esc{};
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 30.0f, cy);
+    key(W::KeyCode::Escape);
+    tree.HandleEvent(MouseUp(cx + 30.0f, cy));
+    if (commits != 4) return "Esc-cancelled drag still committed";
+    if (ends != begins || ends != 5) {
+        return "Esc did not close the gesture macro";
+    }
+    if (!Near(last_preview.offset_x, current.transform.offset_x) ||
+        !Near(last_preview.offset_y, current.transform.offset_y)) {
+        return "Esc did not restore the original preview";
+    }
+
+    // ---- double-click inside the box resets (hook-out) ----
+    tree.HandleEvent(MouseDown(cx, cy));
+    tree.HandleEvent(MouseUp(cx, cy));
+    tree.HandleEvent(MouseDown(cx, cy));
+    tree.HandleEvent(MouseUp(cx, cy));
+    if (resets != 1 || reset_id != "c1") {
+        return "double-click inside the box did not reset once";
+    }
+
+    // ---- snap: center candidate crosses the 0.5 line ----
+    snap_on = true;
+    // cx cand at +40 px -> .4975, inside the 6 px threshold -> the
+    // offset lands so the box center sits exactly on the line.
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 40.0f, cy);
+    if (!Near(last_preview.offset_x, 0.375f, 0.002f)) {
+        return "move snap did not land the center on the 0.5 line";
+    }
+    {
+        RecordingRenderer r;
+        tree.Render(r, tokens);
+        // kGizmoSnapColor — the timeline's accent-cyan guide token.
+        if (!r.DrewLine({0.13f, 0.83f, 0.93f, 1.0f})) {
+            return "snapped drag did not paint the accent guide";
+        }
+    }
+    tree.HandleEvent(MouseUp(cx + 40.0f, cy));
+    if (!Near(last_commit.offset_x, 0.375f, 0.002f)) {
+        return "snap commit drifted from the snapped offset";
+    }
+    snap_on = false;
+
+    // ---- press-to-select + promote to move ----
+    const int selects_before = selects;
+    const float pick_x = dest.x + dest.width * 0.05f;
+    const float pick_y = dest.y + dest.height * 0.05f;
+    tree.HandleEvent(MouseDown(pick_x, pick_y));
+    if (selects != selects_before + 1 || selected_id != "c2") {
+        return "press on a clip did not select it";
+    }
+    mouse_move(pick_x + 20.0f, pick_y);
+    tree.HandleEvent(MouseUp(pick_x + 20.0f, pick_y));
+    if (committed_id != "c2" || commits != 6) {
+        return "post-select drag did not move the picked clip";
+    }
+    if (!Near(last_commit.offset_x, 0.02f + 20.0f / 640.0f, 0.003f)) {
+        return "picked-clip move drifted from the pointer delta";
+    }
+    current = c2;   // keep the pull consistent with selection
+
+    // ---- empty-frame click still toggles playback ----
+    const float empty_x = dest.x + dest.width * 0.6f;
+    const float empty_y = dest.y + dest.height * 0.9f;
+    tree.HandleEvent(MouseDown(empty_x, empty_y));
+    tree.HandleEvent(MouseUp(empty_x, empty_y));
+    if (toggled != 1) {
+        return "empty-frame click did not toggle playback";
+    }
+
+    // ---- armed click points keep priority over the gizmo ----
+    surface->SetClickPointsArmed(true);
+    float click_nx = -1.0f;
+    MonitorHooks& mh = surface->MutableHooks();
+    mh.on_click_point = [&](float nx, float) { click_nx = nx; };
+    tree.HandleEvent(MouseDown(cx, cy));
+    mouse_move(cx + 10.0f, cy);
+    tree.HandleEvent(MouseUp(cx + 10.0f, cy));
+    if (begins != 7 || commits != 6) {
+        return "armed click points did not beat the gizmo";
+    }
+    surface->SetClickPointsArmed(false);
+    (void)picked_x;
+    (void)click_nx;
+    (void)pre_esc;
+
+    // ---- no selection -> no box ----
+    current.clip_id.clear();
+    if (surface->GizmoVisible()) {
+        return "gizmo stayed visible with an empty target";
+    }
 
     tree.SetRoot(nullptr);
     return {};
@@ -435,8 +1140,14 @@ std::string Ui2MonitorSmoke() {
     if (const std::string err = CheckPanelChrome(); !err.empty()) {
         return "panel: " + err;
     }
+    if (const std::string err = CheckTransformGizmo(); !err.empty()) {
+        return "gizmo: " + err;
+    }
     if (const std::string err = CheckShellWiring(); !err.empty()) {
         return "shell: " + err;
+    }
+    if (const std::string err = CheckEditVerbs(); !err.empty()) {
+        return "verbs: " + err;
     }
     return {};
 }

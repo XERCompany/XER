@@ -58,7 +58,8 @@ std::int64_t AutoCacher::FrameIndexAt(double t, double frame_dt) {
 
 bool AutoCacher::Init(const Project& snapshot, const Options& options,
                       std::string* error_out) {
-    Shutdown();   // joins any previous worker; safe re-init
+    // Validate first — after Shutdown() there is no failure path, so
+    // initializing_ is always released before this returns.
     if (snapshot.width <= 0 || snapshot.height <= 0) {
         return Fail(error_out, "invalid canvas size");
     }
@@ -68,6 +69,14 @@ bool AutoCacher::Init(const Project& snapshot, const Options& options,
     if (!options.frame_cache) {
         return Fail(error_out, "autocache requires a frame_cache");
     }
+    {
+        // Arm BEFORE Shutdown: stop_ flickers true while the old
+        // worker joins, and WaitIdle callers (smoke checks, HUDs)
+        // must not read that transient as a settled worker.
+        std::lock_guard<std::mutex> lk(mutex_);
+        initializing_ = true;
+    }
+    Shutdown();   // joins any previous worker; safe re-init
     project_ = snapshot;
     options_ = options;
     factory_ = options_.decoder_factory
@@ -129,12 +138,23 @@ bool AutoCacher::Init(const Project& snapshot, const Options& options,
                     options_.quality > 0.0f && options_.quality < 1.0f)
                        ? options_.quality
                        : 1.0f;
-        stats_ = Stats{};
+        // stats_ deliberately NOT reset: the PreviewEngine re-Inits
+        // this worker on every quality-tier flip (canvas dims are
+        // cache-key material), and stats readers — smoke checks, perf
+        // HUDs — rely on the counters staying monotonic across those
+        // re-binds. Shutdown() clears everything anyway.
         warnings_.clear();
         warned_once_.clear();
     }
     playhead_.store(0.0, std::memory_order_relaxed);
     worker_ = std::thread(&AutoCacher::WorkerMain, this);
+    {
+        std::lock_guard<std::mutex> lk(mutex_);
+        initializing_ = false;
+    }
+    // Nudge WaitIdle waiters parked across the re-bind so they can
+    // re-evaluate against the fresh (dirty) state.
+    idle_cv_.notify_all();
     return true;
 }
 
@@ -268,9 +288,13 @@ bool AutoCacher::WaitIdle(int timeout_ms) {
     std::unique_lock<std::mutex> lk(mutex_);
     return idle_cv_.wait_for(lk, std::chrono::milliseconds(timeout_ms),
                              [this] {
-                                 return stop_ ||
-                                        (!busy_ && queue_.empty() &&
-                                         !WindowDueLocked());
+                                 // stop_ reports a real teardown only —
+                                 // during Init's re-bind it is a
+                                 // transient behind initializing_.
+                                 return !initializing_ &&
+                                        (stop_ ||
+                                         (!busy_ && queue_.empty() &&
+                                          !WindowDueLocked()));
                              });
 }
 

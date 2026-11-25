@@ -120,16 +120,20 @@ XER_UI_TEST(FluxInputDispatchesTabTextBackspaceAndArrows) {
     XER_UI_EXPECT_TRUE(adapter.HandleInput("\x1b[A\x1b[D", tree));
     XER_UI_EXPECT_TRUE(adapter.HandleInput("\r\x1b[B\x1b[C", tree));
 
-    XER_UI_EXPECT_EQ(std::size_t{7}, widget->events.size());
-    XER_UI_EXPECT_EQ(Event::Type::TextInput, widget->events[0].type);
-    XER_UI_EXPECT_EQ(std::string("h\xC3\xA9"), widget->events[0].text);
-    XER_UI_EXPECT_EQ(Event::Type::KeyDown, widget->events[1].type);
-    XER_UI_EXPECT_EQ(KeyCode::Backspace, widget->events[1].key);
-    XER_UI_EXPECT_EQ(KeyCode::ArrowUp, widget->events[2].key);
-    XER_UI_EXPECT_EQ(KeyCode::ArrowLeft, widget->events[3].key);
-    XER_UI_EXPECT_EQ(KeyCode::Enter, widget->events[4].key);
-    XER_UI_EXPECT_EQ(KeyCode::ArrowDown, widget->events[5].key);
-    XER_UI_EXPECT_EQ(KeyCode::ArrowRight, widget->events[6].key);
+    // The opening Tab moved focus onto the widget — the tree's Focus
+    // notification (views contract: delivered on every focus change)
+    // lands in the event log before the input events.
+    XER_UI_EXPECT_EQ(std::size_t{8}, widget->events.size());
+    XER_UI_EXPECT_EQ(Event::Type::Focus, widget->events[0].type);
+    XER_UI_EXPECT_EQ(Event::Type::TextInput, widget->events[1].type);
+    XER_UI_EXPECT_EQ(std::string("h\xC3\xA9"), widget->events[1].text);
+    XER_UI_EXPECT_EQ(Event::Type::KeyDown, widget->events[2].type);
+    XER_UI_EXPECT_EQ(KeyCode::Backspace, widget->events[2].key);
+    XER_UI_EXPECT_EQ(KeyCode::ArrowUp, widget->events[3].key);
+    XER_UI_EXPECT_EQ(KeyCode::ArrowLeft, widget->events[4].key);
+    XER_UI_EXPECT_EQ(KeyCode::Enter, widget->events[5].key);
+    XER_UI_EXPECT_EQ(KeyCode::ArrowDown, widget->events[6].key);
+    XER_UI_EXPECT_EQ(KeyCode::ArrowRight, widget->events[7].key);
 }
 
 XER_UI_TEST(FluxInputMapsSgrMouseCoordinates) {
@@ -147,27 +151,31 @@ XER_UI_TEST(FluxInputMapsSgrMouseCoordinates) {
     XER_UI_EXPECT_TRUE(
         adapter.HandleInput("\x1b[<0;5;4M\x1b[<32;6;5M\x1b[<0;5;4m", tree)
     );
-    XER_UI_EXPECT_EQ(std::size_t{4}, widget->events.size());
-    XER_UI_EXPECT_EQ(Event::Type::MouseDown, widget->events[0].type);
-    XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Left, widget->events[0].mouse_button);
-    XER_UI_EXPECT_EQ(4.0f, widget->events[0].position.x);
-    XER_UI_EXPECT_EQ(3.0f, widget->events[0].position.y);
-    XER_UI_EXPECT_EQ(Event::Type::MouseMove, widget->events[1].type);
+    // The first MouseDown also moves focus onto the widget — the tree
+    // delivers the Focus notification (views contract) before the
+    // MouseDown itself.
+    XER_UI_EXPECT_EQ(std::size_t{5}, widget->events.size());
+    XER_UI_EXPECT_EQ(Event::Type::Focus, widget->events[0].type);
+    XER_UI_EXPECT_EQ(Event::Type::MouseDown, widget->events[1].type);
     XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Left, widget->events[1].mouse_button);
-    XER_UI_EXPECT_EQ(5.0f, widget->events[1].position.x);
-    XER_UI_EXPECT_EQ(4.0f, widget->events[1].position.y);
-    XER_UI_EXPECT_EQ(Event::Type::MouseUp, widget->events[2].type);
+    XER_UI_EXPECT_EQ(4.0f, widget->events[1].position.x);
+    XER_UI_EXPECT_EQ(3.0f, widget->events[1].position.y);
+    XER_UI_EXPECT_EQ(Event::Type::MouseMove, widget->events[2].type);
     XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Left, widget->events[2].mouse_button);
-    // MouseUp on the pressed target synthesizes a Click, like native UI.
-    XER_UI_EXPECT_EQ(Event::Type::Click, widget->events[3].type);
+    XER_UI_EXPECT_EQ(5.0f, widget->events[2].position.x);
+    XER_UI_EXPECT_EQ(4.0f, widget->events[2].position.y);
+    XER_UI_EXPECT_EQ(Event::Type::MouseUp, widget->events[3].type);
     XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Left, widget->events[3].mouse_button);
+    // MouseUp on the pressed target synthesizes a Click, like native UI.
+    XER_UI_EXPECT_EQ(Event::Type::Click, widget->events[4].type);
+    XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Left, widget->events[4].mouse_button);
 
     XER_UI_EXPECT_TRUE(adapter.HandleInput("\x1b[<1;5;4M\x1b[<2;5;4m", tree));
-    XER_UI_EXPECT_EQ(std::size_t{6}, widget->events.size());
-    XER_UI_EXPECT_EQ(Event::Type::MouseDown, widget->events[4].type);
-    XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Middle, widget->events[4].mouse_button);
-    XER_UI_EXPECT_EQ(Event::Type::MouseUp, widget->events[5].type);
-    XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Right, widget->events[5].mouse_button);
+    XER_UI_EXPECT_EQ(std::size_t{7}, widget->events.size());
+    XER_UI_EXPECT_EQ(Event::Type::MouseDown, widget->events[5].type);
+    XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Middle, widget->events[5].mouse_button);
+    XER_UI_EXPECT_EQ(Event::Type::MouseUp, widget->events[6].type);
+    XER_UI_EXPECT_EQ(XER::UI::Widgets::MouseButton::Right, widget->events[6].mouse_button);
 }
 
 XER_UI_TEST(FluxRendererClipsLinesToFrame) {

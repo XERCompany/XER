@@ -91,6 +91,26 @@ Goal started: 2026-11-15. Design doc:
   patching/track-targeting and panel chrome across Premiere/Resolve/FCP/
   CapCut/Descript; per-topic ui2 comparison tables + 20-item prioritized
   gap list (S/M/L, owning file per item) (2026-11-23).
+- [2026-11-24-cool-effects-tech.md](research/2026-11-24-cool-effects-tech.md)
+  — signature-look wave: per-family effect candidates (halation/bloom/
+  film kit, warps, stylize, glow, glitch, temporal, texture) with impl
+  sketches + effort/wow; tech evals (xfade~58 transitions near-free,
+  effects_rack exposure ~9 audio fx free, ACES/OCIO finish, GL-transitions
+  MIT, GPU ladder CPU-parallel→Vulkan/libplacebo, OFX/frei0r/VST3/SoundTouch
+  licenses checked) + ranked top-10 (2026-11-24).
+- [2026-11-24-adobe-render-pipeline.md](research/2026-11-24-adobe-render-pipeline.md)
+  — Adobe/BMD render & playback pipeline anatomy: Mercury Playback
+  Engine GPU/CPU split, green/yellow/red render bars, I-frame preview
+  files, AE RAM/persistent-disk cache + MFR + adaptive-resolution
+  ladder, Resolve 3-tier smart/user cache; per-product table + gap
+  analysis + ranked tickets T1–T10 (dropped-frame counter, render
+  bar, adaptive quality, priority autocache, disk preview tier,
+  MFR export) (2026-11-24).
+- [2026-11-24-transitions.md](research/2026-11-24-transitions.md) —
+  XER-native `xer.tr.*` transition set: GL-transitions source/license
+  audit (MIT per-shader, HP BSD-3 page-curl excluded), NLE convention
+  targets (Resolve/Premiere signature list), the 15-transition table
+  with param schema + port provenance (2026-11-24).
 - [2026-11-20-diff-review.md](reports/2026-11-20-diff-review.md) —
   pass-2 review of session's own changes: seqlock ordering bug in
   RenderStore, channel/worker leak in UiRenderHost, nested-transform
@@ -151,6 +171,30 @@ Goal started: 2026-11-15. Design doc:
   focus), adopt/keep lists, and ranked port tickets T1–T16 with
   effort estimates + "don't port the compositor" verdict
   (2026-11-23).
+- [packaging-module.md](architecture/packaging-module.md) —
+  `src/packaging` app bundler: in-process PE dep scan, staging tree +
+  xer-package/1 manifest, zip via XER_Archive, software-rendered
+  `xer_packager` GUI/CLI; archive_manager .xer-tmp format-detection
+  fix (2026-11-24).
+- [chromium-render-port-plan.md](architecture/chromium-render-port-plan.md)
+  — Chromium render/media pipeline ↔ VE render path mapping
+  (VideoFrame↔video::Frame, BeginFrame↔WM_TIMER pump, VRA↔none,
+  SharedImage↔RenderStore/keyed-mutex), binary-verified facts
+  (libskia=Ganesh-GL-only, libEGL=real ANGLE-D3D11, FFmpeg has
+  d3d11va), per-frame CPU-copy cost audit, single-process zero-copy
+  design (d3d11va→VideoProcessor→GPU compositor→keyed-mutex present),
+  and ranked tickets R1–R9 + not-portable list (command_buffer/Mojo/
+  GPU-process) (2026-11-24).
+- [xer-sync-dev.md](architecture/xer-sync-dev.md) — `xer_sync_dev`
+  tool for `third_party/3RD.xersyunc`: status/sync/cmake-gen/verify/
+  auto/selftest subcommands, libclang include-graph analysis (MSYS2
+  clang64 `libclang` via `find_package(Clang)`), `xer-<dep>.cmake`
+  patch shapes, `.xersync-state.json` interval gating (2026-11-25).
+- [content-opendialog.md](architecture/content-opendialog.md) —
+  `src/content/opendialog`: Windows common-item-dialog pickers
+  (open/save/dir read+write) with `IFileDialogCustomize` custom widgets
+  embedded in the system dialog, legacy comdlg32 fallback, HWND seam
+  for `src/ui`, and the headless/interactive test split (2026-11-24).
 - [builder-check-2026-11-15.md](reviews/builder-check-2026-11-15.md) —
   independent design-doc review findings and how each was resolved.
 

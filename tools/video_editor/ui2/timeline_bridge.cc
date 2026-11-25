@@ -166,9 +166,18 @@ void TimelineBridge::BuildHooks() {
     if (host_.pin_mosaic) hooks_.on_pin_mosaic = host_.pin_mosaic;
     if (host_.clear_track) hooks_.on_clear_track = host_.clear_track;
     if (host_.face_blur) hooks_.on_face_blur = host_.face_blur;
+    if (host_.track_mask) hooks_.on_track_mask = host_.track_mask;
+    if (host_.clear_mask) hooks_.on_clear_mask = host_.clear_mask;
     if (host_.ai_slowmo) hooks_.on_ai_slowmo = host_.ai_slowmo;
     if (host_.edit_transcript) {
         hooks_.on_edit_transcript = host_.edit_transcript;
+    }
+    if (host_.clip_cost_class) {
+        hooks_.get_clip_cost_class = host_.clip_cost_class;
+    }
+    if (host_.source_verb) hooks_.on_source_verb = host_.source_verb;
+    if (host_.on_track_target) {
+        hooks_.on_track_target = host_.on_track_target;
     }
 }
 
@@ -296,59 +305,13 @@ void TimelineBridge::RippleTrimClip(const std::string& clip_id,
                                     TrimEdge edge, double point) {
     const Clip* clip = FindClip(project_, clip_id);
     if (clip == nullptr) return;
-    const int track = clip->track;
-    const double old_start = clip->timeline_start;
-    const double old_end = ClipEndSeconds(*clip);
     std::string error;
-    history_.BeginMacro("Ripple trim");
-    bool ok = history_.TrimClip(clip_id, edge, point,
-                                BoundsForPath(clip->source_path),
-                                &error);
-    if (ok) {
-        // Freed span on this track, if any: head trims move the
-        // clip's start right, tail trims pull its end left. Growth
-        // in either direction needs no gap close (TrimClip already
-        // rejected growth into occupied space).
-        const Clip* after = FindClip(project_, clip_id);
-        double gap = 0.0;
-        double pivot = 0.0;   // followers start at/after this time
-        if (after != nullptr && edge == TrimEdge::In) {
-            gap = after->timeline_start - old_start;
-            pivot = after->timeline_start;
-        } else if (after != nullptr) {
-            gap = old_end - ClipEndSeconds(*after);
-            pivot = old_end;
-        }
-        if (gap > 1e-9) {
-            std::vector<const Clip*> followers;
-            for (const Clip& c : project_.clips) {
-                if (c.track != track) continue;
-                const bool self_moved =
-                    edge == TrimEdge::In && c.id == clip_id;
-                if (self_moved ||
-                    (c.id != clip_id &&
-                     c.timeline_start >= pivot - 1e-9)) {
-                    followers.push_back(&c);
-                }
-            }
-            std::sort(followers.begin(), followers.end(),
-                      [](const Clip* a, const Clip* b) {
-                          return a->timeline_start <
-                                 b->timeline_start;
-                      });
-            // Move leftmost-first so each clip lands in freed space.
-            for (const Clip* f : followers) {
-                if (!history_.MoveClip(
-                        f->id, f->timeline_start - gap,
-                        BoundsForPath(f->source_path), &error)) {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-    }
-    history_.EndMacro();
-    if (!ok) {
+    if (!history_.RippleTrimClip(
+            clip_id, edge, point,
+            [this](const std::string& path) {
+                return BoundsForPath(path);
+            },
+            &error)) {
         SetStatus("Ripple trim failed: " + error, true);
     } else {
         SetStatus("Ripple trim");
@@ -447,8 +410,18 @@ void TimelineBridge::AddTransitionPair(
     const double applied =
         duration > 0.0 ? duration : transition_duration_;
     std::string error;
+    // `script` is type-scoped (surface_hooks.h): Script takes a JS
+    // transition id, Xfade takes the avfilter token, XerFx takes the
+    // "xer.tr.*" id — route it into the matching Transition field.
+    const std::string script_id =
+        type == Transition::Type::Script ? script : "";
+    const std::string xfade_name =
+        type == Transition::Type::Xfade ? script : "";
+    const std::string xer_id =
+        type == Transition::Type::XerFx ? script : "";
     if (!history_.AddTransition(from_id, to_id, type, applied,
-                                &error, script)) {
+                                &error, script_id, xfade_name, xer_id,
+                                "")) {
         SetStatus("Transition failed: " + error, true);
         return;
     }

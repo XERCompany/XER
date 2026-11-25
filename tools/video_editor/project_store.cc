@@ -6,6 +6,7 @@
 #include "project_store.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -33,6 +34,72 @@ bool Fail(std::string* error_out, const std::string& message) {
         *error_out = message;
     }
     return false;
+}
+
+// ---- base64 (mask_track bitmap payloads) -----------------------------
+// The mask track's packed 1bpp bitmaps serialize as base64 strings —
+// self-contained here rather than a shared helper since nothing else
+// in the project file carries binary.
+
+std::string Base64Encode(const std::uint8_t* data, std::size_t n) {
+    static const char kTab[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((n + 2) / 3 * 4);
+    for (std::size_t i = 0; i < n; i += 3) {
+        const unsigned a = data[i];
+        const unsigned b = i + 1 < n ? data[i + 1] : 0u;
+        const unsigned c = i + 2 < n ? data[i + 2] : 0u;
+        const unsigned v = (a << 16) | (b << 8) | c;
+        out.push_back(kTab[(v >> 18) & 63]);
+        out.push_back(kTab[(v >> 12) & 63]);
+        out.push_back(i + 1 < n ? kTab[(v >> 6) & 63] : '=');
+        out.push_back(i + 2 < n ? kTab[v & 63] : '=');
+    }
+    return out;
+}
+
+// Strict decode: returns false on any non-alphabet, non-'=' byte so a
+// hand-corrupted bitmap is a load error, not a silently-wrong mask.
+bool Base64Decode(const std::string& text,
+                  std::vector<std::uint8_t>* out) {
+    static const std::array<signed char, 256> rev = [] {
+        std::array<signed char, 256> t;
+        t.fill(-1);
+        const char* kTab =
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        for (int i = 0; kTab[i] != '\0'; ++i) {
+            t[static_cast<unsigned char>(kTab[i])] =
+                static_cast<signed char>(i);
+        }
+        return t;
+    }();
+    out->clear();
+    if (text.size() % 4 != 0) return false;
+    for (std::size_t i = 0; i < text.size(); i += 4) {
+        unsigned v = 0;
+        int pads = 0;
+        for (int j = 0; j < 4; ++j) {
+            const unsigned char c =
+                static_cast<unsigned char>(text[i + j]);
+            if (c == '=') {
+                ++pads;
+                v <<= 6;
+                continue;
+            }
+            if (pads > 0 || rev[c] < 0) return false;
+            v = (v << 6) | static_cast<unsigned>(rev[c]);
+        }
+        if (pads > 2) return false;
+        out->push_back(static_cast<std::uint8_t>((v >> 16) & 0xFF));
+        if (pads < 2) {
+            out->push_back(static_cast<std::uint8_t>((v >> 8) & 0xFF));
+        }
+        if (pads < 1) {
+            out->push_back(static_cast<std::uint8_t>(v & 0xFF));
+        }
+    }
+    return true;
 }
 
 // ---- enum <-> spec strings (unknown strings are load errors) ---------
@@ -991,6 +1058,91 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
                 }
             }
 
+            // mask_track: optional SAM mask-track result —
+            // {grid_w, grid_h, label, samples: [{t, cx, cy, w, h,
+            // conf, cut, bits}]}. `bits` is the packed 1bpp grid
+            // bitmap base64'd; a sample whose bits decode to the
+            // wrong length is dropped (corrupt entry, same policy as
+            // non-finite numbers above).
+            if (cj.isMember("mask_track")) {
+                const Json::Value& mj = cj["mask_track"];
+                const std::string mwhere = where + ".mask_track";
+                if (!mj.isObject()) {
+                    return Fail(error_out,
+                                mwhere + ": expected object");
+                }
+                Reader mr{mj, mwhere, error_out};
+                std::int64_t gw = 0, gh = 0;
+                if (!mr.GetI64("grid_w", 0, &gw) ||
+                    !mr.GetI64("grid_h", 0, &gh)) {
+                    return false;
+                }
+                if (!mr.GetStr("label", clip.mask_track.label,
+                               &clip.mask_track.label)) {
+                    return false;
+                }
+                if (gw < 0 || gw > 4096 || gh < 0 || gh > 4096) {
+                    return Fail(error_out,
+                                mwhere + ": grid dims out of range");
+                }
+                clip.mask_track.grid_w = static_cast<int>(gw);
+                clip.mask_track.grid_h = static_cast<int>(gh);
+                const std::size_t want_bits =
+                    (static_cast<std::size_t>(gw) *
+                         static_cast<std::size_t>(gh) +
+                     7) /
+                    8;
+                if (mj.isMember("samples")) {
+                    const Json::Value& sj = mj["samples"];
+                    if (!sj.isArray()) {
+                        return Fail(
+                            error_out,
+                            mwhere + ".samples: expected array");
+                    }
+                    for (Json::ArrayIndex j = 0; j < sj.size(); ++j) {
+                        const Json::Value& ss = sj[j];
+                        const std::string swhere =
+                            mwhere + ".samples[" +
+                            std::to_string(j) + "]";
+                        if (!ss.isObject()) {
+                            return Fail(error_out,
+                                        swhere + ": expected object");
+                        }
+                        Reader sr{ss, swhere, error_out};
+                        ClipMaskSample sample;
+                        std::string bits64;
+                        if (!sr.GetF64("t", sample.t, &sample.t) ||
+                            !sr.GetF32("cx", sample.cx, &sample.cx) ||
+                            !sr.GetF32("cy", sample.cy, &sample.cy) ||
+                            !sr.GetF32("w", sample.w, &sample.w) ||
+                            !sr.GetF32("h", sample.h, &sample.h) ||
+                            !sr.GetF32("conf", sample.confidence,
+                                       &sample.confidence) ||
+                            !sr.GetBool("cut", sample.scene_boundary,
+                                        &sample.scene_boundary) ||
+                            !sr.GetStr("bits", "", &bits64)) {
+                            return false;
+                        }
+                        if (!std::isfinite(sample.t) ||
+                            !std::isfinite(sample.cx) ||
+                            !std::isfinite(sample.cy) ||
+                            !std::isfinite(sample.w) ||
+                            !std::isfinite(sample.h) ||
+                            !std::isfinite(sample.confidence)) {
+                            continue;   // corrupt entry — drop it
+                        }
+                        if (!bits64.empty()) {
+                            if (!Base64Decode(bits64, &sample.bits) ||
+                                sample.bits.size() != want_bits) {
+                                continue;   // corrupt bitmap — drop
+                            }
+                        }
+                        clip.mask_track.samples.push_back(
+                            std::move(sample));
+                    }
+                }
+            }
+
             *clip_out = std::move(clip);
             return true;
     };
@@ -1075,6 +1227,15 @@ bool ProjectFromJson(const Json::Value& root, Project* project_out,
             // endpoints; a missing/unknown id falls back to a linear
             // crossfade at render time.
             r.GetStr("script", "", &transition.script);
+            // Xfade token for Type::Xfade ("radial", "circleopen",
+            // ...) — same lenient contract: an unknown name falls
+            // back to the native crossfade at render time.
+            r.GetStr("xfade", "", &transition.xfade);
+            // XER-native id + params for Type::XerFx
+            // ("xer.tr.whip_pan", ...; "dir=3;soft=0.2" knobs) —
+            // same lenient contract via transitions_lib.
+            r.GetStr("xer_fx", "", &transition.xer_fx);
+            r.GetStr("xer_params", "", &transition.xer_params);
             // Non-positive/non-finite duration → invalid transition:
             // drop it (self-heal, same class as missing endpoints —
             // AddTransition requires duration > 0). Unknown `type`
@@ -1336,6 +1497,35 @@ Json::Value ClipToJson(const Clip& clip) {
         out["object_track"] = track;
     }
 
+    if (!clip.mask_track.samples.empty() ||
+        !clip.mask_track.label.empty()) {
+        Json::Value mtrack(Json::objectValue);
+        mtrack["grid_w"] = clip.mask_track.grid_w;
+        mtrack["grid_h"] = clip.mask_track.grid_h;
+        if (!clip.mask_track.label.empty()) {
+            mtrack["label"] = clip.mask_track.label;
+        }
+        Json::Value samples(Json::arrayValue);
+        for (const ClipMaskSample& sample :
+             clip.mask_track.samples) {
+            Json::Value sj(Json::objectValue);
+            sj["t"] = sample.t;
+            sj["cx"] = static_cast<double>(sample.cx);
+            sj["cy"] = static_cast<double>(sample.cy);
+            sj["w"] = static_cast<double>(sample.w);
+            sj["h"] = static_cast<double>(sample.h);
+            sj["conf"] = static_cast<double>(sample.confidence);
+            sj["cut"] = sample.scene_boundary;
+            if (!sample.bits.empty()) {
+                sj["bits"] = Base64Encode(sample.bits.data(),
+                                          sample.bits.size());
+            }
+            samples.append(sj);
+        }
+        mtrack["samples"] = samples;
+        out["mask_track"] = mtrack;
+    }
+
     if (!clip.masks.empty()) {
         Json::Value masks(Json::arrayValue);
         for (const ClipMask& mask : clip.masks) {
@@ -1404,6 +1594,15 @@ Json::Value TransitionToJson(const Transition& transition) {
     out["duration"] = transition.duration;
     if (transition.type == Transition::Type::Script) {
         out["script"] = transition.script;
+    }
+    if (transition.type == Transition::Type::Xfade) {
+        out["xfade"] = transition.xfade;
+    }
+    if (transition.type == Transition::Type::XerFx) {
+        out["xer_fx"] = transition.xer_fx;
+        if (!transition.xer_params.empty()) {
+            out["xer_params"] = transition.xer_params;
+        }
     }
     return out;
 }
@@ -1505,6 +1704,10 @@ const char* TransitionTypeToString(Transition::Type type) {
             return "dip_to_white";
         case Transition::Type::AdditiveDissolve:
             return "additive_dissolve";
+        case Transition::Type::Xfade:
+            return "xfade";
+        case Transition::Type::XerFx:
+            return "xer_fx";
         case Transition::Type::Script:
             return "script";
     }
@@ -1529,6 +1732,8 @@ bool TransitionTypeFromString(const std::string& text,
         {"dip_to_black", Transition::Type::DipToBlack},
         {"dip_to_white", Transition::Type::DipToWhite},
         {"additive_dissolve", Transition::Type::AdditiveDissolve},
+        {"xfade", Transition::Type::Xfade},
+        {"xer_fx", Transition::Type::XerFx},
         {"script", Transition::Type::Script},
     };
     for (const auto& entry : kTypes) {
@@ -1752,6 +1957,9 @@ Json::Value VeDescribeTransitions(const Project& project) {
         j["type"] = TransitionTypeToString(t.type);
         j["duration"] = t.duration;
         if (!t.script.empty()) j["script"] = t.script;
+        if (!t.xfade.empty()) j["xfade"] = t.xfade;
+        if (!t.xer_fx.empty()) j["xer_fx"] = t.xer_fx;
+        if (!t.xer_params.empty()) j["xer_params"] = t.xer_params;
         transitions.append(std::move(j));
     }
     Json::Value v(Json::objectValue);

@@ -86,6 +86,11 @@ public:
         // Run close hooks for destruction paths that bypass WM_CLOSE
         // (e.g. the Window object being dropped while the app runs).
         RunCloseHooks();
+        // The measure target must not dangle past our renderer — clear
+        // it when it points at ours (another live window may own it).
+        if (Widgets::GetTextMeasureTarget() == renderer_.get()) {
+            Widgets::SetTextMeasureTarget(nullptr);
+        }
         if (hwnd_) {
             renderer_.reset();
             // Detach the WndProc from this Window BEFORE DestroyWindow.
@@ -336,6 +341,27 @@ public:
 
     void SetRenderer(std::unique_ptr<Rendering::Renderer> renderer) {
         renderer_ = std::move(renderer);
+        RegisterTextMeasureTarget();
+    }
+
+    // Keeps the widgets-layer text-measure target pointed at the live
+    // renderer so layout-time size queries (Label::GetMinSize/
+    // GetPreferredSize) ride the real font backend instead of the
+    // char-width estimate.
+    void RegisterTextMeasureTarget() {
+        if (renderer_ != nullptr) {
+            Widgets::SetTextMeasureTarget(renderer_.get());
+        }
+    }
+
+    // renderer_ reset that keeps the measure target honest: another
+    // window's renderer may be the registered target, so the slot is
+    // cleared only when it points at ours.
+    void ResetRenderer() {
+        if (Widgets::GetTextMeasureTarget() == renderer_.get()) {
+            Widgets::SetTextMeasureTarget(nullptr);
+        }
+        renderer_.reset();
     }
 
     void SetEventBus(std::shared_ptr<UiEventBus> bus) {
@@ -465,7 +491,7 @@ public:
                 // Close hooks run while the window is still alive so
                 // observers (e.g. DevTools) can react synchronously.
                 RunCloseHooks();
-                renderer_.reset();
+                ResetRenderer();
                 DestroyWindow(message_hwnd);
                 hwnd_ = nullptr;
                 // on_close_ runs last: it may drop the last shared_ptr
@@ -772,7 +798,7 @@ public:
             }
 
             case WM_NCDESTROY: {
-                renderer_.reset();
+                ResetRenderer();
                 const LRESULT result = DefWindowProcW(message_hwnd, msg, wParam, lParam);
                 if (hwnd_ == message_hwnd) {
                     hwnd_ = nullptr;
@@ -965,6 +991,7 @@ private:
                 if (renderer_ == nullptr) {
                     renderer_ = std::make_unique<Rendering::Windows::Direct2DRenderer>(hwnd);
                 }
+                RegisterTextMeasureTarget();
                 renderer_->SetDpi(dpi_);
                 renderer_->SetClearColor(background);
                 RECT client{};
@@ -984,6 +1011,7 @@ private:
                 if (renderer_ == nullptr) {
                     renderer_ = std::make_unique<Rendering::Windows::Direct2DRenderer>(hwnd);
                 }
+                RegisterTextMeasureTarget();
                 renderer_->SetDpi(dpi_);
                 renderer_->SetClearColor(background);
                 // XER_UI_PERF=1: push last frame's stats so the renderer
@@ -1138,10 +1166,10 @@ private:
             }
             last_render_error_.clear();
         } catch (const std::exception& error) {
-            renderer_.reset();
+            ResetRenderer();
             ReportRenderError(error.what());
         } catch (...) {
-            renderer_.reset();
+            ResetRenderer();
             ReportRenderError("Unknown native renderer failure");
         }
     }

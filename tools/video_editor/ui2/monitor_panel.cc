@@ -2,7 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <deque>
 #include <utility>
 
 #include "lab/object_ops.h"           // Lab::IntPoint (complete type for vector)
@@ -36,6 +39,9 @@ constexpr float kTimecodeWidth = 132.0f;
 constexpr float kQualityWidth = 76.0f;
 constexpr float kZoomWidth = 72.0f;
 constexpr float kBadgeH = 18.0f;
+// Drop stoplight: 11px dot in a 16px slot right of the timecode.
+constexpr float kDropDot = 11.0f;
+constexpr float kDropSlot = 16.0f;
 
 // Centered transport strip order/widths (old-monitor parity + a
 // dedicated Stop the old row folded into the play toggle).
@@ -150,6 +156,46 @@ private:
     std::string text_ = "00:00:00:00";
 };
 
+// Premiere's dropped-frame indicator — the small stoplight dot that
+// sits under the monitor. The panel feeds a 0/1/2 level (green /
+// amber / red by recent drop rate); the tooltip carries the counts.
+class DropLight final : public W::Widget {
+public:
+    void SetLevel(int level) {
+        if (level_ == level) return;
+        level_ = level;
+        Invalidate();
+    }
+    int Level() const { return level_; }
+    std::string GetDebugText() const override { return "droplight"; }
+
+    void Render(Rendering::Renderer& renderer,
+                const Theme::Tokens& tokens) override {
+        const auto b = GetBounds();
+        const float d = std::min(b.width, b.height);
+        const Layout::Rect dot{b.x + (b.width - d) * 0.5f,
+                               b.y + (b.height - d) * 0.5f, d, d};
+        const Color c = level_ == 2   ? tokens.status_bad
+                        : level_ == 1 ? tokens.status_warn
+                                      : tokens.status_ok;
+        renderer.FillRect(dot, c, d * 0.5f);   // max radius = circle
+        renderer.StrokeRect(dot, tokens.border, 1.0f, d * 0.5f);
+    }
+    void Layout(const Layout::Rect& bounds) override {
+        SetBounds(bounds);
+    }
+    bool HandleEvent(const W::Event&) override { return false; }
+    void Tick(double) override {}
+    Layout::Size GetMinSize() const override { return {kDropDot, kDropDot}; }
+    Layout::Size GetPreferredSize() const override {
+        return {kDropSlot, 28.0f};
+    }
+    Layout::Size GetMaxSize() const override { return {28.0f, 28.0f}; }
+
+private:
+    int level_ = 0;
+};
+
 }  // namespace
 
 std::shared_ptr<MonitorPanel> MonitorPanel::Create(Kind kind) {
@@ -214,8 +260,19 @@ void MonitorPanel::BuildChildren() {
     quality_badge_->SetTooltip("Preview quality");
     AddChild(quality_badge_);
 
+    adaptive_badge_ = std::make_shared<W::Badge>(
+        "adapt", W::BadgeVariant::Accent);
+    adaptive_badge_->SetTooltip(
+        "Adaptive preview quality (measured auto-step)");
+    adaptive_badge_->SetVisible(false);
+    AddChild(adaptive_badge_);
+
     timecode_ = std::make_shared<TimecodeLabel>();
     AddChild(timecode_);
+    auto drop = std::make_shared<DropLight>();
+    drop->SetTooltip("Dropped frames: 0");
+    drop_light_ = drop;
+    AddChild(drop_light_);
 
     const auto make_btn = [this](const char* text, const char* icon,
                                  const char* tooltip) {
@@ -369,6 +426,7 @@ XER::UI::Widgets::Widget* MonitorPanel::Chrome(ChromeId id) const {
         case ChromeId::Timecode:     return timecode_.get();
         case ChromeId::Title:        return title_label_.get();
         case ChromeId::Meters:       return meter_.get();
+        case ChromeId::DropLight:    return drop_light_.get();
     }
     return nullptr;
 }
@@ -423,11 +481,69 @@ void MonitorPanel::SetQualityScale(float scale) {
     }
     syncing_quality_ = false;
 }
+void MonitorPanel::SetDropStats(std::uint64_t dropped,
+                                std::uint64_t rendered,
+                                double last_render_ms,
+                                int adaptive_level,
+                                float effective_scale) {
+    // Stoplight by the RECENT drop rate — a trailing ~3 s window of
+    // (dropped, rendered) deltas; Premiere's rule: green while no
+    // frames drop, amber once they do, red when the rate is heavy.
+    const auto now = std::chrono::steady_clock::now();
+    drop_history_.push_back({now, dropped, rendered});
+    while (drop_history_.size() > 2 &&
+           now - drop_history_.front().t > std::chrono::seconds(3)) {
+        drop_history_.pop_front();
+    }
+    const DropSample& base = drop_history_.front();
+    const std::uint64_t rd = dropped - base.dropped;
+    const std::uint64_t rr = rendered - base.rendered;
+    int level = 0;
+    if (rd > 0) {
+        const double frac = static_cast<double>(rd) /
+                            static_cast<double>(rd + rr);
+        level = frac > 0.15 ? 2 : 1;
+    } else if (dropped > 0) {
+        level = 1;   // drops happened — latches amber like Premiere
+    }
+    drop_level_ = level;
+    if (auto* dl = static_cast<DropLight*>(drop_light_.get())) {
+        dl->SetLevel(level);
+    }
+    char tip[96];
+    std::snprintf(tip, sizeof(tip),
+                  "Dropped %llu frame%s (last render %.1f ms)",
+                  static_cast<unsigned long long>(dropped),
+                  dropped == 1 ? "" : "s", last_render_ms);
+    drop_light_->SetTooltip(tip);
+    // Measured adaptive ladder badge — Premiere has no analog; shows
+    // while the engine is auto-stepping the playback tier.
+    if (adaptive_badge_ != nullptr) {
+        adaptive_badge_->SetVisible(adaptive_level > 0);
+        if (adaptive_level > 0) {
+            char at[64];
+            std::snprintf(at, sizeof(at),
+                          "Adaptive preview: effective 1/%g",
+                          std::max(1.0f,
+                                   1.0f / std::max(effective_scale,
+                                                   0.001f)));
+            adaptive_badge_->SetTooltip(at);
+        }
+    }
+}
+bool MonitorPanel::AdaptiveBadgeVisible() const {
+    return adaptive_badge_ != nullptr && adaptive_badge_->IsVisible();
+}
 void MonitorPanel::SetProxyBadge(std::string text) {
     proxy_badge_->SetText(std::move(text));
     proxy_badge_->SetVisible(
         !proxy_badge_->GetText().empty());
     RequestLayout();
+}
+void MonitorPanel::SetScopeActive(bool active) {
+    if (scope_active_ == active) return;
+    scope_active_ = active;
+    Invalidate();
 }
 void MonitorPanel::SetStatusText(std::string text, bool is_error) {
     surface_->SetStatusText(std::move(text), is_error);
@@ -463,6 +579,10 @@ std::pair<double, double> MonitorPanel::Marks() const {
 void MonitorPanel::SetFrame(const std::vector<std::uint8_t>& bgra,
                             int width, int height) {
     surface_->SetFrame(bgra, width, height);
+}
+void MonitorPanel::SetVideoFrame(
+    Render::scoped_refptr<Render::VideoFrame> frame) {
+    surface_->SetVideoFrame(std::move(frame));
 }
 void MonitorPanel::SetClickPointsArmed(bool armed) {
     surface_->SetClickPointsArmed(armed);
@@ -515,7 +635,7 @@ float MonitorPanel::CenterStripLeft(float row_width) const {
     // strip on the full width parks its first button ON the timecode
     // text at narrow panel widths. Center in the span that remains
     // after the readout instead, and never slide back into it.
-    const float tc_right = 4.0f + kTimecodeWidth;
+    const float tc_right = 4.0f + kTimecodeWidth + kDropSlot;
     const float centered = tc_right +
         std::max(0.0f, (row_width - tc_right - strip) * 0.5f);
     return std::max(centered, tc_right + kGap);
@@ -573,10 +693,16 @@ void MonitorPanel::Layout(const Layout::Rect& bounds) {
         quality_badge_->Layout(
             {rx, badge_y, 44.0f, kBadgeH}, tokens);
     }
+    if (adaptive_badge_->IsVisible()) {
+        rx -= 40.0f;
+        adaptive_badge_->Layout({rx, badge_y, 40.0f, kBadgeH}, tokens);
+        rx -= kGap;
+    }
     if (proxy_badge_->IsVisible()) {
-        rx -= 56.0f + kGap;
+        rx -= 56.0f;
         proxy_badge_->Layout(
             {rx, badge_y, 56.0f, kBadgeH}, tokens);
+        rx -= kGap;
     }
     title_label_->Layout(
         {header.x + 8.0f, header.y,
@@ -591,6 +717,10 @@ void MonitorPanel::Layout(const Layout::Rect& bounds) {
     // Transport row.
     const auto row = TransportRect();
     timecode_->Layout(ChromeRect(ChromeId::Timecode), tokens);
+    drop_light_->Layout(
+        {row.x + 4.0f + kTimecodeWidth + (kDropSlot - kDropDot) * 0.5f,
+         row.y + (row.height - kDropDot) * 0.5f, kDropDot, kDropDot},
+        tokens);
     for (std::size_t i = 0; i < kCenterStrip.size(); ++i) {
         auto* w = Chrome(kCenterStrip[i]);
         if (w != nullptr) {
@@ -640,7 +770,16 @@ void MonitorPanel::Render(Rendering::Renderer& renderer,
                           const Theme::Tokens& tokens) {
     const auto b = GetBounds();
     renderer.FillRect(b, tokens.surface, tokens.radius_large);
-    renderer.StrokeRect(b, tokens.border, 1.0f, tokens.radius_large);
+    // Last-active-viewer accent border — the shell marks the panel
+    // whose scope the shortcut router currently serves (Premiere's
+    // blue viewer highlight).
+    if (scope_active_) {
+        renderer.StrokeRect(b, tokens.accent, 2.0f,
+                            tokens.radius_large);
+    } else {
+        renderer.StrokeRect(b, tokens.border, 1.0f,
+                            tokens.radius_large);
+    }
     // Separators under the header and above the transport row.
     const auto header = HeaderRect();
     const auto row = TransportRect();

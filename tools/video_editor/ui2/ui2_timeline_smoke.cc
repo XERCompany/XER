@@ -368,6 +368,205 @@ std::string CheckChromeHooks(TimelineSurface& s, Rec& r) {
     return "";
 }
 
+std::string CheckSnapIndicator(TimelineSurface& s) {
+    // SnapCandidate is the const tool-facing seam — a resolved-
+    // different result marks the guide time the Render pass draws.
+    // c1's in edge sits at 1.0; the 8px window is 0.1s at zoom 80.
+    const double snapped = s.SnapCandidate(1.04, 0);
+    if (!Near(snapped, 1.0, 1e-9)) {
+        return "candidate did not snap to the clip edge";
+    }
+    if (s.SnapIndicatorSeconds() != snapped) {
+        return "snapped candidate did not mark the guide";
+    }
+    // An unsnapped call hides the guide again (drag moved off).
+    if (s.SnapCandidate(3.4, 0) != 3.4 ||
+        s.SnapIndicatorSeconds() != -1.0) {
+        return "unsnapped candidate kept the guide marked";
+    }
+    // Re-mark, then the release that ends the drag clears it.
+    s.SnapCandidate(1.04, 0);
+    if (s.SnapIndicatorSeconds() < 0.0) {
+        return "guide failed to re-mark";
+    }
+    s.HandleEvent(Up(s.XAtTime(4.0), s.GetBounds().y + 120.0f));
+    if (s.SnapIndicatorSeconds() != -1.0) {
+        return "drag release did not clear the guide";
+    }
+    return "";
+}
+
+std::string CheckTrackTargeting(TimelineSurface& s, Rec& r) {
+    // Default patch after SetProject: the first track per kind —
+    // V1 = index 0, A1 = index 2 on the V1/V2/A1/A2 seed grid
+    // (Premiere's unpatched-everything-else default).
+    if (s.TargetedTracks(TrackKind::Video) !=
+        std::vector<int>{0}) {
+        return "default video target != track 0";
+    }
+    if (s.TargetedTracks(TrackKind::Audio) !=
+        std::vector<int>{2}) {
+        return "default audio target != track 2";
+    }
+    if (s.FirstTargetedTrack(TrackKind::Video) != 0 ||
+        s.FirstTargetedTrack(TrackKind::Audio) != 2) {
+        return "FirstTargetedTrack disagrees with the seed";
+    }
+    const auto mask0 = s.TargetedMask();
+    if (mask0 != std::vector<bool>{true, false, true, false}) {
+        return "default target mask wrong";
+    }
+
+    // Badge click (header button id 6) — the V/A chip in the
+    // header's upper band toggles the target set when no hook is
+    // bound (the surface owns session targeting).
+    const Rect h0 = s.HeaderRect(0);
+    const float badge_x = h0.x + 3.0f + 8.0f + 17.0f;
+    s.HandleEvent(Down(badge_x, h0.y + 18.0f));
+    s.HandleEvent(Up(badge_x, h0.y + 18.0f));
+    if (s.TrackTargeted(0)) {
+        return "badge click did not untarget V1";
+    }
+    if (s.FirstTargetedTrack(TrackKind::Video) != -1) {
+        return "video target not empty after patch-off";
+    }
+    const Rect h1 = s.HeaderRect(1);
+    s.HandleEvent(Down(badge_x, h1.y + 18.0f));
+    s.HandleEvent(Up(badge_x, h1.y + 18.0f));
+    if (!s.TrackTargeted(1)) {
+        return "badge click did not target V2";
+    }
+    if (s.FirstTargetedTrack(TrackKind::Video) != 1) {
+        return "video target did not move to track 1";
+    }
+    if (s.TargetedMask() !=
+        std::vector<bool>{false, true, true, false}) {
+        return "target mask did not follow the badge toggles";
+    }
+
+    // Hook-bound: with on_track_target wired the badge reports the
+    // REQUESTED state and the set stays put — the shell pushes the
+    // result back through SetTrackTargeted.
+    Rec r2;
+    TimelineHooks h2 = RecordingHooks(r2);
+    int calls = 0, last_track = -1;
+    bool last_on = false;
+    h2.on_track_target = [&](int t, bool on) {
+        ++calls;
+        last_track = t;
+        last_on = on;
+    };
+    s.SetHooks(std::move(h2));
+    s.HandleEvent(Down(badge_x, h1.y + 18.0f));
+    s.HandleEvent(Up(badge_x, h1.y + 18.0f));
+    if (calls != 1 || last_track != 1 || last_on) {
+        return "target hook did not get the toggle request";
+    }
+    if (!s.TrackTargeted(1)) {
+        return "surface self-toggled despite the bound hook";
+    }
+    // Shell push-back mirrors the request (the app's wiring).
+    s.SetTrackTargeted(1, false);
+    if (s.TrackTargeted(1)) {
+        return "SetTrackTargeted(false) did not clear the target";
+    }
+    s.SetHooks(RecordingHooks(r));
+    s.ResetTrackTargets();
+    if (s.TargetedTracks(TrackKind::Video) !=
+        std::vector<int>{0}) {
+        return "ResetTrackTargets did not re-seed V1";
+    }
+    return "";
+}
+
+std::string CheckTrimPreview(TimelineSurface& s, Rec& r) {
+    (void)r;
+    const Project& p = *s.GetProject();
+    s.SetSnapEnabled(false);   // deterministic pointer deltas
+
+    // N-tool roll on the c1/c3 shared cut — both panes track the
+    // moving cut (Premiere trim-mode's two-up). The roll tool maps
+    // the pointer's absolute time to the new cut, so the move aims
+    // at XAtTime(5.5) for a +0.5 s offset.
+    s.SetTool(ToolId::RollingEdit);
+    const Rect c3 = s.RealClipRect(p.clips[2]);
+    const float cy = c3.y + c3.height * 0.5f;
+    const float cut_x = s.XAtTime(5.0) + 2.0f;   // c3's in-edge zone
+    const float target_x = s.XAtTime(5.5);
+    if (s.TrimPreviewActive()) {
+        return "trim preview armed before a grab";
+    }
+    s.HandleEvent(Down(cut_x, cy));
+    s.HandleEvent(Move(target_x, cy));
+    if (!s.TrimPreviewActive()) {
+        return "roll drag did not arm the trim preview";
+    }
+    if (!Near(s.TrimOffsetSeconds(), 0.5, 0.02)) {
+        return "roll offset != pointer delta";
+    }
+    if (s.TrimOffsetFrames() != 15) {
+        return "roll frame counter != 15 at 30 fps";
+    }
+    const auto roll_out = s.TrimPreviewOutgoing();
+    const auto roll_in = s.TrimPreviewIncoming();
+    if (roll_out.clip_id != "c1" || !roll_out.moves ||
+        roll_in.clip_id != "c3" || !roll_in.moves) {
+        return "roll A/B sides resolved wrong";
+    }
+    // c1 in_point 0 rate 1: moving its out edge to 5.5 previews the
+    // 4.5 s source frame; c3's head lands on 0.5 s.
+    if (!Near(roll_out.source_seconds, 4.5, 1e-6)) {
+        return "roll outgoing source frame wrong";
+    }
+    if (!Near(roll_in.source_seconds, 0.5, 1e-6)) {
+        return "roll incoming source frame wrong";
+    }
+    s.HandleEvent(Up(target_x, cy));
+    if (s.TrimPreviewActive()) {
+        return "trim preview did not clear on release";
+    }
+
+    // B-tool ripple trim on an unshared edge — c2's out edge on the
+    // audio lane. The outgoing pane moves; the incoming pane reads
+    // empty (no follower on the track). Same absolute-time mapping:
+    // XAtTime(4.0) grows the [0.5,3.5) clip by +0.5 s.
+    s.SetTool(ToolId::RippleEdit);
+    const Rect c2 = s.RealClipRect(p.clips[1]);
+    const float acy = c2.y + c2.height * 0.5f;
+    const float edge_x = c2.x + c2.width - 2.0f;
+    const float ripple_x = s.XAtTime(4.0);
+    s.HandleEvent(Down(edge_x, acy));
+    s.HandleEvent(Move(ripple_x, acy));
+    if (!s.TrimPreviewActive()) {
+        return "ripple drag did not arm the trim preview";
+    }
+    if (!Near(s.TrimOffsetSeconds(), 0.5, 0.02)) {
+        return "ripple offset != pointer delta";
+    }
+    const auto rp_out = s.TrimPreviewOutgoing();
+    const auto rp_in = s.TrimPreviewIncoming();
+    if (rp_out.clip_id != "c2" || !rp_out.moves || rp_in.moves ||
+        !rp_in.clip_id.empty()) {
+        return "ripple A/B sides resolved wrong";
+    }
+    // c2 [0.5,3.5) + 0.5 s growth previews its 3.5 s source frame.
+    if (!Near(rp_out.source_seconds, 3.5, 1e-6)) {
+        return "ripple outgoing source frame wrong";
+    }
+    // Escape mid-drag: the gesture cancels and the overlay drops.
+    W::Event esc{};
+    esc.type = W::Event::Type::KeyDown;
+    esc.key = W::KeyCode::Escape;
+    s.HandleEvent(esc);
+    if (s.TrimPreviewActive()) {
+        return "escape did not drop the trim preview";
+    }
+
+    s.SetTool(ToolId::Selection);
+    s.SetSnapEnabled(true);
+    return "";
+}
+
 std::string CheckStrip() {
     auto strip = TimelineStrip::Create();
     if (strip == nullptr || strip->Surface() == nullptr) {
@@ -483,6 +682,18 @@ std::string Ui2TimelineSmoke() {
     if (const std::string err = CheckChromeHooks(*surface, rec);
         !err.empty()) {
         return "chrome: " + err;
+    }
+    if (const std::string err = CheckSnapIndicator(*surface);
+        !err.empty()) {
+        return "snap indicator: " + err;
+    }
+    if (const std::string err = CheckTrackTargeting(*surface, rec);
+        !err.empty()) {
+        return "targeting: " + err;
+    }
+    if (const std::string err = CheckTrimPreview(*surface, rec);
+        !err.empty()) {
+        return "trim preview: " + err;
     }
     // Async media seam: every clip source gets probed through the
     // tri-state hooks and kPending answers return immediately.

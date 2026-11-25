@@ -33,12 +33,14 @@
 #include <vector>
 
 #include "media_decoder.h"      // MediaDecoderFactory
+#include "render/video_frame.h"  // render::VideoFrame (zero-copy marshal)
 #include "timeline_model.h"     // Project
 
 namespace XER::VideoEditor {
 class PreviewEngine;
 struct PreviewOptions;
 class IAudioSink;
+class FrameClock;
 }
 
 namespace XER::VideoEditor::Ui2 {
@@ -68,6 +70,9 @@ public:
     // null factory keeps the production decoder path.
     void SetDecoderFactory(MediaDecoderFactory factory);
     void SetAutocache(bool enabled);
+    // Test/headless seam — a manual FrameClock makes playhead advance
+    // deterministic (PreviewOptions::clock parity). Set before Ensure.
+    void SetClock(std::shared_ptr<FrameClock> clock);
 
     // ---- document state ----
     // Rebinds the playback snapshot; the next Ensure() re-inits the
@@ -104,6 +109,10 @@ public:
     // opposite key halves and flips direction at 1x; a stopped
     // shuttle cold-starts at ±1x (old ShuttleStep parity).
     void ShuttleStep(int direction);   // +1 = L, -1 = J
+    // K+J/K+L held combos: plays at a fixed `rate` (bypasses the
+    // ladder — Premiere's held slow shuttle). Idempotent under OS
+    // key auto-repeat; release is the caller's ShuttleStop().
+    void HeldShuttle(double rate);
     void ShuttleStop();                // K — pause + reset ladder
     // Pause at the playhead + reset the ladder (old
     // StopProgramTransport/StopSourceTransport).
@@ -140,6 +149,22 @@ public:
     // mixer's master strip) pull the same values. Zeros until the
     // engine reports.
     std::pair<float, float> PeakLevels() const;
+    // Mirror of PreviewEngine::FrameStats (dropped-frame indicator +
+    // adaptive badge data), refreshed by DrainPending — the shell's
+    // read of the engine counters without an engine include.
+    struct FrameStats {
+        std::uint64_t rendered = 0;
+        std::uint64_t dropped = 0;
+        double last_render_ms = 0.0;
+        float effective_scale = 1.0f;
+        int adaptive_level = 0;
+        std::uint64_t scheduler_dropped = 0;
+        std::uint64_t scheduler_missed = 0;
+    };
+    const FrameStats& LastFrameStats() const { return last_stats_; }
+    // True when the shared effect cache already holds frames for
+    // clip_id — the timeline render-status bar's green tier.
+    bool ClipCached(const std::string& clip_id) const;
 
 private:
     // Forwarding audio sink — engines capture the audio_sink pointer
@@ -151,6 +176,9 @@ private:
     void EnsurePlatformAudioSink();
     // Shared cold-start boot (Seek + SetLoop + SetRate + play flags).
     void StartPlayback(double rate);
+    // Single write point for shuttle_rate_ — pushes the speed-badge
+    // mirror onto the attached panel (hidden at 0 / +1x).
+    void SetShuttleRate(double rate);
     void ApplyLoopCommand();
     void Report(const std::string& text, bool is_error = false);
 
@@ -159,6 +187,7 @@ private:
     std::function<void(const std::string&, bool)> on_status_;
     std::function<std::string(const std::string&)> media_resolver_;
     MediaDecoderFactory decoder_factory_;
+    std::shared_ptr<FrameClock> clock_;
     bool autocache_ = true;
 
     Project snapshot_;
@@ -183,14 +212,20 @@ private:
     double work_in_ = 0.0, work_out_ = 0.0;
 
     // Pending marshal slots — written by the engine worker, swapped
-    // out by DrainPending (old pending_* parity).
+    // out by DrainPending (old pending_* parity). The frame slot is a
+    // refcounted render::VideoFrame — the R9 single-marshal hand-off:
+    // one ref moves worker->UI, no pixel copy on the way.
     mutable std::mutex mutex_;
-    std::vector<std::uint8_t> pending_frame_;
-    int pending_w_ = 0, pending_h_ = 0;
+    Render::scoped_refptr<Render::VideoFrame> pending_frame_;
     bool has_frame_ = false;
     float pending_peak_l_ = 0.0f, pending_peak_r_ = 0.0f;
     bool has_peaks_ = false;
     double pending_playhead_ = -1.0;
+
+    // Last drained FrameStats + drop-report throttle state.
+    FrameStats last_stats_;
+    std::uint64_t last_reported_dropped_ = 0;
+    std::chrono::steady_clock::time_point last_drop_report_{};
 };
 
 }  // namespace XER::VideoEditor::Ui2

@@ -41,6 +41,10 @@ constexpr Tokens kLightTokens{
     .track_audio = {0.051f, 0.580f, 0.533f, 1.0f},  // teal-600 #0d9488
     .playhead = {0.031f, 0.569f, 0.698f, 1.0f},     // cyan-700 #0891b2
     .warning_chip = {0.851f, 0.467f, 0.024f, 1.0f}, // amber-600 #d97706
+    // Stoplight status: render-bar green/yellow/red + drop indicator.
+    .status_ok = {0.133f, 0.545f, 0.133f, 1.0f},    // green-600 #16883a-ish
+    .status_warn = {0.851f, 0.467f, 0.024f, 1.0f},  // amber-600 #d97706
+    .status_bad = {0.718f, 0.11f, 0.11f, 1.0f},     // red-700 #b91c1c
 };
 
 // shadcn/ui dark: near-black zinc-950 canvas, cards one step above,
@@ -82,6 +86,10 @@ constexpr Tokens kDarkTokens{
     .track_audio = {0.176f, 0.831f, 0.749f, 1.0f},  // teal-400 #2dd4bf
     .playhead = {0.133f, 0.827f, 0.933f, 1.0f},     // cyan-400 #22d3ee
     .warning_chip = {0.984f, 0.749f, 0.141f, 1.0f}, // amber-400 #fbbf24
+    // Stoplight status: render-bar green/yellow/red + drop indicator.
+    .status_ok = {0.290f, 0.871f, 0.502f, 1.0f},    // green-400 #4ade80
+    .status_warn = {0.984f, 0.749f, 0.141f, 1.0f},  // amber-400 #fbbf24
+    .status_bad = {0.898f, 0.282f, 0.302f, 1.0f},   // red-500-ish #e5484d
 };
 
 } // namespace

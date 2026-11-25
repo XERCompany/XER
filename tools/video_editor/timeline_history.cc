@@ -461,16 +461,22 @@ private:
 
 class LiftRangeCommand : public TimelineSnapshotCommand {
 public:
-    LiftRangeCommand(double t0, double t1, bool close_gap)
-        : t0_(t0), t1_(t1), close_gap_(close_gap) {}
+    LiftRangeCommand(double t0, double t1, bool close_gap,
+                     std::vector<bool> track_target)
+        : t0_(t0), t1_(t1), close_gap_(close_gap),
+          track_target_(std::move(track_target)) {}
     bool ApplyOp(Project& project, std::string* error) override {
-        return LiftRange(project, t0_, t1_, close_gap_, error);
+        return LiftRange(project, t0_, t1_, close_gap_, error,
+                         track_target_);
     }
     std::string Label() const override { return "Lift/extract"; }
 
 private:
     double t0_, t1_;
     bool close_gap_;
+    // Premiere track targeting / Resolve auto-select: empty = all
+    // unlocked tracks (legacy), mask[t]==false skips track t.
+    std::vector<bool> track_target_;
 };
 
 // Same snapshot/replay shape as TimelineSnapshotCommand but covering
@@ -1016,16 +1022,21 @@ class AddTransitionCommand : public Command {
 public:
     AddTransitionCommand(std::string from, std::string to,
                          Transition::Type type, double duration,
-                         std::string script)
+                         std::string script, std::string xfade,
+                         std::string xer_fx, std::string xer_params)
         : from_(std::move(from)),
           to_(std::move(to)),
           type_(type),
           duration_(duration),
-          script_(std::move(script)) {}
+          script_(std::move(script)),
+          xfade_(std::move(xfade)),
+          xer_fx_(std::move(xer_fx)),
+          xer_params_(std::move(xer_params)) {}
     bool Apply(Project& project) override {
         last_error_.clear();
         return AddTransition(project, from_, to_, type_, duration_,
-                             &last_error_, script_);
+                             &last_error_, script_, xfade_, xer_fx_,
+                             xer_params_);
     }
     bool Revert(Project& project) override {
         return RemoveTransition(project, from_, to_);
@@ -1039,6 +1050,9 @@ private:
     Transition::Type type_;
     double duration_;
     std::string script_;
+    std::string xfade_;
+    std::string xer_fx_;
+    std::string xer_params_;
     std::string last_error_;
 };
 
@@ -1395,10 +1409,13 @@ bool TimelineHistory::AddTransition(const std::string& from_clip,
                                     const std::string& to_clip,
                                     Transition::Type type, double duration,
                                     std::string* error_out,
-                                    const std::string& script) {
-    auto cmd = std::make_unique<AddTransitionCommand>(from_clip, to_clip,
-                                                    type, duration,
-                                                    script);
+                                    const std::string& script,
+                                    const std::string& xfade,
+                                    const std::string& xer_fx,
+                                    const std::string& xer_params) {
+    auto cmd = std::make_unique<AddTransitionCommand>(
+        from_clip, to_clip, type, duration, script, xfade, xer_fx,
+        xer_params);
     auto* raw = cmd.get();
     if (!cmd->Apply(project_)) {
         if (error_out) {
@@ -1489,9 +1506,77 @@ bool TimelineHistory::RippleDeleteClip(const std::string& clip_id,
     return true;
 }
 
+bool TimelineHistory::RippleTrimClip(
+    const std::string& clip_id, TrimEdge edge, double point,
+    const std::function<MediaBounds(const std::string&)>& bounds_for,
+    std::string* error_out) {
+    const Clip* clip = FindClip(project_, clip_id);
+    if (clip == nullptr) {
+        if (error_out) *error_out = "no such clip";
+        return false;
+    }
+    const int track = clip->track;
+    const double old_start = clip->timeline_start;
+    const double old_end = ClipEndSeconds(*clip);
+    std::string error;
+    BeginMacro("Ripple trim");
+    bool ok =
+        TrimClip(clip_id, edge, point, bounds_for(clip->source_path),
+                 &error);
+    if (ok) {
+        // Freed span on this track, if any: head trims move the
+        // clip's start right, tail trims pull its end left. Growth
+        // in either direction needs no gap close (TrimClip already
+        // rejected growth into occupied space).
+        const Clip* after = FindClip(project_, clip_id);
+        double gap = 0.0;
+        double pivot = 0.0;   // followers start at/after this time
+        if (after != nullptr && edge == TrimEdge::In) {
+            gap = after->timeline_start - old_start;
+            pivot = after->timeline_start;
+        } else if (after != nullptr) {
+            gap = old_end - ClipEndSeconds(*after);
+            pivot = old_end;
+        }
+        if (gap > 1e-9) {
+            std::vector<const Clip*> followers;
+            for (const Clip& c : project_.clips) {
+                if (c.track != track) continue;
+                const bool self_moved =
+                    edge == TrimEdge::In && c.id == clip_id;
+                if (self_moved ||
+                    (c.id != clip_id &&
+                     c.timeline_start >= pivot - 1e-9)) {
+                    followers.push_back(&c);
+                }
+            }
+            std::sort(followers.begin(), followers.end(),
+                      [](const Clip* a, const Clip* b) {
+                          return a->timeline_start <
+                                 b->timeline_start;
+                      });
+            // Move leftmost-first so each clip lands in freed space.
+            for (const Clip* f : followers) {
+                if (!MoveClip(f->id, f->timeline_start - gap,
+                              bounds_for(f->source_path), &error)) {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+    }
+    EndMacro();
+    if (!ok && error_out != nullptr) {
+        *error_out = error;
+    }
+    return ok;
+}
+
 bool TimelineHistory::LiftRange(double t0, double t1, bool close_gap,
-                                std::string* error_out) {
-    auto cmd = std::make_unique<LiftRangeCommand>(t0, t1, close_gap);
+                                std::string* error_out,
+                                const std::vector<bool>& track_target) {
+    auto cmd = std::make_unique<LiftRangeCommand>(t0, t1, close_gap,
+                                                track_target);
     auto* raw = cmd.get();
     if (!cmd->Apply(project_)) {
         if (error_out) {
