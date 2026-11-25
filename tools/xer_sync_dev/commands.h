@@ -26,6 +26,7 @@ struct Options {
     std::string cacert;                  // --cacert <path> (CAINFO)
     std::string dep_name;                // --name <n> (add* commands)
     std::string add_url;                 // positional url (add* commands)
+    std::string ref;                     // --ref <tag|sha> (addfromgit)
     std::vector<ExtractMapEntry> extract_map;  // --extract-map f=t;...
 };
 

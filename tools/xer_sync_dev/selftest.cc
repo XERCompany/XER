@@ -109,11 +109,15 @@ int CmdSelftest(const Options& o) {
                 " true,\n"
                 "  \"prefix_new_version_all_dependencies\": \"XER-\",\n"
                 "  \"output_directory\": \"third_party\",\n"
+                "  \"build_mode\": \"static\",\n"
                 "  \"dependencies-from-github\": [\n"
                 "    {\"name\": \"minilib\", \"url\": "
-                "\"https://example.invalid/minilib\"},\n"
+                "\"https://example.invalid/minilib\",\n"
+                "     \"ref\": \"v1.2.3\",\n"
+                "     \"notes\": \"test note\"},\n"
                 "    {\"name\": \"otherhdr\", \"url\": "
-                "\"https://example.invalid/otherhdr\"}\n"
+                "\"https://example.invalid/otherhdr\",\n"
+                "     \"build_mode\": \"shared\"}\n"
                 "  ]\n"
                 "}\n"),
           "write synthetic manifest");
@@ -127,6 +131,17 @@ int CmdSelftest(const Options& o) {
           "output_directory resolved against manifest dir");
     Check(m.prefix_new_version_all_dependencies == "XER-",
           "prefix parsed");
+    Check(m.build_mode == "static", "manifest build_mode parsed");
+    {
+        const Dependency* mini = FindDep(m, "minilib");
+        const Dependency* oh = FindDep(m, "otherhdr");
+        Check(mini && mini->ref == "v1.2.3", "dep ref parsed");
+        Check(mini && mini->notes == "test note", "dep notes parsed");
+        Check(oh && EffectiveBuildMode(m, *oh) == "shared",
+              "per-dep build_mode overrides manifest");
+        Check(mini && EffectiveBuildMode(m, *mini) == "static",
+              "dep build_mode inherits manifest");
+    }
 
     // --- status ----------------------------------------------------------
     std::printf("\n[status]\n");
@@ -224,6 +239,8 @@ int CmdSelftest(const Options& o) {
         g.kind = DepKind::kGit;
         g.name = "testgit";
         g.url = "https://example.invalid/testgit.git";
+        g.ref = "deadbeef";
+        g.notes = "hard: custom build";
         std::string ae;
         Check(AppendDepToManifest(mpath, g, &ae),
               "append github entry" + (ae.empty() ? "" : " — " + ae));
@@ -252,8 +269,10 @@ int CmdSelftest(const Options& o) {
         Check(m2.deps.size() == 4, "manifest now has 4 deps");
         const Dependency* t = FindDep(m2, "testgit");
         Check(t && t->kind == DepKind::kGit &&
-                  t->url == g.url,
-              "github entry round-trips");
+                  t->url == g.url &&
+                  t->ref == "deadbeef" &&
+                  t->notes == "hard: custom build",
+              "github entry + ref + notes round-trips");
         const Dependency* t2 = FindDep(m2, "testos");
         Check(t2 && t2->kind == DepKind::kBinary &&
                   t2->mirrors.size() == 1 &&

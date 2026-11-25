@@ -97,6 +97,58 @@ bool GitClone(const std::string& url, const std::filesystem::path& dir,
     return r.ran && r.exit_code == 0 && fs::is_directory(dir);
 }
 
+bool GitCloneRef(const std::string& url, const std::string& ref,
+                 const std::filesystem::path& dir, std::string* log) {
+    std::string out;
+    auto run = [&out](const std::string& cmd) {
+        const ProcResult r = RunProcess(cmd, true);
+        out += r.output;
+        return r.ran && r.exit_code == 0;
+    };
+    const std::string qdir = ShellQuote(GenericPath(dir));
+    if (!run("git init --quiet " + qdir)) {
+        if (log) *log = out;
+        return false;
+    }
+    if (!run("git -C " + qdir + " remote add origin " +
+             ShellQuote(url))) {
+        if (log) *log = out;
+        return false;
+    }
+    bool ok = run("git -C " + qdir +
+                  " fetch --quiet --depth 1 origin " + ShellQuote(ref)) &&
+              run("git -C " + qdir + " checkout --quiet --detach FETCH_HEAD");
+    if (!ok) {
+        // Server refused the direct ref fetch (no reachable-sha1
+        // uploadpack permission) — widen to a full fetch and let git
+        // resolve the ref name itself.
+        ok = run("git -C " + qdir + " fetch --quiet origin") &&
+             run("git -C " + qdir + " checkout --quiet --detach " +
+                 ShellQuote(ref));
+    }
+    if (log) *log = out;
+    return ok && fs::is_directory(dir);
+}
+
+std::string GitResolveRef(const std::filesystem::path& dir,
+                          const std::string& ref) {
+    // "^{commit}" goes inside the quotes — an unquoted ^ is cmd.exe's
+    // escape char and gets swallowed before git sees it.
+    const ProcResult r =
+        Git(dir, "rev-parse --verify --quiet " +
+                     ShellQuote(ref + "^{commit}"), false);
+    if (!r.ran || r.exit_code != 0) return {};
+    return FirstLine(r.output);
+}
+
+bool GitCheckout(const std::filesystem::path& dir,
+                 const std::string& ref, std::string* log) {
+    const ProcResult r = Git(dir, "checkout --quiet --detach " +
+                                      ShellQuote(ref), true);
+    if (log) *log = r.output;
+    return r.ran && r.exit_code == 0;
+}
+
 bool GitFetch(const std::filesystem::path& dir, std::string* log) {
     const ProcResult r = Git(dir, "fetch --quiet origin", true);
     if (log) *log = r.output;

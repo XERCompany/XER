@@ -67,6 +67,7 @@ bool LoadManifest(const std::filesystem::path& path, Manifest* out,
         root.get("prefix_new_version_all_dependencies", "XER-").asString();
     m.output_directory =
         root.get("output_directory", "third_party").asString();
+    m.build_mode = root.get("build_mode", "static").asString();
 
     for (const auto& d : root["dependencies-from-github"]) {
         if (!d.isObject()) continue;
@@ -74,6 +75,9 @@ bool LoadManifest(const std::filesystem::path& path, Manifest* out,
         dep.kind = DepKind::kGit;
         dep.name = d.get("name", "").asString();
         dep.url = d.get("url", "").asString();
+        dep.ref = d.get("ref", "").asString();
+        dep.notes = d.get("notes", "").asString();
+        dep.build_mode = d.get("build_mode", "").asString();
         if (!dep.name.empty() && !dep.url.empty()) {
             m.deps.push_back(std::move(dep));
         }
@@ -85,6 +89,8 @@ bool LoadManifest(const std::filesystem::path& path, Manifest* out,
         dep.name = d.get("package_name", d.get("name", "").asString())
                        .asString();
         dep.url = d.get("url", "").asString();
+        dep.notes = d.get("notes", "").asString();
+        dep.build_mode = d.get("build_mode", "").asString();
         for (const auto& mm : d["mirrors"]) {
             if (mm.isString()) dep.mirrors.push_back(mm.asString());
         }
@@ -146,6 +152,10 @@ const Dependency* FindDep(const Manifest& m, const std::string& name) {
     return nullptr;
 }
 
+std::string EffectiveBuildMode(const Manifest& m, const Dependency& d) {
+    return d.build_mode.empty() ? m.build_mode : d.build_mode;
+}
+
 namespace {
 
 // Minimal JSON string escaping for values we write back (names/urls
@@ -205,6 +215,16 @@ std::string RenderEntry(const Dependency& dep) {
     s += "            \"" + name_key + "\": \"" + JsonEscape(dep.name) +
          "\",\n";
     s += "            \"url\": \"" + JsonEscape(dep.url) + "\"";
+    if (!dep.ref.empty()) {
+        s += ",\n            \"ref\": \"" + JsonEscape(dep.ref) + "\"";
+    }
+    if (!dep.build_mode.empty()) {
+        s += ",\n            \"build_mode\": \"" +
+             JsonEscape(dep.build_mode) + "\"";
+    }
+    if (!dep.notes.empty()) {
+        s += ",\n            \"notes\": \"" + JsonEscape(dep.notes) + "\"";
+    }
     if (!dep.mirrors.empty()) {
         s += ",\n            \"mirrors\": [\n";
         for (size_t i = 0; i < dep.mirrors.size(); ++i) {

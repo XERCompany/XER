@@ -40,6 +40,23 @@ std::string VendoredDescribe(const std::filesystem::path& dir);
 bool GitClone(const std::string& url, const std::filesystem::path& dir,
               bool shallow, std::string* log);
 
+// Clone pinned at `ref` (tag, branch or commit sha): `git init` +
+// `fetch --depth 1 origin <ref>` + detached `checkout FETCH_HEAD`.
+// Fetching a sha directly relies on the server allowing reachable-sha1
+// fetch (GitHub/GitLab/googlesource all do); if the shallow fetch is
+// refused we fall back to a full `git fetch origin` + `checkout <ref>`.
+bool GitCloneRef(const std::string& url, const std::string& ref,
+                 const std::filesystem::path& dir, std::string* log);
+
+// `git rev-parse --verify <ref>^{commit}` -> sha; "" when the ref is
+// not resolvable locally (e.g. never fetched) or not a repo.
+std::string GitResolveRef(const std::filesystem::path& dir,
+                          const std::string& ref);
+
+// `git checkout --detach <ref>` — used to re-pin a drifted dep.
+bool GitCheckout(const std::filesystem::path& dir,
+                 const std::string& ref, std::string* log);
+
 // `git -C dir fetch --quiet origin`; FETCH_HEAD is left for
 // CountBehindUpstream().
 bool GitFetch(const std::filesystem::path& dir, std::string* log);

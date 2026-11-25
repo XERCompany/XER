@@ -67,6 +67,7 @@ options:
   --manifest <path>   manifest for the add* commands (default
                       third_party/3RD.xersyunc)
   --name <name>       dep name for the add* commands
+  --ref <tag|sha>     pin a new git dep's checkout (--addfromgit)
   --extract-map <spec>  opensource extract_map, "from=to;from=to;..."
   --verbose           more output
   --keep              (selftest) keep the temp workspace
@@ -113,6 +114,8 @@ int main(int argc, char** argv) {
             manifest_opt = argv[++i];
         } else if (a == "--name" && i + 1 < argc) {
             opt.dep_name = argv[++i];
+        } else if (a == "--ref" && i + 1 < argc) {
+            opt.ref = argv[++i];
         } else if (a == "--extract-map" && i + 1 < argc) {
             // "from=to;from=to;..."
             for (const std::string& pair :

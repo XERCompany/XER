@@ -176,6 +176,16 @@ int CmdStatus(const Manifest& m, const Options& o) {
                                    : GitProbe{};
             if (d.kind == DepKind::kGit) {
                 rev = p.is_repo ? p.describe : "(not a git repo)";
+                if (!d.ref.empty() && p.is_repo) {
+                    rev += " [pin " + d.ref + "]";
+                    const std::string resolved =
+                        GitResolveRef(dir, d.ref);
+                    if (resolved.empty()) {
+                        pending.push_back("pin-fetch");
+                    } else if (resolved != p.head) {
+                        pending.push_back("re-pin");
+                    }
+                }
             } else {
                 rev = state.GetString(d.name, "version");
                 if (rev.empty()) rev = "(binary)";
@@ -215,6 +225,9 @@ int CmdStatus(const Manifest& m, const Options& o) {
                          }
                          return s;
                      }());
+        if (!d.notes.empty()) {
+            std::printf("%-14s %s\n", "", d.notes.c_str());
+        }
     }
     std::printf("\n%d dep(s) missing from %s\n", missing,
                 GenericPath(m.output_dir).c_str());
@@ -239,7 +252,8 @@ SyncOutcome SyncGitDep(const Manifest& m, const Dependency& d,
 
     if (!present) {
         if (o.check_only) {
-            r.status = "missing — would clone " + d.url;
+            r.status = "missing — would clone " + d.url +
+                       (d.ref.empty() ? "" : " @ " + d.ref);
             return r;
         }
         std::string log;
@@ -248,10 +262,14 @@ SyncOutcome SyncGitDep(const Manifest& m, const Dependency& d,
         // immediate retry is cheap insurance; a failed clone leaves a
         // partial dir behind, so it is removed before the retry.
         for (int attempt = 1; attempt <= 2 && !cloned; ++attempt) {
-            std::printf("  cloning %s -> %s ...%s\n", d.url.c_str(),
+            std::printf("  cloning %s%s -> %s ...%s\n", d.url.c_str(),
+                        d.ref.empty() ? ""
+                                      : (" @ " + d.ref).c_str(),
                         GenericPath(dir).c_str(),
                         attempt > 1 ? " (retry)" : "");
-            cloned = GitClone(d.url, dir, /*shallow=*/true, &log);
+            cloned = d.ref.empty()
+                         ? GitClone(d.url, dir, /*shallow=*/true, &log)
+                         : GitCloneRef(d.url, d.ref, dir, &log);
             if (!cloned) fs::remove_all(dir, ec);
         }
         if (!cloned) {
@@ -263,6 +281,7 @@ SyncOutcome SyncGitDep(const Manifest& m, const Dependency& d,
         const GitProbe p = ProbeRepo(dir);
         state->SetString(d.name, "kind", "github");
         state->SetString(d.name, "url", d.url);
+        if (!d.ref.empty()) state->SetString(d.name, "ref", d.ref);
         state->SetString(d.name, "head", p.head);
         state->SetString(d.name, "version", p.describe);
         state->SetString(d.name, "applied_version",
@@ -292,6 +311,56 @@ SyncOutcome SyncGitDep(const Manifest& m, const Dependency& d,
         } else {
             r.status = "present but not a git repo — skipped";
         }
+        return r;
+    }
+
+    // Pinned dep ("ref"): the pin wins over the update machinery — no
+    // fetch/behind-count pass. Drift (HEAD != ref) is re-checked out.
+    if (!d.ref.empty()) {
+        state->SetString(d.name, "kind", "github");
+        state->SetString(d.name, "url", d.url);
+        state->SetString(d.name, "ref", d.ref);
+        const std::string resolved = GitResolveRef(dir, d.ref);
+        if (resolved == p.head) {
+            state->SetString(d.name, "last_check", NowIso8601());
+            state->SetInt(d.name, "pending_updates", 0);
+            r.status = "pinned " + p.describe + " (ref " + d.ref + ")";
+            return r;
+        }
+        if (o.check_only) {
+            r.status = resolved.empty()
+                           ? "pinned ref " + d.ref +
+                                 " not fetched — would fetch + checkout"
+                           : "pin drift — would re-checkout " + d.ref;
+            return r;
+        }
+        if (resolved.empty()) {
+            std::string log;
+            const ProcResult fr = RunProcess(
+                "git -C " + ShellQuote(GenericPath(dir)) +
+                    " fetch --quiet --depth 1 origin " + ShellQuote(d.ref),
+                true);
+            if (!fr.ran || fr.exit_code != 0) {
+                r.status = "PIN FETCH FAILED: " + FirstLineOf(fr.output);
+                r.hard_error = true;
+                return r;
+            }
+        }
+        std::string log;
+        if (GitCheckout(dir, d.ref, &log) ||
+            GitCheckout(dir, "FETCH_HEAD", &log)) {
+            const GitProbe np = ProbeRepo(dir);
+            state->SetString(d.name, "head", np.head);
+            state->SetString(d.name, "version", np.describe);
+            state->SetString(d.name, "applied_version",
+                             AppliedVersion(m, np));
+            state->SetString(d.name, "last_check", NowIso8601());
+            state->SetInt(d.name, "pending_updates", 0);
+            r.status = "re-pinned to " + d.ref + " (" + np.describe + ")";
+            return r;
+        }
+        r.status = "PIN CHECKOUT FAILED: " + FirstLineOf(log);
+        r.hard_error = true;
         return r;
     }
 
@@ -953,6 +1022,7 @@ int CmdAddImpl(const std::string& manifest_arg, const Options& o,
         d.kind = kind;
         d.name = name;
         d.url = url;
+        if (kind == DepKind::kGit) d.ref = o.ref;
         if (kind == DepKind::kBinary) d.extract_map = o.extract_map;
         if (!AppendDepToManifest(m.manifest_path, d, &err)) {
             std::fprintf(stderr, "error: %s\n", err.c_str());

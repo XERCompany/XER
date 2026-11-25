@@ -14,14 +14,38 @@
  *   automatic_create_patch_for_cmake_all_dependencies bool
  *   prefix_new_version_all_dependencies             string ("XER-")
  *   output_directory                                string ("third_party")
- *   dependencies-from-github[]  {name, url}         git-cloned deps
+ *   build_mode                                      string ("static"):
+ *                               default build flavor applied to every dep
+ *                               that lacks its own "build_mode" override.
+ *                               "static" and "shared" force
+ *                               BUILD_SHARED_LIBS OFF/ON (scoped, saved +
+ *                               restored) around the add_subdirectory() of
+ *                               an upstream-CMake wrapper patch and pick
+ *                               the STATIC/SHARED keyword for
+ *                               source-list-generated libraries.
+ *                               "default" leaves upstream's own choice
+ *                               untouched. Header-only and binary deps are
+ *                               unaffected.
+ *   dependencies-from-github[]  {name, url}         git-cloned deps;
+ *                               optional "ref" pins the checkout (tag,
+ *                               branch or commit sha — sync fetches the
+ *                               ref shallowly and checks it out detached;
+ *                               a pinned dep never gets the update-count
+ *                               pass, pin drift is reported/re-pinned),
+ *                               optional "build_mode" overrides the
+ *                               manifest default, optional "notes" is a
+ *                               free-form annotation surfaced by status
+ *                               (used to flag 'hard' deps needing custom
+ *                               build scripts).
  *   dependencies-opensource[]   {package_name,url}  binary archives;
  *                               optional "mirrors": [url,...] tried in
- *                               order after `url`, and optional
+ *                               order after `url`, optional
  *                               "extract_map": [{from,to},...] that
  *                               flattens matching staging subtrees into
  *                               <dep>/<to>/ after extraction (e.g. a
- *                               NuGet .nupkg's runtimes/ tree).
+ *                               NuGet .nupkg's runtimes/ tree), and the
+ *                               same optional "build_mode"/"notes" fields
+ *                               as github deps.
  */
 #pragma once
 
@@ -44,6 +68,15 @@ struct Dependency {
     DepKind kind = DepKind::kGit;
     std::string name;   // "name" (github) or "package_name" (opensource)
     std::string url;
+    std::string ref;    // kGit only: pin — tag, branch or commit sha.
+                        // Clones fetch the ref shallowly and check it out
+                        // detached; sync reports and re-pins drift instead
+                        // of counting upstream commits.
+    std::string notes;  // free-form annotation (surfaced by `status`);
+                        // used to flag 'hard' deps that need custom build
+                        // scripts — see msys2-exit-plan.md route H.
+    std::string build_mode;  // "" -> inherit Manifest::build_mode;
+                             // "static"|"shared"|"default".
     std::vector<std::string> mirrors;          // kBinary only
     std::vector<ExtractMapEntry> extract_map;  // kBinary only
 };
@@ -55,6 +88,10 @@ struct Manifest {
     bool automatic_create_patch_for_cmake_all_dependencies = false;
     std::string prefix_new_version_all_dependencies = "XER-";
     std::string output_directory = "third_party";
+    // Default build flavor for cmake-gen ("static" per the MSYS2-exit
+    // directive — every dep builds as a static lib). See the file-top
+    // comment for the accepted values.
+    std::string build_mode = "static";
 
     std::vector<Dependency> deps;
 
@@ -73,6 +110,11 @@ bool LoadManifest(const std::filesystem::path& path, Manifest* out,
 std::vector<const Dependency*> DepsOfKind(const Manifest& m, DepKind k);
 
 const Dependency* FindDep(const Manifest& m, const std::string& name);
+
+// dep.build_mode when set, else the manifest-level default
+// ("static"). "static"/"shared"/"default" are the meaningful values —
+// anything else is treated as "default".
+std::string EffectiveBuildMode(const Manifest& m, const Dependency& d);
 
 // Appends `dep` to the manifest file on disk, into the array matching
 // `dep.kind` ("dependencies-from-github" / "dependencies-opensource").

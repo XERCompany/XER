@@ -41,7 +41,9 @@ void EmitHeader(std::ostringstream& o, const Dependency& dep,
       << "# Generated: " << ctx.generated_at << "   analysis: "
       << (a.libclang_used ? "libclang include-graph + fs scan"
                           : "fs scan (libclang unavailable)")
-      << "\n";
+      << "\n"
+      << "# BuildMode: " << EffectiveBuildMode(*ctx.manifest, dep)
+      << " (manifest default \"" << ctx.manifest->build_mode << "\")\n";
     if (!a.inter_dep_includes.empty()) {
         o << "# Inter-dep includes detected:";
         for (const auto& [d, n] : a.inter_dep_includes) {
@@ -234,12 +236,30 @@ std::string GeneratePatch(const Dependency& dep,
           << "# Scoped overrides the wrapper applies around upstream:\n"
           << "set(_xer_saved_BUILD_TESTING \"${BUILD_TESTING}\")\n"
           << "set(BUILD_TESTING OFF CACHE BOOL \"off via xer-" << dep.name
-          << " wrapper\" FORCE)\n"
-          << "add_subdirectory(\"${CMAKE_CURRENT_LIST_DIR}\"\n"
+          << " wrapper\" FORCE)\n";
+        const std::string bmode = EffectiveBuildMode(*ctx.manifest, dep);
+        const bool force_shared =
+            (bmode == "static" || bmode == "shared");
+        if (force_shared) {
+            // build_mode: force BUILD_SHARED_LIBS around the upstream
+            // project, scoped save + restore like BUILD_TESTING.
+            o << "set(_xer_saved_BUILD_SHARED_LIBS "
+                 "\"${BUILD_SHARED_LIBS}\")\n"
+              << "set(BUILD_SHARED_LIBS "
+              << (bmode == "shared" ? "ON" : "OFF")
+              << " CACHE BOOL \"forced via xer-" << dep.name
+              << " wrapper (build_mode=" << bmode << ")\" FORCE)\n";
+        }
+        o << "add_subdirectory(\"${CMAKE_CURRENT_LIST_DIR}\"\n"
           << "               \"${CMAKE_BINARY_DIR}/xer_deps/" << dep.name
           << "\"\n"
           << "               EXCLUDE_FROM_ALL)\n"
-          << "set(BUILD_TESTING \"${_xer_saved_BUILD_TESTING}\")\n\n";
+          << "set(BUILD_TESTING \"${_xer_saved_BUILD_TESTING}\")\n";
+        if (force_shared) {
+            o << "set(BUILD_SHARED_LIBS "
+                 "\"${_xer_saved_BUILD_SHARED_LIBS}\")\n";
+        }
+        o << "\n";
 
         if (!a.upstream_lib_targets.empty()) {
             o << "# Alias the upstream library under the XER- name.\n";
@@ -280,19 +300,33 @@ std::string GeneratePatch(const Dependency& dep,
     }
 
     // --- compiled sources, no upstream build files --------------------
+    // STATIC is the manifest default; build_mode=shared flips the
+    // keyword (BUILD_SHARED_LIBS is meaningless without an upstream
+    // project to read it).
+    const std::string slmode = EffectiveBuildMode(*ctx.manifest, dep);
     o << "# No upstream CMakeLists — sources enumerated by "
          "xer_sync_dev\n"
       << "# (" << a.sources.size() << " kept, "
       << a.excluded_sources.size()
       << " excluded by platform/test filter).\n"
-      << "add_library(XER-" << dep.name << " STATIC\n";
+      << "add_library(XER-" << dep.name << " "
+      << (slmode == "shared" ? "SHARED" : "STATIC") << "\n";
     for (const auto& s : a.sources) o << "  " << Q(s) << "\n";
     o << ")\n"
       << "target_include_directories(XER-" << dep.name << "\n"
       << "  PUBLIC\n";
     for (const auto& d : a.include_dirs) o << "    " << Q(d) << "\n";
-    o << "  PRIVATE\n    ${CMAKE_CURRENT_LIST_DIR}\n    "
-         "${CMAKE_CURRENT_LIST_DIR}/src\n)\n";
+    o << "  PRIVATE\n    ${CMAKE_CURRENT_LIST_DIR}\n";
+    {
+        // src/ is a common private-include convention but not universal
+        // (lz4 keeps sources under lib/) — emit only when it exists, or
+        // VerifyPatch flags a missing referenced path.
+        std::error_code sec;
+        if (fs::is_directory(a.root / "src", sec)) {
+            o << "    ${CMAKE_CURRENT_LIST_DIR}/src\n";
+        }
+    }
+    o << ")\n";
 
     const auto defs = SafeDefines(a);
     if (!defs.empty()) {
