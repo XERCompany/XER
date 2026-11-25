@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <map>
 #include <regex>
@@ -53,6 +54,43 @@ std::string FirstLineOf(const std::string& s) {
     const size_t nl = s.find('\n');
     return Trim(s.substr(0, nl));
 }
+
+// CA bundle candidates for ResolveCaBundle(): the linked MSYS2
+// OpenSSL curl has a compiled-in default path that's meaningless to a
+// native Windows exe, so we probe real locations — msys roots, the
+// POSIX spellings (harmless when missing) and a repo-local
+// third_party/cacert.pem escape hatch.
+std::vector<std::string> DefaultCaCandidates(const Manifest& m) {
+    return {
+        "C:/tools/msys64/usr/ssl/certs/ca-bundle.crt",
+        "C:/tools/msys64/clang64/etc/ssl/certs/ca-bundle.crt",
+        "C:/tools/msys64/etc/ssl/certs/ca-bundle.crt",
+        "C:/Program Files/Git/usr/ssl/certs/ca-bundle.crt",
+        "C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt",
+        "/etc/ssl/certs/ca-bundle.crt",
+        "/usr/ssl/certs/ca-bundle.crt",
+        GenericPath(m.output_dir / "cacert.pem"),
+    };
+}
+
+// RAII chdir — restored even when the guarded call throws/returns
+// early. Needed because ArchiveManager::Extract pipes every entry
+// through ARCHIVE_EXTRACT_SECURE_NOABSOLUTEPATHS: the destination it
+// prepends must therefore be *relative*, with the CWD as the anchor.
+struct ScopedCwd {
+    fs::path prev;
+    explicit ScopedCwd(const fs::path& to) {
+        std::error_code ec;
+        prev = fs::current_path(ec);
+        fs::current_path(to, ec);
+    }
+    ~ScopedCwd() {
+        std::error_code ec;
+        fs::current_path(prev, ec);
+    }
+    ScopedCwd(const ScopedCwd&) = delete;
+    ScopedCwd& operator=(const ScopedCwd&) = delete;
+};
 
 std::string AppliedVersion(const Manifest& m, const GitProbe& p) {
     // For vendored dirs the applied version is the outer repo's sha —
@@ -205,9 +243,18 @@ SyncOutcome SyncGitDep(const Manifest& m, const Dependency& d,
             return r;
         }
         std::string log;
-        std::printf("  cloning %s -> %s ...\n", d.url.c_str(),
-                    GenericPath(dir).c_str());
-        if (!GitClone(d.url, dir, /*shallow=*/true, &log)) {
+        bool cloned = false;
+        // Shallow clones die often enough on flaky networks that one
+        // immediate retry is cheap insurance; a failed clone leaves a
+        // partial dir behind, so it is removed before the retry.
+        for (int attempt = 1; attempt <= 2 && !cloned; ++attempt) {
+            std::printf("  cloning %s -> %s ...%s\n", d.url.c_str(),
+                        GenericPath(dir).c_str(),
+                        attempt > 1 ? " (retry)" : "");
+            cloned = GitClone(d.url, dir, /*shallow=*/true, &log);
+            if (!cloned) fs::remove_all(dir, ec);
+        }
+        if (!cloned) {
             r.status = "CLONE FAILED";
             r.hard_error = true;
             std::cerr << log;
@@ -288,7 +335,7 @@ SyncOutcome SyncGitDep(const Manifest& m, const Dependency& d,
 }
 
 SyncOutcome SyncBinaryDep(const Manifest& m, const Dependency& d,
-                          const Options& o, SyncState* state) {
+                              const Options& o, SyncState* state) {
     SyncOutcome r;
     const fs::path dir = DepDir(m, d);
     std::error_code ec;
@@ -307,63 +354,128 @@ SyncOutcome SyncBinaryDep(const Manifest& m, const Dependency& d,
     const fs::path dl_dir = m.output_dir / ".xersync-downloads";
     const fs::path staging = dl_dir / ("extract-" + d.name);
     fs::create_directories(dl_dir, ec);
+    fs::remove_all(staging, ec);
     fs::create_directories(staging, ec);
 
-    std::string fname = d.url.substr(d.url.find_last_of('/') + 1);
-    const size_t q = fname.find_first_of("?#");
-    if (q != std::string::npos) fname.resize(q);
-    const fs::path tarball = dl_dir / fname;
+    // URL chain: the canonical `url` first, then `mirrors` in order.
+    std::vector<std::string> urls{d.url};
+    urls.insert(urls.end(), d.mirrors.begin(), d.mirrors.end());
 
-    if (!fs::exists(tarball, ec)) {
-        std::printf("  downloading %s ...\n", d.url.c_str());
-        std::string err;
-        if (!HttpDownload(d.url, GenericPath(tarball), &err)) {
-            r.status = "DOWNLOAD FAILED: " + err;
-            r.hard_error = true;
-            return r;
+    fs::path tarball;
+    std::string fname;
+    std::string err;
+    bool got = false;
+    for (const std::string& u : urls) {
+        std::string f = u.substr(u.find_last_of('/') + 1);
+        const size_t q = f.find_first_of("?#");
+        if (q != std::string::npos) f.resize(q);
+        const fs::path cand = dl_dir / f;
+        // A finished download gets a sibling ".done" marker; a bare
+        // file may be a partial from a killed run — HttpDownload
+        // resumes it via CURLOPT_RESUME_FROM_LARGE.
+        const fs::path done_marker =
+            fs::path(cand.string() + ".done");
+        if (fs::is_regular_file(cand, ec) &&
+            fs::is_regular_file(done_marker, ec)) {
+            std::printf("  using cached %s\n",
+                        GenericPath(cand).c_str());
+            tarball = cand;
+            fname = f;
+            got = true;
+            break;
         }
-    } else {
-        std::printf("  using cached %s\n",
-                    GenericPath(tarball).c_str());
+
+        std::printf("  downloading %s ...\n", u.c_str());
+        DownloadOptions dopt;
+        dopt.cacert = o.cacert;
+        dopt.ca_candidates = DefaultCaCandidates(m);
+        dopt.max_retries = 3;
+        if (o.verbose) {
+            dopt.progress = [](double total, double now) {
+                if (total > 0) {
+                    std::printf("\r    %.1f / %.1f MB", now / 1e6,
+                                total / 1e6);
+                    std::fflush(stdout);
+                }
+            };
+        }
+        if (!HttpDownload(u, GenericPath(cand), &err, dopt)) {
+            if (o.verbose && dopt.progress) std::printf("\n");
+            std::printf("  source failed: %s\n", err.c_str());
+            continue;  // next mirror
+        }
+        if (o.verbose && dopt.progress) std::printf("\n");
+        {
+            std::ofstream mark(done_marker, std::ios::binary |
+                                                std::ios::trunc);
+            mark << NowIso8601() << "\n";
+        }
+        tarball = cand;
+        fname = f;
+        got = true;
+        break;
+    }
+    if (!got) {
+        r.status = "DOWNLOAD FAILED: " + err;
+        r.hard_error = true;
+        return r;
     }
 
     std::printf("  extracting -> %s ...\n",
                 GenericPath(staging).c_str());
     int64_t extracted = 0;
-    std::string err;
-    if (!XER::Content::Archive::ArchiveManager::Extract(
-            GenericPath(tarball), GenericPath(staging), {}, &extracted,
-            &err)) {
-        r.status = "EXTRACT FAILED: " + err;
-        r.hard_error = true;
-        return r;
+    err.clear();
+    {
+        // Extract needs a *relative* dest (absolute paths are blocked
+        // by SECURE_NOABSOLUTEPATHS) — anchor the CWD at the download
+        // dir so "extract-<name>" lands in `staging`.
+        const ScopedCwd cwd(dl_dir);
+        if (!XER::Content::Archive::ArchiveManager::Extract(
+                GenericPath(tarball), "extract-" + d.name, {},
+                &extracted, &err)) {
+            r.status = "EXTRACT FAILED: " + err;
+            r.hard_error = true;
+            return r;
+        }
     }
 
-    // Typical tarballs have one top-level dir; move it into place.
     fs::create_directories(dir.parent_path(), ec);
-    fs::path payload = staging;
-    {
-        int entries = 0;
-        fs::path single;
-        for (const auto& e : fs::directory_iterator(staging, ec)) {
-            ++entries;
-            single = e.path();
-        }
-        if (entries == 1 && fs::is_directory(single, ec)) {
-            payload = single;
-        }
-    }
     if (fs::exists(dir, ec)) fs::remove_all(dir, ec);
-    if (payload == staging) {
-        fs::rename(staging, dir, ec);
-    } else {
-        fs::rename(payload, dir, ec);
+
+    if (!d.extract_map.empty()) {
+        // NuGet-style payload: only the mapped subtrees land in the
+        // dep dir (<dep>/<to>/...).
+        if (!ApplyExtractMap(staging, dir, d.extract_map, &err)) {
+            r.status = "EXTRACT-MAP FAILED: " + err;
+            r.hard_error = true;
+            return r;
+        }
         fs::remove_all(staging, ec);
-    }
-    if (ec) {
-        r.status = "MOVE FAILED: " + ec.message();
-        r.hard_error = true;
-        return r;
+    } else {
+        // Typical tarballs have one top-level dir; move it into place.
+        fs::path payload = staging;
+        {
+            int nentries = 0;
+            fs::path single;
+            for (const auto& e : fs::directory_iterator(staging, ec)) {
+                ++nentries;
+                single = e.path();
+            }
+            if (nentries == 1 && fs::is_directory(single, ec)) {
+                payload = single;
+            }
+        }
+        if (payload == staging) {
+            fs::rename(staging, dir, ec);
+        } else {
+            fs::rename(payload, dir, ec);
+            fs::remove_all(staging, ec);
+        }
+        if (ec) {
+            r.status = "MOVE FAILED: " + ec.message();
+            r.hard_error = true;
+            return r;
+        }
     }
 
     std::string ver = fname;
@@ -379,6 +491,112 @@ SyncOutcome SyncBinaryDep(const Manifest& m, const Dependency& d,
 }
 
 }  // namespace
+
+// Moves the extracted subtree `staging/<from>` (or
+// `staging/<single-top-dir>/<from>`) — contents flattened — into
+// `<dep_dir>/<to>/`, per entry. `from` missing in the staging tree is
+// a hard error; the staging top-level listing is included for
+// debugging.
+bool ApplyExtractMap(const fs::path& staging, const fs::path& dep_dir,
+                     const std::vector<ExtractMapEntry>& entries,
+                     std::string* error) {
+    auto fail = [error](const std::string& msg) {
+        if (error) *error = msg;
+        return false;
+    };
+    auto norm = [](std::string s) {
+        std::replace(s.begin(), s.end(), '\\', '/');
+        while (!s.empty() && s.front() == '/') s.erase(s.begin());
+        while (!s.empty() && s.back() == '/') s.pop_back();
+        return s;
+    };
+
+    std::error_code ec;
+    for (const auto& e : entries) {
+        const std::string from = norm(e.from);
+        const std::string to = norm(e.to);
+        if (from.empty() || to.empty()) {
+            return fail("ApplyExtractMap: empty from/to in entry '" +
+                        e.from + "' -> '" + e.to + "'");
+        }
+
+        fs::path src = staging / fs::path(from);
+        if (!fs::exists(src, ec)) {
+            // Tarballs usually wrap everything in one top dir — probe
+            // one level down before giving up.
+            for (const auto& top : fs::directory_iterator(staging, ec)) {
+                if (ec) break;
+                if (!top.is_directory()) continue;
+                const fs::path cand = top.path() / fs::path(from);
+                if (fs::exists(cand, ec)) {
+                    src = cand;
+                    break;
+                }
+            }
+        }
+        if (!fs::exists(src, ec)) {
+            std::string listing;
+            std::error_code lec;
+            for (const auto& t : fs::directory_iterator(staging, lec)) {
+                listing += " " + t.path().filename().string();
+            }
+            if (listing.empty()) listing = " <empty>";
+            return fail("ApplyExtractMap: '" + e.from +
+                        "' not found under staging — top-level:" +
+                        listing);
+        }
+
+        const fs::path dst_dir = dep_dir / fs::path(to);
+        fs::create_directories(dst_dir, ec);
+        if (ec) {
+            return fail("ApplyExtractMap: cannot create " +
+                        GenericPath(dst_dir) + ": " + ec.message());
+        }
+
+        if (fs::is_regular_file(src, ec)) {
+            const fs::path dst = dst_dir / src.filename();
+            fs::remove_all(dst, ec);
+            ec.clear();
+            fs::rename(src, dst, ec);
+            if (ec) {
+                ec.clear();
+                fs::copy_file(
+                    src, dst, fs::copy_options::overwrite_existing, ec);
+                fs::remove(src, ec);
+            }
+            if (ec) {
+                return fail("ApplyExtractMap: move " +
+                            GenericPath(src) + " -> " +
+                            GenericPath(dst) + ": " + ec.message());
+            }
+            continue;
+        }
+
+        for (const auto& child : fs::directory_iterator(src, ec)) {
+            if (ec) break;
+            const fs::path dst = dst_dir / child.path().filename();
+            fs::remove_all(dst, ec);
+            ec.clear();
+            fs::rename(child.path(), dst, ec);
+            if (ec) {
+                // rename across dirs should be same-volume, but fall
+                // back to a recursive copy so partial moves still win.
+                ec.clear();
+                fs::copy(child.path(), dst,
+                         fs::copy_options::recursive |
+                             fs::copy_options::overwrite_existing,
+                         ec);
+                if (ec) {
+                    return fail("ApplyExtractMap: move " +
+                                GenericPath(child.path()) + " -> " +
+                                GenericPath(dst) + ": " + ec.message());
+                }
+                fs::remove_all(child.path(), ec);
+            }
+        }
+    }
+    return true;
+}
 
 int CmdSync(const Manifest& m, const Options& o) {
     SyncState state;
@@ -656,6 +874,119 @@ int CmdAuto(const Manifest& m, const Options& o) {
     if (!state.Save(&werr)) std::cerr << "warning: " << werr << "\n";
     std::printf("auto: done\n");
     return 0;
+}
+
+// --- addfromgit / addopensource -----------------------------------------
+
+namespace {
+
+// Shared tail of both add commands: run the dep's full pipeline
+// (clone or download+extract, then cmake-gen) and persist state.
+int RunDepPipeline(const Manifest& m, const Dependency& d,
+                   const Options& o) {
+    SyncState state;
+    std::string serr;
+    state.Load(StatePathFor(m), &serr);
+    if (!serr.empty()) std::cerr << "note: " << serr << "\n";
+
+    const SyncOutcome r =
+        d.kind == DepKind::kGit ? SyncGitDep(m, d, o, &state)
+                                : SyncBinaryDep(m, d, o, &state);
+    std::printf("%-14s %s\n", d.name.c_str(), r.status.c_str());
+    int errors = r.hard_error ? 1 : 0;
+
+    if (!r.hard_error) {
+        std::string detail;
+        if (RunCmakeGenForDep(m, d, o, &detail) == 0) {
+            std::printf("%-14s %s\n", d.name.c_str(), detail.c_str());
+        } else {
+            std::printf("%-14s cmake-gen FAILED: %s\n", d.name.c_str(),
+                        detail.c_str());
+            ++errors;
+        }
+    }
+
+    std::string werr;
+    if (!state.Save(&werr)) std::cerr << "warning: " << werr << "\n";
+    return errors ? 1 : 0;
+}
+
+int CmdAddImpl(const std::string& manifest_arg, const Options& o,
+               DepKind kind) {
+    const std::string manifest_path =
+        manifest_arg.empty() ? "third_party/3RD.xersyunc" : manifest_arg;
+    const std::string url = o.add_url;
+    if (url.empty()) {
+        std::fprintf(stderr, "add: url argument required\n");
+        return 2;
+    }
+    const std::string name =
+        o.dep_name.empty() ? DefaultNameFromUrl(url, kind) : o.dep_name;
+    if (name.empty()) {
+        std::fprintf(stderr,
+                     "add: cannot derive a dep name from '%s' — pass "
+                     "--name\n",
+                     url.c_str());
+        return 2;
+    }
+
+    Manifest m;
+    std::string err;
+    if (!LoadManifest(manifest_path, &m, &err)) {
+        std::fprintf(stderr, "error: %s\n", err.c_str());
+        return 2;
+    }
+
+    const Dependency* dep = FindDep(m, name);
+    if (dep) {
+        if (dep->kind != kind || dep->url != url) {
+            std::fprintf(stderr,
+                         "add: dep '%s' already in manifest with a "
+                         "different kind/url — not overwriting\n",
+                         name.c_str());
+            return 2;
+        }
+        std::printf("dep '%s' already in manifest — running pipeline\n",
+                    name.c_str());
+    } else {
+        Dependency d;
+        d.kind = kind;
+        d.name = name;
+        d.url = url;
+        if (kind == DepKind::kBinary) d.extract_map = o.extract_map;
+        if (!AppendDepToManifest(m.manifest_path, d, &err)) {
+            std::fprintf(stderr, "error: %s\n", err.c_str());
+            return 1;
+        }
+        std::printf("manifest: appended '%s' to %s\n", name.c_str(),
+                    GenericPath(m.manifest_path).c_str());
+        // Re-read so `dep` points at the on-disk truth.
+        Manifest m2;
+        if (!LoadManifest(manifest_path, &m2, &err)) {
+            std::fprintf(stderr, "error: %s\n", err.c_str());
+            return 2;
+        }
+        m = std::move(m2);
+        dep = FindDep(m, name);
+        if (!dep) {
+            std::fprintf(stderr,
+                         "add: appended dep '%s' but reload can't see "
+                         "it\n",
+                         name.c_str());
+            return 1;
+        }
+    }
+    return RunDepPipeline(m, *dep, o);
+}
+
+}  // namespace
+
+int CmdAddFromGit(const std::string& manifest_arg, const Options& o) {
+    return CmdAddImpl(manifest_arg, o, DepKind::kGit);
+}
+
+int CmdAddOpenSource(const std::string& manifest_arg, const Options& o) {
+    return CmdAddImpl(manifest_arg, o, DepKind::kBinary);
 }
 
 }  // namespace xer_sync_dev

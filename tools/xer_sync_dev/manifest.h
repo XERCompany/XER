@@ -15,7 +15,13 @@
  *   prefix_new_version_all_dependencies             string ("XER-")
  *   output_directory                                string ("third_party")
  *   dependencies-from-github[]  {name, url}         git-cloned deps
- *   dependencies-opensource[]   {package_name,url}  binary tarballs
+ *   dependencies-opensource[]   {package_name,url}  binary archives;
+ *                               optional "mirrors": [url,...] tried in
+ *                               order after `url`, and optional
+ *                               "extract_map": [{from,to},...] that
+ *                               flattens matching staging subtrees into
+ *                               <dep>/<to>/ after extraction (e.g. a
+ *                               NuGet .nupkg's runtimes/ tree).
  */
 #pragma once
 
@@ -27,10 +33,19 @@ namespace xer_sync_dev {
 
 enum class DepKind { kGit, kBinary };
 
+// One extract_map rule: the extracted subtree `from` (archive-relative,
+// '/'-separated) is moved — contents flattened — into `<dep_dir>/<to>/`.
+struct ExtractMapEntry {
+    std::string from;   // e.g. "runtimes/win-x64/native/"
+    std::string to;     // e.g. "win-x64/"
+};
+
 struct Dependency {
     DepKind kind = DepKind::kGit;
     std::string name;   // "name" (github) or "package_name" (opensource)
     std::string url;
+    std::vector<std::string> mirrors;          // kBinary only
+    std::vector<ExtractMapEntry> extract_map;  // kBinary only
 };
 
 struct Manifest {
@@ -58,5 +73,21 @@ bool LoadManifest(const std::filesystem::path& path, Manifest* out,
 std::vector<const Dependency*> DepsOfKind(const Manifest& m, DepKind k);
 
 const Dependency* FindDep(const Manifest& m, const std::string& name);
+
+// Appends `dep` to the manifest file on disk, into the array matching
+// `dep.kind` ("dependencies-from-github" / "dependencies-opensource").
+// The edit is surgical: the `-- format: json` comment header and the
+// existing formatting are preserved byte-for-byte; the new entry is
+// emitted in the file's 4-space-indent style. `mirrors`/`extract_map`
+// are only written when non-empty (kBinary entries).
+// Fails when the target array can't be located or the file can't be
+// rewritten; the file is left untouched on failure.
+bool AppendDepToManifest(const std::filesystem::path& path,
+                         const Dependency& dep, std::string* error);
+
+// Derives a default dep name from a URL: basename minus a trailing
+// ".git" (github) or a known archive extension (.nupkg/.zip/.tar.*)
+// for opensource entries. "" when nothing sensible can be derived.
+std::string DefaultNameFromUrl(const std::string& url, DepKind kind);
 
 }  // namespace xer_sync_dev

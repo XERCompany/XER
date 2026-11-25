@@ -11,6 +11,9 @@
  *   xer_sync_dev verify    <manifest> [--dep n]
  *   xer_sync_dev auto      <manifest> [--dep n] [--fetch]
  *   xer_sync_dev selftest  [--keep]
+ *   xer_sync_dev --addfromgit <url.git> [--name n] [--manifest m]
+ *   xer_sync_dev --addopensource <url> [--name n] [--manifest m]
+ *                [--extract-map <from>=<to>[;<from>=<to>...]]
  */
 #include <cstdio>
 #include <cstring>
@@ -45,6 +48,13 @@ commands:
                          Missing deps are only fetched with --fetch.
   selftest               Offline end-to-end test on a synthetic dep
                          tree in a temp dir (no manifest, no network).
+  --addfromgit <url>     append {name,url} to dependencies-from-github,
+                         then run that dep's pipeline (clone -> state
+                         -> cmake-gen). Name defaults to the repo
+                         basename minus .git.
+  --addopensource <url>  append {package_name,url,extract_map?} to
+                         dependencies-opensource, then download +
+                         extract + cmake-gen + state.
 
 options:
   --dep <name>        scope to a single dependency
@@ -52,6 +62,12 @@ options:
   --fetch             (auto) allow cloning/downloading missing deps
   --force             ignore interval freshness / regenerate patches
   --extra-include <dir>  extra -I root for include resolution
+  --cacert <path>     CA bundle for downloads (overrides probing and
+                      CURLSSLOPT_NATIVE_CA)
+  --manifest <path>   manifest for the add* commands (default
+                      third_party/3RD.xersyunc)
+  --name <name>       dep name for the add* commands
+  --extract-map <spec>  opensource extract_map, "from=to;from=to;..."
   --verbose           more output
   --keep              (selftest) keep the temp workspace
   --help              this text
@@ -73,6 +89,7 @@ int main(int argc, char** argv) {
     const std::string cmd = argv[1];
     xer_sync_dev::Options opt;
     std::string manifest_arg;
+    std::string manifest_opt;
 
     for (int i = 2; i < argc; ++i) {
         const std::string a = argv[i];
@@ -90,6 +107,27 @@ int main(int argc, char** argv) {
             opt.keep = true;
         } else if (a == "--extra-include" && i + 1 < argc) {
             opt.extra_includes.push_back(argv[++i]);
+        } else if (a == "--cacert" && i + 1 < argc) {
+            opt.cacert = argv[++i];
+        } else if (a == "--manifest" && i + 1 < argc) {
+            manifest_opt = argv[++i];
+        } else if (a == "--name" && i + 1 < argc) {
+            opt.dep_name = argv[++i];
+        } else if (a == "--extract-map" && i + 1 < argc) {
+            // "from=to;from=to;..."
+            for (const std::string& pair :
+                 xer_sync_dev::SplitTokens(argv[++i], ";")) {
+                const size_t eq = pair.find('=');
+                if (eq == std::string::npos) {
+                    std::fprintf(stderr,
+                                 "--extract-map: entry '%s' lacks "
+                                 "'='\n",
+                                 pair.c_str());
+                    return 2;
+                }
+                opt.extract_map.push_back(
+                    {pair.substr(0, eq), pair.substr(eq + 1)});
+            }
         } else if (!a.empty() && a[0] == '-') {
             std::fprintf(stderr, "unknown option: %s\n", a.c_str());
             return 2;
@@ -103,6 +141,21 @@ int main(int argc, char** argv) {
 
     if (cmd == "selftest") {
         return xer_sync_dev::CmdSelftest(opt);
+    }
+
+    // The add* commands take a URL positional, not a manifest —
+    // --manifest picks the file (default third_party/3RD.xersyunc).
+    if (cmd == "--addfromgit" || cmd == "addfromgit" ||
+        cmd == "--addopensource" || cmd == "addopensource") {
+        if (manifest_arg.empty()) {
+            std::fprintf(stderr, "%s: url argument required\n",
+                         cmd.c_str());
+            return 2;
+        }
+        opt.add_url = manifest_arg;
+        return (cmd.find("git") != std::string::npos)
+                   ? xer_sync_dev::CmdAddFromGit(manifest_opt, opt)
+                   : xer_sync_dev::CmdAddOpenSource(manifest_opt, opt);
     }
 
     if (manifest_arg.empty()) {

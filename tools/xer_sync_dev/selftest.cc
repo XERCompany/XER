@@ -10,16 +10,19 @@
  */
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <string>
 
 #include "analyzer.h"
+#include "archive_manager.h"
 #include "cmake_gen.h"
 #include "commands.h"
 #include "common.h"
 #include "manifest.h"
+#include "process_util.h"
 #include "state.h"
 
 namespace xer_sync_dev {
@@ -210,6 +213,190 @@ int CmdSelftest(const Options& o) {
               "pending_updates round-trips");
         Check(DaysSinceIso(st2.last_auto_run()) == 0,
               "last_auto_run is today");
+    }
+
+    // --- manifest mutation round-trip ------------------------------------
+    // --addfromgit/--addopensource append entries surgically; the file
+    // must stay parseable and keep the `-- format: json` header.
+    std::printf("\n[manifest append]\n");
+    {
+        Dependency g;
+        g.kind = DepKind::kGit;
+        g.name = "testgit";
+        g.url = "https://example.invalid/testgit.git";
+        std::string ae;
+        Check(AppendDepToManifest(mpath, g, &ae),
+              "append github entry" + (ae.empty() ? "" : " — " + ae));
+
+        Dependency b;
+        b.kind = DepKind::kBinary;
+        b.name = "testos";
+        b.url = "https://example.invalid/testos.1.2.3.zip";
+        b.mirrors = {"https://mirror.invalid/testos.1.2.3.zip"};
+        b.extract_map = {{"runtimes/win-x64/native/", "win-x64/"},
+                         {"build/native/include/", "include/"}};
+        Check(AppendDepToManifest(mpath, b, &ae),
+              "append opensource entry" +
+                  (ae.empty() ? "" : " — " + ae));
+
+        std::ifstream head(mpath);
+        std::string first_line;
+        std::getline(head, first_line);
+        Check(Trim(first_line) == "-- format: json",
+              "manifest keeps '-- format: json' header");
+
+        Manifest m2;
+        Check(LoadManifest(mpath, &m2, &ae),
+              "manifest re-parses after appends" +
+                  (ae.empty() ? "" : " — " + ae));
+        Check(m2.deps.size() == 4, "manifest now has 4 deps");
+        const Dependency* t = FindDep(m2, "testgit");
+        Check(t && t->kind == DepKind::kGit &&
+                  t->url == g.url,
+              "github entry round-trips");
+        const Dependency* t2 = FindDep(m2, "testos");
+        Check(t2 && t2->kind == DepKind::kBinary &&
+                  t2->mirrors.size() == 1 &&
+                  t2->extract_map.size() == 2 &&
+                  t2->extract_map[0].from ==
+                      "runtimes/win-x64/native/" &&
+                  t2->extract_map[0].to == "win-x64/",
+              "opensource entry + mirrors + extract_map round-trip");
+        Check(DefaultNameFromUrl("https://github.com/foo/bar.git",
+                                 DepKind::kGit) == "bar" &&
+                  DefaultNameFromUrl(
+                      "https://x/microsoft.ml.onnxruntime.1.32.0.nupkg",
+                      DepKind::kBinary) == "microsoft.ml.onnxruntime" &&
+                  DefaultNameFromUrl("https://x/y.tar.bz2",
+                                     DepKind::kBinary) == "y",
+              "DefaultNameFromUrl git/nupkg/tar.bz2");
+    }
+
+    // --- extract_map on a locally-built zip ------------------------------
+    // Mirrors the .nupkg flow: build a real zip with `cmake -E tar`,
+    // "download" it via a file:// URL, extract with ArchiveManager,
+    // then flatten via ApplyExtractMap.
+    std::printf("\n[extract_map pipeline]\n");
+    {
+        const fs::path zsrc = root / "zipsrc";
+        Check(Write(zsrc / "runtimes/win-x64/native/ort.dll",
+                    "MZ-fake-dll"),
+              "write fixture ort.dll");
+        Check(Write(zsrc / "build/native/include/ort.h",
+                    "#pragma once\n"),
+              "write fixture ort.h");
+        Check(Write(zsrc / "junk/skip.me", "x"), "write unmapped file");
+
+        const fs::path zip = root / "pkg.zip";
+        const ProcResult tar = RunProcess(
+            "cd /d " + ShellQuote(GenericPath(zsrc)) +
+                " && cmake -E tar cf " +
+                ShellQuote(GenericPath(zip)) +
+                " --format=zip -- runtimes build junk",
+            true);
+        Check(tar.ran && tar.exit_code == 0 &&
+                  fs::is_regular_file(zip, ec),
+              "cmake -E tar builds zip");
+
+        const fs::path dldir = root / "dl";
+        const fs::path dl = dldir / "pkg.zip";
+        std::string derr;
+        Check(HttpDownload("file://" + GenericPath(zip),
+                           GenericPath(dl), &derr),
+              "HttpDownload handles file:// url" +
+                  (derr.empty() ? "" : " — " + derr));
+
+        const fs::path staging = root / "staging";
+        int64_t n = 0;
+        std::string xerr;
+        {
+            // Extract needs a relative dest — anchor CWD at `root`.
+            const fs::path prev_cwd = fs::current_path(ec);
+            fs::current_path(root, ec);
+            Check(XER::Content::Archive::ArchiveManager::Extract(
+                      GenericPath(dl), "staging", {}, &n, &xerr) &&
+                      n > 0,
+                  "zip extracts" +
+                      (xerr.empty() ? "" : " — " + xerr));
+            fs::current_path(prev_cwd, ec);
+        }
+        Check(fs::is_regular_file(
+                  staging / "runtimes/win-x64/native/ort.dll", ec),
+              "staging has runtimes/ tree");
+
+        const fs::path depdir = root / "third_party/onnxruntime";
+        Check(ApplyExtractMap(
+                  staging, depdir,
+                  {{"runtimes/win-x64/native/", "win-x64/"},
+                   {"build/native/include/", "include/"}},
+                  &xerr),
+              "ApplyExtractMap runs" +
+                  (xerr.empty() ? "" : " — " + xerr));
+        Check(fs::is_regular_file(depdir / "win-x64/ort.dll", ec),
+              "flattened: <dep>/win-x64/ort.dll exists");
+        Check(fs::is_regular_file(depdir / "include/ort.h", ec),
+              "flattened: <dep>/include/ort.h exists");
+        Check(!fs::exists(depdir / "junk", ec) &&
+                  !fs::exists(depdir / "skip.me", ec),
+              "unmapped subtree not copied");
+        std::string merr;
+        Check(!ApplyExtractMap(staging, depdir,
+                               {{"does/not/exist/", "x/"}}, &merr) &&
+                  !merr.empty(),
+              "ApplyExtractMap errors on missing 'from'");
+    }
+
+    // --- CA bundle resolution --------------------------------------------
+    std::printf("\n[ca resolution]\n");
+    {
+        const fs::path probe = root / "probe-ca.crt";
+        Check(Write(probe, "-----BEGIN CERTIFICATE-----\n"),
+              "write probe CA file");
+        const std::string probe_s = GenericPath(probe);
+        Check(ResolveCaBundle("", {"C:/nonexistent/ca.crt",
+                                   probe_s}) == probe_s,
+              "ResolveCaBundle picks first existing candidate");
+        Check(ResolveCaBundle("C:/explicit/my-ca.pem", {probe_s}) ==
+                  "C:/explicit/my-ca.pem",
+              "explicit --cacert wins verbatim");
+
+        // env override: CURL_CA_BUNDLE is honored before candidates.
+        const fs::path envca = root / "env-ca.crt";
+        Check(Write(envca, "-----BEGIN CERTIFICATE-----\n"),
+              "write env CA file");
+        const std::string env_s = GenericPath(envca);
+#ifdef _WIN32
+        _putenv_s("CURL_CA_BUNDLE", env_s.c_str());
+#else
+        setenv("CURL_CA_BUNDLE", env_s.c_str(), 1);
+#endif
+        Check(ResolveCaBundle("", {probe_s}) == env_s,
+              "CURL_CA_BUNDLE env override wins over candidates");
+#ifdef _WIN32
+        _putenv_s("CURL_CA_BUNDLE", "");
+#else
+        unsetenv("CURL_CA_BUNDLE");
+#endif
+    }
+
+    // --- download retry seam ---------------------------------------------
+    // http://127.0.0.1:9 is the discard port — connection refused is
+    // instant, and the attempts out-param exposes the retry plumbing.
+    std::printf("\n[retry seam]\n");
+    {
+        const fs::path dest = root / "never.bin";
+        DownloadOptions dopt;
+        dopt.max_retries = 3;
+        dopt.retry_backoff_ms = 1;
+        int attempts = 0;
+        dopt.attempts = &attempts;
+        std::string derr;
+        Check(!HttpDownload("http://127.0.0.1:9/xer_sync_dev_selftest",
+                            GenericPath(dest), &derr, dopt) &&
+                  attempts == 3,
+              "retry loop runs max_retries attempts (attempts=" +
+                  std::to_string(attempts) + ")");
+        Check(!fs::exists(dest, ec), "no partial file left behind");
     }
 
     if (!o.keep) {

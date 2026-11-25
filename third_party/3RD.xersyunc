@@ -67,7 +67,18 @@
     "dependencies-opensource": [
         {
             "package_name": "cef",
-            "url": "https://cef-builds.spotifycdn.com/cef_binary_158.0.6%2Bg23f1736%2Bchromium-158.0.8127.89_windows64.tar.bz2"
+            "url": "https://cef-builds.spotifycdn.com/cef_binary_158.0.6%2Bg23f1736%2Bchromium-158.0.8127.89_windows64.tar.bz2",
+            "mirrors": [
+                "https://cef-builds.spotifycdn.com/cef_binary_158.0.6+g23f1736+chromium-158.0.8127.89_windows64.tar.bz2"
+            ]
+        },
+        {
+            "package_name": "onnxruntime",
+            "url": "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.32.0/microsoft.ml.onnxruntime.1.32.0.nupkg",
+            "extract_map": [
+                {"from": "runtimes/win-x64/native/", "to": "win-x64/"},
+                {"from": "build/native/include/", "to": "include/"}
+            ]
         }
     ]
 }
