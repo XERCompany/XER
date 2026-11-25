@@ -160,6 +160,12 @@ public:
     std::pair<double, double> Marks() const;
     void SetFrame(const std::vector<std::uint8_t>& bgra, int width,
                   int height);
+    // Zero-copy frame feed — refcounted render::VideoFrame straight
+    // from the PreviewEngine mailbox (the R9 marshal; the pooled
+    // storage recycles when the panel drops the previous frame's
+    // lease). CPU frames only; unsupported frames are ignored.
+    void SetVideoFrame(
+        Render::scoped_refptr<Render::VideoFrame> frame);
     void SetClickPointsArmed(bool armed);
     void SetMarkPoints(std::vector<std::pair<int, int>> frame_points);
     void SetMaskContour(std::vector<Lab::IntPoint> frame_points);

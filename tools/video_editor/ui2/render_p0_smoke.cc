@@ -90,10 +90,11 @@ private:
 };
 
 struct DimSink final : PreviewEngine::Sink {
-    void OnVideoFrame(const video::Frame& f) override {
+    void OnVideoFrame(
+        Render::scoped_refptr<Render::VideoFrame> f) override {
         ++frames;
-        last_w = f.Width();
-        last_h = f.Height();
+        last_w = f->visible_rect().width;
+        last_h = f->visible_rect().height;
     }
     void OnAudioPeakLevels(float, float) override {}
     void OnPlayhead(double) override {}
@@ -370,6 +371,17 @@ std::string CheckEngine() {
         return "adaptive ladder did not restore on pause";
     }
     engine.Shutdown();
+    // R7 parity check — the FrameScheduler's BeginFrame drop
+    // accounting must land on the same number the engine's
+    // playhead-skip counter produced (both count media-frame slots
+    // skipped past the rate's step; identical by construction once
+    // the worker is quiescent).
+    const PreviewEngine::FrameStats sf = engine.GetFrameStats();
+    if (sf.dropped != sf.scheduler_dropped) {
+        return "scheduler drop counter diverged: engine=" +
+               std::to_string(sf.dropped) + " scheduler=" +
+               std::to_string(sf.scheduler_dropped);
+    }
     return {};
 }
 

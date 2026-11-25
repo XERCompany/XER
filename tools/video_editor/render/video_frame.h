@@ -251,6 +251,17 @@ public:
     // kOpaqueTexture frames only; zero struct otherwise.
     const VideoTexture& texture() const { return texture_; }
 
+    // Shares the packed CPU storage as a vector — the bridge onto the
+    // legacy shared_ptr<const std::vector<std::uint8_t>> wire format
+    // (MonitorSurface::Frame / ScopeFrame / the eyedropper seam).
+    // The returned shared_ptr aliases the frame's real storage with
+    // ZERO copies; pooled frames recycle only when they are the sole
+    // remaining owner, so an outstanding alias can never observe a
+    // buffer the pool already handed out again. Null for texture
+    // frames and multi-planar formats.
+    virtual std::shared_ptr<const std::vector<std::uint8_t>>
+    SharePixels() const = 0;
+
     // Plane count / packed size helpers (unit-coverable math).
     static int NumPlanes(VideoPixelFormat format);
     // Total bytes the format needs for a coded w*h (all planes).
@@ -324,6 +335,10 @@ public:
         std::uint64_t pool_misses = 0;    // fresh allocations
         std::uint64_t returned = 0;       // storages recycled on death
         std::uint64_t overflow_frees = 0; // died past the idle cap
+        // Died while a SharePixels() alias was still outstanding —
+        // NOT recycled (an aliased buffer could be re-acquired and
+        // overwritten under the reader); frees with the alias.
+        std::uint64_t aliased_frees = 0;
         std::size_t idle_buffers = 0;     // storages waiting in the pool
         std::size_t idle_bytes = 0;
     };

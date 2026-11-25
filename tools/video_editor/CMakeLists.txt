@@ -36,6 +36,16 @@ list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX
 list(FILTER VIDEO_EDITOR_CORE_SOURCES EXCLUDE REGEX
     "/records_store\\.cc$")
 
+# Chromium render port — the UI-free render primitives compile into
+# the core lib (slice 2 wires PreviewEngine/Compositor to them, and
+# XER_VideoEditor_Tests links the same lib). probe_render.cc stays
+# exe-only (it backs `video_editor --probe-render`), d2d_presenter.cc
+# needs the UI include path — both live in the exe target_sources
+# block at the bottom of this file.
+list(APPEND VIDEO_EDITOR_CORE_SOURCES
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/video_frame.cc
+    ${CMAKE_CURRENT_SOURCE_DIR}/render/frame_scheduler.cc)
+
 set(_ve_core_deps
     XER_Video          # video::Frame / FrameExporter (clip_poster)
     XER_ContentVideo   # XER::Content::Video::ProbeVideo (catalog)
@@ -837,18 +847,15 @@ add_dependencies(video_editor XERVideoLoader XERSyncMedia XERFxScript
     VE.ExtensionsRuntime)
 
 # ---------------------------------------------------------------------------
-# Chromium render port — slice 1 (tools/video_editor/render/). New files
-# only; intentionally NOT wired into the preview pipeline yet — the
-# compositor/monitor_surface/ve_app integration is a later ticket.
-# video_frame.cc + frame_scheduler.cc + probe_render.cc are UI-free and
-# build on every platform (probe_render.cc backs `video_editor
-# --probe-render`). d2d_presenter.cc is the Windows D2D/D3D11 presenter
-# skeleton — it needs the XER_UI_Core include path the WIN32 block
-# above provides.
+# Chromium render port (tools/video_editor/render/). The UI-free
+# primitives (video_frame.cc, frame_scheduler.cc) moved into
+# XER_VideoEditor_Core at the top of this file in slice 2 — the
+# preview engine + compositor + tests all consume them through the
+# core lib. probe_render.cc backs `video_editor --probe-render`;
+# d2d_presenter.cc is the Windows D2D/D3D11 presenter skeleton — it
+# needs the XER_UI_Core include path the WIN32 block above provides.
 # ---------------------------------------------------------------------------
 target_sources(video_editor PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/render/video_frame.cc
-    ${CMAKE_CURRENT_SOURCE_DIR}/render/frame_scheduler.cc
     ${CMAKE_CURRENT_SOURCE_DIR}/render/probe_render.cc)
 if(WIN32)
     target_sources(video_editor PRIVATE

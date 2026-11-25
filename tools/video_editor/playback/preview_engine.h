@@ -56,6 +56,7 @@
 #include "frame_clock.h"
 #include "audio_output.h"
 #include "media_decoder.h"
+#include "render/video_frame.h"  // render::VideoFrame (chromium port)
 #include "timeline_model.h"
 
 namespace XER::VideoEditor {
@@ -102,9 +103,13 @@ public:
     // UI-facing callbacks — all fired on the worker thread.
     struct Sink {
         virtual ~Sink() = default;
-        // Latest composited canvas, packed BGRA8 (scaled down when
-        // quality < 1). pts is the timeline time in microseconds.
-        virtual void OnVideoFrame(const video::Frame& frame) = 0;
+        // Latest composited canvas as a refcounted render::VideoFrame
+        // (kBGRA8 owned-memory, packed plane; scaled down when
+        // quality < 1). timestamp_us() is the timeline time in
+        // microseconds. Zero-copy mailbox hand-off — the sink takes a
+        // ref; the pooled storage recycles when the last ref dies.
+        virtual void OnVideoFrame(
+            Render::scoped_refptr<Render::VideoFrame> frame) = 0;
         // Stereo peak magnitudes of the last mixed chunk (may exceed
         // 1.0 on overs). Fired once per written chunk; {0,0} on
         // pause-at-end and after seeks so meters decay.
@@ -176,12 +181,21 @@ public:
     //                     separate Paused Resolution).
     //   adaptive_level  — >0 while the measured auto-drop is active
     //                     (the monitor's "adaptive" badge).
+    //   scheduler_dropped / scheduler_missed — the render::
+    //                     FrameScheduler's own counters (BeginFrame
+    //                     drop accounting + missed deadline windows).
+    //                     `dropped` and `scheduler_dropped` measure the
+    //                     same quantity two ways — they converge at
+    //                     quiescence; either may transiently lead while
+    //                     a frame is mid-render.
     struct FrameStats {
         std::uint64_t rendered = 0;
         std::uint64_t dropped = 0;
         double last_render_ms = 0.0;
         float effective_scale = 1.0f;
         int adaptive_level = 0;
+        std::uint64_t scheduler_dropped = 0;
+        std::uint64_t scheduler_missed = 0;
     };
     FrameStats GetFrameStats() const;
     // Zero the dropped-frame counter — Premiere resets the indicator

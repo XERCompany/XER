@@ -16,6 +16,7 @@
 
 #include <cstddef>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -79,6 +80,17 @@ public:
     bool TrimClip(const std::string& clip_id, TrimEdge edge,
                   double new_point, const MediaBounds& bounds,
                   std::string* error_out = nullptr);
+    // Ripple trim — TrimClip + close the freed gap / push followers
+    // on the clip's track, one "Ripple trim" macro. The algorithm
+    // the TimelineBridge surface-commit uses, lifted here so
+    // app-level verbs (Q/W top-and-tail) share it. `bounds_for`
+    // resolves media bounds per source path (the caller's catalog
+    // seam) for the trim + follower move validation.
+    bool RippleTrimClip(
+        const std::string& clip_id, TrimEdge edge, double point,
+        const std::function<MediaBounds(const std::string&)>&
+            bounds_for,
+        std::string* error_out = nullptr);
     bool SplitClip(const std::string& clip_id, double split_timeline_t,
                    std::string* new_clip_id_out = nullptr,
                    std::string* error_out = nullptr);
@@ -108,8 +120,11 @@ public:
     // generated one).
     bool RippleDeleteClip(const std::string& clip_id,
                           std::string* error_out = nullptr);
+    // `track_target` is the optional track-sized targeting mask —
+    // empty applies to every unlocked track (model LiftRange parity).
     bool LiftRange(double t0, double t1, bool close_gap,
-                   std::string* error_out = nullptr);
+                   std::string* error_out = nullptr,
+                   const std::vector<bool>& track_target = {});
     // Compound (Premiere "Nest"): selected clips move into a new
     // stored Sequence and one compound clip replaces them. Ids are
     // minted internally and returned via the out-params (the model

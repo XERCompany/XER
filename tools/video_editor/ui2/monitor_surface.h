@@ -46,6 +46,7 @@
 #include <vector>
 
 #include "layout/geometry.h"
+#include "render/video_frame.h"  // render::VideoFrame (zero-copy feed)
 #include "surface_hooks.h"
 #include "timeline_model.h"   // Marker
 #include "widgets/widget.h"
@@ -106,6 +107,15 @@ public:
     // (old MonitorWidget::SetExternalFrame parity).
     void SetFrame(const std::vector<std::uint8_t>& bgra, int width,
                   int height);
+    // Zero-copy push path (chromium render-port R9): a refcounted
+    // render::VideoFrame from the PreviewEngine pool. The surface
+    // keeps the frame ref as the storage LEASE and aliases its pixel
+    // vector for the paint/pull consumers — no copy anywhere; the
+    // previous frame's storage recycles into the engine's pool when
+    // this call drops its lease. CPU packed-BGRA/RGBA frames with
+    // packed stride only; anything else (opaque texture, multi-planar,
+    // padded stride) is ignored — the caller keeps its CPU fallback.
+    void SetVideoFrame(Render::scoped_refptr<Render::VideoFrame> frame);
     // Pull path — consulted once per paint; may be nullptr.
     void SetFrameProvider(FrameProvider provider);
     bool HasFrame() const;
@@ -375,8 +385,15 @@ private:
     std::shared_ptr<XER::UI::Widgets::Surface> surface_;
 
     // Frame (push path, shared so CurrentFrame() snapshots are free)
-    // + provider (pull path).
+    // + provider (pull path). For the VideoFrame feed, frame_ aliases
+    // the frame's plane storage (SharePixels) and video_frame_ holds
+    // the refcount lease — dropping the lease is what lets the pool
+    // recycle the storage. frame_px_offset_ is the visible_rect
+    // origin inside the packed plane (0 for today's producers, which
+    // always render a full-frame visible rect).
     std::shared_ptr<const std::vector<std::uint8_t>> frame_;
+    Render::scoped_refptr<Render::VideoFrame> video_frame_;
+    std::size_t frame_px_offset_ = 0;
     int frame_width_ = 0;
     int frame_height_ = 0;
     FrameProvider frame_provider_;

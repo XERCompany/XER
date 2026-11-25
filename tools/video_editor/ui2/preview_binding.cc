@@ -45,17 +45,19 @@ class PreviewBinding::Sink final : public PreviewEngine::Sink {
 public:
     explicit Sink(PreviewBinding* owner) : owner_(owner) {}
 
-    void OnVideoFrame(const video::Frame& frame) override {
-        if (frame.DataSize() == 0 || frame.Width() <= 0 ||
-            frame.Height() <= 0) {
+    void OnVideoFrame(
+        Render::scoped_refptr<Render::VideoFrame> frame) override {
+        // Refcount hand-off — the frame's plane is already the
+        // composited canvas; a newer pending frame just drops its
+        // ref (storage returns to the engine's pool when the last
+        // consumer releases).
+        if (!frame || frame->planes() < 1 ||
+            frame->coded_size().IsEmpty()) {
             return;
         }
         auto* o = owner_;
         std::lock_guard<std::mutex> lock(o->mutex_);
-        o->pending_frame_.assign(frame.Data(),
-                                 frame.Data() + frame.DataSize());
-        o->pending_w_ = frame.Width();
-        o->pending_h_ = frame.Height();
+        o->pending_frame_ = std::move(frame);
         o->has_frame_ = true;
     }
     void OnAudioPeakLevels(float l, float r) override {
@@ -379,19 +381,17 @@ bool PreviewBinding::Playing() const {
 
 void PreviewBinding::DrainPending() {
     // Swap pending values out under the lock; apply unlocked —
-    // SetFrame is a full-frame memcpy + paint state update and
-    // holding the mutex through it stalls the engine worker.
-    std::vector<std::uint8_t> frame;
-    int w = 0, h = 0;
+    // applying a frame is a ref move + paint-state update and holding
+    // the mutex through it stalls the engine worker.
+    Render::scoped_refptr<Render::VideoFrame> frame;
     bool has_frame = false, has_peaks = false;
     float pl = 0.0f, pr = 0.0f;
     double playhead = -1.0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (has_frame_) {
-            frame.swap(pending_frame_);
-            w = pending_w_;
-            h = pending_h_;
+            frame = std::move(pending_frame_);
+            pending_frame_.reset();
             has_frame_ = false;
             has_frame = true;
         }
@@ -415,6 +415,8 @@ void PreviewBinding::DrainPending() {
         last_stats_.last_render_ms = s.last_render_ms;
         last_stats_.effective_scale = s.effective_scale;
         last_stats_.adaptive_level = s.adaptive_level;
+        last_stats_.scheduler_dropped = s.scheduler_dropped;
+        last_stats_.scheduler_missed = s.scheduler_missed;
         if (panel_ != nullptr) {
             panel_->SetDropStats(s.dropped, s.rendered,
                                  s.last_render_ms, s.adaptive_level,
@@ -439,7 +441,7 @@ void PreviewBinding::DrainPending() {
         }
         return;
     }
-    if (has_frame) panel_->SetFrame(frame, w, h);
+    if (has_frame) panel_->SetVideoFrame(std::move(frame));
     if (has_peaks) panel_->SetPeakLevels(pl, pr);
     if (playhead >= 0.0) {
         playhead_ =

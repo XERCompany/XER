@@ -382,14 +382,16 @@ Project MakeProject(double clip_duration) {
 // ------------------------------------------------------------------
 class RecordingSink final : public PreviewEngine::Sink {
 public:
-    void OnVideoFrame(const video::Frame& frame) override {
+    void OnVideoFrame(
+        XER::VideoEditor::Render::scoped_refptr<
+            XER::VideoEditor::Render::VideoFrame> frame) override {
         std::lock_guard<std::mutex> lk(mutex_);
         ++frames;
-        last_w = frame.Width();
-        last_h = frame.Height();
-        last_pts = frame.Pts();
-        last_pixels.assign(frame.Data(),
-                           frame.Data() + frame.DataSize());
+        last_w = frame->visible_rect().width;
+        last_h = frame->visible_rect().height;
+        last_pts = frame->timestamp_us();
+        last_pixels.assign(frame->data(0),
+                           frame->data(0) + frame->plane_size(0));
     }
     void OnAudioPeakLevels(float l, float r) override {
         std::lock_guard<std::mutex> lk(mutex_);

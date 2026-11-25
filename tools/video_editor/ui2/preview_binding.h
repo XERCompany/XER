@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "media_decoder.h"      // MediaDecoderFactory
+#include "render/video_frame.h"  // render::VideoFrame (zero-copy marshal)
 #include "timeline_model.h"     // Project
 
 namespace XER::VideoEditor {
@@ -157,6 +158,8 @@ public:
         double last_render_ms = 0.0;
         float effective_scale = 1.0f;
         int adaptive_level = 0;
+        std::uint64_t scheduler_dropped = 0;
+        std::uint64_t scheduler_missed = 0;
     };
     const FrameStats& LastFrameStats() const { return last_stats_; }
     // True when the shared effect cache already holds frames for
@@ -209,10 +212,11 @@ private:
     double work_in_ = 0.0, work_out_ = 0.0;
 
     // Pending marshal slots — written by the engine worker, swapped
-    // out by DrainPending (old pending_* parity).
+    // out by DrainPending (old pending_* parity). The frame slot is a
+    // refcounted render::VideoFrame — the R9 single-marshal hand-off:
+    // one ref moves worker->UI, no pixel copy on the way.
     mutable std::mutex mutex_;
-    std::vector<std::uint8_t> pending_frame_;
-    int pending_w_ = 0, pending_h_ = 0;
+    Render::scoped_refptr<Render::VideoFrame> pending_frame_;
     bool has_frame_ = false;
     float pending_peak_l_ = 0.0f, pending_peak_r_ = 0.0f;
     bool has_peaks_ = false;

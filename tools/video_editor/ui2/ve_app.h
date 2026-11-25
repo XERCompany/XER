@@ -387,7 +387,35 @@ public:
     // Three-point edits: the marked source range lands on the
     // timeline at the program playhead (insert = ripple, overwrite
     // = replace — old EditSourceToTimeline parity, history macro).
-    void EditSourceToTimeline(bool insert);
+    // `at_override` >= 0 pins the destination to a context-menu
+    // point instead of the playhead. The destination track comes
+    // from the surface's V/A patching badges — no targeted track of
+    // the source's kind errors, a patched-off audio leg drops
+    // silently (Premiere/Resolve patching semantics).
+    void EditSourceToTimeline(bool insert, double at_override = -1.0);
+    // Replace edit (Premiere "Replace with Clip from Source"): the
+    // clip under the playhead on a targeted track — or `target`
+    // when the context menu names one — is swapped for the marked
+    // source range through history_->ReplaceClip (the timeline
+    // footprint/effects/link_group stay; a short source clamps to
+    // its media bounds).
+    void SourceReplaceEdit(const Clip* target = nullptr);
+    // Fit to fill (Resolve "Fit to Fill"): the marked source range
+    // retimes into the work area on the targeted track — rate =
+    // source span / fill span, one history macro via
+    // OverwriteClipAt. No work area -> the targeted clip under the
+    // playhead's span is the fill range.
+    void SourceFitToFill();
+    // Timeline context-menu verb dispatcher (on_source_verb hook):
+    // kInsert/kOverwrite at `point`, kReplace onto `clip_id`,
+    // kFitToFill into the work area.
+    void RunSourceVerb(Ui2::SourceEditVerb verb, double point,
+                       const std::string& clip_id);
+    // Top-and-tail (Premiere Q/W): ripple-trim the clip under the
+    // playhead on the targeted track — head=true moves its start to
+    // the playhead, head=false its end (history_->RippleTrimClip
+    // closes the freed gap).
+    void ProgramTopTail(bool head);
     void StopSourceTransport();
 
     // Held-combo + play-around transports (the router's held-key

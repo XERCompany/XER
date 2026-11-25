@@ -16,6 +16,8 @@
 #include "shortcut_router.h"
 #include "timeline_bridge.h"
 #include "timeline_model.h"
+#include "timeline_strip.h"
+#include "timeline_surface.h"
 #include "ve_app.h"
 #include "ve_theme.h"
 #include "widgets/widget_tree.h"
@@ -590,6 +592,258 @@ std::string CheckShellWiring() {
     return {};
 }
 
+// ---- source-patch + edit verbs (round-trip) -----------------------
+//
+// App-level contract for the NLE verbs: the surface's V/A patching
+// badges steer insert/overwrite/lift/extract destination tracks, and
+// replace / fit-to-fill / top-and-tail commute with Undo. The
+// project fixture is three clips ([0,10) on V1, V2, A1) so the
+// untargeted lane proves the mask, not an empty track.
+
+std::string CheckEditVerbs() {
+    const auto prefs_path =
+        std::filesystem::temp_directory_path() /
+        "xer_ui2_monitor_verb_prefs" / "ui2_shell.json";
+    std::error_code ec;
+    std::filesystem::remove_all(prefs_path.parent_path(), ec);
+
+    auto app = std::make_shared<VeApp>(std::string{}, prefs_path);
+    W::WidgetTree tree;
+    tree.SetRoot(app);
+    const auto tokens = Theme::DarkTokens();
+    tree.Layout({0.0f, 0.0f, 1440.0f, 860.0f}, tokens);
+    app->InstallShortcutRouter();
+
+    Project p;
+    p.width = 640;
+    p.height = 360;
+    Track v1;
+    v1.kind = TrackKind::Video;
+    Track v2;
+    v2.kind = TrackKind::Video;
+    Track a1;
+    a1.kind = TrackKind::Audio;
+    p.tracks = {v1, v2, a1};
+    const auto make_clip = [](const char* id, const char* path,
+                              int track) {
+        Clip c;
+        c.id = id;
+        c.source_path = path;
+        c.name = id;
+        c.source.kind = SourceKind::Media;
+        c.track = track;
+        c.timeline_start = 0.0;
+        c.in_point = 0.0;
+        c.duration = 10.0;
+        c.playback_rate = 1.0;
+        return c;
+    };
+    p.clips.push_back(make_clip("v1-clip", "old_a.mov", 0));
+    p.clips.push_back(make_clip("v2-clip", "old_b.mov", 1));
+    p.clips.push_back(make_clip("a1-clip", "old_c.wav", 2));
+    app->SetProject(p);
+
+    if (app->Timeline() == nullptr ||
+        app->Timeline()->Surface() == nullptr) {
+        return "timeline surface missing";
+    }
+    TimelineSurface* surf = app->Timeline()->Surface().get();
+    // SetProject re-seeds Premiere's default patch: first track of
+    // each kind (V1 + A1 here).
+    if (surf->FirstTargetedTrack(TrackKind::Video) != 0 ||
+        surf->FirstTargetedTrack(TrackKind::Audio) != 2) {
+        return "default patch is not V1 + A1";
+    }
+    // Repatch video onto V2; A1 stays targeted, V1 goes dark.
+    surf->SetTrackTargeted(0, false);
+    surf->SetTrackTargeted(1, true);
+    if (surf->FirstTargetedTrack(TrackKind::Video) != 1) {
+        return "video repatch did not land on V2";
+    }
+
+    const auto count_on_track = [&](int track) {
+        int n = 0;
+        for (const Clip& c : app->Document()->clips) {
+            if (c.track == track) ++n;
+        }
+        return n;
+    };
+    const auto find_on_track = [&](int track,
+                                   const std::string& path) {
+        for (const Clip& c : app->Document()->clips) {
+            if (c.track == track && c.source_path == path) return &c;
+        }
+        return static_cast<const Clip*>(nullptr);
+    };
+
+    // Video-only source: [0,2) marked, program playhead at 4.
+    app->OpenInSourceMonitor("verb_src.mov", "verb_src", 6.0, 30, 1,
+                             /*has_video=*/true, /*has_audio=*/false,
+                             640, 360);
+    if (!app->SourceLoaded()) return "verb source did not load";
+    app->SourceMark(true);        // in = 0
+    app->SourceSeek(2.0);
+    app->SourceMark(false);       // out = 2
+
+    // Overwrite lands on the TARGETED V2 at the playhead — the
+    // untargeted V1 stays empty of new media.
+    app->Seek(4.0);
+    app->EditSourceToTimeline(/*insert=*/false);
+    const Clip* landed = find_on_track(1, "verb_src.mov");
+    if (landed == nullptr) {
+        return "overwrite did not land on the targeted V2";
+    }
+    if (!Near(static_cast<float>(landed->timeline_start), 4.0f,
+              0.01f) ||
+        !Near(static_cast<float>(landed->duration), 2.0f, 0.01f)) {
+        return "overwrite clip geometry drifted";
+    }
+    if (find_on_track(0, "verb_src.mov") != nullptr) {
+        return "overwrite touched the untargeted V1";
+    }
+    app->Undo();
+    if (find_on_track(1, "verb_src.mov") != nullptr ||
+        count_on_track(1) != 1) {
+        return "overwrite did not undo cleanly";
+    }
+
+    // Insert at an explicit context-menu point: the straddler on V2
+    // splits and the marked range lands inside the ripple.
+    app->EditSourceToTimeline(/*insert=*/true, /*at_override=*/7.0);
+    landed = find_on_track(1, "verb_src.mov");
+    if (landed == nullptr ||
+        !Near(static_cast<float>(landed->timeline_start), 7.0f,
+              0.01f) ||
+        !Near(static_cast<float>(landed->duration), 2.0f, 0.01f)) {
+        return "insert-at-point did not land on the targeted V2";
+    }
+    if (count_on_track(1) != 3) {
+        return "insert did not ripple the straddler apart";
+    }
+    app->Undo();
+    if (count_on_track(1) != 1 ||
+        FindClip(*app->Document(), "v2-clip") == nullptr) {
+        return "insert did not undo cleanly";
+    }
+
+    // Lift/extract honoring the mask: work area [2,5), V2 + A1
+    // targeted, V1 dark — V1's clip must survive untouched.
+    app->Seek(2.0);
+    app->ProgramSetWorkAreaPoint(true);
+    app->Seek(5.0);
+    app->ProgramSetWorkAreaPoint(false);
+    app->ProgramLiftExtract(/*close_gap=*/false);
+    const Clip* v1c = FindClip(*app->Document(), "v1-clip");
+    if (v1c == nullptr || v1c->duration != 10.0 ||
+        count_on_track(0) != 1) {
+        return "lift touched the untargeted V1";
+    }
+    if (count_on_track(1) != 2 || count_on_track(2) != 2) {
+        return "lift did not split the targeted lanes";
+    }
+    app->Undo();
+    if (count_on_track(1) != 1 || count_on_track(2) != 1) {
+        return "lift did not undo cleanly";
+    }
+    // Extract ripples the freed span on targeted lanes only.
+    app->ProgramLiftExtract(/*close_gap=*/true);
+    {
+        double latest_end = 0.0;
+        for (const Clip& c : app->Document()->clips) {
+            if (c.track == 1) {
+                latest_end = std::max(
+                    latest_end, c.timeline_start + c.duration);
+            }
+        }
+        if (!Near(static_cast<float>(latest_end), 7.0f, 0.01f)) {
+            return "extract did not close the gap on V2";
+        }
+    }
+    if (count_on_track(0) != 1 ||
+        FindClip(*app->Document(), "v1-clip")->duration != 10.0) {
+        return "extract touched the untargeted V1";
+    }
+    app->Undo();
+
+    // Replace edit: playhead inside the targeted V2 clip swaps its
+    // media for the marked source range, keeping the clip id.
+    app->Seek(3.0);
+    app->SourceReplaceEdit();
+    {
+        const Clip* rc = FindClip(*app->Document(), "v2-clip");
+        if (rc == nullptr || rc->source_path != "verb_src.mov") {
+            return "replace did not swap the targeted clip's media";
+        }
+        if (!Near(static_cast<float>(rc->duration), 2.0f, 0.01f) ||
+            !Near(static_cast<float>(rc->in_point), 0.0f, 0.01f)) {
+            return "replace did not use the marked source range";
+        }
+    }
+    app->Undo();
+    {
+        const Clip* rc = FindClip(*app->Document(), "v2-clip");
+        if (rc == nullptr || rc->source_path != "old_b.mov" ||
+            rc->duration != 10.0) {
+            return "replace did not undo cleanly";
+        }
+    }
+
+    // Fit to fill: work area is still [2,5) — a 2 s source retimes
+    // to 3 s at 2/3 speed on the targeted V2.
+    app->SourceFitToFill();
+    landed = find_on_track(1, "verb_src.mov");
+    if (landed == nullptr) {
+        return "fit to fill did not land on the targeted V2";
+    }
+    if (!Near(static_cast<float>(landed->duration), 3.0f, 0.01f) ||
+        !Near(static_cast<float>(landed->playback_rate),
+              2.0f / 3.0f, 0.01f)) {
+        return "fit to fill computed the wrong retime";
+    }
+    app->Undo();
+    if (find_on_track(1, "verb_src.mov") != nullptr ||
+        count_on_track(1) != 1) {
+        return "fit to fill did not undo cleanly";
+    }
+
+    // Top-and-tail (Q/W): head trims to the playhead and ripples the
+    // freed head closed; tail trims the end.
+    app->Seek(4.0);
+    app->ProgramTopTail(/*head=*/true);
+    {
+        const Clip* tc = FindClip(*app->Document(), "v2-clip");
+        if (tc == nullptr ||
+            !Near(static_cast<float>(tc->timeline_start), 0.0f,
+                  0.01f) ||
+            !Near(static_cast<float>(tc->duration), 6.0f, 0.01f) ||
+            !Near(static_cast<float>(tc->in_point), 4.0f, 0.01f)) {
+            return "top-and-tail head did not ripple-trim to the "
+                   "playhead";
+        }
+    }
+    app->Undo();
+    {
+        const Clip* tc = FindClip(*app->Document(), "v2-clip");
+        if (tc == nullptr || tc->duration != 10.0 ||
+            tc->in_point != 0.0) {
+            return "top-and-tail head did not undo cleanly";
+        }
+    }
+    app->Seek(6.0);
+    app->ProgramTopTail(/*head=*/false);
+    {
+        const Clip* tc = FindClip(*app->Document(), "v2-clip");
+        if (tc == nullptr ||
+            !Near(static_cast<float>(tc->duration), 6.0f, 0.01f)) {
+            return "top-and-tail tail did not trim the end";
+        }
+    }
+    app->Undo();
+
+    tree.SetRoot(nullptr);
+    return {};
+}
+
 // ---- transform gizmo ---------------------------------------------
 //
 // Surface-level gesture contract: a fake shell binds the gizmo
@@ -891,6 +1145,9 @@ std::string Ui2MonitorSmoke() {
     }
     if (const std::string err = CheckShellWiring(); !err.empty()) {
         return "shell: " + err;
+    }
+    if (const std::string err = CheckEditVerbs(); !err.empty()) {
+        return "verbs: " + err;
     }
     return {};
 }

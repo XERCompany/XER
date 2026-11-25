@@ -46,6 +46,18 @@ enum class MediaLookup {
     kFailed,   // permanent miss — surface caches the failure
 };
 
+// Source-edit verbs the shell owns (Premiere three-point edit
+// parity). The timeline context menu lists them when
+// TimelineHooks::on_source_verb is bound; `point` is the timeline
+// seconds under the context click and `clip_id` the right-clicked
+// clip ("" = lane background).
+enum class SourceEditVerb {
+    kInsert,      // splice source range at point (Premiere `,`)
+    kOverwrite,   // overwrite at point (Premiere `.`)
+    kReplace,     // swap clip_id's clip for the source range
+    kFitToFill,   // fit source range into [point-region] via rate
+};
+
 // TimelineSurface (S1) hook contract — TimelineWidget::Hooks ported
 // verbatim. The shell binds every member; surfaces may fire them from
 // any gesture handler.
@@ -104,6 +116,20 @@ struct TimelineHooks {
     std::function<void(int, bool)> on_track_mute;
     std::function<void(int, bool)> on_track_hidden;
     std::function<void(int, bool)> on_track_locked;
+    // Track-header V/A target badge + header context-menu "Target
+    // Track" (Premiere source patching / Resolve destination
+    // control): fires with the REQUESTED target state so the shell
+    // stays the single source of truth — unset -> the surface
+    // toggles its own session targeting set. Targeting is view
+    // state, not document state (Resolve semantics): it never
+    // enters history and is never serialized.
+    std::function<void(int, bool)> on_track_target;
+    // Context-menu source-edit verbs (see SourceEditVerb):
+    // (verb, timeline-point, clip_id-or-"") — the shell resolves
+    // source marks/playhead and reports failures via on_status.
+    // Unset -> the verb items never appear in the menu.
+    std::function<void(SourceEditVerb, double, const std::string&)>
+        on_source_verb;
     // Optional media queries — every one degrades gracefully when
     // unset. Tri-state non-blocking contract (see MediaLookup):
     // the shell serves a warm cache and answers kPending while a

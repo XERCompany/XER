@@ -71,6 +71,7 @@
 #include "helper/string_utils.h"
 #include "js_fx.h"
 #include "keyboard_map.h"
+#include "l2_frame_cache.h"
 #include "lut_manager.h"
 #include "media_catalog.h"
 #include "media_decoder.h"               // MakeGpuDecoder / IMediaDecoder
@@ -1952,7 +1953,10 @@ std::string CheckAutoCache() {
         return {};
     }
     struct NullSink : PreviewEngine::Sink {
-        void OnVideoFrame(const video::Frame&) override { ++frames; }
+        void OnVideoFrame(
+            Render::scoped_refptr<Render::VideoFrame>) override {
+            ++frames;
+        }
         void OnAudioPeakLevels(float, float) override {}
         void OnPlayhead(double) override {}
         std::atomic<int> frames{0};
@@ -2022,6 +2026,198 @@ std::string CheckAutoCache() {
                  (unsigned long long)hits_before,
                  (unsigned long long)hits_after);
     engine.Shutdown();
+    return {};
+}
+
+// ---- parallel_determinism --------------------------------------------
+// VeParallelRows must be byte-deterministic: every wrapped kernel writes
+// disjoint output rows, so serial vs pooled dispatch must produce
+// identical pixels. Renders one frame of a project exercising every
+// parallel family — a crossfade transition over the cut, a feathered
+// clip mask, a rotated+scaled+offset warp, a non-Normal blend mode on
+// an upper layer, and two builtin per-pixel kernels — once under
+// XER_VE_THREADS=1 (serial path, pool never engaged) and once under
+// the full pool, then memcmps. XER_VE_THREADS is read per dispatch
+// (parallel_rows.cc VeRenderThreadCount) so both configs live in one
+// process; the serial pass runs FIRST so its bytes can never have been
+// produced by a worker. Wall ms for both passes is printed so the
+// check log shows the speedup alongside the proof.
+std::string CheckParallelDeterminism() {
+    const auto build = [] {
+        Project project = MakeRenderProject(960, 540, 15);
+        project.tracks.push_back(Track{TrackKind::Video, "V2"});
+        Clip& a = project.clips[0];                    // bars [0,2)
+        a.effects.push_back({"builtin:xer.fx.film_grain",
+                             {30.f, 1.f, 2.f, 5.f}});
+        a.effects.push_back({"grayscale", {}});
+        a.transform.rotation_deg = 12.0f;
+        a.transform.scale = 1.3f;
+        a.transform.offset_x = 0.05f;
+        a.transform.opacity = 0.9f;
+        a.masks.push_back(ClipMask{});                 // feathered ellipse
+        Clip b = MakeGeneratedClip("bars-b", 0, 2.0, 1.0,
+                                   SourceKind::ColorBars, "smpte75");
+        b.effects.push_back({"builtin:xer.fx.vignette2",
+                             {1.0f, 0.5f, 0.4f, 1.0f}});
+        project.clips.push_back(b);
+        Transition tr;
+        tr.from_clip = "bars";
+        tr.to_clip = "bars-b";
+        tr.type = Transition::Type::Crossfade;
+        tr.duration = 1.0;
+        project.transitions.push_back(tr);
+        Clip top = MakeGeneratedClip("top", 2, 0.0, 3.0,
+                                     SourceKind::ColorBars, "smpte75");
+        top.blend_mode = BlendMode::Multiply;
+        top.transform.scale = 0.6f;
+        project.clips.push_back(top);
+        return project;
+    };
+    std::string err;
+    const auto render = [&build](std::vector<std::uint8_t>* out,
+                                 double* ms, std::string* err) {
+        const Project project = build();
+        Compositor compositor;
+        if (!compositor.Init(project, {}, err)) return false;
+        // Warmup: lazily builds LUTs / spawns pool workers so the timed
+        // pass measures steady-state dispatch.
+        if (!compositor.RenderFrameAt(1.8, out, err)) return false;
+        const auto t0 = std::chrono::steady_clock::now();
+        const bool ok = compositor.RenderFrameAt(1.8, out, err);
+        *ms = std::chrono::duration<double, std::milli>(
+                  std::chrono::steady_clock::now() - t0).count();
+        compositor.Shutdown();
+        return ok;
+    };
+
+    // Restores XER_VE_THREADS on every exit path (checks run in one
+    // process — a leaked "1" would silently serialize every later
+    // render check).
+    const char* prev_env = std::getenv("XER_VE_THREADS");
+    struct EnvGuard {
+        ~EnvGuard() {
+#if defined(_WIN32)
+            // _putenv_s with an empty value deletes the variable.
+            _putenv_s("XER_VE_THREADS", value.c_str());
+#else
+            if (value.empty()) unsetenv("XER_VE_THREADS");
+            else setenv("XER_VE_THREADS", value.c_str(), 1);
+#endif
+        }
+        std::string value;
+    } guard{prev_env != nullptr ? prev_env : ""};
+    const auto set_threads = [](const char* v) {
+#if defined(_WIN32)
+        _putenv_s("XER_VE_THREADS", v);
+#else
+        setenv("XER_VE_THREADS", v, 1);
+#endif
+    };
+
+    std::vector<std::uint8_t> serial, pooled;
+    double serial_ms = 0, pooled_ms = 0;
+    set_threads("1");
+    if (!render(&serial, &serial_ms, &err)) {
+        return "serial render failed: " + err;
+    }
+    // Overshoot clamps to the pool's hardware bound (parallel_rows.cc).
+    set_threads("64");
+    if (!render(&pooled, &pooled_ms, &err)) {
+        return "pooled render failed: " + err;
+    }
+    if (serial.size() != pooled.size() ||
+        std::memcmp(serial.data(), pooled.data(), serial.size()) != 0) {
+        return "parallel rows changed pixels: serial/pooled outputs "
+               "differ";
+    }
+    std::fprintf(stderr,
+                 "  parallel_determinism: serial %.1f ms  pooled "
+                 "%.1f ms  bytes %zu identical\n",
+                 serial_ms, pooled_ms, serial.size());
+    return {};
+}
+
+// ---- l2_frame_cache ---------------------------------------------------
+// Disk tier behind the RAM EffectFrameCache. Hermetic: the explicit
+// ctor (no env gate) rooted under SmokeTempDir, a RAM capacity of
+// exactly one frame, then store A -> store B (A evicts from RAM, both
+// write-through to disk) -> Flush -> Lookup(A) must be an L2 hit that
+// promotes the decoded .dxcfz bytes back into RAM, pixel-exact. Then
+// a second Lookup(A) is a RAM hit (promotion works), and stats assert
+// the counters moved the right way.
+std::string CheckL2FrameCache() {
+    const auto dir = SmokeTempDir() / "l2_frame_cache";
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    constexpr int kW = 64, kH = 36;
+    const std::size_t frame_bytes =
+        static_cast<std::size_t>(kW) * kH * 4;
+    auto l2 = std::make_shared<L2FrameCache>(
+        dir, /*capacity_bytes*/ 64ull * 1024ull * 1024ull);
+    EffectFrameCache cache(frame_bytes);   // exactly one frame fits
+    cache.SetDiskTier(l2);
+
+    const auto make_frame = [](std::uint8_t seed) {
+        std::vector<std::uint8_t> px(kW * kH * 4);
+        for (std::size_t i = 0; i < px.size(); ++i) {
+            px[i] = static_cast<std::uint8_t>(seed + i * 31u);
+        }
+        video::Frame f;
+        f.Adopt(kW, kH, video::PixelFormat::BGRA8, std::move(px));
+        return f;
+    };
+    EffectFrameCache::Key ka{"clip-a", 1000, 1111};
+    EffectFrameCache::Key kb{"clip-b", 2000, 2222};
+    const video::Frame fa = make_frame(7), fb = make_frame(101);
+    cache.Store(ka, fa);
+    cache.Store(kb, fb);      // RAM capacity: 1 frame -> ka evicts
+    l2->Flush();              // async writer drains to .dxcfz
+
+    auto stats = cache.GetStats();
+    if (stats.entries != 1 || stats.evictions != 1) {
+        return "RAM tier did not evict as expected";
+    }
+    const auto l2st0 = l2->GetStats();
+    if (l2st0.stores != 2) {
+        return "write-through did not store 2 frames to disk";
+    }
+
+    video::Frame out;
+    if (!cache.Lookup(ka, &out)) {
+        return "L2 lookup miss for evicted frame";
+    }
+    if (out.Width() != kW || out.Height() != kH ||
+        out.DataSize() != fa.DataSize() ||
+        std::memcmp(out.Data(), fa.Data(), fa.DataSize()) != 0) {
+        return "L2-promoted frame pixels differ";
+    }
+    stats = cache.GetStats();
+    if (stats.l2_hits != 1 || stats.hits != 1) {
+        return "L2 hit not counted in cache stats";
+    }
+    // The promote wrote ka back into RAM — a second lookup must be a
+    // pure RAM hit (l2_hits stays 1) and must have evicted kb again.
+    if (!cache.Lookup(ka, &out)) {
+        return "promoted frame not served from RAM";
+    }
+    stats = cache.GetStats();
+    if (stats.hits != 2 || stats.l2_hits != 1) {
+        return "RAM re-hit after promote not counted";
+    }
+    // kb is still on disk even though it fell out of RAM again.
+    if (!cache.Lookup(kb, &out) ||
+        out.DataSize() != fb.DataSize() ||
+        std::memcmp(out.Data(), fb.Data(), fb.DataSize()) != 0) {
+        return "second frame did not survive RAM eviction via L2";
+    }
+    const auto l2st = l2->GetStats();
+    std::fprintf(stderr,
+                 "  l2_frame_cache: stores %llu hits %llu misses %llu "
+                 "bytes_on_disk %llu\n",
+                 (unsigned long long)l2st.stores,
+                 (unsigned long long)l2st.hits,
+                 (unsigned long long)l2st.misses,
+                 (unsigned long long)l2st.bytes_on_disk);
     return {};
 }
 
@@ -2165,10 +2361,11 @@ std::string CheckPreviewPerf() {
     std::uint64_t presented = 0;
     {
         struct CountSink : PreviewEngine::Sink {
-            void OnVideoFrame(const video::Frame& f) override {
+            void OnVideoFrame(
+                Render::scoped_refptr<Render::VideoFrame> f) override {
                 ++frames;
-                last_w = f.Width();
-                last_h = f.Height();
+                last_w = f->visible_rect().width;
+                last_h = f->visible_rect().height;
             }
             void OnAudioPeakLevels(float, float) override {}
             void OnPlayhead(double) override {}
@@ -9826,6 +10023,8 @@ constexpr CheckEntry kChecks[] = {
     {"preview_quality", &CheckPreviewQualityScale},
     {"fx_frame_cache", &CheckFxFrameCache},
     {"auto_cache", &CheckAutoCache},
+    {"parallel_determinism", &CheckParallelDeterminism},
+    {"l2_frame_cache", &CheckL2FrameCache},
     {"preview_perf", &CheckPreviewPerf},
     {"js_fx", &CheckJsFx},
     {"builtin_fx", &CheckBuiltinFx},

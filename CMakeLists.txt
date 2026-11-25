@@ -946,6 +946,77 @@ endif()
 # subdirectories that attach its POST_BUILD staging.
 add_subdirectory(tools/pe_deps)
 
+# xer_sync_dev — .xersync dependency-manifest dev utility
+# (third_party/3RD.xersyunc): status / sync / cmake-gen / verify /
+# auto / selftest. Uses libclang (MSYS2 clang64 llvm+clang packages)
+# for the cmake-gen include graph when available, XER_Archive for
+# tarball extraction, CURL::libcurl for streaming downloads and the
+# git CLI for clone/fetch. After tools/pe_deps so
+# xer_stage_runtime_dlls(TARGET ...) has its PE scanner.
+add_executable(xer_sync_dev
+    tools/xer_sync_dev/main.cc
+    tools/xer_sync_dev/commands.cc
+    tools/xer_sync_dev/selftest.cc
+    tools/xer_sync_dev/manifest.cc
+    tools/xer_sync_dev/state.cc
+    tools/xer_sync_dev/process_util.cc
+    tools/xer_sync_dev/git_ops.cc
+    tools/xer_sync_dev/analyzer.cc
+    tools/xer_sync_dev/cmake_gen.cc
+)
+target_include_directories(xer_sync_dev PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/tools/xer_sync_dev
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/content/archive
+)
+target_compile_features(xer_sync_dev PRIVATE cxx_std_23)
+target_link_libraries(xer_sync_dev PRIVATE
+    XER_JsonCpp
+    XER_Archive
+    CURL::libcurl
+)
+if(WIN32)
+    # static libcurl.a references if_nametoindex
+    target_link_libraries(xer_sync_dev PRIVATE iphlpapi)
+endif()
+
+# libclang (C API, clang-c/Index.h) powers the cmake-gen include
+# graph. MSYS2 clang64 ships the llvm+clang dev packages; without
+# them the tool still builds — analysis falls back to the textual
+# #include scan (see tools/xer_sync_dev/analyzer.cc).
+find_package(Clang CONFIG QUIET)
+if(TARGET libclang)
+    # The MINGW static-retarget hook repoints libclang's implib at
+    # libclang.a (which drags in the whole static clang/LLVM stack).
+    # We want the shared C API — restore the .dll.a implib.
+    get_filename_component(_xsd_prefix "${Clang_DIR}/../../.." REALPATH)
+    if(EXISTS "${_xsd_prefix}/lib/libclang.dll.a")
+        set_property(TARGET libclang
+            PROPERTY IMPORTED_IMPLIB_RELEASE
+            "${_xsd_prefix}/lib/libclang.dll.a")
+        set_property(TARGET libclang
+            PROPERTY IMPORTED_IMPLIB
+            "${_xsd_prefix}/lib/libclang.dll.a")
+    endif()
+    target_link_libraries(xer_sync_dev PRIVATE libclang)
+    target_compile_definitions(xer_sync_dev PRIVATE
+        XER_SYNC_DEV_HAVE_LIBCLANG=1
+        XER_SYNC_DEV_SYSROOT_INCLUDE="${_xsd_prefix}/include")
+    if(MINGW AND COMMAND xer_stage_runtime_dlls)
+        # Stages libclang.dll + libLLVM-N.dll beside the exe.
+        xer_stage_runtime_dlls(TARGET xer_sync_dev
+                               SEARCH "${_xsd_prefix}/bin")
+    endif()
+else()
+    message(STATUS "xer_sync_dev: libclang not found — cmake-gen"
+            " falls back to the textual include scan")
+    target_compile_definitions(xer_sync_dev PRIVATE
+        XER_SYNC_DEV_HAVE_LIBCLANG=0)
+endif()
+
+set_target_properties(xer_sync_dev PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
+
 # VideoEditor (XER Studio Phase 1) — headless core lib; the exe lands in
 # 1C/1D inside this same directory.
 add_subdirectory(tools/tz)

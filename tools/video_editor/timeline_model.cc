@@ -519,7 +519,8 @@ bool RippleDeleteClip(Project& project, const std::string& clip_id,
 }
 
 bool LiftRange(Project& project, double t0, double t1, bool close_gap,
-               std::string* error_out) {
+               std::string* error_out,
+               const std::vector<bool>& track_target) {
     if (!std::isfinite(t0) || !std::isfinite(t1)) {
         return Fail(error_out, "lift range must be finite");
     }
@@ -530,6 +531,11 @@ bool LiftRange(Project& project, double t0, double t1, bool close_gap,
     if (t1 <= t0) {
         return Fail(error_out, "lift range must be non-empty");
     }
+    if (!track_target.empty() &&
+        track_target.size() != project.tracks.size()) {
+        return Fail(error_out,
+                    "lift target mask must match the track count");
+    }
     // Multi-track splits/removals are one transaction: everything runs
     // on a staged copy and is committed only when every track's edit
     // succeeded.
@@ -538,7 +544,10 @@ bool LiftRange(Project& project, double t0, double t1, bool close_gap,
         const int track = static_cast<int>(t);
         // Locked tracks are skipped silently (a lift leaves them
         // untouched; it is not an error to have locked tracks).
-        if (IsTrackLocked(staged, track)) {
+        // Untargeted tracks (the destination/auto-select mask) skip
+        // the same way — Premiere lift/extract only reads targets.
+        if (IsTrackLocked(staged, track) ||
+            (!track_target.empty() && !track_target[t])) {
             continue;
         }
         if (!LiftRangeOnTrack(staged, track, t0, t1, error_out)) {

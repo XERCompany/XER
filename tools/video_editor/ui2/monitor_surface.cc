@@ -136,9 +136,59 @@ void MonitorSurface::SetFrame(const std::vector<std::uint8_t>& bgra,
             static_cast<std::size_t>(height)) {
         return;
     }
+    video_frame_ = nullptr;   // legacy path — drop any VideoFrame lease
+    frame_px_offset_ = 0;
     frame_ = std::make_shared<const std::vector<std::uint8_t>>(bgra);
     frame_width_ = width;
     frame_height_ = height;
+    Invalidate(VideoAreaRect());
+}
+
+void MonitorSurface::SetVideoFrame(
+    Render::scoped_refptr<Render::VideoFrame> frame) {
+    // R9 zero-copy feed — same validity contract as SetFrame, plus
+    // storage/format gates the CPU paint path needs. Unsupported
+    // frames are dropped silently: callers keep their CPU fallback.
+    if (!frame || !frame->IsMappable() || frame->planes() < 1 ||
+        frame->data(0) == nullptr) {
+        return;
+    }
+    const auto fmt = frame->format();
+    if (fmt != Render::VideoPixelFormat::kBGRA8 &&
+        fmt != Render::VideoPixelFormat::kRGBA8) {
+        return;
+    }
+    const Render::VideoRect vis = frame->visible_rect();
+    const Render::VideoSize coded = frame->coded_size();
+    if (vis.IsEmpty() || coded.IsEmpty() ||
+        !vis.FitsInside(coded)) {
+        return;
+    }
+    // DrawFrameBgra reads packed rows — the visible rows must be
+    // contiguous (stride == vis.width*4). Padded/unpacked sources
+    // need a repack or the texture path; neither exists yet.
+    if (frame->stride(0) != vis.width * 4) {
+        return;
+    }
+    auto pixels = frame->SharePixels();
+    if (!pixels || pixels->empty() ||
+        pixels->size() / 4u <
+            static_cast<std::size_t>(coded.width) *
+                static_cast<std::size_t>(coded.height)) {
+        return;
+    }
+    // Order matters for pooling: release the previous alias FIRST so
+    // the old frame's storage is the sole owner when the lease dies
+    // — that is the only case the pool recycles (a live alias means
+    // the buffer frees with the reader instead).
+    frame_ = std::move(pixels);
+    video_frame_ = std::move(frame);
+    frame_px_offset_ =
+        static_cast<std::size_t>(vis.y) *
+            static_cast<std::size_t>(frame->stride(0)) +
+        static_cast<std::size_t>(vis.x) * 4;
+    frame_width_ = vis.width;
+    frame_height_ = vis.height;
     Invalidate(VideoAreaRect());
 }
 
@@ -967,10 +1017,14 @@ void MonitorSurface::Paint(Rendering::Renderer& renderer,
                         tokens.radius_medium);
 
     if (pixels != nullptr && !pixels->empty() && frame_width_ > 0 &&
-        frame_height_ > 0) {
+        frame_height_ > 0 &&
+        frame_px_offset_ + static_cast<std::size_t>(frame_width_) *
+                                   frame_height_ * 4 <=
+                               pixels->size()) {
         const auto dest = FittedFrameRect();
-        renderer.DrawFrameBgra(pixels->data(), frame_width_,
-                               frame_height_, dest, 1.0f);
+        renderer.DrawFrameBgra(pixels->data() + frame_px_offset_,
+                               frame_width_, frame_height_, dest,
+                               1.0f);
         renderer.StrokeRect(dest, tokens.border, 1.0f, 0.0f);
         DrawOverlays(renderer, tokens, dest);
         // Transform gizmo — over the frame/overlays, inside the

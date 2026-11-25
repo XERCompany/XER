@@ -236,6 +236,18 @@ public:
     bool RenderFrameAt(double t, std::vector<std::uint8_t>* out_bgra,
                        std::string* error_out = nullptr);
 
+    // RenderFrameAt variant that copies the finished canvas into a
+    // caller-owned buffer — `dst_bgra` must hold at least
+    // CanvasWidth()*CanvasHeight()*4 bytes (packed BGRA8, stride
+    // width*4). This is the render::VideoFramePool hand-off the
+    // preview engine uses: the pooled frame's plane is the copy
+    // destination, so the per-frame delivery needs no fresh vector
+    // allocation. Same render contract otherwise (clamped t, false +
+    // error_out on decode/render failure).
+    bool RenderFrameAtTo(double t, std::uint8_t* dst_bgra,
+                         std::size_t dst_bytes,
+                         std::string* error_out = nullptr);
+
     // ui2 monitor-gizmo seam: replaces one clip's STATIC transform in
     // the bound project snapshot. Sessions stay open and the
     // per-layer memo/effect caches re-key on the transform hash, so a

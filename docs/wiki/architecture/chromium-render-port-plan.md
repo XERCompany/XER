@@ -312,3 +312,73 @@ through `preview_binding.cc` pending slots (R9); `MonitorSurface` pull
 via `(t_min,t_max)` `FrameProvider` signature (R6 contract); feed
 `FrameScheduler` from `D2DPresenter`'s post-`Present1` ack for a real
 BeginFrame.
+
+---
+
+## 9. Slice-2 status — 2026-11-24 (VideoFrame delivery + scheduler wired)
+
+Second slice routes the preview pipeline through the render
+primitives — the three marshal `memcpy`s of R9 are gone on the
+delivery path, and the pump now runs on `TimeSource`/`FrameScheduler`
+with audio-clock drift correction. All changes are in existing files
+plus the two render TUs moved into `XER_VideoEditor_Core`.
+
+**Landed:**
+
+- `PreviewEngine::Sink::OnVideoFrame` now takes
+  `Render::scoped_refptr<Render::VideoFrame>` — refcounted delivery,
+  no `video::Frame` copy on the boundary (all six in-tree sinks
+  updated: `smoke_checks.cc` ×2, `render_p0_smoke.cc`, `main.cc`,
+  `tests/…/video_editor_playback_tests.cc`, plus the UI binding).
+- `Compositor::RenderFrameAtTo(t, dst_bgra, dst_bytes, err)` renders
+  into a caller-provided buffer (`RenderFrameAtImpl` shared body —
+  `RenderFrameAt` keeps the vector-`assign` path for export/tests).
+  The engine acquires a pooled `VideoFrame` and the compositor writes
+  the canvas straight into its plane — **zero pixel copies** between
+  render and the monitor widget.
+- `render::VideoFrame` gained `SharePixels()` (aliased storage view);
+  `VideoFramePool` recycling is alias-safe — a `use_count` guard keeps
+  shared storages out of the idle deque while an alias is live.
+- UI path: `MonitorSurface::SetVideoFrame(scoped_refptr)` +
+  `MonitorPanel::SetVideoFrame`; `PreviewBinding`'s marshal slots
+  carry the `scoped_refptr` — the old `pending_frame_.assign` copy is
+  gone. The widget reads `visible_rect()`/`data(0)` directly.
+- Pump clocking: worker owns `WallClockTimeSource` +
+  `AudioClockTimeSource` (the audio clock drives media time while the
+  sink consumes — Chromium's audio-master rule) + `FrameScheduler`
+  ticking `BeginFrame` on a vsync grid; `OnFramePresented(tr)` is the
+  DidFinishFrame analogue. Scheduler `dropped`/`missed_deadlines`
+  counters mirror into `GetFrameStats()` (`sched_dropped_`,
+  `sched_missed_`); `render_p0_smoke` asserts the scheduler drop
+  count equals the existing `frames_dropped_` counter (parity).
+  Drift correction rebases onto the audio clock past
+  `kAudioDriftCorrectSeconds` (skipped while looping / reverse / a
+  stalled clock).
+- `probe_render` extended with slice-2 checks (pool→engine→sink
+  scoped-ref handoff, `SharePixels` aliasing + recycle guard,
+  `RenderFrameAtTo` byte-parity with `RenderFrameAt`, scheduler
+  counters vs engine drops).
+- CMake: `render/video_frame.cc` + `render/frame_scheduler.cc` moved
+  into `XER_VideoEditor_Core` (the engine needs them); exe-side
+  keeps `probe_render.cc`/`d2d_presenter.cc`.
+
+**Verification:** `windows-clang-msys2` builds clean;
+`--probe-render` passes 24/24 (slice-1 17 + 7 new slice-2 checks) and
+`--smoke` passes every render-path check — `render_p0` (incl. the
+scheduler-drop parity assertion), `ui2_monitor`, `preview_perf`
+(reports `deliver 0.00 ms` — the marshal copies are gone),
+`compositor_render`, `blend_modes`. `XER_VideoEditor_Tests` builds +
+runs with 4 failures that are all **pre-existing at HEAD** (blend
+test written for the retired loop's math; chroma_key test written
+for the CPU fallback while the committed Skia path uses L1 distance;
+`TestQualityScale` predates the committed paused→1.0 quality split;
+`boot_assets_registry` expects an accent the committed `editor.yaml`
+doesn't have). The suite's only FAIL is `ui2_timeline`'s
+trim-preview check — part of a concurrent, uncommitted feature
+outside this slice.
+
+**Slice-3 candidates:** ANGLE `angle_context` + `XER_VE_GPU_PRESENT`
+GL-quad present (deferred — CPU path stays the default), feed
+`FrameScheduler` from a real present ack, `MonitorSurface` pull-side
+`(t_min,t_max)` frame queue, `VideoFrame→video::Frame` view for the
+remaining `video::Frame` consumers.

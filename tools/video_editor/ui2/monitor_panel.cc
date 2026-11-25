@@ -580,6 +580,10 @@ void MonitorPanel::SetFrame(const std::vector<std::uint8_t>& bgra,
                             int width, int height) {
     surface_->SetFrame(bgra, width, height);
 }
+void MonitorPanel::SetVideoFrame(
+    Render::scoped_refptr<Render::VideoFrame> frame) {
+    surface_->SetVideoFrame(std::move(frame));
+}
 void MonitorPanel::SetClickPointsArmed(bool armed) {
     surface_->SetClickPointsArmed(armed);
 }

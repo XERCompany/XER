@@ -71,35 +71,45 @@ void BindPlanes(VideoFrame::Plane* planes, int count,
     }
 }
 
-// Standalone owned-memory frame (the VideoFramePool-free path).
+// Standalone owned-memory frame (the VideoFramePool-free path). The
+// storage is a shared_ptr so SharePixels() can alias it — a by-value
+// vector member could not be shared without copying.
 class OwnedVideoFrame final : public VideoFrame {
 public:
     // Allocates the buffer for `coded` in `format`.
     OwnedVideoFrame(VideoPixelFormat format, VideoSize coded,
                     VideoRect visible, std::int64_t ts,
                     std::int64_t dur)
-        : pixels_(BytesRequired(format, coded.width, coded.height)) {
+        : pixels_(std::make_shared<std::vector<std::uint8_t>>(
+              BytesRequired(format, coded.width, coded.height))) {
         Plane planes[kMaxPlanes]{};
         const int n = NumPlanes(format);
         ComputePlaneLayout(format, coded.width, coded.height, planes);
-        BindPlanes(planes, n, pixels_.data());
+        BindPlanes(planes, n, pixels_->data());
         InitCpu(format, coded, visible, ts, dur, planes, n);
     }
     // Adopts the caller's buffer (single-plane formats only — checked
-    // by WrapOwnedMemory before construction).
+    // by WrapOwnedMemory before construction). The incoming vector is
+    // moved into a shared allocation — one pointer fix-up, no copy.
     OwnedVideoFrame(VideoPixelFormat format, VideoSize coded,
                     VideoRect visible, std::int64_t ts, std::int64_t dur,
                     std::vector<std::uint8_t>&& pixels)
-        : pixels_(std::move(pixels)) {
+        : pixels_(std::make_shared<std::vector<std::uint8_t>>(
+              std::move(pixels))) {
         Plane plane{};
         plane.stride = coded.width * 4;
-        plane.size = pixels_.size();
-        plane.ptr = pixels_.data();
+        plane.size = pixels_->size();
+        plane.ptr = pixels_->data();
         InitCpu(format, coded, visible, ts, dur, &plane, 1);
     }
 
+    std::shared_ptr<const std::vector<std::uint8_t>> SharePixels()
+        const override {
+        return pixels_;
+    }
+
 private:
-    std::vector<std::uint8_t> pixels_;
+    std::shared_ptr<std::vector<std::uint8_t>> pixels_;
 };
 
 // Texture-backed frame — the WrapSharedImage analogue. Owns no pixels;
@@ -120,6 +130,11 @@ public:
         if (mailbox_release_) {
             mailbox_release_();
         }
+    }
+
+    std::shared_ptr<const std::vector<std::uint8_t>> SharePixels()
+        const override {
+        return nullptr;   // opaque storage — nothing CPU-visible to share
     }
 
 private:
@@ -153,6 +168,11 @@ public:
                                           std::move(storage_));
         }
         // Weak core expired (pool destroyed): storage_ frees normally.
+    }
+
+    std::shared_ptr<const std::vector<std::uint8_t>> SharePixels()
+        const override {
+        return storage_;
     }
 
 private:
@@ -336,6 +356,14 @@ void VideoFramePool::ReturnStorage(
     detail::VideoFramePoolCore& core, std::uint64_t key,
     std::shared_ptr<std::vector<std::uint8_t>> storage) {
     std::lock_guard<std::mutex> lk(core.mutex);
+    // Aliased-out storage (a SharePixels() shared_ptr still held by a
+    // monitor/scopes reader) must NOT go back on the idle deque — the
+    // next Acquire would overwrite pixels the reader still owns.
+    // Let it die with the alias instead.
+    if (storage.use_count() > 1) {
+        ++core.stats.aliased_frees;
+        return;
+    }
     auto& dq = core.idle[key];
     if (dq.size() >= core.options.max_idle_per_key) {
         ++core.stats.overflow_frees;

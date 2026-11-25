@@ -185,6 +185,11 @@ Goal started: 2026-11-15. Design doc:
   design (d3d11va→VideoProcessor→GPU compositor→keyed-mutex present),
   and ranked tickets R1–R9 + not-portable list (command_buffer/Mojo/
   GPU-process) (2026-11-24).
+- [xer-sync-dev.md](architecture/xer-sync-dev.md) — `xer_sync_dev`
+  tool for `third_party/3RD.xersyunc`: status/sync/cmake-gen/verify/
+  auto/selftest subcommands, libclang include-graph analysis (MSYS2
+  clang64 `libclang` via `find_package(Clang)`), `xer-<dep>.cmake`
+  patch shapes, `.xersync-state.json` interval gating (2026-11-25).
 - [content-opendialog.md](architecture/content-opendialog.md) —
   `src/content/opendialog`: Windows common-item-dialog pickers
   (open/save/dir read+write) with `IFileDialogCustomize` custom widgets

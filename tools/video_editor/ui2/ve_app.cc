@@ -747,6 +747,20 @@ void VeApp::WireTimelineBridge() {
         }
         return static_cast<int>(ClipCostClassFor(clip));
     };
+    // Timeline ctx-menu edit verbs — RunSourceVerb dispatches onto
+    // the targeted insert/overwrite/replace/fit-to-fill methods.
+    host.source_verb =
+        [this](Ui2::SourceEditVerb verb, double point,
+               const std::string& clip_id) {
+            RunSourceVerb(verb, point, clip_id);
+        };
+    // V/A patching badges — the shell owns the surface's targeted
+    // set (requested state arrives here, the surface mirrors back).
+    host.on_track_target = [this](int track, bool on) {
+        if (const auto& s = timeline_->Surface()) {
+            s->SetTrackTargeted(track, on);
+        }
+    };
     bridge_->SetHost(std::move(host));
 
     surface->SetHooks(bridge_->Hooks());
@@ -1109,6 +1123,12 @@ void VeApp::SetProject(const Project& project) {
     if (history_ != nullptr) history_->Clear();
     project_ = project;
     playhead_ = 0.0;
+    // Per-document patching (Premiere): a new track layout re-seeds
+    // the default V1/A1 targets rather than inheriting stale
+    // indices.
+    if (timeline_ != nullptr && timeline_->Surface() != nullptr) {
+        timeline_->Surface()->ResetTrackTargets();
+    }
     NotifyTimelineChanged();
 }
 
@@ -1238,8 +1258,15 @@ void VeApp::ProgramLiftExtract(bool close_gap) {
         return;
     }
     if (history_ == nullptr) return;
+    // Track targeting (Premiere patching): the surface's V/A badge
+    // set masks which tracks the range op touches — untargeted
+    // lanes behave like locked ones.
+    const std::vector<bool> mask =
+        timeline_ != nullptr && timeline_->Surface() != nullptr
+            ? timeline_->Surface()->TargetedMask()
+            : std::vector<bool>{};
     std::string error;
-    if (!history_->LiftRange(wi, wo, close_gap, &error)) {
+    if (!history_->LiftRange(wi, wo, close_gap, &error, mask)) {
         SetStatus("Lift/extract failed: " + error, true);
         return;
     }
@@ -1506,10 +1533,38 @@ void VeApp::ProgramMatchFrame() {
     SetStatus("Match frame: " + name);
 }
 
-void VeApp::EditSourceToTimeline(bool insert) {
+// Target badge name for status lines — "V2"/"A1" by per-kind
+// ordinal (the surface header chip paints the same id).
+static std::string TrackBadgeName(const Project& project,
+                                  int track_index) {
+    if (track_index < 0 ||
+        track_index >= static_cast<int>(project.tracks.size())) {
+        return "?";
+    }
+    const TrackKind kind =
+        project.tracks[static_cast<std::size_t>(track_index)].kind;
+    int ordinal = 0;
+    for (int i = 0; i <= track_index; ++i) {
+        if (project.tracks[static_cast<std::size_t>(i)].kind ==
+            kind) {
+            ++ordinal;
+        }
+    }
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%c%d",
+                  kind == TrackKind::Video ? 'V' : 'A', ordinal);
+    return buf;
+}
+
+void VeApp::EditSourceToTimeline(bool insert, double at_override) {
     // Ported from VideoEditorAppWidget::EditSourceToTimeline — same
-    // mark resolution, target-track rule, linked A/V pair,
-    // straddling split and history macro.
+    // mark resolution, linked A/V pair, straddling split and history
+    // macro. The destination now follows the surface's V/A patching
+    // badges (Premiere source patching / Resolve destination
+    // controls): the FIRST unlocked targeted track of the source's
+    // kind wins; when that kind exists but nothing is targeted the
+    // edit errors instead of guessing, and a patched-off audio leg
+    // drops silently.
     if (source_path_.empty()) {
         SetStatus("No clip loaded in the source monitor", true);
         return;
@@ -1532,23 +1587,46 @@ void VeApp::EditSourceToTimeline(bool insert) {
     // as a linked pair — video on the video track, audio on an
     // audio track, shared link_group.
     const bool linked_av = source_has_video_ && source_has_audio_;
-    const std::string selected =
-        bridge_ != nullptr ? bridge_->SelectedClipId() : std::string{};
+    TimelineSurface* surface =
+        timeline_ != nullptr ? timeline_->Surface().get() : nullptr;
+    const auto kind_exists = [this](TrackKind kind) {
+        for (const Track& t : project_.tracks) {
+            if (t.kind == kind) return true;
+        }
+        return false;
+    };
     int track_index = -1;
-    if (const Clip* sel = FindClip(project_, selected);
-        sel != nullptr && sel->track >= 0 &&
-        sel->track < static_cast<int>(project_.tracks.size()) &&
-        project_.tracks[sel->track].kind == wanted &&
-        !project_.tracks[sel->track].locked) {
-        track_index = sel->track;
-    }
-    if (track_index < 0) {
-        for (int i = 0;
-             i < static_cast<int>(project_.tracks.size()); ++i) {
-            const Track& t = project_.tracks[i];
-            if (t.kind == wanted && !t.locked) {
-                track_index = i;
-                break;
+    if (surface != nullptr) {
+        track_index = surface->FirstTargetedTrack(wanted);
+        if (track_index < 0 && kind_exists(wanted)) {
+            SetStatus(std::string("Source edit failed: no targeted ") +
+                          (wanted == TrackKind::Video ? "video"
+                                                      : "audio") +
+                          " track",
+                      true);
+            return;
+        }
+    } else {
+        // No surface (legacy/headless) — the old selection-then-
+        // first-unlocked fallback.
+        const std::string selected =
+            bridge_ != nullptr ? bridge_->SelectedClipId()
+                               : std::string{};
+        if (const Clip* sel = FindClip(project_, selected);
+            sel != nullptr && sel->track >= 0 &&
+            sel->track < static_cast<int>(project_.tracks.size()) &&
+            project_.tracks[sel->track].kind == wanted &&
+            !project_.tracks[sel->track].locked) {
+            track_index = sel->track;
+        }
+        if (track_index < 0) {
+            for (int i = 0;
+                 i < static_cast<int>(project_.tracks.size()); ++i) {
+                const Track& t = project_.tracks[i];
+                if (t.kind == wanted && !t.locked) {
+                    track_index = i;
+                    break;
+                }
             }
         }
     }
@@ -1559,37 +1637,62 @@ void VeApp::EditSourceToTimeline(bool insert) {
             SetStatus("Source edit failed: cannot add a track", true);
             return;
         }
+        // A kind that had no lane gets its first track targeted —
+        // the patch set keeps up with auto-creation.
+        if (surface != nullptr) {
+            surface->SetTrackTargeted(track_index, true);
+        }
     }
     int audio_track = -1;
     if (linked_av) {
-        for (int i = 0;
-             i < static_cast<int>(project_.tracks.size()); ++i) {
-            const Track& t = project_.tracks[i];
-            if (t.kind == TrackKind::Audio && !t.locked) {
-                audio_track = i;
-                break;
+        if (surface != nullptr) {
+            audio_track = surface->FirstTargetedTrack(TrackKind::Audio);
+            if (audio_track < 0 && !kind_exists(TrackKind::Audio)) {
+                audio_track =
+                    history_->AddTrack(TrackKind::Audio, "Audio");
+                if (audio_track < 0) {
+                    SetStatus("Source edit failed: cannot add an "
+                              "audio track",
+                              true);
+                    return;
+                }
+                surface->SetTrackTargeted(audio_track, true);
             }
-        }
-        if (audio_track < 0) {
-            audio_track =
-                history_->AddTrack(TrackKind::Audio, "Audio");
+            // audio_track still < 0 here = every audio lane is
+            // patched off or locked — the A leg drops (video-only
+            // edit), matching Premiere's unpatched-A behavior.
+        } else {
+            for (int i = 0;
+                 i < static_cast<int>(project_.tracks.size()); ++i) {
+                const Track& t = project_.tracks[i];
+                if (t.kind == TrackKind::Audio && !t.locked) {
+                    audio_track = i;
+                    break;
+                }
+            }
             if (audio_track < 0) {
-                SetStatus("Source edit failed: cannot add an audio "
-                          "track",
-                          true);
-                return;
+                audio_track =
+                    history_->AddTrack(TrackKind::Audio, "Audio");
+                if (audio_track < 0) {
+                    SetStatus("Source edit failed: cannot add an "
+                              "audio track",
+                              true);
+                    return;
+                }
             }
         }
     }
+    const bool audio_leg = audio_track >= 0;
 
     // Premiere drops an insert at the playhead even when it lands
     // inside a clip — split the straddler first so InsertClipAt's
     // non-overlap validation passes.
     const bool snap =
         timeline_ != nullptr && timeline_->SnapEnabled();
-    double at = snap ? SnapTime(project_, track_index, playhead_, 0.1,
+    const double dest = at_override >= 0.0 ? at_override : playhead_;
+    double at = snap ? SnapTime(project_, track_index, dest, 0.1,
                                 playhead_)
-                     : playhead_;
+                     : dest;
     at = std::max(0.0, at);
     const auto straddler_on = [this, at](int track) -> const Clip* {
         for (const Clip& c : project_.clips) {
@@ -1604,7 +1707,7 @@ void VeApp::EditSourceToTimeline(bool insert) {
     const Clip* straddler =
         insert ? straddler_on(track_index) : nullptr;
     const Clip* audio_straddler =
-        insert && linked_av ? straddler_on(audio_track) : nullptr;
+        insert && audio_leg ? straddler_on(audio_track) : nullptr;
 
     Clip clip = MakeSourceClip(source_path_, track_index, at, src_in,
                                src_out, source_media_w_,
@@ -1612,7 +1715,7 @@ void VeApp::EditSourceToTimeline(bool insert) {
                                project_.height);
     clip.id = NewClipId();
     Clip audio_clip;
-    if (linked_av) {
+    if (audio_leg) {
         // 0,0 src dims -> identity transform: audio-only leg.
         audio_clip = MakeSourceClip(source_path_, audio_track, at,
                                     src_in, src_out, 0, 0, 0, 0);
@@ -1648,7 +1751,7 @@ void VeApp::EditSourceToTimeline(bool insert) {
         applied_any |= ok;
         if (ok) clip.id = new_id;
     }
-    if (ok && linked_av) {
+    if (ok && audio_leg) {
         std::string new_id;
         if (insert) {
             ok = history_->InsertClipAt(audio_clip, audio_bounds,
@@ -1671,8 +1774,321 @@ void VeApp::EditSourceToTimeline(bool insert) {
     if (bridge_ != nullptr) bridge_->SelectClip(clip.id);
     Seek(clip.timeline_start + clip.duration);
     NotifyTimelineChanged();
-    SetStatus(std::string(insert ? "Inserted " : "Overwrote ") +
-              source_name_);
+    // Report the patch destination so the badges' effect is visible
+    // in the status line ("Inserted onto V2+A1").
+    std::string badge = TrackBadgeName(project_, track_index);
+    if (audio_leg) {
+        badge += "+" + TrackBadgeName(project_, audio_track);
+    }
+    SetStatus(std::string(insert ? "Inserted onto " : "Overwrote ") +
+              badge + " — " + source_name_);
+}
+
+// ── source-edit verbs (replace / fit-to-fill / top-and-tail) ─────────
+// The clip under the playhead on a TARGETED track — replace and
+// top-and-tail both resolve their subject this way (Premiere's
+// "clip on the patched track under the CTI"). Video-kind tracks win
+// over audio; the lowest index wins within a kind. Locked tracks
+// are skipped; an unwired surface accepts every track (legacy).
+static const Clip* TargetedClipAt(const Project& project,
+                                  const TimelineSurface* surface,
+                                  double playhead) {
+    const Clip* best = nullptr;
+    int best_pri = 0;
+    for (const Clip& c : project.clips) {
+        if (playhead < c.timeline_start ||
+            playhead >= c.timeline_start + c.duration) {
+            continue;
+        }
+        if (c.track < 0 ||
+            c.track >= static_cast<int>(project.tracks.size())) {
+            continue;
+        }
+        const Track& tr = project.tracks[c.track];
+        if (tr.locked) continue;
+        if (surface != nullptr && !surface->TrackTargeted(c.track)) {
+            continue;
+        }
+        const int pri =
+            (tr.kind == TrackKind::Video ? 2 : 1) * 10000 - c.track;
+        if (best == nullptr || pri > best_pri) {
+            best = &c;
+            best_pri = pri;
+        }
+    }
+    return best;
+}
+
+void VeApp::SourceReplaceEdit(const Clip* target) {
+    // Premiere "Replace Edit": the source range swaps into the
+    // timeline clip's footprint — position, duration, effects and
+    // link_group stay (history ReplaceClip keeps the clip id, so
+    // transitions survive too). A source shorter than the footprint
+    // clamps to its media bounds rather than overshooting.
+    if (source_path_.empty()) {
+        SetStatus("No clip loaded in the source monitor", true);
+        return;
+    }
+    if (history_ == nullptr) return;
+    double src_in = 0.0, src_out = 0.0;
+    const auto marks_it = source_marks_.find(source_path_);
+    const SourceMarks marks = marks_it != source_marks_.end()
+                                  ? marks_it->second
+                                  : SourceMarks{};
+    if (!ResolveSourceRange(marks, source_duration_, &src_in,
+                            &src_out)) {
+        SetStatus("Source range is empty — set in/out marks", true);
+        return;
+    }
+    TimelineSurface* surface =
+        timeline_ != nullptr ? timeline_->Surface().get() : nullptr;
+    if (target == nullptr) {
+        target =
+            TargetedClipAt(project_, surface, playhead_);
+    }
+    if (target == nullptr) {
+        SetStatus("Replace: no clip under the playhead on a targeted "
+                  "track",
+                  true);
+        return;
+    }
+    double dur = target->duration;
+    if (source_duration_ > 0.0) {
+        dur = std::min(dur,
+                       std::max(0.0, source_duration_ - src_in));
+    }
+    const double src_span = src_out - src_in;
+    if (src_span < dur) dur = src_span;
+    if (dur <= 1e-9) {
+        SetStatus("Replace: source range is shorter than a frame",
+                  true);
+        return;
+    }
+    Clip repl = *target;
+    repl.source_path = source_path_;
+    if (!source_name_.empty()) repl.name = source_name_;
+    repl.source.kind = SourceKind::Media;
+    repl.in_point = src_in;
+    repl.duration = dur;
+    repl.playback_rate = 1.0;
+    // The old clip's per-source annotations (tags, object/mask
+    // tracks) describe different media — drop them; effects and
+    // gain stay (the timeline treatment survives a replace).
+    repl.tags.clear();
+    repl.object_track = ClipTrack{};
+    repl.mask_track = ClipMaskTrack{};
+    const MediaBounds bounds{source_duration_, source_has_video_};
+    std::string error;
+    if (!history_->ReplaceClip(target->id, repl, bounds, &error)) {
+        SetStatus("Replace failed: " + error, true);
+        return;
+    }
+    if (bridge_ != nullptr) bridge_->SelectClip(target->id);
+    NotifyTimelineChanged();
+    SetStatus("Replaced " + TrackBadgeName(project_, target->track) +
+              " clip with " + source_name_);
+}
+
+void VeApp::SourceFitToFill() {
+    // Resolve "Fit to Fill": the marked source range retimes into
+    // the fill range — work area when set, else the targeted clip
+    // under the playhead's span — as one history macro.
+    if (source_path_.empty()) {
+        SetStatus("No clip loaded in the source monitor", true);
+        return;
+    }
+    if (history_ == nullptr) return;
+    double src_in = 0.0, src_out = 0.0;
+    const auto marks_it = source_marks_.find(source_path_);
+    const SourceMarks marks = marks_it != source_marks_.end()
+                                  ? marks_it->second
+                                  : SourceMarks{};
+    if (!ResolveSourceRange(marks, source_duration_, &src_in,
+                            &src_out)) {
+        SetStatus("Source range is empty — set in/out marks", true);
+        return;
+    }
+    TimelineSurface* surface =
+        timeline_ != nullptr ? timeline_->Surface().get() : nullptr;
+    double fill_in = 0.0, fill_out = 0.0;
+    if (project_.work_out > project_.work_in) {
+        fill_in = project_.work_in;
+        fill_out = project_.work_out;
+    } else if (const Clip* under =
+                   TargetedClipAt(project_, surface, playhead_);
+               under != nullptr) {
+        fill_in = under->timeline_start;
+        fill_out = under->timeline_start + under->duration;
+    } else {
+        SetStatus("Fit to fill needs a work area or a clip under "
+                  "the playhead",
+                  true);
+        return;
+    }
+    const double fill_dur = fill_out - fill_in;
+    const double src_dur = src_out - src_in;
+    if (fill_dur <= 1e-9 || src_dur <= 1e-9) {
+        SetStatus("Fit to fill: empty range", true);
+        return;
+    }
+    const double rate = src_dur / fill_dur;
+    if (rate < 0.01 || rate > 100.0) {
+        SetStatus("Fit to fill: rate out of range", true);
+        return;
+    }
+    const TrackKind wanted =
+        source_has_video_ ? TrackKind::Video : TrackKind::Audio;
+    int track_index = -1;
+    if (surface != nullptr) {
+        track_index = surface->FirstTargetedTrack(wanted);
+        if (track_index < 0) {
+            bool kind_exists = false;
+            for (const Track& t : project_.tracks) {
+                if (t.kind == wanted) {
+                    kind_exists = true;
+                    break;
+                }
+            }
+            if (kind_exists) {
+                SetStatus("Fit to fill: no targeted track", true);
+                return;
+            }
+        }
+    } else {
+        for (int i = 0;
+             i < static_cast<int>(project_.tracks.size()); ++i) {
+            const Track& t = project_.tracks[i];
+            if (t.kind == wanted && !t.locked) {
+                track_index = i;
+                break;
+            }
+        }
+    }
+    if (track_index < 0) {
+        track_index = history_->AddTrack(
+            wanted, wanted == TrackKind::Video ? "Video" : "Audio");
+        if (track_index < 0) {
+            SetStatus("Fit to fill: cannot add a track", true);
+            return;
+        }
+        if (surface != nullptr) {
+            surface->SetTrackTargeted(track_index, true);
+        }
+    }
+
+    Clip clip = MakeSourceClip(source_path_, track_index, fill_in,
+                               src_in, src_out, source_media_w_,
+                               source_media_h_, project_.width,
+                               project_.height);
+    clip.id = NewClipId();
+    clip.playback_rate = rate;
+    clip.duration = fill_dur;
+    const MediaBounds bounds{source_duration_, source_has_video_};
+    std::string error;
+    history_->BeginMacro("Fit to fill");
+    bool applied_any = false;
+    bool ok = true;
+    // Split straddlers at both fill edges so the overwrite covers
+    // exactly the fill span.
+    for (const double edge_t : {fill_in, fill_out}) {
+        for (const Clip& c : project_.clips) {
+            if (c.track != track_index ||
+                c.timeline_start >= edge_t - 1e-9 ||
+                ClipEndSeconds(c) <= edge_t + 1e-9) {
+                continue;
+            }
+            std::string ignored;
+            ok = history_->SplitClip(c.id, edge_t, &ignored);
+            applied_any |= ok;
+            if (!ok) {
+                error = "fill-edge split failed";
+                break;
+            }
+            break;   // one straddler per edge
+        }
+        if (!ok) break;
+    }
+    if (ok) {
+        std::string new_id;
+        ok = history_->OverwriteClipAt(clip, bounds, &new_id, &error);
+        applied_any |= ok;
+        if (ok) clip.id = new_id;
+    }
+    history_->EndMacro();
+    if (!ok) {
+        if (applied_any) history_->Undo();
+        SetStatus("Fit to fill failed: " + error, true);
+        return;
+    }
+    if (bridge_ != nullptr) bridge_->SelectClip(clip.id);
+    NotifyTimelineChanged();
+    char rate_txt[24];
+    std::snprintf(rate_txt, sizeof(rate_txt), "%.2fx", rate);
+    SetStatus(std::string("Fit to fill ") + rate_txt + " onto " +
+              TrackBadgeName(project_, track_index));
+}
+
+void VeApp::RunSourceVerb(Ui2::SourceEditVerb verb, double point,
+                          const std::string& clip_id) {
+    switch (verb) {
+        case Ui2::SourceEditVerb::kInsert:
+            EditSourceToTimeline(true, point);
+            break;
+        case Ui2::SourceEditVerb::kOverwrite:
+            EditSourceToTimeline(false, point);
+            break;
+        case Ui2::SourceEditVerb::kReplace: {
+            const Clip* target = FindClip(project_, clip_id);
+            if (target == nullptr) {
+                SetStatus("Replace: no clip at that point", true);
+                return;
+            }
+            SourceReplaceEdit(target);
+            break;
+        }
+        case Ui2::SourceEditVerb::kFitToFill:
+            SourceFitToFill();
+            break;
+    }
+}
+
+void VeApp::ProgramTopTail(bool head) {
+    // Premiere Q/W: the clip edge under the playhead on the targeted
+    // track ripples to the playhead — head trims its start, tail its
+    // end, and the freed gap closes (history_->RippleTrimClip).
+    TimelineSurface* surface =
+        timeline_ != nullptr ? timeline_->Surface().get() : nullptr;
+    const Clip* clip = TargetedClipAt(project_, surface, playhead_);
+    if (clip == nullptr) {
+        SetStatus("Top-and-tail: no clip under the playhead on a "
+                  "targeted track",
+                  true);
+        return;
+    }
+    if (history_ == nullptr) return;
+    const double rate =
+        clip->playback_rate != 0.0 ? clip->playback_rate : 1.0;
+    const double src_point =
+        clip->in_point + (playhead_ - clip->timeline_start) * rate;
+    std::string error;
+    if (!history_->RippleTrimClip(
+            clip->id, head ? TrimEdge::In : TrimEdge::Out, src_point,
+            [this](const std::string& path) {
+                MediaBounds bounds;
+                if (const CatalogEntry* e = FindCatalogEntry(path);
+                    e != nullptr) {
+                    bounds.duration_seconds = e->duration_seconds;
+                    bounds.has_video = e->HasVideo();
+                }
+                return bounds;
+            },
+            &error)) {
+        SetStatus("Top-and-tail failed: " + error, true);
+        return;
+    }
+    NotifyTimelineChanged();
+    SetStatus(head ? "Trimmed start to playhead"
+                   : "Trimmed end to playhead");
 }
 
 // ── shortcuts ────────────────────────────────────────────────────────
@@ -1869,6 +2285,32 @@ void VeApp::BindShellShortcuts() {
                            return true;
                        },
                        R::kScopeProgram);
+    // Top-and-tail (Premiere Q/W): ripple-trim the targeted clip's
+    // start/end to the playhead. Program scope.
+    shortcuts_.BindKey('q', [this] {
+                           ProgramTopTail(true);
+                           return true;
+                       },
+                       R::kScopeProgram);
+    shortcuts_.BindKey('w', [this] {
+                           ProgramTopTail(false);
+                           return true;
+                       },
+                       R::kScopeProgram);
+    // Source-scope verb chords: Shift+, replaces the targeted clip
+    // under the playhead with the source range; Shift+. fits the
+    // source range to the work area (Fit to Fill). F9–F12 don't
+    // exist in KeyCode, so the punctuation row carries them.
+    shortcuts_.BindShiftKey(',', [this] {
+                               SourceReplaceEdit();
+                               return true;
+                           },
+                           R::kScopeSource);
+    shortcuts_.BindShiftKey('.', [this] {
+                               SourceFitToFill();
+                               return true;
+                           },
+                           R::kScopeSource);
     shortcuts_.BindChord(W::KeyCode::Space,
                          [this] {
                              SourceTogglePlay();

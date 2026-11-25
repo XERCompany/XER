@@ -114,6 +114,18 @@ public:
         // (0 realtime / 1 cached / 2 needs-render). Unset -> the
         // surface draws no strip.
         std::function<int(const Clip&)> clip_cost_class;
+        // Context-menu source-edit verbs (insert / overwrite /
+        // replace / fit-to-fill): (verb, timeline point, clip id or
+        // "") — the shell resolves source marks + track targets.
+        // Unset -> the verb items hide.
+        std::function<void(SourceEditVerb, double,
+                           const std::string&)>
+            source_verb;
+        // Track target toggles (the V/A badge + header menu "Target
+        // Track") — fires with the requested state; the shell pushes
+        // it back through TimelineSurface::SetTrackTargeted. Unset ->
+        // the surface owns its own session targeting set.
+        std::function<void(int, bool)> on_track_target;
     };
 
     // Borrows both — the shell outlives the bridge. `host` copies;

@@ -137,3 +137,11 @@ yarn-error.log*
 # see third_party/VENDORED.md (onnxruntime/win-x64 section).
 !/third_party/onnxruntime/win-x64/*.dll
 nul
+
+# xer_sync_dev runtime state + fetch staging/artifacts
+# (third_party/3RD.xersyunc manifest itself IS tracked).
+third_party/.xersync-state.json
+third_party/.xersync-downloads/
+# Generated per-dep cmake patches live next to upstream source;
+# regenerate via `xer_sync_dev cmake-gen` / `auto`.
+third_party/*/xer-*.cmake

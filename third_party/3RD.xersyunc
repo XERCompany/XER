@@ -1,0 +1,73 @@
+-- format: json
+{
+    "automatic_update": true,
+    "automatic_update_interval_days": 7,
+    "automatic_update_check_on_start": true,
+    "automatic_create_patch_for_cmake_all_dependencies": true,
+    "prefix_new_version_all_dependencies": "XER-",
+    "output_directory": "third_party",
+    "dependencies-from-github": [
+        {
+            "name": "abseil-cpp",
+            "url": "https://github.com/abseil/abseil-cpp"
+        },
+        {
+            "name": "libxml2",
+            "url": "https://github.com/GNOME/libxml2"
+        },
+        {
+            "name": "ffmpeg",
+            "url": "https://git.ffmpeg.org/ffmpeg.git"
+        },
+        {
+            "name": "zlib",
+            "url": "https://github.com/madler/zlib"
+        },
+        {
+            "name": "brotli",
+            "url": "https://github.com/google/brotli"
+        },
+        {
+            "name": "libuv",
+            "url": "https://github.com/libuv/libuv"
+        },
+        {
+            "name": "fp16",
+            "url": "https://github.com/Maratyszcza/fp16"
+        },
+        {
+            "name": "re2",
+            "url": "https://github.com/google/re2"
+        },
+        {
+            "name": "zstd",
+            "url": "https://github.com/facebook/zstd"
+        },
+        {
+            "name": "pthreadpool",
+            "url": "https://github.com/Maratyszcza/pthreadpool"
+        },
+        {
+            "name": "fxdiv",
+            "url": "https://github.com/Maratyszcza/FXdiv"
+        },
+        {
+            "name": "dlfcn-win32",
+            "url": "https://github.com/dlfcn-win32/dlfcn-win32"
+        },
+        {
+            "name": "assimp",
+            "url": "https://github.com/assimp/assimp"
+        },
+        {
+            "name": "sdl2",
+            "url": "https://github.com/libsdl-org/SDL" 
+        }
+    ],
+    "dependencies-opensource": [
+        {
+            "package_name": "cef",
+            "url": "https://cef-builds.spotifycdn.com/cef_binary_158.0.6%2Bg23f1736%2Bchromium-158.0.8127.89_windows64.tar.bz2"
+        }
+    ]
+}

@@ -213,6 +213,14 @@ Rect HeaderChevronRect(const Rect& label_rect) {
                 label_rect.y + 6.0f, 16.0f, 16.0f};
 }
 
+// V/A target badge — the patching chip under the kind bar (header
+// button id 6). Fixed rect shared by hit test + paint so the click
+// zone and the drawn chip can never drift apart.
+Rect TargetBadgeRect(const Rect& label_rect) {
+    return Rect{label_rect.x + kKindBarWidth + 8.0f,
+                label_rect.y + 8.0f, 34.0f, 20.0f};
+}
+
 // Diamond outline (marker glyph) — four DrawLine segments, no polygon
 // primitive in the renderer.
 void DrawDiamond(XER::UI::Rendering::Renderer& renderer, Point center,
@@ -359,6 +367,12 @@ void TimelineSurface::SetProject(const Project* project) {
     // The project object may have been rebuilt by a commit — drop any
     // stale tool previews keyed by old clip ids.
     clip_previews_.clear();
+    // Seed the default V1/A1 patch once per surface — a document
+    // swap keeps the user's map (ResetTrackTargets is the shell's
+    // re-seed seam on load/new).
+    if (!targets_seeded_ && project_ != nullptr) {
+        ResetTrackTargets();
+    }
     // Edit changed the cost domain — reclassify the render-status
     // strip immediately rather than on the next Tick cadence.
     RefreshCostClasses();
@@ -445,6 +459,79 @@ void TimelineSurface::SetLinkEditsEnabled(bool enabled) {
     link_edits_enabled_ = enabled;
 }
 
+// ---- track targeting (Premiere source patching / Resolve
+// destination controls — session view state, never serialized) ----
+
+void TimelineSurface::SetTrackTargeted(int track, bool targeted) {
+    if (track < 0) return;
+    if (targeted) {
+        targeted_tracks_.insert(track);
+    } else {
+        targeted_tracks_.erase(track);
+    }
+    Invalidate();
+}
+
+bool TimelineSurface::TrackTargeted(int track) const {
+    return targeted_tracks_.count(track) != 0u;
+}
+
+std::vector<int> TimelineSurface::TargetedTracks(
+    TrackKind kind) const {
+    std::vector<int> out;
+    if (project_ == nullptr) return out;
+    for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
+        if (project_->tracks[i].kind == kind &&
+            targeted_tracks_.count(static_cast<int>(i)) != 0u) {
+            out.push_back(static_cast<int>(i));
+        }
+    }
+    return out;
+}
+
+int TimelineSurface::FirstTargetedTrack(TrackKind kind) const {
+    for (const int i : TargetedTracks(kind)) {
+        if (!project_->tracks[static_cast<std::size_t>(i)].locked) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+std::vector<bool> TimelineSurface::TargetedMask() const {
+    std::vector<bool> mask;
+    if (project_ == nullptr) return mask;
+    mask.resize(project_->tracks.size(), false);
+    for (const int i : targeted_tracks_) {
+        if (i >= 0 && i < static_cast<int>(mask.size())) {
+            mask[static_cast<std::size_t>(i)] = true;
+        }
+    }
+    return mask;
+}
+
+void TimelineSurface::ResetTrackTargets() {
+    targeted_tracks_.clear();
+    if (project_ != nullptr) {
+        // Premiere's default patch: the FIRST track of each kind is
+        // the destination (V1 + A1 on the legacy seed grid).
+        bool have_video = false, have_audio = false;
+        for (std::size_t i = 0; i < project_->tracks.size(); ++i) {
+            const bool video =
+                project_->tracks[i].kind == TrackKind::Video;
+            if (video && !have_video) {
+                targeted_tracks_.insert(static_cast<int>(i));
+                have_video = true;
+            } else if (!video && !have_audio) {
+                targeted_tracks_.insert(static_cast<int>(i));
+                have_audio = true;
+            }
+        }
+    }
+    targets_seeded_ = true;
+    Invalidate();
+}
+
 void TimelineSurface::ZoomToFit() {
     const double duration =
         project_ != nullptr ? project_->duration() : 0.0;
@@ -455,6 +542,7 @@ void TimelineSurface::ZoomToFit() {
 void TimelineSurface::SetTool(ToolId tool) {
     if (tool == active_tool_) return;
     transition_drag_ = false;  // junction-handle drags die with the tool
+    DisarmTrimPreview();       // so does the trim-mode overlay
     if (TimelineTool* current = ActiveToolImpl()) {
         current->Cancel(*this);
     }
@@ -641,6 +729,11 @@ TimelineSurface::HeaderHit TimelineSurface::HitHeaderButton(
         const Track& track = project_->tracks[i];
         if (HeaderChevronRect(label).Contains(p)) {
             return HeaderHit{static_cast<int>(i), 3};
+        }
+        // V/A target badge (button 6) — sits in the upper header
+        // band, so it hits before the bottom-strip chips.
+        if (TargetBadgeRect(label).Contains(p)) {
+            return HeaderHit{static_cast<int>(i), 6};
         }
         const int count = HeaderButtonCount(track);
         for (int slot = 0; slot < count; ++slot) {
@@ -1232,7 +1325,11 @@ void TimelineSurface::Render(
             WithAlpha(kind, track.locked ? 0.4f : 0.9f), 1.5f);
 
         // Track-id badge chip ("V1" blue / "A1" teal): kind letter +
-        // per-kind ordinal, not the arbitrary track name.
+        // per-kind ordinal, not the arbitrary track name. It doubles
+        // as the source-patching target toggle (header button id 6):
+        // a targeted track paints the full-strength kind chip, an
+        // untargeted one dims to an outlined ghost (Premiere's
+        // unpatched look) — hover brightens it back toward hot.
         int ordinal = 0;
         for (std::size_t j = 0; j <= i; ++j) {
             if (project_->tracks[j].kind == track.kind) ++ordinal;
@@ -1240,18 +1337,25 @@ void TimelineSurface::Render(
         char badge_text[8];
         std::snprintf(badge_text, sizeof(badge_text), "%c%d",
                       is_video ? 'V' : 'A', ordinal);
-        const auto badge_size = renderer.MeasureText(
-            badge_text,
-            {Color{1, 1, 1, 0.95f}, tokens.font_small, 700});
-        const Rect badge{label_rect.x + kKindBarWidth + 8.0f,
-                         label_rect.y + 8.0f,
-                         badge_size.width + 12.0f, 20.0f};
-        renderer.FillRect(badge, WithAlpha(kind, 0.9f), 5.0f);
-        DrawCenteredText(renderer, badge_text,
-                         Rect{badge.x, badge.y + 2.5f, badge.width,
-                              badge.height},
-                         {Color{1.0f, 1.0f, 1.0f, 0.95f},
-                          tokens.font_small, 700});
+        const bool targeted =
+            TrackTargeted(static_cast<int>(i));
+        const bool badge_hot =
+            hover_header_.track == static_cast<int>(i) &&
+            hover_header_.button == 6;
+        const Rect badge = TargetBadgeRect(label_rect);
+        const float badge_alpha =
+            targeted ? (badge_hot ? 1.0f : 0.9f)
+                     : (badge_hot ? 0.55f : 0.30f);
+        renderer.FillRect(badge, WithAlpha(kind, badge_alpha), 5.0f);
+        if (!targeted) {
+            renderer.StrokeRect(badge, WithAlpha(kind, 0.55f), 1.0f,
+                                5.0f);
+        }
+        DrawCenteredText(
+            renderer, badge_text,
+            Rect{badge.x, badge.y + 2.5f, badge.width, badge.height},
+            {Color{1.0f, 1.0f, 1.0f, targeted ? 0.95f : 0.60f},
+             tokens.font_small, 700});
 
         // Track name on the badge's right when it adds information
         // (duplicate of the badge id is hidden); state flags below.
@@ -1713,6 +1817,10 @@ void TimelineSurface::Render(
                       {play_x, bounds.y + bounds.height},
                       tokens.playhead, 2.0f);
 
+    // Trim-mode two-up overlay (Premiere's trim monitor): sits above
+    // clips and the playhead while an edge/cut drag is live.
+    RenderTrimPreview(renderer, tokens, bounds);
+
     // Media-bin drag hovering this surface — accent frame marks the
     // panel as a live drop target (SetExternalDropHover).
     if (external_drop_hover_) {
@@ -1996,6 +2104,134 @@ void TimelineSurface::RenderThumbnails(
     }
 }
 
+// Trim-mode overlay — Premiere's two-up monitor translated onto the
+// surface: an outgoing pane (the frame leaving the cut) and an
+// incoming pane (the frame entering it), each with a signed frame
+// counter for the side the gesture moves. Posters come through the
+// same non-blocking get_poster seam the clip thumbnails use, so the
+// panes show placeholders until a decode lands and never stall paint.
+void TimelineSurface::RenderTrimPreview(
+    XER::UI::Rendering::Renderer& renderer,
+    const XER::UI::Theme::Tokens& tokens,
+    const Rect& bounds) {
+    if (!TrimPreviewActive() || project_ == nullptr) return;
+    const float ruler_bottom =
+        timeline_area_.y + kMarkerLaneHeight + kRulerHeight;
+    constexpr float kPaneW = 148.0f;
+    constexpr float kPaneH = 84.0f;    // ~16:9
+    constexpr float kGutter = 34.0f;
+    constexpr float kPad = 9.0f;
+    constexpr float kCaption = 14.0f;
+    const float card_w = kPad * 2.0f + kPaneW * 2.0f + kGutter;
+    const float card_h =
+        kPad * 2.0f + kCaption + kPaneH + kCaption + 2.0f;
+    const float cut_x = XAtTime(trim_.boundary + trim_.offset);
+    const float view_l = timeline_area_.x + kHeaderWidth;
+    const float view_r = timeline_area_.x + timeline_area_.width;
+    float cx = cut_x - card_w * 0.5f;
+    cx = std::clamp(cx, view_l + 4.0f,
+                    std::max(view_l + 4.0f, view_r - card_w - 4.0f));
+    const float cy = ruler_bottom + 6.0f;
+    if (cy + card_h > bounds.y + bounds.height) return;
+    const Rect card{cx, cy, card_w, card_h};
+    renderer.FillRect(card, Theme::kOverlayChip, 8.0f);
+    renderer.StrokeRect(card, WithAlpha(tokens.accent, 0.7f), 1.0f,
+                        8.0f);
+
+    const int frames = TrimOffsetFrames();
+    const auto draw_side = [&](const TrimSide& side,
+                               const char* role, float x) {
+        const Rect cap{x, cy + kPad, kPaneW, kCaption};
+        const Rect pane{x, cy + kPad + kCaption, kPaneW, kPaneH};
+        const Rect ctr{x, cy + kPad + kCaption + kPaneH + 2.0f,
+                       kPaneW, kCaption};
+        const Clip* clip =
+            side.clip_id.empty()
+                ? nullptr
+                : FindClip(*project_, side.clip_id);
+        // Pane: the side's source frame (media clips) letterboxed on
+        // black, or a dark matte carrying the clip id / "gap".
+        renderer.FillRect(pane, Color{0.0f, 0.0f, 0.0f, 0.9f}, 3.0f);
+        if (clip != nullptr &&
+            clip->source.kind == SourceKind::Media &&
+            !clip->source_path.empty()) {
+            if (const video::Frame* frame =
+                    PosterFor(clip->source_path,
+                              side.source_seconds);
+                frame != nullptr && frame->Height() > 0) {
+                const float aspect =
+                    static_cast<float>(frame->Width()) /
+                    frame->Height();
+                float dw = kPaneW, dh = kPaneH;
+                if (aspect > kPaneW / kPaneH) {
+                    dh = kPaneW / aspect;
+                } else {
+                    dw = kPaneH * aspect;
+                }
+                const Rect dst{pane.x + (kPaneW - dw) * 0.5f,
+                               pane.y + (kPaneH - dh) * 0.5f, dw, dh};
+                renderer.DrawFrameBgra(frame->Data(),
+                                       frame->Width(),
+                                       frame->Height(), dst, 1.0f);
+            }
+        } else {
+            DrawCenteredText(
+                renderer,
+                clip != nullptr ? "no video" : "gap",
+                pane, {tokens.muted, tokens.font_small, 500});
+        }
+        // The moving edge's pane gets the accent ring (Premiere's
+        // active-side highlight); the still side stays muted.
+        renderer.StrokeRect(
+            pane,
+            side.moves ? tokens.accent : WithAlpha(tokens.border, 0.9f),
+            side.moves ? 2.0f : 1.0f, 3.0f);
+        // Caption: role + clip id + the previewed source time.
+        std::string cap_text = role;
+        cap_text += " ";
+        cap_text += side.clip_id.empty() ? "—" : side.clip_id;
+        if (clip != nullptr) {
+            cap_text += " ";
+            cap_text += FormatTime(side.source_seconds);
+        }
+        renderer.DrawText(
+            cap_text, cap,
+            {side.moves ? tokens.accent : tokens.muted,
+             tokens.font_small, 600});
+        // Counter: signed frame offset for the moving side.
+        char buf[24];
+        if (!side.moves) {
+            std::snprintf(buf, sizeof(buf), "%s", "\xc2\xb1" "0f");
+        } else {
+            std::snprintf(buf, sizeof(buf), "%+df", frames);
+        }
+        DrawCenteredText(renderer, buf, ctr,
+                         {side.moves ? tokens.accent : tokens.muted,
+                          tokens.font_small, 700});
+    };
+
+    draw_side(TrimPreviewOutgoing(), "OUT", card.x + kPad);
+    draw_side(TrimPreviewIncoming(), "IN",
+              card.x + kPad + kPaneW + kGutter);
+
+    // Gutter: mode tag (ROLL / RIPPLE / TRIM) + the live cut marker.
+    const char* mode = trim_.tool == ToolId::RollingEdit
+                           ? "ROLL"
+                           : trim_.tool == ToolId::RippleEdit
+                                 ? "RIPPLE"
+                                 : "TRIM";
+    const float gx = card.x + kPad + kPaneW;
+    DrawCenteredText(
+        renderer, mode,
+        Rect{gx, cy + kPad + kPaneH * 0.5f - 16.0f, kGutter, 14.0f},
+        {tokens.accent, tokens.font_small, 700});
+    DrawCenteredText(
+        renderer, FormatTime(trim_.boundary + trim_.offset),
+        Rect{gx - 6.0f, cy + kPad + kPaneH * 0.5f + 2.0f,
+             kGutter + 12.0f, 14.0f},
+        {tokens.muted, tokens.font_small, 500});
+}
+
 // ---- input ----
 
 void TimelineSurface::Layout(const XER::UI::Layout::Rect& bounds) {
@@ -2136,6 +2372,32 @@ bool TimelineSurface::HandleEvent(
             } else if (hit.button == 5) {
                 SetStatus(
                     "Record arm isn't wired into the track model yet");
+            } else if (hit.button == 6) {
+                // V/A target badge — Premiere source patching /
+                // Resolve destination control. The hook reports the
+                // REQUESTED state (the shell stays source of truth);
+                // unbound, the surface owns its session set.
+                const bool on = !TrackTargeted(hit.track);
+                if (hooks_.on_track_target) {
+                    hooks_.on_track_target(hit.track, on);
+                } else {
+                    SetTrackTargeted(hit.track, on);
+                }
+                int ordinal = 0;
+                for (int j = 0; j <= hit.track; ++j) {
+                    if (project_->tracks[
+                            static_cast<std::size_t>(j)].kind ==
+                        track.kind) {
+                        ++ordinal;
+                    }
+                }
+                char name[8];
+                std::snprintf(name, sizeof(name), "%c%d",
+                              track.kind == TrackKind::Video ? 'V'
+                                                             : 'A',
+                              ordinal);
+                SetStatus(std::string(name) +
+                          (on ? " target on" : " target off"));
             }
             Invalidate();
             return true;
@@ -2223,6 +2485,10 @@ bool TimelineSurface::HandleEvent(
         // macro scope as a pointer-up burst.
         const ToolContext ctx = MakeContext(event);
         TimelineTool* tool = ActiveToolImpl();
+        // Arm the trim-mode overlay from the same ctx the tool sees —
+        // it activates only if the press actually starts an edge/cut
+        // drag (TrimPreviewActive gates on IsDragging).
+        ArmTrimPreview(ctx);
         bool used = false;
         if (tool != nullptr) {
             GestureScope(*this, "edit");
@@ -2344,7 +2610,11 @@ bool TimelineSurface::HandleEvent(
         if (TimelineTool* tool = ActiveToolImpl();
             tool != nullptr && tool->IsDragging()) {
             const ToolContext ctx = MakeContext(event);
-            return tool->OnPointerMove(ctx, *this);
+            const bool used = tool->OnPointerMove(ctx, *this);
+            // The tool just updated clip_previews_ — re-resolve the
+            // trim overlay's A/B frames + offset counter from them.
+            RefreshTrimPreview();
+            return used;
         }
         return false;
     }
@@ -2395,8 +2665,11 @@ bool TimelineSurface::HandleEvent(
             tool != nullptr && tool->IsDragging()) {
             const ToolContext ctx = MakeContext(event);
             GestureScope(*this, "edit");
-            return tool->OnPointerUp(ctx, *this);
+            const bool used = tool->OnPointerUp(ctx, *this);
+            DisarmTrimPreview();   // release ends the trim overlay
+            return used;
         }
+        DisarmTrimPreview();
         return false;
     }
 
@@ -2415,6 +2688,7 @@ bool TimelineSurface::HandleEvent(
             if (TimelineTool* tool = ActiveToolImpl();
                 tool != nullptr && tool->IsDragging()) {
                 tool->Cancel(*this);
+                DisarmTrimPreview();
                 return true;
             }
             return false;
@@ -2573,6 +2847,164 @@ void TimelineSurface::ZoomToRange(double t0, double t1) {
     Invalidate();
 }
 
+// ---- trim preview (Premiere trim-mode / FCP precision editor) ----
+// The overlay is read-only state on top of the tools' existing
+// preview ghosts: ArmTrimPreview records which edit point a
+// pointer-down could grab, RefreshTrimPreview re-resolves the A/B
+// source frames + offset counter from clip_previews_ after every
+// drag move, and the release/cancel paths disarm it.
+
+bool TimelineSurface::TrimPreviewActive() const {
+    const TimelineTool* tool = ActiveToolImpl();
+    return trim_.armed && tool != nullptr && tool->IsDragging();
+}
+
+int TimelineSurface::TrimOffsetFrames() const {
+    const double frame =
+        project_ != nullptr && project_->fps_num > 0
+            ? static_cast<double>(project_->fps_den) /
+                  project_->fps_num
+            : 1.0 / 30.0;
+    return static_cast<int>(std::lround(trim_.offset / frame));
+}
+
+TimelineSurface::TrimSide TimelineSurface::TrimPreviewOutgoing()
+    const {
+    return TrimSide{trim_.out_id, trim_.out_src, trim_.out_moves};
+}
+
+TimelineSurface::TrimSide TimelineSurface::TrimPreviewIncoming()
+    const {
+    return TrimSide{trim_.in_id, trim_.in_src, trim_.in_moves};
+}
+
+void TimelineSurface::ArmTrimPreview(const ToolContext& ctx) {
+    DisarmTrimPreview();
+    if (project_ == nullptr) return;
+    if (active_tool_ == ToolId::RollingEdit) {
+        // N-tool roll grabs carry the shared-cut pair in the ctx.
+        if (ctx.roll_from == nullptr || ctx.roll_to == nullptr) {
+            return;
+        }
+        trim_.armed = true;
+        trim_.tool = active_tool_;
+        trim_.roll_from = ctx.roll_from->id;
+        trim_.roll_to = ctx.roll_to->id;
+        trim_.boundary = ClipEndSeconds(*ctx.roll_from);
+        RefreshTrimPreview();
+        return;
+    }
+    if (active_tool_ != ToolId::Selection &&
+        active_tool_ != ToolId::RippleEdit) {
+        return;
+    }
+    if (ctx.clip == nullptr ||
+        (ctx.clip_part != ClipPart::EdgeIn &&
+         ctx.clip_part != ClipPart::EdgeOut)) {
+        return;
+    }
+    trim_.armed = true;
+    trim_.tool = active_tool_;
+    trim_.edge_clip = ctx.clip->id;
+    trim_.edge = ctx.clip_part == ClipPart::EdgeIn ? TrimEdge::In
+                                                 : TrimEdge::Out;
+    trim_.boundary = trim_.edge == TrimEdge::In
+                         ? ctx.clip->timeline_start
+                         : ClipEndSeconds(*ctx.clip);
+    RefreshTrimPreview();
+}
+
+void TimelineSurface::RefreshTrimPreview() {
+    if (!trim_.armed || project_ == nullptr) return;
+    const auto rate_of = [](const Clip& c) {
+        return c.playback_rate != 0.0 ? c.playback_rate : 1.0;
+    };
+    const auto preview_of = [this](const std::string& id)
+        -> const std::pair<double, double>* {
+        const auto it = clip_previews_.find(id);
+        return it != clip_previews_.end() ? &it->second : nullptr;
+    };
+
+    if (trim_.tool == ToolId::RollingEdit) {
+        // Roll: the shared cut moves BOTH edges — the outgoing clip's
+        // out frame and the incoming clip's in frame track it.
+        const Clip* from = FindClip(*project_, trim_.roll_from);
+        const Clip* to = FindClip(*project_, trim_.roll_to);
+        if (from == nullptr || to == nullptr) {
+            DisarmTrimPreview();
+            return;
+        }
+        const auto* pv_from = preview_of(from->id);
+        const auto* pv_to = preview_of(to->id);
+        const double edge_now =
+            pv_from != nullptr ? pv_from->second
+                               : ClipEndSeconds(*from);
+        const double to_start =
+            pv_to != nullptr ? pv_to->first : to->timeline_start;
+        trim_.offset = edge_now - trim_.boundary;
+        trim_.out_id = from->id;
+        trim_.in_id = to->id;
+        trim_.out_src =
+            from->in_point +
+            (edge_now - from->timeline_start) * rate_of(*from);
+        trim_.in_src =
+            to->in_point +
+            (to_start - to->timeline_start) * rate_of(*to);
+        trim_.out_moves = trim_.in_moves = true;
+        return;
+    }
+
+    // Single-edge trim (V/B): the grabbed edge moves; the pane on the
+    // other side of the cut shows the still neighbor's frame — a
+    // gap side reads as an empty pane.
+    const Clip* clip = FindClip(*project_, trim_.edge_clip);
+    if (clip == nullptr) {
+        DisarmTrimPreview();
+        return;
+    }
+    const auto* pv = preview_of(clip->id);
+    if (trim_.edge == TrimEdge::Out) {
+        const double edge_now =
+            pv != nullptr ? pv->second : ClipEndSeconds(*clip);
+        trim_.offset = edge_now - trim_.boundary;
+        trim_.out_id = clip->id;
+        trim_.out_src =
+            clip->in_point +
+            (edge_now - clip->timeline_start) * rate_of(*clip);
+        trim_.out_moves = true;
+        trim_.in_moves = false;
+        const Clip* next = NextClipOnTrack(*project_, clip->track,
+                                           trim_.boundary - 1e-4);
+        if (next != nullptr && next->id != clip->id) {
+            trim_.in_id = next->id;
+            trim_.in_src = next->in_point;
+        } else {
+            trim_.in_id.clear();
+            trim_.in_src = 0.0;
+        }
+    } else {
+        const double edge_now =
+            pv != nullptr ? pv->first : clip->timeline_start;
+        trim_.offset = edge_now - trim_.boundary;
+        trim_.in_id = clip->id;
+        trim_.in_src =
+            clip->in_point +
+            (edge_now - clip->timeline_start) * rate_of(*clip);
+        trim_.in_moves = true;
+        trim_.out_moves = false;
+        const Clip* prev = PrevClipOnTrack(*project_, clip->track,
+                                           trim_.boundary + 1e-4);
+        if (prev != nullptr && prev->id != clip->id) {
+            trim_.out_id = prev->id;
+            trim_.out_src = prev->in_point +
+                            prev->duration * rate_of(*prev);
+        } else {
+            trim_.out_id.clear();
+            trim_.out_src = 0.0;
+        }
+    }
+}
+
 void TimelineSurface::Tick(double dt_seconds) {
     (void)dt_seconds;
     // Render-status strip: refresh the cached cost classes on a slow
@@ -2659,6 +3091,18 @@ bool TimelineSurface::ShowContextMenu(
             }
         };
         items.push_back(std::move(lock));
+        // Source patching: the same toggle the V/A badge click fires.
+        Widgets::ContextMenu::Item target;
+        target.label = "Target Track";
+        target.checked = TrackTargeted(track);
+        target.action = [this, track, on = !TrackTargeted(track)] {
+            if (hooks_.on_track_target) {
+                hooks_.on_track_target(track, on);
+            } else {
+                SetTrackTargeted(track, on);
+            }
+        };
+        items.push_back(std::move(target));
     } else if (in_header) {
         return false;  // ruler/header corner box — no menu
     } else if (p.y < lane_bottom) {
@@ -2772,6 +3216,33 @@ bool TimelineSurface::ShowContextMenu(
                     };
                     items.push_back(std::move(media));
                 }
+                // Source-edit verbs at the clicked time — the shell
+                // resolves source marks and routes the clip to the
+                // targeted track (the V/A patching badges).
+                if (hooks_.on_source_verb) {
+                    const struct {
+                        const char* label;
+                        SourceEditVerb verb;
+                    } kVerbs[] = {
+                        {"Insert Source Here",
+                         SourceEditVerb::kInsert},
+                        {"Overwrite Source Here",
+                         SourceEditVerb::kOverwrite},
+                        {"Fit Source to Work Area",
+                         SourceEditVerb::kFitToFill},
+                    };
+                    bool first = true;
+                    for (const auto& verb : kVerbs) {
+                        Widgets::ContextMenu::Item item;
+                        item.label = verb.label;
+                        item.separator_before = first;
+                        item.action = [this, v = verb.verb, t] {
+                            hooks_.on_source_verb(v, t, "");
+                        };
+                        items.push_back(std::move(item));
+                        first = false;
+                    }
+                }
             }
         } else {
             const Clip& clip = *hit.clip;
@@ -2790,6 +3261,71 @@ bool TimelineSurface::ShowContextMenu(
                 }
             };
             items.push_back(std::move(split));
+
+            // Top-and-tail trims (Resolve "Trim Start/End to
+            // Playhead", Premiere Q/W): the clip edge under the
+            // playhead ripples to the playhead. They ride the
+            // on_ripple_trim hook so a shell without the ripple seam
+            // simply shows them disabled.
+            const double clip_end =
+                clip.timeline_start + clip.duration;
+            const bool head_ok =
+                playhead_ > clip.timeline_start + 1e-9 &&
+                playhead_ < clip_end - 1e-9;
+            const double rate =
+                clip.playback_rate != 0.0 ? clip.playback_rate : 1.0;
+            const double src_at_playhead =
+                clip.in_point +
+                (playhead_ - clip.timeline_start) * rate;
+            Widgets::ContextMenu::Item top;
+            top.label = "Trim Start to Playhead";
+            top.shortcut = "Q";
+            top.enabled =
+                head_ok && hooks_.on_ripple_trim != nullptr;
+            top.action = [this, id, src = src_at_playhead] {
+                if (hooks_.on_ripple_trim) {
+                    hooks_.on_ripple_trim(id, TrimEdge::In, src);
+                }
+            };
+            items.push_back(std::move(top));
+            Widgets::ContextMenu::Item tail;
+            tail.label = "Trim End to Playhead";
+            tail.shortcut = "W";
+            tail.enabled =
+                head_ok && hooks_.on_ripple_trim != nullptr;
+            tail.action = [this, id, src = src_at_playhead] {
+                if (hooks_.on_ripple_trim) {
+                    hooks_.on_ripple_trim(id, TrimEdge::Out, src);
+                }
+            };
+            items.push_back(std::move(tail));
+
+            // Source-edit verbs — the shell resolves source marks +
+            // track targets (unset hook hides the block).
+            if (hooks_.on_source_verb != nullptr) {
+                Widgets::ContextMenu::Item repl;
+                repl.label = "Replace with Source";
+                repl.separator_before = true;
+                repl.action = [this, id, t] {
+                    hooks_.on_source_verb(SourceEditVerb::kReplace,
+                                          t, id);
+                };
+                items.push_back(std::move(repl));
+                Widgets::ContextMenu::Item ins;
+                ins.label = "Insert Source at Cursor";
+                ins.action = [this, id, t] {
+                    hooks_.on_source_verb(SourceEditVerb::kInsert,
+                                          t, id);
+                };
+                items.push_back(std::move(ins));
+                Widgets::ContextMenu::Item ovr;
+                ovr.label = "Overwrite Source at Cursor";
+                ovr.action = [this, id, t] {
+                    hooks_.on_source_verb(SourceEditVerb::kOverwrite,
+                                          t, id);
+                };
+                items.push_back(std::move(ovr));
+            }
 
             // Junction pick: right-click on a clip's out-edge offers
             // every supported transition type to the next clip (the

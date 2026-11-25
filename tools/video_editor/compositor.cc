@@ -28,6 +28,7 @@
 #include "generated_source.h"
 #include "js_fx.h"
 #include "mix_system.h"
+#include "parallel_rows.h"
 #include "plugin_host.h"
 #include "transitions_lib.h"
 #include "video_effects.h"
@@ -96,13 +97,24 @@ inline void AlphaOverPixel(std::uint8_t* dst, const std::uint8_t* src) {
                dst);
 }
 
+// Row-parallel: each output row reads only the matching src row.
 void AlphaOverFrame(video::Frame* dst, const video::Frame& src) {
-    const int count = dst->Width() * dst->Height();
+    const int w = dst->Width();
+    const int h = dst->Height();
     std::uint8_t* d = dst->Data();
     const std::uint8_t* s = src.Data();
-    for (int i = 0; i < count; ++i) {
-        AlphaOverPixel(d + i * 4, s + i * 4);
-    }
+    const std::size_t row_bytes = static_cast<std::size_t>(w) * 4;
+    VeParallelRows(h, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            std::uint8_t* dr =
+                d + static_cast<std::size_t>(y) * row_bytes;
+            const std::uint8_t* sr =
+                s + static_cast<std::size_t>(y) * row_bytes;
+            for (int x = 0; x < w; ++x) {
+                AlphaOverPixel(dr + x * 4, sr + x * 4);
+            }
+        }
+    });
 }
 
 void FillBackground(video::Frame* canvas,
@@ -217,7 +229,8 @@ void ResampleBilinearBGRA(const video::Frame& src, video::Frame* dst) {
             std::lround((fx - x0) * 256.0));
     }
     const double ky = static_cast<double>(sh) / dh;
-    for (int y = 0; y < dh; ++y) {
+    VeParallelRows(dh, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         const double fy = std::clamp((y + 0.5) * ky - 0.5, 0.0,
                                      static_cast<double>(sh - 1));
         const int y0 = static_cast<int>(fy);
@@ -251,6 +264,7 @@ void ResampleBilinearBGRA(const video::Frame& src, video::Frame* dst) {
             }
         }
     }
+    });
 }
 
 // ------------------------------------------------------------------
@@ -487,7 +501,8 @@ void ApplySphereRefraction(video::Frame* frame, double cx, double cy,
     const double lx = cx - radius * 0.38;
     const double ly = cy - radius * 0.38;
     const double spec_r = radius * 0.16;
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         std::uint8_t* row = dst + static_cast<std::size_t>(y) * w * 4;
         for (int x = 0; x < w; ++x) {
             std::uint8_t* p = row + x * 4;
@@ -531,6 +546,7 @@ void ApplySphereRefraction(video::Frame* frame, double cx, double cy,
             p[3] = out[3];
         }
     }
+    });
 }
 
 // Fluted / reeded glass — a row of cylindrical ribs. Each rib's local
@@ -550,7 +566,8 @@ void ApplyRibbedGlassPixels(video::Frame* frame, double period_px,
     const double two_pi = 6.283185307179586;
     const int extra = static_cast<int>(std::round(softness * 4.0));
     const double spread = period_px * 0.12;
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         std::uint8_t* row = dst + static_cast<std::size_t>(y) * w * 4;
         for (int x = 0; x < w; ++x) {
             const double axis_pos = horizontal ? y + 0.5 : x + 0.5;
@@ -577,6 +594,7 @@ void ApplyRibbedGlassPixels(video::Frame* frame, double period_px,
             }
         }
     }
+    });
 }
 
 // Bokeh DOF — circle-of-confusion grows away from a focus region and
@@ -615,7 +633,8 @@ void ApplyBokehDOFPixels(video::Frame* frame, bool radial, double cx,
                                   static_cast<double>(h) * h);
     const double band_px = band * diag;
     const double fall_px = std::max(falloff * diag, 1.0);
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         std::uint8_t* row = dst + static_cast<std::size_t>(y) * w * 4;
         // Band mode: the CoC is a pure function of y — evaluated once
         // per row, and an in-focus row skips outright.
@@ -663,6 +682,7 @@ void ApplyBokehDOFPixels(video::Frame* frame, bool radial, double cx,
             }
         }
     }
+    });
 }
 
 // ------------------------------------------------------------------
@@ -1520,7 +1540,11 @@ struct Compositor::Impl {
         // honest.
         const int stride = frame.Stride();
         std::uint8_t* data = frame.Data();
-        for (int by = y0; by < y1; by += block) {
+        // Block rows are disjoint — parallelize over them.
+        const int block_rows = (y1 - y0 + block - 1) / block;
+        VeParallelFor(block_rows, [&](int ba, int bb) {
+        for (int bi = ba; bi < bb; ++bi) {
+            const int by = y0 + bi * block;
             const int bh = std::min(block, y1 - by);
             for (int bx = x0; bx < x1; bx += block) {
                 const int bw = std::min(block, x1 - bx);
@@ -1559,6 +1583,7 @@ struct Compositor::Impl {
                 }
             }
         }
+        });
     }
 
     // xer.fx.track_mask: resolve the clip's SAM mask track in
@@ -1731,7 +1756,8 @@ struct Compositor::Impl {
                 }
                 // Blend: inside mask -> original, outside -> blurred
                 // plate resampled on the fly (quarter-res bilinear).
-                for (int y = 0; y < fh; ++y) {
+                VeParallelRows(fh, [&](int ya, int yb) {
+                for (int y = ya; y < yb; ++y) {
                     std::uint8_t* row =
                         data + static_cast<std::size_t>(y) * stride;
                     const double ly =
@@ -1773,6 +1799,7 @@ struct Compositor::Impl {
                         }
                     }
                 }
+                });
             }
             return;
         }
@@ -1781,7 +1808,8 @@ struct Compositor::Impl {
         // isolate scales existing alpha (keeps the subject cutout);
         // key REPLACES alpha with the mask (a matte for downstream
         // blending).
-        for (int y = 0; y < fh; ++y) {
+        VeParallelRows(fh, [&](int ya, int yb) {
+        for (int y = ya; y < yb; ++y) {
             std::uint8_t* row =
                 data + static_cast<std::size_t>(y) * stride;
             for (int x = 0; x < fw; ++x) {
@@ -1794,6 +1822,7 @@ struct Compositor::Impl {
                 }
             }
         }
+        });
     }
 
     void ApplyClipEffects(ClipSession& s,
@@ -2498,7 +2527,9 @@ struct Compositor::Impl {
 
         const std::uint8_t* spx = s.frame.Data();
         std::uint8_t* dpx = s.layer.Data();
-        for (int y = by0; y <= by1; ++y) {
+        const int bbox_rows = by1 - by0 + 1;
+        VeParallelRows(bbox_rows, [&](int ya, int yb) {
+        for (int y = by0 + ya; y < by0 + yb; ++y) {
             for (int x = bx0; x <= bx1; ++x) {
                 // Inside test in the rect's rotated space — identical
                 // to WarpClipFrame's inverse map, minus the sampling.
@@ -2519,6 +2550,7 @@ struct Compositor::Impl {
                 dpx[i + 3] = Clamp8(spx[i + 3] * opacity);
             }
         }
+        });
         return true;
     }
 
@@ -2570,13 +2602,12 @@ struct Compositor::Impl {
 
     // ---- frame render -------------------------------------------------
 
-    bool RenderFrameAt(double t, std::vector<std::uint8_t>* out_bgra,
-                       std::string* error_out) {
+    // Renders the canvas for timeline t into `canvas` — the shared
+    // body of both public outputs (vector assign and the caller-buffer
+    // memcpy below).
+    bool RenderFrameAtImpl(double t, std::string* error_out) {
         if (!initialized) {
             return Fail(error_out, "compositor not initialized");
-        }
-        if (out_bgra == nullptr) {
-            return Fail(error_out, "out_bgra is required");
         }
         if (cancelled.load(std::memory_order_relaxed)) {
             return Fail(error_out, "export cancelled");
@@ -2739,9 +2770,34 @@ struct Compositor::Impl {
         }
 
         CloseFinishedSessions(tc);
+        return true;
+    }
 
+    bool RenderFrameAt(double t, std::vector<std::uint8_t>* out_bgra,
+                       std::string* error_out) {
+        if (out_bgra == nullptr) {
+            return Fail(error_out, "out_bgra is required");
+        }
+        if (!RenderFrameAtImpl(t, error_out)) {
+            return false;
+        }
         out_bgra->assign(canvas.Data(),
                          canvas.Data() + canvas.DataSize());
+        return true;
+    }
+
+    bool RenderFrameAtTo(double t, std::uint8_t* dst_bgra,
+                         std::size_t dst_bytes, std::string* error_out) {
+        if (dst_bgra == nullptr) {
+            return Fail(error_out, "dst_bgra is required");
+        }
+        if (!RenderFrameAtImpl(t, error_out)) {
+            return false;
+        }
+        if (dst_bytes < canvas.DataSize()) {
+            return Fail(error_out, "dst_bgra too small");
+        }
+        std::memcpy(dst_bgra, canvas.Data(), canvas.DataSize());
         return true;
     }
 };
@@ -2822,15 +2878,28 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
         }
         type = Transition::Type::Crossfade;   // graceful fallback
     }
+    // All pixel passes below are row-independent — each output row is
+    // a pure function of that row's inputs, so they split across the
+    // render pool byte-identically to the serial order.
+    const std::size_t row_bytes =
+        static_cast<std::size_t>(width) * 4u;
     if (type == Transition::Type::Crossfade) {
-        const int count = width * height;
-        for (int i = 0; i < count; ++i) {
-            CrossfadePixel(u + i * 4, o + i * 4, w, iw, d + i * 4);
-        }
+        VeParallelRows(height, [&](int y0, int y1) {
+            for (int y = y0; y < y1; ++y) {
+                const std::size_t base =
+                    static_cast<std::size_t>(y) * row_bytes;
+                for (int x = 0; x < width; ++x) {
+                    const std::size_t i = base +
+                        static_cast<std::size_t>(x) * 4u;
+                    CrossfadePixel(u + i, o + i, w, iw, d + i);
+                }
+            }
+        });
         return true;
     }
     if (IsWipe(type)) {
-        for (int y = 0; y < height; ++y) {
+        VeParallelRows(height, [&](int ya, int yb) {
+        for (int y = ya; y < yb; ++y) {
             for (int x = 0; x < width; ++x) {
                 const std::size_t i =
                     (static_cast<std::size_t>(y) * width + x) * 4u;
@@ -2845,17 +2914,19 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
                 }
             }
         }
+        });
         return true;
     }
     if (IsSlide(type)) {
         double udx = 0.0, udy = 0.0, odx = 0.0, ody = 0.0;
         SlideOffsets(type, w, width, height, &udx, &udy, &odx, &ody);
-        std::uint8_t upx[4] = {0, 0, 0, 0};
-        std::uint8_t opx[4] = {0, 0, 0, 0};
-        for (int y = 0; y < height; ++y) {
+        VeParallelRows(height, [&](int ya, int yb) {
+        for (int y = ya; y < yb; ++y) {
             for (int x = 0; x < width; ++x) {
                 const std::size_t i =
                     (static_cast<std::size_t>(y) * width + x) * 4u;
+                std::uint8_t upx[4] = {0, 0, 0, 0};
+                std::uint8_t opx[4] = {0, 0, 0, 0};
                 SampleBilinearBGRA(u, width, height,
                                    x + 0.5 - udx, y + 0.5 - udy,
                                    false, upx);
@@ -2869,6 +2940,7 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
                 AlphaOverPixel(d + i, opx);
             }
         }
+        });
         return true;
     }
     if (type == Transition::Type::DipToBlack ||
@@ -2884,16 +2956,23 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
         const std::uint8_t* lay = first_half ? u : o;
         const double fade =
             first_half ? (1.0 - 2.0 * w) : (2.0 * w - 1.0);
-        const int count = width * height;
-        for (int i = 0; i < count; ++i) {
-            const std::uint8_t* lp = lay + i * 4;
-            const double sa = (lp[3] / 255.0) * fade;
-            std::uint8_t* dp = d + i * 4;
-            dp[0] = Clamp8(lp[0] * sa + solid * (1.0 - sa));
-            dp[1] = Clamp8(lp[1] * sa + solid * (1.0 - sa));
-            dp[2] = Clamp8(lp[2] * sa + solid * (1.0 - sa));
-            dp[3] = 255;
-        }
+        VeParallelRows(height, [&](int y0, int y1) {
+            for (int y = y0; y < y1; ++y) {
+                const std::size_t base =
+                    static_cast<std::size_t>(y) * row_bytes;
+                for (int x = 0; x < width; ++x) {
+                    const std::size_t i = base +
+                        static_cast<std::size_t>(x) * 4u;
+                    const std::uint8_t* lp = lay + i;
+                    const double sa = (lp[3] / 255.0) * fade;
+                    std::uint8_t* dp = d + i;
+                    dp[0] = Clamp8(lp[0] * sa + solid * (1.0 - sa));
+                    dp[1] = Clamp8(lp[1] * sa + solid * (1.0 - sa));
+                    dp[2] = Clamp8(lp[2] * sa + solid * (1.0 - sa));
+                    dp[3] = 255;
+                }
+            }
+        });
         return true;
     }
     if (type == Transition::Type::AdditiveDissolve) {
@@ -2901,13 +2980,19 @@ bool ApplyTransitionPixels(Transition::Type type, double weight,
         // weighted contributions on ALL four channels — unlike
         // CrossfadePixel the rgb channels are not alpha-weighted, so
         // semi-transparent layers still add their full color.
-        const int count = width * height;
-        for (int i = 0; i < count; ++i) {
-            for (int c = 0; c < 4; ++c) {
-                d[i * 4 + c] =
-                    Clamp8(u[i * 4 + c] * iw + o[i * 4 + c] * w);
+        VeParallelRows(height, [&](int y0, int y1) {
+            for (int y = y0; y < y1; ++y) {
+                const std::size_t base =
+                    static_cast<std::size_t>(y) * row_bytes;
+                for (int x = 0; x < width; ++x) {
+                    const std::size_t i = base +
+                        static_cast<std::size_t>(x) * 4u;
+                    for (int c = 0; c < 4; ++c) {
+                        d[i + c] = Clamp8(u[i + c] * iw + o[i + c] * w);
+                    }
+                }
             }
-        }
+        });
         return true;
     }
     return false;   // unknown transition type
@@ -2925,7 +3010,8 @@ bool ApplyMaskPixels(video::Frame* frame,
     const int w = frame->Width();
     const int h = frame->Height();
     std::uint8_t* px = frame->Data();
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         for (int x = 0; x < w; ++x) {
             double coverage = 1.0;
             for (const ClipMask& mask : masks) {
@@ -2941,6 +3027,7 @@ bool ApplyMaskPixels(video::Frame* frame,
             p[3] = Clamp8(p[3] * coverage);
         }
     }
+    });
     return true;
 }
 
@@ -2957,9 +3044,11 @@ bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
         AlphaOverFrame(dst, src);   // identical math, dedicated path
         return true;
     }
-    // All named modes route through the shared frame-level blend —
-    // W3C Porter-Duff / separable / non-separable compositing in
-    // MixSystem::BlendFrames -> Bridge::Skia::BlendModeApply.
+    // All named modes route through the shared W3C Porter-Duff /
+    // separable / non-separable compositing — the same per-pixel math
+    // as MixSystem::BlendFrames (NormalizeBlendModeName ->
+    // BlendModeApply), row-split here so a canvas-size layer
+    // parallelizes like every other pass.
     //
     // Intentional semantic change vs the retired loop for the original
     // six modes (Add/Multiply/Screen/Overlay/Darken/Lighten): the old
@@ -2967,8 +3056,30 @@ bool ApplyBlendModePixels(BlendMode mode, video::Frame* dst,
     // also weights by backdrop alpha — identical for opaque layers
     // (the common case), marginally different for translucent ones,
     // matching Skia.
-    return video::MixSystem::BlendFrames(*dst, src,
-                                         BlendModeSkiaName(mode));
+    const std::string mode_name =
+        XER::Bridge::Skia::NormalizeBlendModeName(
+            BlendModeSkiaName(mode));
+    const int w = dst->Width();
+    const int h = dst->Height();
+    std::uint8_t* dp = dst->Data();
+    const std::uint8_t* sp = src.Data();
+    const std::size_t row_bytes = static_cast<std::size_t>(w) * 4u;
+    VeParallelRows(h, [&](int y0, int y1) {
+        for (int y = y0; y < y1; ++y) {
+            std::uint8_t* dr =
+                dp + static_cast<std::size_t>(y) * row_bytes;
+            const std::uint8_t* sr =
+                sp + static_cast<std::size_t>(y) * row_bytes;
+            for (int x = 0; x < w; ++x) {
+                std::uint8_t* d = dr + x * 4;
+                UnpackSkia(
+                    XER::Bridge::Skia::BlendModeApply(
+                        mode_name, PackSkia(d), PackSkia(sr + x * 4)),
+                    d);
+            }
+        }
+    });
+    return true;
 }
 
 bool WarpClipFrame(const video::Frame& src, const Transform& tr,
@@ -3065,7 +3176,12 @@ bool WarpClipFrameRegion(const video::Frame& src, double region_x,
 
     const std::uint8_t* src_px = src.Data();
     std::uint8_t* dst_px = out_layer->Data();
-    for (int y = by0; y <= by1; ++y) {
+    // Row-independent inverse map — the compositor's heaviest single
+    // pass (per output pixel: transform + bilinear gather), splits
+    // across the render pool deterministically.
+    const int bbox_rows = by1 - by0 + 1;
+    VeParallelRows(bbox_rows, [&](int ya, int yb) {
+    for (int y = by0 + ya; y < by0 + yb; ++y) {
         for (int x = bx0; x <= bx1; ++x) {
             // Inverse map: dest pixel center -> scaled-rect space
             // relative to the rotation center, rotate by -theta.
@@ -3091,6 +3207,7 @@ bool WarpClipFrameRegion(const video::Frame& src, double region_x,
             op[3] = Clamp8(spx[3] * opacity);
         }
     }
+    });
     return true;
 }
 
@@ -3129,6 +3246,12 @@ bool Compositor::RenderFrameAt(double t,
                                std::vector<std::uint8_t>* out_bgra,
                                std::string* error_out) {
     return impl_->RenderFrameAt(t, out_bgra, error_out);
+}
+
+bool Compositor::RenderFrameAtTo(double t, std::uint8_t* dst_bgra,
+                                 std::size_t dst_bytes,
+                                 std::string* error_out) {
+    return impl_->RenderFrameAtTo(t, dst_bgra, dst_bytes, error_out);
 }
 
 bool Compositor::UpdateClipTransform(const std::string& clip_id,

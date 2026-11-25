@@ -175,6 +175,10 @@ void TimelineBridge::BuildHooks() {
     if (host_.clip_cost_class) {
         hooks_.get_clip_cost_class = host_.clip_cost_class;
     }
+    if (host_.source_verb) hooks_.on_source_verb = host_.source_verb;
+    if (host_.on_track_target) {
+        hooks_.on_track_target = host_.on_track_target;
+    }
 }
 
 MediaBounds TimelineBridge::BoundsForPath(
@@ -301,59 +305,13 @@ void TimelineBridge::RippleTrimClip(const std::string& clip_id,
                                     TrimEdge edge, double point) {
     const Clip* clip = FindClip(project_, clip_id);
     if (clip == nullptr) return;
-    const int track = clip->track;
-    const double old_start = clip->timeline_start;
-    const double old_end = ClipEndSeconds(*clip);
     std::string error;
-    history_.BeginMacro("Ripple trim");
-    bool ok = history_.TrimClip(clip_id, edge, point,
-                                BoundsForPath(clip->source_path),
-                                &error);
-    if (ok) {
-        // Freed span on this track, if any: head trims move the
-        // clip's start right, tail trims pull its end left. Growth
-        // in either direction needs no gap close (TrimClip already
-        // rejected growth into occupied space).
-        const Clip* after = FindClip(project_, clip_id);
-        double gap = 0.0;
-        double pivot = 0.0;   // followers start at/after this time
-        if (after != nullptr && edge == TrimEdge::In) {
-            gap = after->timeline_start - old_start;
-            pivot = after->timeline_start;
-        } else if (after != nullptr) {
-            gap = old_end - ClipEndSeconds(*after);
-            pivot = old_end;
-        }
-        if (gap > 1e-9) {
-            std::vector<const Clip*> followers;
-            for (const Clip& c : project_.clips) {
-                if (c.track != track) continue;
-                const bool self_moved =
-                    edge == TrimEdge::In && c.id == clip_id;
-                if (self_moved ||
-                    (c.id != clip_id &&
-                     c.timeline_start >= pivot - 1e-9)) {
-                    followers.push_back(&c);
-                }
-            }
-            std::sort(followers.begin(), followers.end(),
-                      [](const Clip* a, const Clip* b) {
-                          return a->timeline_start <
-                                 b->timeline_start;
-                      });
-            // Move leftmost-first so each clip lands in freed space.
-            for (const Clip* f : followers) {
-                if (!history_.MoveClip(
-                        f->id, f->timeline_start - gap,
-                        BoundsForPath(f->source_path), &error)) {
-                    ok = false;
-                    break;
-                }
-            }
-        }
-    }
-    history_.EndMacro();
-    if (!ok) {
+    if (!history_.RippleTrimClip(
+            clip_id, edge, point,
+            [this](const std::string& path) {
+                return BoundsForPath(path);
+            },
+            &error)) {
         SetStatus("Ripple trim failed: " + error, true);
     } else {
         SetStatus("Ripple trim");

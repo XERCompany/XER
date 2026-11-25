@@ -38,6 +38,14 @@
 // Threading: every method is internally synchronized — safe to share
 // one instance across compositors on different threads (preview worker,
 // monitor UI thread) even though today each owner keeps its own.
+//
+// Disk tier (optional, l2_frame_cache.h): SetDiskTier attaches a
+// shared .dxcfz-backed L2. Lookup falls through RAM miss -> disk
+// read -> RAM promote; Store write-through-enqueues every newly-
+// accepted key (async — render threads never do disk I/O). Keys are
+// the same pure-function-of-inputs, so the tier needs no independent
+// invalidation: stale entries can only exist under keys nobody asks
+// for, reclaimed by the tier's own TTL/cap sweep.
 #pragma once
 
 #include <cstddef>
@@ -52,6 +60,8 @@
 #include "frame.h"   // video::Frame — XER_Video
 
 namespace XER::VideoEditor {
+
+class L2FrameCache;
 
 class EffectFrameCache {
 public:
@@ -85,6 +95,11 @@ public:
         std::uint64_t stores = 0;
         std::uint64_t evictions = 0;
         std::uint64_t lookups_saved_frames = 0;  // hits (alias — HUD)
+        // Disk tier counters — l2_hits are also counted in `hits`
+        // (the caller got pixels). l2_misses are disk-tier lookups
+        // that found nothing (the Lookup counted once in `misses`).
+        std::uint64_t l2_hits = 0;
+        std::uint64_t l2_misses = 0;
         std::size_t bytes = 0;
         std::size_t entries = 0;
     };
@@ -113,6 +128,12 @@ public:
     void Clear();
     std::size_t CapacityBytes() const;
     void SetCapacityBytes(std::size_t bytes);
+
+    // Disk tier attach/detach — pass nullptr to detach. Lookup
+    // consults the tier on RAM miss and promotes hits back into the
+    // LRU; Store write-throughs to it. See the header comment.
+    void SetDiskTier(std::shared_ptr<L2FrameCache> l2);
+    std::shared_ptr<L2FrameCache> DiskTier() const;
 
     Stats GetStats() const;
     // Convenience: hits as a fraction of lookups in [0,1] (0 when no
@@ -149,10 +170,14 @@ private:
     // alongside map_ inserts/erases.
     std::unordered_map<std::string, std::size_t> clip_counts_;
 
+    std::shared_ptr<L2FrameCache> l2_;
+
     std::uint64_t hits_ = 0;
     std::uint64_t misses_ = 0;
     std::uint64_t stores_ = 0;
     std::uint64_t evictions_ = 0;
+    std::uint64_t l2_hits_ = 0;
+    std::uint64_t l2_misses_ = 0;
 };
 
 }  // namespace XER::VideoEditor

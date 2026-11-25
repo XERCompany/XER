@@ -923,7 +923,9 @@ int RunAudioProbe(const std::string& media_path, double seconds) {
         std::string LastError() const override { return last_err; }
     };
     struct NullSink : VE::PreviewEngine::Sink {
-        void OnVideoFrame(const video::Frame&) override {}
+        void OnVideoFrame(
+            VE::Render::scoped_refptr<VE::Render::VideoFrame>)
+            override {}
         void OnAudioPeakLevels(float, float) override {}
         void OnPlayhead(double) override {}
     };

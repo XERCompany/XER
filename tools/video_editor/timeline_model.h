@@ -409,8 +409,13 @@ bool RippleDeleteClip(Project&, const std::string& clip_id,
 // [t0, t1) on ALL unlocked tracks. Clips spanning the range edges are
 // split at the boundaries first. close_gap=false lifts (leaves a
 // hole); close_gap=true extracts and shifts subsequent clips left.
+// `track_target` is an optional track-sized mask (Premiere track
+// targeting / Resolve auto-select): non-empty and shorter than the
+// track list is an error; mask[t]==false skips track t exactly like
+// a locked track. Empty = every unlocked track (legacy behavior).
 bool LiftRange(Project&, double t0, double t1, bool close_gap,
-               std::string* error_out);
+               std::string* error_out,
+               const std::vector<bool>& track_target = {});
 bool MoveClip(Project&, const std::string& clip_id, double new_timeline_start,
               const MediaBounds&, std::string* error_out);
 // Rolling edit on an adjacent pair (from ends where to starts, same

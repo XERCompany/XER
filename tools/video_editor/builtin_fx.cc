@@ -44,6 +44,7 @@
 #include "audio/effects_rack/fx_pitch_auto_tune_correct.h"
 #include "audio/effects_rack/fx_reverb_algorithmic.h"
 #include "audio/effects_rack/fx_reverb_convolution.h"
+#include "parallel_rows.h"
 #include "voice_isolate.h"
 #include "wrapper/skia/skia_engine_bridge.h"
 
@@ -249,7 +250,8 @@ int radial_blur(XER_VideoFrame* f, const float* p, int32_t n) {
         return src.data() + static_cast<size_t>(iy) * st +
                static_cast<size_t>(ix) * 4;
     };
-    for (int32_t y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * st;
         for (int32_t x = 0; x < w; ++x) {
             float b = 0, g = 0, rr = 0, a = 0, wsum = 0;
@@ -272,6 +274,7 @@ int radial_blur(XER_VideoFrame* f, const float* p, int32_t n) {
             d[3] = static_cast<uint8_t>(a * inv);
         }
     }
+    });
     return 0;
 }
 
@@ -363,7 +366,8 @@ int duotone(XER_VideoFrame* f, const float* p, int32_t n) {
     float sr, sg, sb, hr, hg, hb;
     hue_to_rgb(Param(p, n, 0, 220.f), &sr, &sg, &sb);
     hue_to_rgb(Param(p, n, 1, 40.f), &hr, &hg, &hb);
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < f->width; ++x, row += 4) {
             const float b = row[0], g = row[1], r = row[2];
@@ -374,6 +378,7 @@ int duotone(XER_VideoFrame* f, const float* p, int32_t n) {
             row[0] = Clamp8f((sb + (hb - sb) * l) * 255.f + 0.5f);
         }
     }
+    });
     return 0;
 }
 
@@ -396,7 +401,8 @@ int channel_mixer(XER_VideoFrame* f, const float* p, int32_t n) {
 int invert_lum(XER_VideoFrame* f, const float* p, int32_t n) {
     if (!VideoValid(f)) return 1;
     const float amt = std::clamp(Param(p, n, 0, 1.f), 0.f, 1.f);
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* px = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < f->width; ++x, px += 4) {
             const float b = px[0], g = px[1], r = px[2];
@@ -407,6 +413,7 @@ int invert_lum(XER_VideoFrame* f, const float* p, int32_t n) {
             px[2] = Clamp8f(r + shift + 0.5f);
         }
     }
+    });
     return 0;
 }
 
@@ -429,7 +436,8 @@ int color_isolate(XER_VideoFrame* f, const float* p, int32_t n) {
         if (h < 0.f) h += 360.f;
         return h;
     };
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* px = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < f->width; ++x, px += 4) {
             const float b = px[0], g = px[1], r = px[2];
@@ -444,6 +452,7 @@ int color_isolate(XER_VideoFrame* f, const float* p, int32_t n) {
             px[2] = Clamp8f(ly + (r - ly) * k + 0.5f);
         }
     }
+    });
     return 0;
 }
 
@@ -501,7 +510,8 @@ int wave_h(XER_VideoFrame* f, const float* p, int32_t n) {
         std::clamp(Param(p, n, 1, 120.f), 8.f, 512.f);
     const int32_t w = f->width, h = f->height;
     const std::vector<uint8_t> src = Snapshot(f);
-    for (int32_t y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         const int32_t shift = static_cast<int32_t>(
             std::lround(amp * std::sin(kTwoPi * y / wl)));
         uint8_t* dst = f->data + static_cast<size_t>(y) * f->stride;
@@ -514,6 +524,7 @@ int wave_h(XER_VideoFrame* f, const float* p, int32_t n) {
                         4, dst + static_cast<size_t>(x) * 4);
         }
     }
+    });
     return 0;
 }
 
@@ -525,7 +536,9 @@ int wave_v(XER_VideoFrame* f, const float* p, int32_t n) {
         std::clamp(Param(p, n, 1, 120.f), 8.f, 512.f);
     const int32_t w = f->width, h = f->height;
     const std::vector<uint8_t> src = Snapshot(f);
-    for (int32_t x = 0; x < w; ++x) {
+    // Column-major kernel — columns are disjoint output units.
+    VeParallelFor(w, [&](int32_t xa, int32_t xb) {
+    for (int32_t x = xa; x < xb; ++x) {
         const int32_t shift = static_cast<int32_t>(
             std::lround(amp * std::sin(kTwoPi * x / wl)));
         for (int32_t y = 0; y < h; ++y) {
@@ -538,6 +551,7 @@ int wave_v(XER_VideoFrame* f, const float* p, int32_t n) {
                             static_cast<size_t>(x) * 4);
         }
     }
+    });
     return 0;
 }
 
@@ -549,7 +563,8 @@ int ripple(XER_VideoFrame* f, const float* p, int32_t n) {
     const std::vector<uint8_t> src = Snapshot(f);
     const float cx = (w - 1) * 0.5f, cy = (h - 1) * 0.5f;
     const float max_dist = std::max(std::hypot(cx, cy), 1e-6f);
-    for (int32_t y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* dst = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < w; ++x) {
             const float dx = x - cx, dy = y - cy;
@@ -572,6 +587,7 @@ int ripple(XER_VideoFrame* f, const float* p, int32_t n) {
                         4, dst + static_cast<size_t>(x) * 4);
         }
     }
+    });
     return 0;
 }
 
@@ -581,7 +597,11 @@ int mirror_quad(XER_VideoFrame* f, const float* p, int32_t n) {
     const int mode =
         std::clamp(static_cast<int>(Param(p, n, 0, 0.f)), 0, 3);
     const int hw = w / 2, hh = h / 2;
-    for (int y = 0; y < h; ++y) {
+    // Writes only ever target the "mirror" half of a row (or never
+    // write for a pass-through pixel) while reads land in the fixed
+    // half — row ranges stay disjoint across every mode.
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         for (int x = 0; x < w; ++x) {
             int sx = x, sy = y;
@@ -598,6 +618,7 @@ int mirror_quad(XER_VideoFrame* f, const float* p, int32_t n) {
             if (s != d) std::copy_n(s, 4, d);
         }
     }
+    });
     return 0;
 }
 
@@ -607,7 +628,8 @@ int tile(XER_VideoFrame* f, const float* p, int32_t n) {
     const int count =
         std::clamp(static_cast<int>(Param(p, n, 0, 3.f)), 2, 8);
     const std::vector<uint8_t> src = Snapshot(f);
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         const uint8_t* srow =
             src.data() +
@@ -617,6 +639,7 @@ int tile(XER_VideoFrame* f, const float* p, int32_t n) {
                         4, row + static_cast<size_t>(x) * 4);
         }
     }
+    });
     return 0;
 }
 
@@ -631,7 +654,8 @@ int twirl(XER_VideoFrame* f, const float* p, int32_t n) {
     const float max_d = std::sqrt(cx * cx + cy * cy);
     if (max_d <= 0.f) return 0;
     const std::vector<uint8_t> src = Snapshot(f);
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         for (int x = 0; x < w; ++x) {
             const float dx = x - cx, dy = y - cy;
@@ -653,6 +677,7 @@ int twirl(XER_VideoFrame* f, const float* p, int32_t n) {
                         4, row + static_cast<size_t>(x) * 4);
         }
     }
+    });
     return 0;
 }
 
@@ -673,7 +698,8 @@ int letterbox(XER_VideoFrame* f, const float* p, int32_t n) {
         std::clamp(Param(p, n, 0, 0.12f), 0.f, 0.45f);
     const int32_t bar =
         static_cast<int32_t>(std::lround(frac * f->height));
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         if (y >= bar && y < f->height - bar) continue;
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < f->width; ++x) {
@@ -682,6 +708,7 @@ int letterbox(XER_VideoFrame* f, const float* p, int32_t n) {
             px[3] = 255;
         }
     }
+    });
     return 0;
 }
 
@@ -703,7 +730,8 @@ int vignette_soft(XER_VideoFrame* f, const float* p, int32_t n) {
                             : (x < e0 ? 0.f : 1.f);
         return t * t * (3.f - 2.f * t);
     };
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         const float dy = (y + 0.5f) - cy;
         for (int32_t x = 0; x < f->width; ++x) {
@@ -717,6 +745,7 @@ int vignette_soft(XER_VideoFrame* f, const float* p, int32_t n) {
             }
         }
     }
+    });
     return 0;
 }
 
@@ -812,7 +841,8 @@ int scanlines(XER_VideoFrame* f, const float* p, int32_t n) {
     const int32_t spacing = static_cast<int32_t>(
         std::clamp(Param(p, n, 0, 4.f), 2.f, 16.f));
     const float k = 1.f - std::clamp(Param(p, n, 1, 0.5f), 0.f, 1.f);
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         if (y % spacing != spacing - 1) continue;
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < f->width; ++x, row += 4) {
@@ -821,6 +851,7 @@ int scanlines(XER_VideoFrame* f, const float* p, int32_t n) {
             row[2] = static_cast<uint8_t>(row[2] * k);
         }
     }
+    });
     return 0;
 }
 
@@ -856,7 +887,8 @@ int neon_edges(XER_VideoFrame* f, const float* p, int32_t n) {
     HueToBgr(std::clamp(Param(p, n, 1, 300.f), 0.f, 360.f), hue);
     const int32_t w = f->width, h = f->height;
     std::vector<float> lum(static_cast<size_t>(w) * h);
-    for (int32_t y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         const uint8_t* row =
             f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < w; ++x) {
@@ -864,7 +896,9 @@ int neon_edges(XER_VideoFrame* f, const float* p, int32_t n) {
                 Luma(row + static_cast<size_t>(x) * 4);
         }
     }
-    for (int32_t y = 0; y < h; ++y) {
+    });
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < w; ++x, row += 4) {
             float mag = 0.f;
@@ -884,6 +918,7 @@ int neon_edges(XER_VideoFrame* f, const float* p, int32_t n) {
             row[2] = static_cast<uint8_t>(hue[2] * t);
         }
     }
+    });
     return 0;
 }
 
@@ -894,7 +929,11 @@ int halftone(XER_VideoFrame* f, const float* p, int32_t n) {
         n > 0 ? static_cast<int>(p[0] + 0.5f) : 8, 4, 32);
     const int w = f->width, h = f->height, st = f->stride;
     const float half = cs * 0.5f;
-    for (int cy = 0; cy < h; cy += cs) {
+    // Cell-grid kernel — cell rows are disjoint output units.
+    const int cell_rows = (h + cs - 1) / cs;
+    VeParallelFor(cell_rows, [&](int ra, int rb) {
+    for (int ri = ra; ri < rb; ++ri) {
+        const int cy = ri * cs;
         const int y1 = std::min(cy + cs, h);
         for (int cx = 0; cx < w; cx += cs) {
             const int x1 = std::min(cx + cs, w);
@@ -923,6 +962,7 @@ int halftone(XER_VideoFrame* f, const float* p, int32_t n) {
             }
         }
     }
+    });
     return 0;
 }
 
@@ -937,7 +977,8 @@ int emboss_color(XER_VideoFrame* f, const float* p, int32_t n) {
     const int w = f->width, h = f->height, st = f->stride;
     const std::vector<uint8_t> src(f->data,
                                    f->data + static_cast<size_t>(st) * h);
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         uint8_t* row = f->data + y * st;
         const int ny = std::clamp(y + dy, 0, h - 1);
         const uint8_t* srow = src.data() + ny * st;
@@ -955,6 +996,7 @@ int emboss_color(XER_VideoFrame* f, const float* p, int32_t n) {
             }
         }
     }
+    });
     return 0;
 }
 
@@ -965,18 +1007,21 @@ int edge_glow(XER_VideoFrame* f, const float* p, int32_t n) {
     const float k = Param(p, n, 1, 1.5f);
     const int w = f->width, h = f->height, st = f->stride;
     std::vector<float> gray(static_cast<size_t>(w) * h);
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         const uint8_t* row = f->data + static_cast<size_t>(y) * st;
         for (int x = 0; x < w; ++x) {
             gray[static_cast<size_t>(y) * w + x] =
                 Luma(row + static_cast<size_t>(x) * 4);
         }
     }
+    });
     const auto g = [&](int x, int y) {
         return gray[static_cast<size_t>(std::clamp(y, 0, h - 1)) * w +
                     std::clamp(x, 0, w - 1)];
     };
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * st;
         for (int x = 0; x < w; ++x) {
             const float gx = g(x + 1, y - 1) + 2 * g(x + 1, y) +
@@ -995,6 +1040,7 @@ int edge_glow(XER_VideoFrame* f, const float* p, int32_t n) {
             }
         }
     }
+    });
     return 0;
 }
 
@@ -1024,7 +1070,8 @@ int tone_split(XER_VideoFrame* f, const float* p, int32_t n) {
     HueRgb(Param(p, n, 0, 220.f), &sr, &sg, &sb);
     HueRgb(Param(p, n, 1, 40.f), &hr, &hg, &hb);
     const int w = f->width, h = f->height, st = f->stride;
-    for (int y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int ya, int yb) {
+    for (int y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * st;
         for (int x = 0; x < w; ++x) {
             uint8_t* px = row + static_cast<size_t>(x) * 4;
@@ -1038,6 +1085,7 @@ int tone_split(XER_VideoFrame* f, const float* p, int32_t n) {
             px[2] = Clamp8f(px[2] + (tr - px[2]) * k + 0.5f);
         }
     }
+    });
     return 0;
 }
 
@@ -1132,7 +1180,8 @@ int film_grain_kernel(XER_VideoFrame* f, const float* p, int32_t n,
     const std::uint32_t seed =
         FilmSeed(media_time_s, clip_seed, Param(p, n, 3, 0.f));
     const float scale = amount * 0.5f;
-    for (int32_t y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * st;
         const int32_t by = y / size;
         for (int32_t bx = 0; bx < fw; ++bx) {
@@ -1164,6 +1213,7 @@ int film_grain_kernel(XER_VideoFrame* f, const float* p, int32_t n,
             }
         }
     }
+    });
     return 0;
 }
 
@@ -1188,7 +1238,8 @@ int halation(XER_VideoFrame* f, const float* p, int32_t n) {
                                    static_cast<size_t>(h2),
                                0u);
     const float knee = std::max(1.f, 255.f - th);
-    for (int32_t y = 0; y < h2; ++y) {
+    VeParallelRows(h2, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         for (int32_t x = 0; x < w2; ++x) {
             float b = 0.f, g = 0.f, r = 0.f;
             for (int32_t dy = 0; dy < 2; ++dy) {
@@ -1214,6 +1265,7 @@ int halation(XER_VideoFrame* f, const float* p, int32_t n) {
                                     255);
         }
     }
+    });
     // Half-res gaussian: sigma halves with the image so the
     // full-res halo radius stays ≈ `spread`.
     const double sigma =
@@ -1226,7 +1278,8 @@ int halation(XER_VideoFrame* f, const float* p, int32_t n) {
                         std::clamp(y, 0, h2 - 1)) * w2 +
                     std::clamp(x, 0, w2 - 1)];
     };
-    for (int32_t y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * st;
         const float gy = (y + 0.5f) * 0.5f - 0.5f;
         const int32_t y0 = std::clamp(static_cast<int32_t>(gy), 0,
@@ -1264,6 +1317,7 @@ int halation(XER_VideoFrame* f, const float* p, int32_t n) {
             }
         }
     }
+    });
     return 0;
 }
 
@@ -1326,7 +1380,8 @@ int gate_weave_kernel(XER_VideoFrame* f, const float* p, int32_t n,
         amp * (0.62f * std::sin(kTwoPi * speed * 0.87f * t + ph[2]) +
                0.38f * std::sin(kTwoPi * speed * 3.13f * t + ph[3]));
     const std::vector<uint8_t> src = Snapshot(f);
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < f->width; ++x) {
             BilinearBGRA(src, f->width, f->height, f->stride,
@@ -1335,6 +1390,7 @@ int gate_weave_kernel(XER_VideoFrame* f, const float* p, int32_t n,
                          row + static_cast<size_t>(x) * 4);
         }
     }
+    });
     return 0;
 }
 
@@ -1401,7 +1457,8 @@ int light_leak_kernel(XER_VideoFrame* f, const float* p, int32_t n,
         }
         b.r2 = r * r;
     }
-    for (int32_t y = 0; y < h; ++y) {
+    VeParallelRows(h, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * st;
         for (int32_t x = 0; x < w; ++x) {
             float k = 0.f;
@@ -1423,6 +1480,7 @@ int light_leak_kernel(XER_VideoFrame* f, const float* p, int32_t n,
                                         (warm[2] * s / 255.f));
         }
     }
+    });
     return 0;
 }
 
@@ -1460,7 +1518,8 @@ int film_flicker_kernel(XER_VideoFrame* f, const float* p, int32_t n,
     for (int32_t i = 0; i < 256; ++i) {
         lut[static_cast<size_t>(i)] = Clamp8f(i * gain);
     }
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* px = f->data + static_cast<size_t>(y) * f->stride;
         for (int32_t x = 0; x < f->width; ++x, px += 4) {
             px[0] = lut[px[0]];
@@ -1468,6 +1527,7 @@ int film_flicker_kernel(XER_VideoFrame* f, const float* p, int32_t n,
             px[2] = lut[px[2]];
         }
     }
+    });
     return 0;
 }
 
@@ -1579,7 +1639,8 @@ int vignette2(XER_VideoFrame* f, const float* p, int32_t n) {
                             : (x < e0 ? 0.f : 1.f);
         return t * t * (3.f - 2.f * t);
     };
-    for (int32_t y = 0; y < f->height; ++y) {
+    VeParallelRows(f->height, [&](int32_t ya, int32_t yb) {
+    for (int32_t y = ya; y < yb; ++y) {
         uint8_t* row = f->data + static_cast<size_t>(y) * f->stride;
         const float dy = ((y + 0.5f) - cy) * aspect;
         for (int32_t x = 0; x < f->width; ++x) {
@@ -1593,6 +1654,7 @@ int vignette2(XER_VideoFrame* f, const float* p, int32_t n) {
             }
         }
     }
+    });
     return 0;
 }
 

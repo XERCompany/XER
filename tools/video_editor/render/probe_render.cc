@@ -31,7 +31,7 @@ int RunRenderProbe() {
     };
 
     std::printf("=== video_editor --probe-render "
-                "(chromium-port slice 1) ===\n");
+                "(chromium-port slices 1+2) ===\n");
 
     // ---- VideoFramePool: storage recycles through release ----
     {
@@ -66,6 +66,64 @@ int RunRenderProbe() {
         auto h = pool.Acquire(VideoPixelFormat::kBGRA8,
                               VideoSize{64, 64}, VideoRect{}, 0, 0);
         check(h && h->data(0) != first, "pool keying: size+format");
+    }
+
+    // ---- SharePixels + alias-safe recycling (slice 2, R9) ----
+    {
+        VideoFramePool pool;
+        std::shared_ptr<const std::vector<std::uint8_t>> alias;
+        {
+            auto f = pool.Acquire(VideoPixelFormat::kBGRA8,
+                                  VideoSize{160, 90}, VideoRect{},
+                                  /*ts*/ 0, /*dur*/ 33333);
+            check(f != nullptr, "SharePixels: pooled frame acquired");
+            f->data(0)[7] = 0x5A;
+            alias = f->SharePixels();
+            // Zero-copy alias: same storage, contents visible.
+            check(alias && alias->data() == f->data(0) &&
+                      (*alias)[7] == 0x5A,
+                  "SharePixels: aliases the plane storage");
+        }  // frame dies while the alias is still live
+        auto st = pool.stats();
+        // The dying frame was NOT the sole owner (alias outstanding)
+        // — the storage must not go back on the idle deque where the
+        // next Acquire could overwrite the reader's pixels.
+        check(st.returned == 0 && st.aliased_frees == 1 &&
+                  st.idle_buffers == 0,
+              "pool: aliased storage never recycles under a reader");
+        check((*alias)[7] == 0x5A,
+              "SharePixels: alias outlives the frame");
+        auto g = pool.Acquire(VideoPixelFormat::kBGRA8,
+                              VideoSize{160, 90}, VideoRect{}, 0, 0);
+        check(g && g->data(0) != alias->data(),
+              "pool: alias excluded from reuse");
+        alias.reset();
+        g.reset();
+        // A fresh death with no aliases recycles normally again.
+        {
+            auto k = pool.Acquire(VideoPixelFormat::kBGRA8,
+                                  VideoSize{160, 90}, VideoRect{}, 0,
+                                  0);
+        }
+        st = pool.stats();
+        // g's death returned its storage (k's acquire re-used it),
+        // then k's death returned it again — unaliased frames recycle
+        // exactly as before the guard.
+        check(st.returned == 2 && st.idle_buffers == 1,
+              "pool: unaliased storage still recycles");
+    }
+
+    // ---- WrapOwnedMemory: SharePixels on the adopted buffer ----
+    {
+        std::vector<std::uint8_t> px(32 * 32 * 4, 0x22);
+        const std::uint8_t* raw = px.data();
+        auto f = VideoFrame::WrapOwnedMemory(
+            VideoPixelFormat::kBGRA8, VideoSize{32, 32}, VideoRect{},
+            0, 0, std::move(px));
+        const auto alias = f ? f->SharePixels() : nullptr;
+        check(alias && alias->data() == raw &&
+                  alias->size() == 32 * 32 * 4,
+              "SharePixels: owned-memory frame shares its buffer");
     }
 
     // ---- WrapOwnedMemory: adopts the caller's buffer ----
