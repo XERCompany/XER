@@ -182,7 +182,7 @@ namespace FFmpeg = XER::Bridge::FFmpeg;
 // delay-loaded backend DLL closures (ggml_backend_load_all, the
 // ~50-DLL OpenCV set), and the FFmpeg export legitimately take tens
 // of seconds on a cold disk / indexer-scanned machine.
-constexpr int kWatchdogSeconds = 240;
+constexpr int kWatchdogSeconds = 480;
 
 // Scratch area for the file-backed checks (store, autosave, catalog,
 // presets, export). Distinct from the unit-test dir so a smoke run
