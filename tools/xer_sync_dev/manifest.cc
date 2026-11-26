@@ -78,6 +78,7 @@ bool LoadManifest(const std::filesystem::path& path, Manifest* out,
         dep.ref = d.get("ref", "").asString();
         dep.notes = d.get("notes", "").asString();
         dep.build_mode = d.get("build_mode", "").asString();
+        dep.toolchain = d.get("toolchain", false).asBool();
         if (!dep.name.empty() && !dep.url.empty()) {
             m.deps.push_back(std::move(dep));
         }
@@ -91,6 +92,7 @@ bool LoadManifest(const std::filesystem::path& path, Manifest* out,
         dep.url = d.get("url", "").asString();
         dep.notes = d.get("notes", "").asString();
         dep.build_mode = d.get("build_mode", "").asString();
+        dep.toolchain = d.get("toolchain", false).asBool();
         for (const auto& mm : d["mirrors"]) {
             if (mm.isString()) dep.mirrors.push_back(mm.asString());
         }

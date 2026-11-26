@@ -667,16 +667,19 @@
         },
         {
             "package_name": "llvm-mingw",
+            "toolchain": true,
             "url": "https://github.com/mstorsjo/llvm-mingw/releases/download/20261117/llvm-mingw-20261117-ucrt-x86_64.zip",
             "notes": "toolchain replacement for MSYS2 clang64 (clang+lld+libc++/ucrt, identical ABI) — lands under third_party/llvm-mingw; see exit plan 2c"
         },
         {
             "package_name": "pkg-config-lite",
+            "toolchain": true,
             "url": "https://downloads.sourceforge.net/project/pkgconfiglite/0.28-1/pkg-config-lite-0.28-1_bin-win32.zip",
             "notes": "native pkg-config for pkg-config strategy A (generated .pc set in the sysroot)"
         },
         {
             "package_name": "w64devkit",
+            "toolchain": true,
             "url": "https://github.com/skeeto/w64devkit/releases/download/v2.11.0/w64devkit-x64-2.11.0.7z.exe",
             "notes": "H escape hatch: portable GCC+busybox (sh/make/sed) for autotools deps — 7z SFX, verify ArchiveManager can read it or unpack manually"
         },
@@ -694,6 +697,7 @@
             "mirrors": [
                 "https://downloads.sourceforge.net/project/boost/boost/1.88.0/boost_1_88_0.tar.gz"
             ],
+            "build_mode": "interface",
             "notes": "headers only (Boost::boost) — no compiled boost libs needed"
         },
         {

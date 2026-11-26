@@ -19,10 +19,19 @@ namespace xer_sync_dev {
 namespace {
 
 // Directories that never contain build-relevant library sources.
+// Besides the generic test/bench/tool vocabulary this list names
+// upstream-specific tool trees seen in the synced deps: cryptopp
+// TestPrograms/TestData/TestVectors, expat xmlwf + gennmtab,
+// ffmpeg fftools + ossfuzz, libass checkasm/compare/profile,
+// openh264 codec/console + autotest, jbigkit pbmtools, gsm tst.
 const std::set<std::string>& SkipDirs() {
     static const std::set<std::string> k = {
         ".git", ".svn", ".hg", ".github", ".gitlab",
         "test", "tests", "testing", "unittest", "unittests",
+        "testprograms", "testscripts", "testdata", "testvectors",
+        "testcase", "testcases", "tst", "autotest", "itest",
+        "checkasm", "gennmtab", "xmlwf", "fftools", "ossfuzz",
+        "compare", "profile", "console", "pbmtools", "module",
         "example", "examples", "sample", "samples", "demo", "demos",
         "benchmark", "benchmarks", "bench",
         "doc", "docs", "documentation", "doxygen", "man", "po",
@@ -56,6 +65,12 @@ const std::set<std::string>& SkipFileTokens() {
 // Non-Windows platform markers in path components / file stems.
 // Matching is exact-token (split on _ - .), so "unistd" or "pthreads"
 // do NOT trigger; "unix", "posix", "linux" directories do.
+// Non-Windows platform markers in path components / file stems.
+// Matching is exact-token (split on _ - .), so "unistd" or "pthreads"
+// do NOT trigger; "unix", "posix", "linux" directories do.
+// Also non-x86 CPU-arch dirs: openh264's codec/{mips,loongarch} and
+// x265's {aarch64,arm} trees carry arch-only intrinsics C that cannot
+// compile for an x64 target — same purpose as the OS tokens.
 const std::set<std::string>& NonWinTokens() {
     static const std::set<std::string> k = {
         "linux", "unix", "posix", "mac", "macos", "osx", "darwin",
@@ -65,6 +80,11 @@ const std::set<std::string>& NonWinTokens() {
         "emscripten", "wasi", "wasm", "uwp", "hurd", "plan9", "vms",
         "os2", "amiga", "beos", "cygwin", "vita", "psp", "ps3", "ps4",
         "ps5", "switch", "nacl", "gnu",
+        // CPU architectures that are not the x64 build target.
+        "aarch64", "arm", "armv7", "armv8", "arm64", "arm64ec",
+        "loongarch", "mips", "mips64", "mipsel", "ppc", "ppc64",
+        "riscv", "sparc", "s390x", "sh4", "xtensa", "alpha", "avr",
+        "ebpf", "wasm32", "wasm64",
     };
     return k;
 }
@@ -148,15 +168,59 @@ bool StemHasSkipToken(const fs::path& p) {
     for (const auto& tok : SplitTokens(s, "_-.")) {
         if (SkipFileTokens().count(tok)) return true;
     }
+    // Undelimited suffixes: cryptopp's datatest/dlltest/fipstest/
+    // regtest1/bench1, nettle's *-test.c (delimited, already caught),
+    // camelCase "FooTest" files. Only case-SENSITIVE "Test"-style and
+    // lowercase suffixes are used — a bare lowercase "test"/"main"
+    // *contained* anywhere would hit legit stems (latest, contest,
+    // textdomain, finddomain), so matching is suffix/prefix-strict.
+    static const std::regex kSuffixRe(
+        R"((test|tests|testcase|bench|fuzz|fuzzer)\d*$|_test$|_bench$)");
+    // English words that happen to end in "test"/"bench" are not test
+    // files — a lib source named latest.c must survive the filter.
+    static const std::set<std::string> kKeep = {
+        "latest", "contest", "attest", "detest", "protest", "retest",
+        "pretest", "posttest", "molest", "eben", "ebench",
+    };
+    if (!kKeep.count(s) && std::regex_search(s, kSuffixRe)) return true;
+    // Test-suite helpers with no "test" in the name — cryptopp's
+    // validat<N>.cpp suite and the primetab codegen tool (its main is
+    // commented out, but upstream keeps it out of the lib too).
+    static const std::regex kHelperRe(R"(^(validat\d*|primetab)$)");
+    if (std::regex_search(s, kHelperRe)) return true;
+    const std::string stem = p.stem().string();
+    if (stem.find("Test") != std::string::npos ||
+        stem.find("Bench") != std::string::npos ||
+        stem.find("Fuzz") != std::string::npos) {
+        return true;
+    }
+    // Entry-point stems: "main", "*_main"/"*-main"/"*Main". A bare
+    // lowercase "main" suffix is NOT safe (textdomain, finddomain).
+    if (s == "main" || EndsWith(s, "_main") || EndsWith(s, "-main") ||
+        EndsWith(stem, "Main")) {
+        return true;
+    }
     return false;
 }
 
-// dir is relative to dep root. True when some component is a skip dir.
-bool UnderSkipDir(const fs::path& rel) {
+// dir is relative to dep root. True when some component is a skip
+// dir. `last_is_file` restricts the tokenized match to real directory
+// components so a file literally named e.g. "testdata.h" at a good
+// location isn't mistaken for a skip dir.
+bool UnderSkipDir(const fs::path& rel, bool last_is_file) {
+    const fs::path fname = rel.filename();
     for (const auto& comp : rel) {
         const std::string c = ToLower(comp.string());
         if (SkipDirs().count(c)) return true;
         if (!c.empty() && c[0] == '.') return true;  // hidden dirs
+        // Delimiter-split components too ("add-test", "unit-tests",
+        // "test-utils") — a camel-cased "TestPrograms" stays a single
+        // token and needs its exact-name entry in SkipDirs instead.
+        if (!last_is_file || comp != fname) {
+            for (const auto& tok : SplitTokens(c, "_-.")) {
+                if (tok != c && SkipDirs().count(tok)) return true;
+            }
+        }
     }
     return false;
 }
@@ -209,40 +273,201 @@ const std::set<std::string>& StdHeaders() {
     return k;
 }
 
-// Extracts add_library()/add_executable() target names from an
-// upstream CMakeLists.txt — best-effort regex pass.
-std::vector<std::string> UpstreamLibTargets(const fs::path& cmake_file) {
-    std::vector<std::string> out;
-    std::ifstream in(cmake_file);
-    if (!in.is_open()) return out;
-    static const std::regex re(
-        R"(^\s*add_library\s*\(\s*([A-Za-z0-9_+.\-]+))",
-        std::regex::icase);
-    std::string line;
-    std::smatch m;
-    while (std::getline(in, line)) {
-        if (line.find('#') != std::string::npos) {
-            line = line.substr(0, line.find('#'));
+// Extracts add_library() target names from an upstream CMake project
+// rooted at `cmake_dir` — best-effort static pass. Handles the common
+// variable spellings too: soxr's `add_library(${PROJECT_NAME} ...)`
+// (resolved via project()), mpg123's `set(TARGET lib${PROJECT_NAME})`
+// + `add_library(${TARGET} ...)`. Subdir CMakeLists are scanned to
+// depth 2 (the project file itself may only add_subdirectory()).
+std::string SubstVars(std::string s,
+                      const std::map<std::string, std::string>& vars) {
+    static const std::regex vre(R"(\$\{([A-Za-z_]\w*)\})");
+    for (int pass = 0; pass < 4; ++pass) {
+        std::string out;
+        auto it = std::sregex_iterator(s.begin(), s.end(), vre);
+        auto end = std::sregex_iterator();
+        size_t last = 0;
+        for (; it != end; ++it) {
+            const std::string v = (*it)[1].str();
+            auto f = vars.find(v);
+            out += s.substr(last, (*it).position() - last);
+            out += f != vars.end() ? f->second : (*it)[0].str();
+            last = (*it).position() + (*it).length();
         }
-        if (std::regex_search(line, m, re)) {
-            const std::string t = m[1].str();
-            // Skip obvious imported/alias-only or test helpers — the
-            // caller picks the first plausible candidate anyway.
-            if (ToLower(t).find("test") == std::string::npos &&
-                std::find(out.begin(), out.end(), t) == out.end()) {
-                out.push_back(t);
+        out += s.substr(last);
+        if (out == s) break;
+        s = out;
+    }
+    return s;
+}
+
+void ScanLibTargets(const fs::path& cmake_file,
+                    const std::map<std::string, std::string>& seed_vars,
+                    std::vector<std::string>* out,
+                    std::map<std::string, std::string>* kinds) {
+    std::ifstream in(cmake_file);
+    if (!in.is_open()) return;
+    static const std::regex lib_re(
+        R"(^\s*add_library\s*\(\s*([A-Za-z0-9_+.\-${}]+)(\s+([A-Za-z0-9_+.\-${}]+))?)",
+        std::regex::icase);
+    static const std::regex set_re(
+        R"(^\s*set\s*\(\s*([A-Za-z_]\w*)\s+("?)([^")\s]+)\2)",
+        std::regex::icase);
+    static const std::regex proj_re(
+        R"(^\s*project\s*\(\s*([A-Za-z0-9_+.\-]+))",
+        std::regex::icase);
+
+    std::vector<std::string> lines;
+    std::string line;
+    while (std::getline(in, line)) lines.push_back(line);
+
+    // First pass: project name + set(VAR value) bindings. The seed
+    // carries the top-level project() name into add_subdirectory'd
+    // files that don't re-declare it (mpg123's src/libmpg123).
+    std::map<std::string, std::string> vars = seed_vars;
+    for (const std::string& raw : lines) {
+        std::string l = raw;
+        if (l.find('#') != std::string::npos) {
+            l = l.substr(0, l.find('#'));
+        }
+        std::smatch m;
+        if (std::regex_search(l, m, proj_re)) {
+            vars["PROJECT_NAME"] = m[1].str();
+        }
+        if (std::regex_search(l, m, set_re)) {
+            vars[m[1].str()] = SubstVars(m[3].str(), vars);
+        }
+    }
+    // Second pass: add_library names, variable-resolved.
+    for (const std::string& raw : lines) {
+        std::string l = raw;
+        if (l.find('#') != std::string::npos) {
+            l = l.substr(0, l.find('#'));
+        }
+        std::smatch m;
+        if (!std::regex_search(l, m, lib_re)) continue;
+        std::string t = SubstVars(m[1].str(), vars);
+        if (t.find("${") != std::string::npos || t.empty()) continue;
+        if (ToLower(t).find("test") != std::string::npos) continue;
+        // Declared kind (m[3] may be a ${VAR} or the first source
+        // file — only real keywords count, else "normal").
+        std::string kind;
+        if (m[3].matched) {
+            kind = ToLower(SubstVars(m[3].str(), vars));
+            static const char* kKinds[] = {
+                "static", "shared", "module", "object", "interface",
+            };
+            bool known = false;
+            for (const char* k : kKinds) {
+                if (kind == k) {
+                    known = true;
+                    break;
+                }
+            }
+            if (!known) kind.clear();
+        }
+        if (std::find(out->begin(), out->end(), t) == out->end()) {
+            out->push_back(t);
+        }
+        if (kinds != nullptr && !kind.empty() && !kinds->count(t)) {
+            (*kinds)[t] = kind;
+        }
+    }
+}
+
+void UpstreamLibTargets(const fs::path& cmake_dir,
+                        std::vector<std::string>* targets,
+                        std::map<std::string, std::string>* kinds) {
+    std::error_code ec;
+    const fs::path top = cmake_dir / "CMakeLists.txt";
+    if (!fs::is_regular_file(top, ec)) return;
+
+    // Top file first — its project() name becomes the seed for subdir
+    // scans.
+    ScanLibTargets(top, {}, targets, kinds);
+    std::map<std::string, std::string> seed;
+    {
+        static const std::regex proj_re(
+            R"(^\s*project\s*\(\s*([A-Za-z0-9_+.\-]+))",
+            std::regex::icase);
+        std::ifstream tin(top);
+        std::string l;
+        std::smatch m;
+        while (std::getline(tin, l) && !seed.count("PROJECT_NAME")) {
+            if (l.find('#') != std::string::npos) {
+                l = l.substr(0, l.find('#'));
+            }
+            if (std::regex_search(l, m, proj_re)) {
+                seed["PROJECT_NAME"] = m[1].str();
             }
         }
     }
-    return out;
+
+    // Subdir CMakeLists (depth <= 2) fill in targets declared by
+    // add_subdirectory'd projects.
+    std::vector<fs::path> extra;
+    for (fs::recursive_directory_iterator it(
+             cmake_dir, fs::directory_options::skip_permission_denied,
+             ec),
+         end;
+         it != end && !ec; it.increment(ec)) {
+        if (it.depth() > 2) {
+            it.disable_recursion_pending();
+            continue;
+        }
+        if (it->is_regular_file(ec) &&
+            it->path().filename() == "CMakeLists.txt" &&
+            it->path() != top) {
+            extra.push_back(it->path());
+        }
+    }
+    std::sort(extra.begin(), extra.end());
+    for (const auto& f : extra) ScanLibTargets(f, seed, targets, kinds);
 }
 
 // --- textual #include / macro-guard scan ------------------------------
+
+// Entry-point regex shared by ScanFileText and the cheap tail probe.
+// Any leading tokens are optional — K&R C has no return type at all
+// (rtmpdump's `main(int argc, ...)` at column 0), and qualifier
+// macros may sit before the name (cryptopp's `int CRYPTOPP_API main(`,
+// sqlite's `int SQLITE_CDECL main(`). An optional arg-list macro may
+// sit between name and paren (gsm's `int main P2((ac, av), ...)`).
+// The name must still be the last bare token before '('.
+const std::regex& MainRe() {
+    static const std::regex re(
+        R"(^\s*(?:[A-Za-z_]\w*\s+)*)"
+        R"((?:main|wmain|WinMain|wWinMain|SDL_main))"
+        R"((?:\s+[A-Za-z_]\w*)?\s*\()");
+    return re;
+}
+
+// Cheap standalone main() probe for sources past the 1200-file scan
+// cap — reads the file but only regexes lines containing "main" (the
+// full ScanFileText runs six patterns per line and is meant for the
+// include graph, not this yes/no check).
+bool FileDefinesMain(const fs::path& file) {
+    std::ifstream in(file);
+    if (!in.is_open()) return false;
+    std::string line;
+    int lines = 0;
+    while (std::getline(in, line) && lines++ < 20000) {
+        if (line.find("main") != std::string::npos &&
+            std::regex_search(line, MainRe())) {
+            return true;
+        }
+    }
+    return false;
+}
 
 struct FileFacts {
     std::vector<std::string> includes;   // spellings in <> or ""
     std::set<std::string> guard_macros;  // names used in #if(n)def/defined()
     std::set<std::string> file_guards;   // include-guard macro of this file
+    // File defines a program entry point (int main()/wmain()/WinMain
+    // — CLI tools, test drivers, fuzzers). Such TUs must not land in a
+    // generated library: multiple main()s break consumers at link.
+    bool has_main = false;
 };
 
 FileFacts ScanFileText(const fs::path& file) {
@@ -266,6 +491,7 @@ FileFacts ScanFileText(const fs::path& file) {
     int lines = 0;
     while (std::getline(in, line) && lines++ < 20000) {
         std::smatch m;
+        if (!f.has_main) f.has_main = std::regex_search(line, MainRe());
         if (std::regex_search(line, m, inc_re)) {
             f.includes.push_back(m[1].str());
             pending_ifndef.clear();
@@ -352,6 +578,15 @@ std::string ClassifySpelling(
 
     for (const auto& [name, dirs] : other_deps) {
         for (const auto& d : dirs) {
+            // Dep-root dirs (filename == dep name) hold build junk like
+            // config.h that is NOT a public include — a bare spelling
+            // matching there is a false edge. Require namespaced
+            // spellings (<dep/x.h>) for root dirs; include/inc/src
+            // subdirs stay open to bare spellings.
+            const bool rootish = d.filename() == name;
+            if (rootish && spelling.find('/') == std::string::npos) {
+                continue;
+            }
             if (fs::exists(d / spelling, ec)) {
                 *matched_dep = name;
                 return name;
@@ -452,6 +687,20 @@ void RunLibClang(const fs::path& dep_root,
         arg_storage.push_back("-I" + GenericPath(dep_root / d));
     }
     arg_storage.push_back("-I" + GenericPath(dep_root));
+    // Sysroot as a plain -I BETWEEN self and other-dep dirs: system
+    // spellings (unistd.h, stdint.h, ...) must resolve to the real
+    // toolchain headers before they can land in a random dep dir that
+    // happens to ship a same-named file (zvbi's misc.h, cryptopp's
+    // config.h) — that mis-resolution was the inter_dep noise source.
+    // -isystem would be searched AFTER -I and lose to every dep dir.
+    if (!opts.sysroot_include.empty()) {
+        arg_storage.push_back("-I" + opts.sysroot_include);
+        std::error_code ec;
+        const fs::path cxx = fs::path(opts.sysroot_include) / "c++" / "v1";
+        if (fs::is_directory(cxx, ec)) {
+            arg_storage.push_back("-I" + GenericPath(cxx));
+        }
+    }
     for (const auto& [name, dirs] : opts.include_dirs_of_deps) {
         for (const auto& d : dirs) {
             arg_storage.push_back("-I" + GenericPath(d));
@@ -459,10 +708,6 @@ void RunLibClang(const fs::path& dep_root,
     }
     for (const auto& d : opts.extra_include_dirs) {
         arg_storage.push_back("-I" + d);
-    }
-    if (!opts.sysroot_include.empty()) {
-        arg_storage.push_back("-isystem");
-        arg_storage.push_back(opts.sysroot_include);
     }
     std::vector<const char*> args;
     args.reserve(arg_storage.size());
@@ -538,7 +783,7 @@ bool AnalyzeDep(const Dependency& dep, const fs::path& dep_root,
             }
         }
 
-        if (UnderSkipDir(rel)) {
+        if (UnderSkipDir(rel, it->is_regular_file(ec))) {
             if (it->is_directory(ec)) it.disable_recursion_pending();
             continue;
         }
@@ -560,9 +805,29 @@ bool AnalyzeDep(const Dependency& dep, const fs::path& dep_root,
         }
     }
 
+    // Upstream cmake may live under a conventional subdir instead of
+    // the root — lz4 keeps its project in build/cmake, the expat repo
+    // wraps everything in expat/, x265 in source/, mpg123 ships a
+    // ports/cmake overlay. A fixed probe list (not arbitrary
+    // recursion) keeps this from misfiring on dep trees that ship
+    // cmake fragments for other purposes (boost libs/*, cef payload).
+    if (!out->has_upstream_cmake) {
+        static const char* kCMakeSubdirs[] = {
+            "build/cmake", "source", "expat", "ports/cmake", "lib",
+        };
+        for (const char* sub : kCMakeSubdirs) {
+            if (fs::is_regular_file(dep_root / sub / "CMakeLists.txt",
+                                    ec)) {
+                out->has_upstream_cmake = true;
+                out->cmake_subdir = sub;
+                break;
+            }
+        }
+    }
     if (out->has_upstream_cmake) {
-        out->upstream_lib_targets =
-            UpstreamLibTargets(dep_root / "CMakeLists.txt");
+        UpstreamLibTargets(dep_root / out->cmake_subdir,
+                           &out->upstream_lib_targets,
+                           &out->upstream_lib_kinds);
     }
 
     // Fallback include dirs when no include/ layout exists.
@@ -606,15 +871,17 @@ bool AnalyzeDep(const Dependency& dep, const fs::path& dep_root,
     }
     if (out->public_headers.empty()) out->public_headers = all_headers;
 
-    // Sources: drop test/fuzz stems and non-Windows platform files.
+    // Sources: drop test/fuzz stems and non-Windows platform files
+    // first (cheap path checks); the main()-definition content check
+    // lands in the textual scan below — it needs file contents.
+    std::vector<std::string> cand_sources;
     for (const auto& s : all_sources) {
         if (StemHasSkipToken(s) || HasNonWinToken(s)) {
             out->excluded_sources.push_back(s);
         } else {
-            out->sources.push_back(s);
+            cand_sources.push_back(s);
         }
     }
-    out->header_only = out->sources.empty() && !out->public_headers.empty();
 
     // Self include dirs (absolute) for the other_deps map exclusion.
     std::map<std::string, std::vector<fs::path>> other =
@@ -622,21 +889,36 @@ bool AnalyzeDep(const Dependency& dep, const fs::path& dep_root,
     other.erase(dep.name);
 
     // --- textual scan over every file --------------------------------
+    // Public headers + candidate sources. Sources double-dip: the scan
+    // both feeds the include graph and decides kept-vs-excluded via
+    // the main() check.
+    std::vector<std::pair<std::string, bool>> scan_list;
+    scan_list.reserve(out->public_headers.size() + cand_sources.size());
+    for (const auto& h : out->public_headers) {
+        scan_list.emplace_back(h, false);
+    }
+    for (const auto& s : cand_sources) {
+        scan_list.emplace_back(s, true);
+    }
+
     std::map<std::string, int> text_edges, text_system;
     int text_internal = 0, text_unresolved = 0;
     int scanned = 0;
-    for (const auto& rel :
-         [&] {
-             std::vector<std::string> all = out->public_headers;
-             all.insert(all.end(), out->sources.begin(),
-                        out->sources.end());
-             return all;
-         }()) {
+    size_t scan_idx = 0;
+    for (; scan_idx < scan_list.size(); ++scan_idx) {
+        const auto& [rel, is_source] = scan_list[scan_idx];
         const fs::path file = dep_root / rel;
-        if (fs::file_size(file, ec) > 2u * 1024 * 1024) continue;
+        if (fs::file_size(file, ec) > 2u * 1024 * 1024) {
+            if (is_source) out->sources.push_back(rel);
+            continue;
+        }
         if (++scanned > 1200) break;  // perf bound on monorepo-ish deps
 
         const FileFacts f = ScanFileText(file);
+        if (is_source) {
+            (f.has_main ? out->excluded_sources : out->sources)
+                .push_back(rel);
+        }
         for (const auto& inc : f.includes) {
             std::string matched;
             const std::string bucket = ClassifySpelling(
@@ -662,6 +944,21 @@ bool AnalyzeDep(const Dependency& dep, const fs::path& dep_root,
             }
         }
     }
+    // Unscanned tail (the 1200-file include-graph perf bound):
+    // sources still get the cheap FileDefinesMain probe so monorepo
+    // deps (ffmpeg, gettext) don't leak CLI mains into the lib.
+    for (; scan_idx < scan_list.size(); ++scan_idx) {
+        if (!scan_list[scan_idx].second) continue;
+        const std::string& rel = scan_list[scan_idx].first;
+        const fs::path file = dep_root / rel;
+        const bool huge =
+            fs::file_size(file, ec) > 2u * 1024 * 1024;
+        (!huge && FileDefinesMain(file) ? out->excluded_sources
+                                        : out->sources)
+            .push_back(rel);
+    }
+    out->header_only =
+        out->sources.empty() && !out->public_headers.empty();
     text_edges.erase(dep.name);  // self-edges are not dependencies
     out->internal_includes = text_internal;
     out->unresolved_includes = text_unresolved;

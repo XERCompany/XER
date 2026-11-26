@@ -117,6 +117,7 @@ std::map<std::string, std::vector<fs::path>> BuildIncludeDirsOfDeps(
     const Manifest& m) {
     std::map<std::string, std::vector<fs::path>> out;
     for (const auto& d : m.deps) {
+        if (d.toolchain) continue;  // compilers aren't include targets
         const fs::path root = DepDir(m, d);
         std::error_code ec;
         if (fs::is_directory(root, ec)) {
@@ -719,6 +720,16 @@ int RunCmakeGenForDep(const Manifest& m, const Dependency& d,
 #ifdef XER_SYNC_DEV_SYSROOT_INCLUDE
     ao.sysroot_include = XER_SYNC_DEV_SYSROOT_INCLUDE;
 #endif
+    if (ao.sysroot_include.empty()) {
+        // In-repo llvm-mingw toolchain is the preferred sysroot — its
+        // headers keep system spellings from resolving into random dep
+        // dirs (see analyzer -I ordering).
+        std::error_code ec;
+        const fs::path mm = m.output_dir / "llvm-mingw" / "include";
+        if (fs::is_directory(mm, ec)) {
+            ao.sysroot_include = GenericPath(mm);
+        }
+    }
 
     DepAnalysis a;
     AnalyzeDep(d, dir, ao, &a);
@@ -761,12 +772,23 @@ int RunCmakeGenForDep(const Manifest& m, const Dependency& d,
         return 1;
     }
     if (detail) {
+        // Patch shape is content-sniffed — opensource-route deps can
+        // land in any of the four emissions now (soxr -> wrapper,
+        // sqlite3 -> static-lib, boost -> interface, cef -> shim).
+        const char* shape =
+            content.find("Binary distribution shim") !=
+                    std::string::npos
+                ? " [binary-shim]"
+            : a.has_upstream_cmake ? " [wrapper]"
+            : content.find("INTERFACE") != std::string::npos
+                ? " [interface]"
+                : " [static-lib]";
         *detail = GenericPath(written) +
                   (a.libclang_used ? " [libclang]" : " [fs-scan]") +
-                  (a.has_upstream_cmake  ? " [wrapper]" :
-                   a.header_only         ? " [interface]" :
-                   d.kind == DepKind::kBinary ? " [binary-shim]"
-                                              : " [static-lib]");
+                  shape +
+                  (a.cmake_subdir.empty()
+                       ? ""
+                       : " (cmake in " + a.cmake_subdir + ")");
         if (!a.inter_dep_includes.empty()) {
             *detail += " edges:";
             for (const auto& [dd, n] : a.inter_dep_includes) {

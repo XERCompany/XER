@@ -44,7 +44,15 @@ struct DepAnalysis {
 
     // Upstream build files.
     bool has_upstream_cmake = false;
+    // "" -> CMakeLists.txt at dep root; otherwise the probed subdir
+    // that carries the real upstream project (lz4 "build/cmake",
+    // expat "expat", x265 "source", mpg123 "ports/cmake").
+    std::string cmake_subdir;
     std::vector<std::string> upstream_lib_targets;  // add_library() names
+    // Declared library kind per target (static/shared/interface/object/
+    // module/normal) — lets the wrapper demote INTERFACE/OBJECT aliases
+    // (lz4's `lz4` is an INTERFACE umbrella, not the real archive).
+    std::map<std::string, std::string> upstream_lib_kinds;
     bool has_autotools = false;   // configure / configure.ac / Makefile.am
     bool has_meson = false;       // meson.build
     std::vector<std::string> config_templates;      // *.in / *.cmake etc.

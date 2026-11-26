@@ -24,7 +24,10 @@
  *                               the STATIC/SHARED keyword for
  *                               source-list-generated libraries.
  *                               "default" leaves upstream's own choice
- *                               untouched. Header-only and binary deps are
+ *                               untouched. "interface" forces a
+ *                               header-only INTERFACE target even when
+ *                               the dep tree carries sources (boost).
+ *                               Header-only and binary deps are
  *                               unaffected.
  *   dependencies-from-github[]  {name, url}         git-cloned deps;
  *                               optional "ref" pins the checkout (tag,
@@ -75,6 +78,10 @@ struct Dependency {
     std::string notes;  // free-form annotation (surfaced by `status`);
                         // used to flag 'hard' deps that need custom build
                         // scripts — see msys2-exit-plan.md route H.
+    bool toolchain = false;  // compiler/tool package (llvm-mingw,
+                             // w64devkit, pkg-config-lite): excluded
+                             // from inter-dep include scanning so every
+                             // other dep doesn't edge against it.
     std::string build_mode;  // "" -> inherit Manifest::build_mode;
                              // "static"|"shared"|"default".
     std::vector<std::string> mirrors;          // kBinary only

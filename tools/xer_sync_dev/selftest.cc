@@ -87,15 +87,45 @@ int CmdSelftest(const Options& o) {
           "write minilib header");
     Check(Write(outdir / "minilib/src/mini.cc",
                 "#include <minilib/mini.h>\n"
+                "#include <otherhdr/other.h>\n"  // edge floor is 2 hits
                 "int mini_value() { return other_answer(); }\n"),
           "write minilib source");
     Check(Write(outdir / "minilib/src/mini_linux.cc",
                 "// posix-only source — must be filtered out\n"
                 "int mini_linux_only() { return 0; }\n"),
           "write minilib linux source");
+    Check(Write(outdir / "minilib/src/mini_tool.cc",
+                "// CLI entry point — must be mains-excluded\n"
+                "int main() { return 0; }\n"),
+          "write minilib tool source (main -> excluded)");
     Check(Write(outdir / "minilib/tests/mini_test.cc",
                 "int main() { return 1; }\n"),
           "write minilib test source (should be skipped)");
+
+    // subdirlib: upstream cmake lives in build/cmake, not the root —
+    // exercises the subdir probe that lands wrappers for lz4 /
+    // expat / x265 / mpg123 layouts.
+    Check(Write(outdir / "subdirlib/build/cmake/CMakeLists.txt",
+                "cmake_minimum_required(VERSION 3.21)\n"
+                "project(subdirlib C)\n"
+                "add_library(subdirlib STATIC x.c)\n"),
+          "write subdirlib nested CMakeLists");
+    Check(Write(outdir / "subdirlib/src/lib.c",
+                "int subdirlib_value() { return 7; }\n"),
+          "write subdirlib source");
+
+    // binpkg: opensource-route binary dist with libs under win-x64/
+    // and tools+dlls under bin/ — exercises the recursive artifact
+    // scan (onnxruntime/cuda-cudart/cudnn layouts).
+    Check(Write(outdir / "binpkg/include/binpkg.h",
+                "#pragma once\n"),
+          "write binpkg header");
+    Check(Write(outdir / "binpkg/win-x64/binpkg.lib", "fake-lib"),
+          "write binpkg nested lib");
+    Check(Write(outdir / "binpkg/bin/binpkg.dll", "fake-dll"),
+          "write binpkg dll");
+    Check(Write(outdir / "binpkg/bin/binpkg-tool.exe", "fake-exe"),
+          "write binpkg tool exe");
 
     // --- synthetic manifest ---------------------------------------------
     const fs::path mpath = root / "TEST.xersyunc";
@@ -117,7 +147,13 @@ int CmdSelftest(const Options& o) {
                 "     \"notes\": \"test note\"},\n"
                 "    {\"name\": \"otherhdr\", \"url\": "
                 "\"https://example.invalid/otherhdr\",\n"
-                "     \"build_mode\": \"shared\"}\n"
+                "     \"build_mode\": \"shared\"},\n"
+                "    {\"name\": \"subdirlib\", \"url\": "
+                "\"https://example.invalid/subdirlib\"}\n"
+                "  ],\n"
+                "  \"dependencies-opensource\": [\n"
+                "    {\"package_name\": \"binpkg\", \"url\": "
+                "\"https://example.invalid/binpkg.1.0.zip\"}\n"
                 "  ]\n"
                 "}\n"),
           "write synthetic manifest");
@@ -126,7 +162,7 @@ int CmdSelftest(const Options& o) {
     std::string err;
     Check(LoadManifest(mpath, &m, &err), "parse manifest" +
           (err.empty() ? "" : " (" + err + ")"));
-    Check(m.deps.size() == 2, "manifest has 2 deps");
+    Check(m.deps.size() == 4, "manifest has 4 deps");
     Check(m.output_dir == fs::weakly_canonical(outdir),
           "output_directory resolved against manifest dir");
     Check(m.prefix_new_version_all_dependencies == "XER-",
@@ -162,6 +198,16 @@ int CmdSelftest(const Options& o) {
         Check(oh && RunCmakeGenForDep(m, *oh, gen, &detail) == 0,
               "cmake-gen otherhdr" +
                   (detail.empty() ? "" : " — " + detail));
+
+        const Dependency* sl = FindDep(m, "subdirlib");
+        Check(sl && RunCmakeGenForDep(m, *sl, gen, &detail) == 0,
+              "cmake-gen subdirlib" +
+                  (detail.empty() ? "" : " — " + detail));
+
+        const Dependency* bp = FindDep(m, "binpkg");
+        Check(bp && RunCmakeGenForDep(m, *bp, gen, &detail) == 0,
+              "cmake-gen binpkg" +
+                  (detail.empty() ? "" : " — " + detail));
     }
 
     const fs::path mini_patch = outdir / "minilib/xer-minilib.cmake";
@@ -185,6 +231,11 @@ int CmdSelftest(const Options& o) {
               "inter-dep edge to otherhdr emitted");
         Check(body.find("MINILIB_ENABLE_EXTRAS") != std::string::npos,
               "config macro reported in header block");
+        // main()-bearing TUs never land in a lib source list — only
+        // allowed as an excluded-sources comment.
+        Check(body.find("${CMAKE_CURRENT_LIST_DIR}/src/mini_tool.cc") ==
+                  std::string::npos,
+              "src/mini_tool.cc (has main) excluded from sources");
     }
     {
         std::ifstream in(oh_patch);
@@ -193,6 +244,33 @@ int CmdSelftest(const Options& o) {
         Check(body.find("add_library(XER-otherhdr INTERFACE)") !=
                   std::string::npos,
               "otherhdr emits INTERFACE target");
+    }
+    {
+        const fs::path sl_patch = outdir / "subdirlib/xer-subdirlib.cmake";
+        std::ifstream in(sl_patch);
+        const std::string body((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        Check(body.find("add_subdirectory(\"${CMAKE_CURRENT_LIST_DIR}/"
+                        "build/cmake\"") != std::string::npos,
+              "subdirlib wrapper points at build/cmake");
+        Check(body.find("add_library(XER-subdirlib ALIAS subdirlib)") !=
+                  std::string::npos,
+              "subdirlib aliases upstream target");
+    }
+    {
+        const fs::path bp_patch = outdir / "binpkg/xer-binpkg.cmake";
+        std::ifstream in(bp_patch);
+        const std::string body((std::istreambuf_iterator<char>(in)),
+                               std::istreambuf_iterator<char>());
+        Check(body.find("XER_BINPKG_LIBRARIES") != std::string::npos &&
+                  body.find("win-x64/binpkg.lib") != std::string::npos,
+              "binpkg shim finds libs under win-x64/");
+        Check(body.find("XER_BINPKG_RUNTIME_DLLS") != std::string::npos &&
+                  body.find("bin/binpkg.dll") != std::string::npos,
+              "binpkg shim finds dlls under bin/");
+        Check(body.find("XER_BINPKG_PROGRAMS") != std::string::npos &&
+                  body.find("bin/binpkg-tool.exe") != std::string::npos,
+              "binpkg shim records tool exes");
     }
 
     // --- verify -----------------------------------------------------------
@@ -266,7 +344,7 @@ int CmdSelftest(const Options& o) {
         Check(LoadManifest(mpath, &m2, &ae),
               "manifest re-parses after appends" +
                   (ae.empty() ? "" : " — " + ae));
-        Check(m2.deps.size() == 4, "manifest now has 4 deps");
+        Check(m2.deps.size() == 6, "manifest now has 6 deps");
         const Dependency* t = FindDep(m2, "testgit");
         Check(t && t->kind == DepKind::kGit &&
                   t->url == g.url &&

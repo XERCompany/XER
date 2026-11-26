@@ -4,6 +4,7 @@
  */
 #include "cmake_gen.h"
 
+#include <algorithm>
 #include <fstream>
 #include <regex>
 #include <set>
@@ -27,6 +28,65 @@ std::string UpperIdent(const std::string& name) {
 
 std::string Q(const std::string& rel) {
     return "\"${CMAKE_CURRENT_LIST_DIR}/" + rel + "\"";
+}
+
+// Scores an upstream add_library target for the wrapper's alias chain:
+// the "real" library should win, helper/OBJECT/test libs lose. Raw
+// scan order would e.g. put mpg123's `compat` OBJECT lib ahead of
+// `libmpg123`, or x265's `common` ahead of `x265-static`.
+int LibTargetScore(const std::string& target,
+                   const std::string& dep_name,
+                   const std::string& bmode,
+                   const std::map<std::string, std::string>& kinds) {
+    const std::string t = ToLower(target);
+    const std::string d = ToLower(dep_name);
+    int s = 0;
+    if (t == d || t == "lib" + d) s += 100;
+    if (t.find(d) != std::string::npos) s += 40;
+    // Declared add_library kind wins over name-guessing — lz4's `lz4`
+    // is an INTERFACE umbrella over shared/static, not the archive.
+    auto ki = kinds.find(target);
+    const std::string kind =
+        ki != kinds.end() ? ki->second : std::string();
+    // INTERFACE umbrellas / OBJECT helpers never outrank a real
+    // archive — they stay in the chain only as last-resort fallbacks.
+    if (kind == "interface") s -= 150;
+    if (kind == "object") s -= 120;
+    bool is_static = kind == "static";
+    bool is_shared = kind == "shared" || kind == "module";
+    if (kind.empty() || kind == "normal") {
+        is_static = t.find("static") != std::string::npos;
+        is_shared = t.find("shared") != std::string::npos ||
+                    t.find("_dll") != std::string::npos;
+    }
+    if (is_static) s += (bmode == "shared" ? -15 : 25);
+    if (is_shared) s += (bmode == "static" ? -15 : 25);
+    static const char* kHelper[] = {
+        "test",    "check", "fuzz",   "compat", "tool", "bench",
+        "example", "demo",  "mock",   "dummy",  "stub", "common",
+    };
+    for (const char* h : kHelper) {
+        if (t.find(h) != std::string::npos) {
+            s -= 30;
+            break;
+        }
+    }
+    return s;
+}
+
+// Sorted copy of upstream_lib_targets, best alias candidate first.
+std::vector<std::string> RankedLibTargets(const DepAnalysis& a,
+                                          const std::string& dep_name,
+                                          const std::string& bmode) {
+    std::vector<std::string> r = a.upstream_lib_targets;
+    std::stable_sort(r.begin(), r.end(),
+                     [&](const std::string& x, const std::string& y) {
+                         return LibTargetScore(x, dep_name, bmode,
+                                               a.upstream_lib_kinds) >
+                                LibTargetScore(y, dep_name, bmode,
+                                               a.upstream_lib_kinds);
+                     });
+    return r;
 }
 
 void EmitHeader(std::ostringstream& o, const Dependency& dep,
@@ -89,6 +149,10 @@ void EmitGuardProlog(std::ostringstream& o, const std::string& name) {
 void EmitInterDepLinks(std::ostringstream& o, const DepAnalysis& a,
                        const std::string& vis) {
     for (const auto& [d, n] : a.inter_dep_includes) {
+        // Single-hit edges are include-resolution noise (a same-named
+        // file shadowing a system header) — real deps almost always
+        // touch >=2 headers. The full list stays in the header comment.
+        if (n < 2) continue;
         o << "if(TARGET XER-" << d << ")\n"
           << "  target_link_libraries(XER-" << a.name << " " << vis
           << " XER-" << d << ")\n"
@@ -111,12 +175,114 @@ std::vector<std::string> SafeDefines(const DepAnalysis& a) {
 
 }  // namespace
 
+// Collects the artifacts a binary distribution ships, for the
+// imported-shim emission. `root` is the payload dir (dep root or the
+// one-level-down dir the tarball wrapped everything in). Scans the
+// conventional dirs (include/lib/lib64/Release/Debug/bin) AND one
+// level into lib-like subdirs + `win-*` platform dirs — ONNX Runtime's
+// extract_map lands libs in win-x64/, the NVIDIA redists in lib/x64/.
+struct BinArtifacts {
+    std::vector<std::string> incs;   // include dirs, rel. to dep root
+    std::vector<std::string> libs;   // .lib/.a/.so files
+    std::vector<std::string> dlls;   // .dll runtime files
+    std::vector<std::string> exes;   // .exe tools (pkg-config, w64devkit)
+};
+
+BinArtifacts CollectBinArtifacts(const fs::path& dep_root,
+                                 const fs::path& root) {
+    BinArtifacts out;
+    std::error_code ec;
+
+    auto lib_dirs = [&]() {
+        std::vector<fs::path> dirs;
+        for (const char* cand :
+             {"lib", "lib64", "Release", "Debug", "bin"}) {
+            const fs::path c = root / cand;
+            if (!fs::is_directory(c, ec)) continue;
+            dirs.push_back(c);
+            // One level down: lib/x64 (cuda-cudart, cudnn), bin/x64.
+            for (const auto& e : fs::directory_iterator(c, ec)) {
+                if (e.is_directory(ec)) dirs.push_back(e.path());
+            }
+        }
+        // Platform dirs at payload root: onnxruntime's win-x64/.
+        for (const auto& e : fs::directory_iterator(root, ec)) {
+            if (!e.is_directory(ec)) continue;
+            const std::string n = ToLower(e.path().filename().string());
+            if (StartsWith(n, "win-") || StartsWith(n, "linux-") ||
+                StartsWith(n, "osx-") || StartsWith(n, "darwin-")) {
+                dirs.push_back(e.path());
+            }
+        }
+        return dirs;
+    };
+
+    for (const char* cand : {"include", "inc", "includes"}) {
+        const fs::path c = root / cand;
+        if (fs::is_directory(c, ec)) {
+            out.incs.push_back(GenericPath(fs::relative(c, dep_root)));
+        }
+    }
+    auto scan_dir = [&](const fs::path& d) {
+        for (const auto& e : fs::directory_iterator(d, ec)) {
+            if (!e.is_regular_file(ec)) continue;
+            const std::string x =
+                ToLower(e.path().extension().string());
+            const std::string rel =
+                GenericPath(fs::relative(e.path(), dep_root));
+            if (x == ".lib" || x == ".a" || x == ".so") {
+                out.libs.push_back(rel);
+            } else if (x == ".dll") {
+                out.dlls.push_back(rel);
+            } else if (x == ".exe") {
+                out.exes.push_back(rel);
+            }
+        }
+    };
+    for (const auto& d : lib_dirs()) scan_dir(d);
+    // Tools sitting at the payload root itself (fftw3's *-wisdom.exe).
+    for (const auto& e : fs::directory_iterator(root, ec)) {
+        if (e.is_regular_file(ec) &&
+            ToLower(e.path().extension().string()) == ".exe") {
+            out.exes.push_back(
+                GenericPath(fs::relative(e.path(), dep_root)));
+        }
+    }
+    return out;
+}
+
 std::string GeneratePatch(const Dependency& dep,
                           const DepAnalysis& a,
                           const GenContext& ctx) {
     std::ostringstream o;
     EmitHeader(o, dep, a, ctx);
     EmitGuardProlog(o, dep.name);
+
+    // --- explicit header-only override --------------------------------
+    // build_mode "interface" forces an INTERFACE target even when the
+    // tree carries sources (boost: headers only per manifest note).
+    if (EffectiveBuildMode(*ctx.manifest, dep) == "interface") {
+        std::error_code iec;
+        std::vector<std::string> incs;
+        if (fs::is_directory(a.root / "include", iec)) {
+            incs.push_back("include");
+        } else if (fs::is_directory(a.root / dep.name, iec)) {
+            // boost/boost/... — the dep root itself is the include dir.
+            incs.push_back(".");
+        } else if (!a.include_dirs.empty()) {
+            incs = a.include_dirs;
+        } else {
+            incs.push_back(".");
+        }
+        o << "# build_mode=interface — header-only INTERFACE target.\n"
+          << "add_library(XER-" << dep.name << " INTERFACE)\n"
+          << "target_include_directories(XER-" << dep.name
+          << " INTERFACE\n";
+        for (const auto& d : incs) o << "  " << Q(d) << "\n";
+        o << ")\n";
+        EmitInterDepLinks(o, a, "INTERFACE");
+        return o.str();
+    }
 
     const bool needs_configure =
         (a.has_autotools || a.has_meson) && !a.has_upstream_cmake;
@@ -130,106 +296,24 @@ std::string GeneratePatch(const Dependency& dep,
              "compile. Run upstream configure first.\")\n\n";
     }
 
-    // --- binary tarball dep: imported shim --------------------------
-    if (dep.kind == DepKind::kBinary) {
-        // Look for conventional lib/include dirs to wire up hints.
-        std::error_code ec;
-        fs::path root = a.root;
-        auto has_artifacts = [](const fs::path& d) {
-            std::error_code ec2;
-            for (const char* c : {"include", "lib", "lib64", "Release",
-                                  "Debug", "bin"}) {
-                if (fs::is_directory(d / c, ec2)) return true;
-            }
-            return false;
-        };
-        if (fs::is_directory(root, ec) && !has_artifacts(root)) {
-            // Tarball payload usually sits one level down
-            // (cef/cef_windows64, <pkg>/<pkg>-<ver>) — pick the first
-            // child dir that actually carries the artifacts.
-            for (const auto& e : fs::directory_iterator(root, ec)) {
-                if (e.is_directory(ec) && has_artifacts(e.path())) {
-                    root = e.path();
-                    break;
-                }
-            }
-        }
-        std::vector<std::string> incs, libs, dlls;
-        for (const char* cand : {"include", "lib", "lib64", "Release",
-                                 "Debug", "bin"}) {
-            const fs::path c = root / cand;
-            if (!fs::is_directory(c, ec)) continue;
-            if (std::string(cand) == "include") {
-                incs.push_back(
-                    GenericPath(fs::relative(c, a.root)));
-            } else {
-                for (const auto& e : fs::directory_iterator(c, ec)) {
-                    const std::string x =
-                        ToLower(e.path().extension().string());
-                    if (x == ".lib" || x == ".a" || x == ".dll.a" ||
-                        x == ".so") {
-                        libs.push_back(
-                            GenericPath(fs::relative(e.path(), a.root)));
-                    } else if (x == ".dll") {
-                        dlls.push_back(
-                            GenericPath(fs::relative(e.path(), a.root)));
-                    }
-                }
-            }
-        }
-        const std::string root_rel =
-            root == a.root ? "" : GenericPath(fs::relative(root, a.root));
-        o << "# Binary distribution shim — artifacts recorded for "
-             "consumers.\n";
-        if (!root_rel.empty()) {
-            o << "set(XER_" << UpperIdent(dep.name) << "_PAYLOAD_DIR"
-              << " \"${CMAKE_CURRENT_LIST_DIR}/" << root_rel << "\")\n";
-        }
-        // LIB_DIR = directory the discovered libs actually live in
-        // (Release/ for CEF, lib/ for conventional layouts).
-        if (!libs.empty()) {
-            const std::string lib_dir =
-                fs::path(libs.front()).parent_path().generic_string();
-            o << "set(XER_" << UpperIdent(dep.name) << "_LIB_DIR"
-              << " \"${CMAKE_CURRENT_LIST_DIR}/" << lib_dir << "\")\n";
-        }
-        if (!incs.empty()) {
-            o << "add_library(XER-" << dep.name << " INTERFACE)\n"
-              << "target_include_directories(XER-" << dep.name
-              << " INTERFACE\n";
-            for (const auto& i : incs) o << "  " << Q(i) << "\n";
-            o << ")\n";
-        }
-        if (!libs.empty()) {
-            o << "set(XER_" << UpperIdent(dep.name) << "_LIBRARIES\n";
-            for (const auto& l : libs) {
-                o << "  \"${CMAKE_CURRENT_LIST_DIR}/" << l << "\"\n";
-            }
-            o << ")\n";
-        } else {
-            o << "# No prebuilt libs found under include/lib/bin yet —\n"
-              << "# set XER_" << UpperIdent(dep.name)
-              << "_LIBRARIES manually.\n";
-        }
-        if (!dlls.empty()) {
-            o << "# Runtime DLLs to stage beside executables.\n"
-              << "set(XER_" << UpperIdent(dep.name) << "_RUNTIME_DLLS\n";
-            for (const auto& l : dlls) {
-                o << "  \"${CMAKE_CURRENT_LIST_DIR}/" << l << "\"\n";
-            }
-            o << ")\n";
-        }
-        return o.str();
-    }
-
     // --- upstream CMake: thin wrapper --------------------------------
+    // Applies to BOTH routes: opensource deps can be source tarballs
+    // (soxr ships a root CMakeLists, mpg123 a ports/cmake overlay).
     if (a.has_upstream_cmake) {
-        o << "# Upstream CMakeLists.txt detected (library targets: ";
-        if (a.upstream_lib_targets.empty()) {
+        const std::string bmode =
+            EffectiveBuildMode(*ctx.manifest, dep);
+        const std::vector<std::string> lib_targets =
+            RankedLibTargets(a, dep.name, bmode);
+        o << "# Upstream CMakeLists.txt detected"
+          << (a.cmake_subdir.empty()
+                  ? ""
+                  : " in subdir \"" + a.cmake_subdir + "\"")
+          << " (library targets: ";
+        if (lib_targets.empty()) {
             o << "none detected";
         } else {
-            for (size_t i = 0; i < a.upstream_lib_targets.size(); ++i) {
-                o << (i ? ", " : "") << a.upstream_lib_targets[i];
+            for (size_t i = 0; i < lib_targets.size(); ++i) {
+                o << (i ? ", " : "") << lib_targets[i];
             }
         }
         o << ").\n"
@@ -237,7 +321,6 @@ std::string GeneratePatch(const Dependency& dep,
           << "set(_xer_saved_BUILD_TESTING \"${BUILD_TESTING}\")\n"
           << "set(BUILD_TESTING OFF CACHE BOOL \"off via xer-" << dep.name
           << " wrapper\" FORCE)\n";
-        const std::string bmode = EffectiveBuildMode(*ctx.manifest, dep);
         const bool force_shared =
             (bmode == "static" || bmode == "shared");
         if (force_shared) {
@@ -250,7 +333,9 @@ std::string GeneratePatch(const Dependency& dep,
               << " CACHE BOOL \"forced via xer-" << dep.name
               << " wrapper (build_mode=" << bmode << ")\" FORCE)\n";
         }
-        o << "add_subdirectory(\"${CMAKE_CURRENT_LIST_DIR}\"\n"
+        o << "add_subdirectory(\"${CMAKE_CURRENT_LIST_DIR}"
+          << (a.cmake_subdir.empty() ? "" : "/" + a.cmake_subdir)
+          << "\"\n"
           << "               \"${CMAKE_BINARY_DIR}/xer_deps/" << dep.name
           << "\"\n"
           << "               EXCLUDE_FROM_ALL)\n"
@@ -261,13 +346,13 @@ std::string GeneratePatch(const Dependency& dep,
         }
         o << "\n";
 
-        if (!a.upstream_lib_targets.empty()) {
+        if (!lib_targets.empty()) {
             o << "# Alias the upstream library under the XER- name.\n";
-            for (size_t i = 0; i < a.upstream_lib_targets.size(); ++i) {
+            for (size_t i = 0; i < lib_targets.size(); ++i) {
                 o << (i == 0 ? "if" : "elseif") << "(TARGET "
-                  << a.upstream_lib_targets[i] << ")\n"
+                  << lib_targets[i] << ")\n"
                   << "  add_library(XER-" << dep.name << " ALIAS "
-                  << a.upstream_lib_targets[i] << ")\n";
+                  << lib_targets[i] << ")\n";
             }
             o << "else()\n"
               << "  message(STATUS \"xer-" << dep.name
@@ -276,6 +361,113 @@ std::string GeneratePatch(const Dependency& dep,
               << "endif()\n";
         }
         return o.str();
+    }
+
+    // --- binary tarball dep: imported shim --------------------------
+    // Only reached when no upstream CMake was found (root or probed
+    // subdir). The shim emits when real binary artifacts exist
+    // (libs/dlls/exes under the conventional dirs) — or when the dep
+    // carries nothing buildable at all. A kBinary dep that is really
+    // a *source* tarball (sqlite3 amalgamation, giflib, gsm, jbigkit,
+    // lame, gmp, ...) has no artifacts and falls through to the
+    // header-only / source-list paths below.
+    if (dep.kind == DepKind::kBinary) {
+        std::error_code ec;
+        fs::path root = a.root;
+        BinArtifacts art = CollectBinArtifacts(a.root, root);
+        if (art.libs.empty() && art.dlls.empty() && art.exes.empty() &&
+            fs::is_directory(root, ec)) {
+            // Tarball payload usually sits one level down
+            // (cef/cef_windows64, <pkg>/<pkg>-<ver>) — pick the first
+            // child dir that actually carries the artifacts.
+            for (const auto& e : fs::directory_iterator(root, ec)) {
+                if (!e.is_directory(ec)) continue;
+                BinArtifacts cand =
+                    CollectBinArtifacts(a.root, e.path());
+                if (!cand.libs.empty() || !cand.dlls.empty() ||
+                    !cand.exes.empty()) {
+                    root = e.path();
+                    art = std::move(cand);
+                    break;
+                }
+            }
+        }
+        const bool has_bins =
+            !art.libs.empty() || !art.dlls.empty() || !art.exes.empty();
+        // include/ alone does NOT make a binary dist — source
+        // tarballs ship headers too (lame's include/lame.h). With no
+        // artifacts and nothing buildable, still emit the shim as the
+        // marker patch (there is nothing else meaningful to emit).
+        if (has_bins ||
+            (a.sources.empty() && a.public_headers.empty())) {
+            const std::string root_rel =
+                root == a.root
+                    ? ""
+                    : GenericPath(fs::relative(root, a.root));
+            o << "# Binary distribution shim — artifacts recorded for "
+                 "consumers.\n";
+            if (!root_rel.empty()) {
+                o << "set(XER_" << UpperIdent(dep.name) << "_PAYLOAD_DIR"
+                  << " \"${CMAKE_CURRENT_LIST_DIR}/" << root_rel
+                  << "\")\n";
+            }
+            // LIB_DIR = directory the discovered libs actually live in
+            // (Release/ for CEF, lib/x64 for the NVIDIA redists).
+            if (!art.libs.empty()) {
+                const std::string lib_dir = fs::path(art.libs.front())
+                                                .parent_path()
+                                                .generic_string();
+                o << "set(XER_" << UpperIdent(dep.name) << "_LIB_DIR"
+                  << " \"${CMAKE_CURRENT_LIST_DIR}/" << lib_dir
+                  << "\")\n";
+            }
+            if (!art.incs.empty()) {
+                o << "add_library(XER-" << dep.name << " INTERFACE)\n"
+                  << "target_include_directories(XER-" << dep.name
+                  << " INTERFACE\n";
+                for (const auto& i : art.incs)
+                    o << "  " << Q(i) << "\n";
+                o << ")\n";
+            }
+            if (!art.libs.empty()) {
+                o << "set(XER_" << UpperIdent(dep.name)
+                  << "_LIBRARIES\n";
+                for (const auto& l : art.libs) {
+                    o << "  \"${CMAKE_CURRENT_LIST_DIR}/" << l
+                      << "\"\n";
+                }
+                o << ")\n";
+            } else {
+                o << "# No prebuilt libs found under "
+                     "include/lib/bin/win-* yet —\n"
+                  << "# set XER_" << UpperIdent(dep.name)
+                  << "_LIBRARIES manually.\n";
+            }
+            if (!art.dlls.empty()) {
+                o << "# Runtime DLLs to stage beside executables.\n"
+                  << "set(XER_" << UpperIdent(dep.name)
+                  << "_RUNTIME_DLLS\n";
+                for (const auto& l : art.dlls) {
+                    o << "  \"${CMAKE_CURRENT_LIST_DIR}/" << l
+                      << "\"\n";
+                }
+                o << ")\n";
+            }
+            if (!art.exes.empty()) {
+                o << "# Tool executables shipped by the package "
+                     "(pkg-config, w64devkit, ...).\n"
+                  << "set(XER_" << UpperIdent(dep.name)
+                  << "_PROGRAMS\n";
+                for (const auto& l : art.exes) {
+                    o << "  \"${CMAKE_CURRENT_LIST_DIR}/" << l
+                      << "\"\n";
+                }
+                o << ")\n";
+            }
+            return o.str();
+        }
+        // Source tarball routed via dependencies-opensource — fall
+        // through to header-only / source-list emission.
     }
 
     // --- header-only --------------------------------------------------
