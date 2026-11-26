@@ -698,19 +698,18 @@
         },
         {
             "package_name": "fftw3",
-            "url": "https://fftw.org/fftw-3.3.10-dll64.zip",
-            "mirrors": [
-                "https://ftp.fftw.org/pub/fftw/fftw-3.3.10-dll64.zip"
-            ],
-            "notes": "prebuilt win64 DLLs + .def files — generate .dll.a implibs with llvm-dlltool; alternative: w64devkit source build"
+            "url": "https://fftw.org/pub/fftw/fftw-3.3.5-dll64.zip",
+            "mirrors": [],
+            "notes": "prebuilt win64 DLLs + .def files — generate .dll.a implibs with llvm-dlltool; alternative: w64devkit source build. NOTE: upstream only ships prebuilt DLLs for 3.3.5 (fftw-3.3.10-dll64.zip never existed; ftp.fftw.org cert is broken). For 3.3.10+ use the source tarball via w64devkit."
         },
         {
             "package_name": "ffmpeg-builds",
-            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n7.1-latest-win64-gpl-shared-7.1.zip",
+            "url": "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n9.0-latest-win64-gpl-shared-9.0.zip",
             "mirrors": [
-                "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n8.0-latest-win64-gpl-shared-8.0.zip"
+                "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+                "https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl-shared.zip"
             ],
-            "notes": "P: BtbN win64-gpl-shared (mingw .dll.a implibs) — interim ffmpeg route; pick a build WITHOUT librsvg to drop the whole glib/cairo/pango set. Asset name carries the ffmpeg version — check the latest release page if both URLs miss"
+            "notes": "P: BtbN win64-gpl-shared (mingw .dll.a implibs) — interim ffmpeg route. NOTE: ALL BtbN builds include librsvg (scripts.d/50-librsvg + glib/cairo/pango chain) — dropping the glib set requires a custom ffmpeg build, not a different BtbN asset. Asset name carries the ffmpeg version — check the latest release page if URLs miss"
         },
         {
             "package_name": "lame",
@@ -749,12 +748,12 @@
         },
         {
             "package_name": "giflib",
-            "url": "https://downloads.sourceforge.net/project/giflib/giflib-5.2.2.tar.gz",
+            "url": "https://downloads.sourceforge.net/project/giflib/giflib-5.x/giflib-5.2.2.tar.gz",
             "notes": "Makefile-only source tree — source-list build"
         },
         {
             "package_name": "jbigkit",
-            "url": "https://www.cl.cam.ac.uk/~mgk25/jbigkit/jbigkit-2.1.tar.gz",
+            "url": "https://www.cl.cam.ac.uk/~mgk25/jbigkit/download/jbigkit-2.1.tar.gz",
             "notes": "Makefile-only source tree (libtiff dep) — source-list build"
         },
         {
@@ -805,7 +804,10 @@
         {
             "package_name": "mkl-devel",
             "url": "https://files.pythonhosted.org/packages/92/16/0251aee7cf1407df1ff0cf0cd5bc676760d17e8eea5a0d938d584b4159b4/mkl_devel-2026.2.1-py2.py3-none-win_amd64.whl",
-            "notes": "pip wheel (zip): static/implib + cmake files under Library/ — pair with the mkl (DLLs) and mkl-include (headers) wheels; extract_map pending wheel-layout check"
+            "extract_map": [
+                {"from": "mkl_devel-2026.2.1.data/data/Library/", "to": "./"}
+            ],
+            "notes": "pip wheel (zip): implibs + lib/cmake/mkl + lib/pkgconfig under Library/ (flattened to dep root via extract_map) — pair with the mkl (DLLs) and mkl-include (headers) wheels; the dist-info dir is dropped by the map"
         }
     ]
 }
